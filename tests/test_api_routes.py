@@ -6,6 +6,7 @@ No live Supabase, FFmpeg, or ElevenLabs required — all external services are m
 
 Endpoints covered:
   GET  /api/v1/health
+  GET  /api/v1/health/live
   POST /api/v1/jobs  (upload)
   GET  /api/v1/jobs/{job_id}
   GET  /api/v1/jobs
@@ -42,17 +43,26 @@ class TestHealthEndpoint:
         assert "redis_available" in body, f"Missing 'redis_available' in health response: {body}"
 
     def test_health_status_is_string(self, client):
-        """Health status field is a string (healthy or degraded)."""
+        """Health status field uses the documented dependency states."""
         response = client.get("/api/v1/health")
         body = response.json()
         assert isinstance(body["status"], str)
-        assert body["status"] in ("healthy", "degraded")
+        assert body["status"] in ("ok", "degraded", "unhealthy")
 
     def test_health_ffmpeg_available_is_bool(self, client):
         """ffmpeg_available field is a boolean."""
         response = client.get("/api/v1/health")
         body = response.json()
         assert isinstance(body["ffmpeg_available"], bool)
+
+    def test_liveness_is_dependency_free(self, client):
+        """Launcher probe returns without running optional dependency checks."""
+        with patch("redis.from_url") as redis_check:
+            response = client.get("/api/v1/health/live")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        redis_check.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
