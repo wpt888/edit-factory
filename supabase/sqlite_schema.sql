@@ -270,6 +270,31 @@ CREATE TABLE IF NOT EXISTS editai_source_videos (
 
 CREATE INDEX IF NOT EXISTS idx_source_videos_profile_id ON editai_source_videos(profile_id);
 
+-- ================================================
+-- TABLE: generated_videos (Seedance 2.0 history)
+-- ================================================
+CREATE TABLE IF NOT EXISTS generated_videos (
+    id                TEXT PRIMARY KEY,
+    profile_id        TEXT NOT NULL,
+    prompt            TEXT NOT NULL,
+    name              TEXT,
+    model             TEXT NOT NULL DEFAULT 'seedance-2.0',
+    duration          TEXT,
+    aspect_ratio      TEXT,
+    resolution        TEXT,
+    generate_audio    INTEGER NOT NULL DEFAULT 1,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    error_message     TEXT,
+    video_url         TEXT,
+    local_video_path  TEXT,
+    source_video_id   TEXT,
+    library_project_id TEXT,
+    library_clip_id   TEXT,
+    created_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_generated_videos_profile_created ON generated_videos(profile_id, created_at DESC);
+
 -- =====================================================
 -- TABLE: editai_project_segments
 -- Source: original schema + migration 012

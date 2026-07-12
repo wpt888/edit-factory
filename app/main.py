@@ -448,6 +448,7 @@ from app.api.buffer_routes import router as buffer_router
 from app.api.schedule_routes import router as schedule_router
 from app.api.feed_routes import router as feed_router
 from app.api.image_generate_routes import router as image_generate_router
+from app.api.video_generate_routes import router as video_generate_router
 from app.api.blipost_platform_routes import router as blipost_platform_router
 from app.api.blipost_render_routes import router as blipost_render_router
 
@@ -456,6 +457,7 @@ app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
 app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
+app.include_router(video_generate_router, prefix="/api/v1", tags=["AI Video Generation"])
 app.include_router(blipost_platform_router, prefix="/api/v1", tags=["Blipost Platform"])
 app.include_router(blipost_render_router, prefix="/api/v1", tags=["Blipost Render"])
 
