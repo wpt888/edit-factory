@@ -82,17 +82,17 @@ interface SubtitleEditorProps {
    * Optional Meta visual version label ("A" or "B"). When set and the active
    * variant has NO explicit user override, the FFmpeg preview endpoint will
    * apply the corresponding Meta profile overlay (Instagram/Facebook). The
-   * caller decides whether to pass this â€” typically only when there is no
+   * caller decides whether to pass this — typically only when there is no
    * override for the current key, to mirror the render-time precedence rule.
    */
   visualVersion?: string;
   /**
    * Controls which sub-panels the component renders.
-   *   "full"          â€” preview + settings side-by-side (current default).
-   *   "preview-only"  â€” just the live preview panel, no settings controls.
+   *   "full"          — preview + settings side-by-side (current default).
+   *   "preview-only"  — just the live preview panel, no settings controls.
    *                     Used by the pipeline page to show an always-on B
    *                     preview while the user edits A (and vice-versa).
-   *   "settings-only" â€” just the style controls, no preview. The pipeline
+   *   "settings-only" — just the style controls, no preview. The pipeline
    *                     page uses this for the active-tab editor; the
    *                     preview is rendered separately via two
    *                     "preview-only" instances so both Meta versions
@@ -155,7 +155,7 @@ export function SubtitleEditor({
       .catch(() => setFontAccessError("System font access was denied. Use the font picker again to retry."));
   };
   const latestSettingsRef = useRef(settings);
-  // Monotonic request id â€” any response whose id is not the latest is
+  // Monotonic request id — any response whose id is not the latest is
   // discarded so a slow earlier render can't overwrite a newer one.
   const requestSeq = useRef(0);
   const latestAppliedSeq = useRef(0);
@@ -263,7 +263,7 @@ export function SubtitleEditor({
   }, [pipelineId, variantIndex]);
 
   // Mirror the active blob URL into a ref so the unmount cleanup below can
-  // read the *latest* value â€” a plain state capture with [] deps would freeze
+  // read the *latest* value — a plain state capture with [] deps would freeze
   // at the initial null and leak the final URL.
   const ffmpegPreviewUrlRef = useRef<string | null>(null);
   const ffmpegBackgroundUrlRef = useRef<string | null>(null);
@@ -760,8 +760,8 @@ export function SubtitleEditor({
     </div>
   );
 
-  // â”€â”€ Render mode branching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // "preview-only" â€” just the live preview, no settings controls or lines
+  // ── Render mode branching ─────────────────────────────────────────────
+  // "preview-only" — just the live preview, no settings controls or lines
   // editor. Used by the pipeline page to stack two always-on previews (A/B)
   // side-by-side without duplicating the settings panel.
   if (renderMode === "preview-only") {
@@ -772,7 +772,7 @@ export function SubtitleEditor({
     );
   }
 
-  // "settings-only" â€” just the style controls (and the subtitle lines editor
+  // "settings-only" — just the style controls (and the subtitle lines editor
   // if the caller provides one). No preview. The pipeline page uses this for
   // the active-tab editor; the preview(s) are rendered separately via
   // "preview-only" instances so both A and B stay visible.
@@ -805,7 +805,7 @@ export function SubtitleEditor({
     );
   }
 
-  // "full" (default) â€” preserves the exact layout from before this refactor.
+  // "full" (default) — preserves the exact layout from before this refactor.
   return (
     <div className={className}>
       {/* Side-by-side layout: Preview (left, sticky) + Settings (right, scrollable) */}

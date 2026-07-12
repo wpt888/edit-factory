@@ -255,7 +255,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </Select>
                 </div>
 
-                {/* Assembly controls â€” how library segments get auto-assigned to phrases */}
+                {/* Assembly controls — how library segments get auto-assigned to phrases */}
                 <div className="space-y-2 pt-1 border-t">
                   <Label htmlFor="assembly-preset" className="pt-3 inline-block">Assembly Preset</Label>
                   <Select
@@ -269,10 +269,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="keyword_strict" title="Only use segments whose keywords match the phrase â€” leaves phrases unmatched rather than guessing">
+                      <SelectItem value="keyword_strict" title="Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing">
                         Keyword strict
                       </SelectItem>
-                      <SelectItem value="balanced" title="Match by keyword when possible, fall back to rotation for the rest â€” the default">
+                      <SelectItem value="balanced" title="Match by keyword when possible, fall back to rotation for the rest — the default">
                         Balanced
                       </SelectItem>
                       <SelectItem value="max_variety" title="Favor spreading usage across the whole segment pool, even for keyword matches">
@@ -281,17 +281,17 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       <SelectItem value="shuffle" title="Randomize segment assignment per variant, for maximum A/B difference">
                         Shuffle per variant
                       </SelectItem>
-                      <SelectItem value="ai_smart" title="Gemini reads each phrase and picks the best-fitting segment from your library â€” falls back to keyword matching if AI is unavailable">
+                      <SelectItem value="ai_smart" title="Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable">
                         AI smart match
                       </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    {assemblyPreset === "keyword_strict" && "Only use segments whose keywords match the phrase â€” leaves phrases unmatched rather than guessing."}
-                    {assemblyPreset === "balanced" && "Match by keyword when possible, fall back to rotation for the rest â€” the default."}
+                    {assemblyPreset === "keyword_strict" && "Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing."}
+                    {assemblyPreset === "balanced" && "Match by keyword when possible, fall back to rotation for the rest — the default."}
                     {assemblyPreset === "max_variety" && "Favor spreading usage across the whole segment pool, even for keyword matches."}
                     {assemblyPreset === "shuffle" && "Randomize segment assignment per variant, for maximum A/B difference."}
-                    {assemblyPreset === "ai_smart" && "Gemini reads each phrase and picks the best-fitting segment from your library â€” falls back to keyword matching if AI is unavailable."}
+                    {assemblyPreset === "ai_smart" && "Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable."}
                   </p>
                 </div>
 
@@ -335,7 +335,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   />
                 </div>
 
-                {/* Picture & Audio adjustments â€” applied by the render engine
+                {/* Picture & Audio adjustments — applied by the render engine
                     (server preview + final render), no re-matching needed. */}
                 <div className="space-y-4 border-t pt-3 min-[1100px]:col-span-2">
                   <div className="flex items-center justify-between gap-4">
@@ -440,7 +440,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               </CardContent>
             </Card>
 
-            {/* Subtitle Style â€” per-Meta-version editor.
+            {/* Subtitle Style — per-Meta-version editor.
                 Meta OFF: one panel, one preview, no tabs.
                 Meta ON:  two tabs (A/B), two always-on previews, one active settings panel. */}
             <Card className={!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""}>
@@ -452,14 +452,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </CardTitle>
                 <CardDescription>
                   {metaMultiplication
-                    ? "Pick A or B â€” each Meta version has its own style, shared across all scripts. Both live previews stay visible so you can compare A and B as you edit."
-                    : "Customize subtitles once â€” the style applies to every variant in this pipeline."}
+                    ? "Pick A or B — each Meta version has its own style, shared across all scripts. Both live previews stay visible so you can compare A and B as you edit."
+                    : "Customize subtitles once — the style applies to every variant in this pipeline."}
                 </CardDescription>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   {subtitleSaveState === "saving" && (
                     <>
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      <span>Saving automaticallyâ€¦</span>
+                      <span>Saving automatically…</span>
                     </>
                   )}
                   {subtitleSaveState === "saved" && (
@@ -497,7 +497,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     </Button>
                   )}
 
-                  {/* Reset to default â€” only meaningful when override exists */}
+                  {/* Reset to default — only meaningful when override exists */}
                   <Button
                     variant="outline"
                     size="sm"
@@ -578,7 +578,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   )}
                   </div>
 
-                  {/* Active-tab settings panel (no preview â€” previews are rendered above) */}
+                  {/* Active-tab settings panel (no preview — previews are rendered above) */}
                   <div className="flex-1 min-w-[320px]">
                     <SubtitleEditor
                       renderMode="settings-only"
@@ -664,7 +664,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               setPlayingAudio(null);
                               setPreviewVariant(card.key);
                             }}
-                            title="High-fidelity preview (FFmpeg render â€” slower; use the instant player in the timeline below for editing)"
+                            title="High-fidelity preview (FFmpeg render — slower; use the instant player in the timeline below for editing)"
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
@@ -750,7 +750,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         );
                       })()}
 
-                      {/* Full timeline editor â€” uses this variant's effective subtitle style */}
+                      {/* Full timeline editor — uses this variant's effective subtitle style */}
                       <TimelineEditor
                         matches={preview.matches}
                         audioDuration={preview.audio_duration}
@@ -785,7 +785,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               }}
               onResetAuto={() => {
                 if (!thumbnailPickerKey) return;
-                // Clear manual selection â€” useEffect will re-auto-select
+                // Clear manual selection — useEffect will re-auto-select
                 setVariantThumbnails(prev => {
                   const next = { ...prev };
                   delete next[thumbnailPickerKey];
@@ -802,10 +802,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               // an explicit subtitle override for this Meta version, suppress
               // the visualVersion so the preview backend does NOT layer the
               // Meta profile on top. Otherwise the preview would show the
-              // overlay while the final render does not â€” visible divergence.
+              // overlay while the final render does not — visible divergence.
               const _activeStyleKey = toStyleKey(activeCard);
-              const _activeOverride = subtitleOverrides[_activeStyleKey];
-              const _hasOverride = !!_activeOverride && Object.keys(_activeOverride).length > 0;
               const _previewPipOverlays = buildPipOverlaysForMatches(previews[previewVariant]?.matches);
               return (
                 <VariantPreviewPlayer
@@ -814,10 +812,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   matches={previews[previewVariant]?.matches ?? []}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
-                  visualVersion={_hasOverride ? undefined : activeCard.visualVersion}
+                  visualVersion={activeCard.visualVersion}
                   title={activeCard.label}
                   profileId={currentProfile.id}
-                  subtitleSettings={getSubtitleSettingsFor(_activeStyleKey)}
+                  subtitleSettings={getPreviewSubtitleSettingsFor(activeCard)}
+                  applyMetaSubtitleStyle={false}
                   sourceVideoIds={selectedSourceIdsArray}
                   minSegmentDuration={minSegmentDuration}
                   wordsPerSubtitle={wordsPerSubtitle}
@@ -835,7 +834,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               );
             })()}
 
-            {/* "Save as preset" dialog â€” captures shared default + any A/B overrides. */}
+            {/* "Save as preset" dialog — captures shared default + any A/B overrides. */}
             <Dialog
               open={savePresetDialogOpen}
               onOpenChange={(open) => {
@@ -946,7 +945,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           );
                         }
                       } catch {
-                        // Sync failed â€” continue with original data, user can retry manually
+                        // Sync failed — continue with original data, user can retry manually
                       }
                     }
                     setVariantStatuses(rendered);
@@ -977,7 +976,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               ) : (
                 <Play className="h-4 w-4 mr-2" />
               )}
-              {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size}${metaMultiplication ? ` Ã— 2 = ${selectedVariants.size * 2}` : ""})`}
+              {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size}${metaMultiplication ? ` × 2 = ${selectedVariants.size * 2}` : ""})`}
             </Button>
 
             {/* Skip render dialog */}

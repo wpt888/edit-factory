@@ -40,7 +40,7 @@ export function SubtitleStylePreviewPanel({
   // Pick an arbitrary script variant that has the matching visualVersion so
   // the FFmpeg frame preview has a background frame to sample. Since the
   // style is now shared across all scripts under the same Meta version, it
-  // doesn't matter *which* script we pick â€” just that one exists.
+  // doesn't matter *which* script we pick — just that one exists.
   const variantIndex = useMemo(() => {
     const targetVersion =
       styleKey === "A" ? "A" : styleKey === "B" ? "B" : undefined;
@@ -49,7 +49,7 @@ export function SubtitleStylePreviewPanel({
   }, [previewCards, styleKey]);
 
   // Only apply the Meta profile overlay in the preview when there is NO
-  // user override for this key â€” mirrors the render-time suppression rule
+  // user override for this key — mirrors the render-time suppression rule
   // so the preview doesn't diverge from the eventual render output.
   const visualVersion =
     hasOverride || styleKey === "default" ? undefined : styleKey;
@@ -57,7 +57,7 @@ export function SubtitleStylePreviewPanel({
   const label =
     styleKey === "default"
       ? "Live Preview"
-      : `Live Preview â€” ${styleKey} (${styleKey === "A" ? "Instagram" : "Facebook"})`;
+      : `Live Preview — ${styleKey} (${styleKey === "A" ? "Instagram" : "Facebook"})`;
 
   return (
     <div
@@ -83,7 +83,7 @@ export function SubtitleStylePreviewPanel({
         renderMode="preview-only"
         settings={settings}
         onSettingsChange={() => {
-          /* preview-only â€” no-op */
+          /* preview-only — no-op */
         }}
         showPreview={true}
         previewHeight={440}
