@@ -53,7 +53,7 @@ const allNavGroups = [
   {
     label: "Library",
     items: [
-      { label: "Clips", href: "/librarie", icon: Film },
+      { label: "Local Projects", href: "/librarie", icon: Film },
       { label: "TTS", href: "/tts-library", icon: Music },
       { label: "Schedule", href: "/schedule", icon: CalendarClock },
     ],
