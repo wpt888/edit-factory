@@ -2,7 +2,6 @@
 
 import logging
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,7 +102,7 @@ def _generate_video_task(video_id: str, profile_id: str, request: GenerateVideoR
             "variant_index": 0, "variant_name": display_name, "raw_video_path": str(local_path),
             "final_video_path": str(local_path), "duration": info.get("duration"),
             "is_selected": True, "is_deleted": False, "final_status": "completed",
-        })
+        }) or {}
         _update(video_id, profile_id, status="completed", video_url=video_url,
                 local_video_path=str(local_path), source_video_id=source_video_id,
                 library_project_id=project_id, library_clip_id=clip.get("id"))
