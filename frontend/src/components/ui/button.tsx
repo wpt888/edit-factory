@@ -9,7 +9,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Standard actions stay neutral. Lime is reserved for the explicit CTA
+        // variant and state/focus feedback.
+        default: "border border-border bg-secondary text-secondary-foreground hover:bg-accent",
         // The ONE lime action per screen (brand accent). Everything else
         // stays on the neutral variants — see globals.css brand note.
         cta: "bg-lime text-ink hover:bg-lime-dim focus-visible:ring-lime/40",

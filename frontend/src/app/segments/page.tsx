@@ -39,6 +39,7 @@ import {
   Repeat1,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
@@ -58,6 +59,8 @@ import { useProfile } from "@/contexts/profile-context";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 import { EmptyState } from "@/components/empty-state";
+import { invalidateCachedSourceVideos } from "@/lib/source-video-cache";
+import { getRouteSessionState, setRouteSessionState } from "@/lib/route-session-state";
 
 interface SourceVideo {
   id: string;
@@ -187,6 +190,7 @@ export default function SegmentsPage() {
 
   // Undo history for segment deletes
   const undoStackRef = useRef<{ segment: Segment; videoId: string }[]>([]);
+  const undoInFlightRef = useRef(false);
 
   // Product group state
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
@@ -251,6 +255,25 @@ export default function SegmentsPage() {
       handleApiError(error, "Error loading source videos");
     }
   }, [router]);
+
+  // Re-read the chosen source so older records can refresh rotation-aware
+  // dimensions without delaying the initial library listing.
+  const selectSourceVideo = useCallback(async (video: SourceVideo) => {
+    setSelectedVideo(video);
+
+    try {
+      const res = await apiGetWithRetry(`/segments/source-videos/${video.id}`);
+      if (!res.ok) return;
+
+      const refreshed = await res.json() as SourceVideo;
+      setSourceVideos((previous) => previous.map((item) =>
+        item.id === refreshed.id ? refreshed : item
+      ));
+      setSelectedVideo((previous) => previous?.id === refreshed.id ? refreshed : previous);
+    } catch {
+      // Keep the library version if metadata refresh is temporarily unavailable.
+    }
+  }, []);
 
   // Fetch product groups for a video
   const fetchProductGroups = useCallback(async (videoId: string) => {
@@ -324,8 +347,13 @@ export default function SegmentsPage() {
     )
   ).sort();
 
+  // Do not overwrite a deep-linked video before the source list has restored it.
+  const restoredFromUrl = useRef(false);
+  const skipSelectionPersistence = useRef(false);
+
   // Sync selected video to URL (?video=<id>)
   useEffect(() => {
+    if (!restoredFromUrl.current) return;
     const params = new URLSearchParams(window.location.search);
     if (selectedVideo) {
       params.set("video", selectedVideo.id);
@@ -344,29 +372,49 @@ export default function SegmentsPage() {
     if (!profileId) return;
 
     // Reset state when profile switches
+    restoredFromUrl.current = false;
+    skipSelectionPersistence.current = false;
+    setSourceVideos([]);
     setSelectedVideo(null);
     setSegments([]);
     setAllSegments([]);
     setSelectedSegment(null);
+    undoStackRef.current = [];
+    undoInFlightRef.current = false;
 
     fetchSourceVideos();
     fetchAllSegments();
   }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
-  // Restore video selection from URL on initial load
-  const restoredFromUrl = useRef(false);
+  // Restore the deep-linked video first, then the in-memory selection from the
+  // last visit. The sidebar links to /segments without query parameters, so the
+  // latter keeps the active clip when switching Pipeline → Segments.
   useEffect(() => {
     if (restoredFromUrl.current || sourceVideos.length === 0) return;
     const params = new URLSearchParams(window.location.search);
-    const videoId = params.get("video");
+    const videoId = params.get("video") || (profileId
+      ? getRouteSessionState<string>("segments.selected-video", profileId)
+      : undefined);
     if (videoId && !selectedVideo) {
       const match = sourceVideos.find((v) => v.id === videoId);
       if (match && match.status !== "processing") {
-        setSelectedVideo(match);
+        skipSelectionPersistence.current = true;
+        void selectSourceVideo(match);
       }
     }
     restoredFromUrl.current = true;
-  }, [sourceVideos, selectedVideo]);
+  }, [sourceVideos, selectedVideo, selectSourceVideo]);
+
+  // Keep the selection only for the active desktop session. Waiting for the
+  // restore pass avoids clearing it while this page is mounting.
+  useEffect(() => {
+    if (!restoredFromUrl.current || !profileId) return;
+    if (skipSelectionPersistence.current) {
+      skipSelectionPersistence.current = false;
+      return;
+    }
+    setRouteSessionState("segments.selected-video", profileId, selectedVideo?.id);
+  }, [profileId, selectedVideo]);
 
   // Actually delete segment (pushes to undo stack)
   const handleDeleteSegment = useCallback(async (segmentId: string) => {
@@ -381,9 +429,16 @@ export default function SegmentsPage() {
         if (segmentToDelete) {
           const videoId = segmentToDelete.source_video_id || selectedVideo?.id || "";
           undoStackRef.current.push({ segment: { ...segmentToDelete }, videoId });
+          undoStackRef.current = undoStackRef.current.slice(-50);
         }
         setSegments((prev) => prev.filter((s) => s.id !== segmentId));
         setAllSegments((prev) => prev.filter((s) => s.id !== segmentId));
+        setSelectedSegment((current) => current?.id === segmentId ? null : current);
+        setAssociations((prev) => {
+          const next = { ...prev };
+          delete next[segmentId];
+          return next;
+        });
         // Update source video segments count
         const videoId = segmentToDelete?.source_video_id || selectedVideo?.id;
         if (videoId) {
@@ -395,6 +450,13 @@ export default function SegmentsPage() {
             )
           );
         }
+        toast.success("Segment deleted", {
+          description: "Press Ctrl+Z to restore it.",
+          action: {
+            label: "Undo",
+            onClick: () => handleUndoRef.current(),
+          },
+        });
       }
     } catch (error) {
       handleApiError(error, "Error deleting segment");
@@ -403,10 +465,15 @@ export default function SegmentsPage() {
 
   // Undo last deleted segment (Ctrl+Z)
   const handleUndo = useCallback(async () => {
-    const last = undoStackRef.current.pop();
-    if (!last) return;
+    if (undoInFlightRef.current) return;
+    const last = undoStackRef.current.at(-1);
+    if (!last) {
+      toast.info("Nothing to undo");
+      return;
+    }
 
     const { segment, videoId } = last;
+    undoInFlightRef.current = true;
     try {
       const res = await apiPost(
         `/segments/source-videos/${videoId}/segments`,
@@ -415,13 +482,50 @@ export default function SegmentsPage() {
           end_time: segment.end_time,
           keywords: segment.keywords,
           notes: segment.notes || "",
+          product_group: segment.product_group || null,
+          single_use: segment.single_use,
         }
       );
       if (res.ok) {
-        const restored = await res.json();
+        const restored = await res.json() as Segment;
         restored.source_video_name = segment.source_video_name;
-        setSegments((prev) => [...prev, restored].sort((a, b) => a.start_time - b.start_time));
-        setAllSegments((prev) => [...prev, restored].sort((a, b) => a.start_time - b.start_time));
+
+        // The create endpoint intentionally resets transforms/favorite. Restore
+        // those optional attributes after the segment itself safely exists.
+        if (segment.transforms) {
+          try {
+            await apiPatch(`/segments/${restored.id}`, { transforms: segment.transforms });
+            restored.transforms = segment.transforms;
+          } catch (error) {
+            console.warn("Could not restore segment transforms", error);
+          }
+        }
+        if (segment.is_favorite) {
+          try {
+            await apiPost(`/segments/${restored.id}/favorite`);
+            restored.is_favorite = true;
+          } catch (error) {
+            console.warn("Could not restore segment favorite state", error);
+          }
+        }
+
+        // Remove history only after the restore request succeeds. This keeps
+        // Ctrl+Z retryable after an offline/server failure.
+        if (undoStackRef.current.at(-1) === last) {
+          undoStackRef.current.pop();
+        }
+
+        if (selectedVideoRef.current?.id === videoId) {
+          setSegments((prev) => [
+            ...prev.filter((item) => item.id !== restored.id),
+            restored,
+          ].sort((a, b) => a.start_time - b.start_time));
+          setSelectedSegment(restored);
+        }
+        setAllSegments((prev) => [
+          ...prev.filter((item) => item.id !== restored.id),
+          restored,
+        ].sort((a, b) => a.start_time - b.start_time));
         setSourceVideos((prev) =>
           prev.map((v) =>
             v.id === videoId
@@ -429,9 +533,12 @@ export default function SegmentsPage() {
               : v
           )
         );
+        toast.success("Segment restored");
       }
     } catch (error) {
       handleApiError(error, "Error restoring segment");
+    } finally {
+      undoInFlightRef.current = false;
     }
   }, []);
 
@@ -442,23 +549,31 @@ export default function SegmentsPage() {
   handleUndoRef.current = handleUndo;
   const selectedSegmentRef = useRef(selectedSegment);
   selectedSegmentRef.current = selectedSegment;
+  const selectedVideoRef = useRef(selectedVideo);
+  selectedVideoRef.current = selectedVideo;
 
   // Keyboard shortcuts: Delete selected segment, Ctrl+Z undo, Escape deselect
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (
+      const isEditableTarget =
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement
-      ) return;
+        e.target instanceof HTMLSelectElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable);
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        if (isEditableTarget) return;
+        e.preventDefault();
+        handleUndoRef.current();
+        return;
+      }
+
+      if (isEditableTarget) return;
 
       if ((e.key === "Delete" || e.key === "Backspace") && selectedSegmentRef.current) {
         e.preventDefault();
         handleDeleteSegmentRef.current(selectedSegmentRef.current.id);
         setSelectedSegment(null);
-      } else if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-        e.preventDefault();
-        handleUndoRef.current();
       } else if (e.key === "Escape") {
         e.preventDefault();
         setSelectedSegment(null);
@@ -569,6 +684,7 @@ export default function SegmentsPage() {
 
       if (res.ok) {
         const newVideo = await res.json() as SourceVideo;
+        invalidateCachedSourceVideos(currentProfile?.id);
         setSourceVideos((prev) => [newVideo, ...prev]);
         setSelectedVideo(newVideo);
         setShowUploadDialog(false);
@@ -658,6 +774,7 @@ export default function SegmentsPage() {
 
       if (res.ok) {
         const newVideo = await res.json() as SourceVideo;
+        invalidateCachedSourceVideos(currentProfile?.id);
         setSourceVideos((prev) => [newVideo, ...prev]);
         setSelectedVideo(newVideo);
         setShowLocalDialog(false);
@@ -720,6 +837,7 @@ export default function SegmentsPage() {
     try {
       const res = await apiDelete(`/segments/source-videos/${videoId}`);
       if (res.ok) {
+        invalidateCachedSourceVideos(currentProfile?.id);
         setSourceVideos((prev) => prev.filter((v) => v.id !== videoId));
         if (selectedVideo?.id === videoId) {
           setSelectedVideo(null);
@@ -740,6 +858,7 @@ export default function SegmentsPage() {
     try {
       const res = await apiPatch(`/segments/source-videos/${videoId}`, { name: trimmed });
       if (res.ok) {
+        invalidateCachedSourceVideos(currentProfile?.id);
         setSourceVideos((prev) => prev.map((v) => v.id === videoId ? { ...v, name: trimmed } : v));
         if (selectedVideo?.id === videoId) {
           setSelectedVideo((prev) => prev ? { ...prev, name: trimmed } : prev);
@@ -993,9 +1112,6 @@ export default function SegmentsPage() {
   };
 
   // Handle segment resize (drag edges on timeline)
-  const selectedVideoRef = useRef(selectedVideo);
-  selectedVideoRef.current = selectedVideo;
-
   const handleSegmentResize = async (segmentId: string, newStart: number, newEnd: number) => {
     const roundedStart = Math.round(newStart * 1000) / 1000;
     const roundedEnd = Math.round(newEnd * 1000) / 1000;
@@ -1313,6 +1429,7 @@ export default function SegmentsPage() {
                         });
                         if (addRes.ok) {
                           const newVideo = await addRes.json() as SourceVideo;
+                          invalidateCachedSourceVideos(currentProfile?.id);
                           addedVideos.push(newVideo);
                           setSourceVideos((prev) => [newVideo, ...prev]);
                           setSelectedVideo(newVideo);
@@ -1594,7 +1711,7 @@ export default function SegmentsPage() {
                         ? "bg-primary/10 border border-primary/50"
                         : "hover:bg-muted"
                     }`}
-                    onClick={() => video.status !== "processing" && setSelectedVideo(video)}
+                    onClick={() => video.status !== "processing" && void selectSourceVideo(video)}
                   >
                     {/* Thumbnail — icon is the base layer; the <img> overlays it and
                         hides itself on error (missing/regenerable thumb) so we never
@@ -2093,14 +2210,19 @@ export default function SegmentsPage() {
             <ChevronLeft className="h-4 w-4" />
           </Button>
         </Link>
-        <h1 className="text-base font-semibold flex items-center gap-1.5 truncate">
+        <h1 className="text-base font-semibold flex items-center gap-1.5 whitespace-nowrap">
           <Scissors className="h-4 w-4 flex-shrink-0" />
-          {selectedVideo ? selectedVideo.name : "Segment Editor"}
+          Source Video
         </h1>
         {selectedVideo && (
-          <span className="text-xs text-muted-foreground whitespace-nowrap">
-            {selectedVideo.width}x{selectedVideo.height} {selectedVideo.fps}fps {formatTime(selectedVideo.duration || 0)}
-          </span>
+          <>
+            <span className="max-w-[240px] truncate text-xs font-medium text-muted-foreground" title={selectedVideo.name}>
+              {selectedVideo.name}
+            </span>
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              {selectedVideo.width}x{selectedVideo.height} {selectedVideo.fps}fps {formatTime(selectedVideo.duration || 0)}
+            </span>
+          </>
         )}
         {!selectedVideo && (
           <span className="text-xs text-muted-foreground">Select a video</span>
@@ -2128,6 +2250,9 @@ export default function SegmentsPage() {
             sourceVideoId={selectedVideo.id}
             profileId={currentProfile?.id}
             productGroups={productGroups}
+            videoWidth={selectedVideo.width}
+            videoHeight={selectedVideo.height}
+            timelineThumbnailUrl={`${API_URL}/segments/source-videos/${selectedVideo.id}/thumbnail${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
           />
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">
@@ -2143,7 +2268,7 @@ export default function SegmentsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="h-full min-h-0 overflow-hidden bg-background text-foreground">
       <EditorLayout
         leftPanel={leftPanelContent}
         rightPanel={rightPanelContent}
@@ -2273,7 +2398,7 @@ export default function SegmentsPage() {
                   ) : (
                     <>
                       Are you sure you want to delete segment <strong>{deleteConfirm.name}</strong>?
-                      This action cannot be undone.
+                      You can restore it afterwards with <strong>Ctrl+Z</strong>.
                     </>
                   )}
                 </p>

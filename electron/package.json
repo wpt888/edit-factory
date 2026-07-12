@@ -4,7 +4,9 @@
   "description": "Blipost Desktop Shell",
   "main": "src/main.js",
   "scripts": {
+    "prestart": "node scripts/ensure-frontend.js",
     "start": "electron .",
+    "predev": "node scripts/ensure-frontend.js",
     "dev": "electron .",
     "dist": "electron-builder --win",
     "dist:publish": "electron-builder --win --publish always",

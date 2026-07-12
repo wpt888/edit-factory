@@ -51,7 +51,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     // count past scripts.length and wrongly lock this step (never "N === M").
     scripts.filter((_: string, i: number) => { const r = ttsMap[i]; return !!r && !r.generating && !r.stale; }).length === scripts.length;
   return (
-        <div className="mb-8">
+        <div className="sticky top-0 z-20 mb-5 border-b bg-background/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <div className="flex items-center justify-between">
             {[
               { num: 1, label: "Idea Input" },
@@ -72,14 +72,14 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                 <div key={s.num} className="flex items-center flex-1">
                   <div className="flex flex-col items-center">
                     <div
-                      className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
+                      className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-semibold ${
                         step === s.num
-                          ? "bg-primary text-primary-foreground"
+                          ? "border-2 border-lime bg-background text-lime ring-2 ring-lime/10"
                           : step > s.num
-                          ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/90 transition-colors"
+                          ? "border-2 border-lime bg-background text-lime cursor-pointer hover:bg-lime/10 transition-colors"
                           : isClickableForward
-                          ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/80 transition-colors"
-                          : "bg-secondary text-muted-foreground"
+                          ? "border-2 border-lime/70 bg-background text-lime cursor-pointer hover:border-lime hover:bg-lime/10 transition-colors"
+                          : "border-2 border-border bg-background text-muted-foreground"
                       }`}
                       onClick={() => {
                         // BUG-FE-31: Step navigation rules:
@@ -110,10 +110,10 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                         }
                       }}
                     >
-                      {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
+                      {step > s.num ? <CheckCircle className="h-4 w-4" /> : s.num}
                     </div>
                     <p
-                      className={`text-xs mt-2 ${
+                      className={`mt-1 text-xs ${
                         step === s.num ? "font-semibold" : "text-muted-foreground"
                       }`}
                     >
@@ -122,8 +122,8 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   </div>
                   {index < 3 && (
                     <div
-                      className={`flex-1 h-1 mx-2 ${
-                        step > s.num ? "bg-primary" : "bg-secondary"
+                      className={`flex-1 h-px mx-2 ${
+                        step > s.num ? "bg-foreground/25" : "bg-secondary"
                       }`}
                     />
                   )}
@@ -133,7 +133,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
           </div>
           {/* New Pipeline button — visible on steps 2-4 */}
           {step > 1 && (
-            <div className="flex justify-end mt-3">
+            <div className="mt-1 flex justify-end">
               <Button
                 variant="ghost"
                 size="sm"

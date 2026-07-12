@@ -111,7 +111,7 @@ function NavLink({
         collapsed ? "justify-center py-2" : "px-3 py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-lime"
       )}
     >
       <item.icon className="size-4" />

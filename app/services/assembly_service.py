@@ -2931,7 +2931,7 @@ class AssemblyService:
             ai_assignments=_ai_assignments,
         )
 
-        timeline, _intro_offset_sec = self.build_timeline(
+        timeline, intro_offset_sec = self.build_timeline(
             match_results=match_results,
             segments_data=segments_data,
             audio_duration=audio_duration,
@@ -2995,6 +2995,11 @@ class AssemblyService:
                 "timeline_duration": e.timeline_duration
             }
             for e in timeline
+        ]
+
+        intro_segments = [
+            entry for entry in timeline_data
+            if entry["timeline_start"] < intro_offset_sec
         ]
 
         # Build available segments summary for the timeline editor picker
@@ -3115,6 +3120,8 @@ class AssemblyService:
             "srt_content": srt_content,
             "matches": matches_data,
             "timeline": timeline_data,
+            "intro_offset_sec": float(intro_offset_sec),
+            "intro_segments": intro_segments,
             "total_phrases": len(match_results),
             "matched_count": matched_count,
             "unmatched_count": unmatched_count,

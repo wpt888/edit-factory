@@ -1616,6 +1616,8 @@ class PipelinePreviewResponse(BaseModel):
     matched_count: int
     unmatched_count: int
     available_segments: List[dict] = []
+    intro_offset_sec: float = 0.0
+    intro_segments: List[dict] = []
 
 
 class PipelineRenderRequest(BaseModel):
@@ -3484,7 +3486,9 @@ async def preview_variant(
             total_phrases=preview_data.get("total_phrases", 0),
             matched_count=preview_data.get("matched_count", 0),
             unmatched_count=preview_data.get("unmatched_count", 0),
-            available_segments=preview_data.get("available_segments", [])
+            available_segments=preview_data.get("available_segments", []),
+            intro_offset_sec=preview_data.get("intro_offset_sec", 0.0),
+            intro_segments=preview_data.get("intro_segments", []),
         )
 
     except ValueError as e:
@@ -5570,6 +5574,8 @@ async def restore_previews(
             "matched_count": pd.get("matched_count", 0),
             "unmatched_count": pd.get("unmatched_count", 0),
             "available_segments": pd.get("available_segments", []),
+            "intro_offset_sec": pd.get("intro_offset_sec", 0.0),
+            "intro_segments": pd.get("intro_segments", []),
         }
 
         # Grab available_segments from the first preview that has them

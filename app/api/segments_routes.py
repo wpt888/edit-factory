@@ -171,7 +171,7 @@ def _get_video_info(video_path: Path) -> dict:
         cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,duration,r_frame_rate",
+            "-show_entries", "stream=width,height,duration,r_frame_rate:stream_side_data=rotation:stream_tags=rotate",
             "-show_entries", "format=duration,size",
             "-of", "json",
             str(video_path)
@@ -184,6 +184,23 @@ def _get_video_info(video_path: Path) -> dict:
         stream = data.get("streams", [{}])[0]
         format_info = data.get("format", {})
 
+        width = stream.get("width")
+        height = stream.get("height")
+
+        # Phone videos are often stored as landscape pixels plus a display
+        # rotation matrix. The browser honors that matrix, so return display
+        # dimensions too; otherwise the editor creates a landscape crop frame
+        # around a portrait video.
+        rotation = 0
+        for side_data in stream.get("side_data_list", []):
+            if "rotation" in side_data:
+                rotation = abs(int(side_data["rotation"])) % 360
+                break
+        if rotation == 0:
+            rotation = abs(int(stream.get("tags", {}).get("rotate", 0))) % 360
+        if rotation in (90, 270):
+            width, height = height, width
+
         # Parse frame rate
         fps_str = stream.get("r_frame_rate", "30/1")
         if "/" in fps_str:
@@ -193,8 +210,8 @@ def _get_video_info(video_path: Path) -> dict:
             fps = float(fps_str)
 
         return {
-            "width": stream.get("width"),
-            "height": stream.get("height"),
+            "width": width,
+            "height": height,
             "duration": float(format_info.get("duration", stream.get("duration", 0))),
             "fps": round(fps, 2),
             "file_size_bytes": int(format_info.get("size", 0))
@@ -991,12 +1008,33 @@ async def get_source_video(
     video_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Get source video details."""
+    """Get source video details, correcting legacy orientation metadata when needed."""
     repo = get_repository()
 
     video = repo.get_source_video(video_id)
     if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
+
+    # Older source videos were indexed before display rotation was considered.
+    # Re-probe the selected file (not the whole library) so their portrait
+    # canvas is corrected as soon as they are opened in the editor.
+    file_path = Path(video["file_path"])
+    if video.get("status") == "ready" and file_path.is_file():
+        video_info = await asyncio.to_thread(_get_video_info, file_path)
+        dimensions_changed = (
+            video_info.get("width") and video_info.get("height")
+            and (video.get("width"), video.get("height"))
+            != (video_info["width"], video_info["height"])
+        )
+        if dimensions_changed:
+            repo.update_source_video(video_id, {
+                "width": video_info["width"],
+                "height": video_info["height"],
+            })
+            video.update({
+                "width": video_info["width"],
+                "height": video_info["height"],
+            })
 
     return _source_video_response(video)
 

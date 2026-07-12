@@ -95,6 +95,14 @@ export interface SegmentOption {
   transforms?: Record<string, unknown> | null;
 }
 
+export interface IntroSegment {
+  source_video_path: string;
+  start_time: number;
+  end_time: number;
+  timeline_start: number;
+  timeline_duration: number;
+}
+
 export interface InterstitialSlide {
   id: string;                    // Unique ID
   afterMatchIndex: number;       // Insert after this match index (-1 = before first)
@@ -108,6 +116,8 @@ export interface InterstitialSlide {
 interface TimelineEditorProps {
   matches: MatchPreview[];
   audioDuration: number;
+  introOffsetSec?: number;
+  introSegments?: IntroSegment[];
   sourceVideoIds: string[];
   availableSegments: SegmentOption[];
   onMatchesChange: (matches: MatchPreview[]) => void;
@@ -123,6 +133,8 @@ interface TimelineEditorProps {
 export function TimelineEditor({
   matches,
   audioDuration,
+  introOffsetSec = 0,
+  introSegments = [],
   sourceVideoIds: _sourceVideoIds,
   availableSegments,
   onMatchesChange,
@@ -164,6 +176,7 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+  const [isPreviewIntro, setIsPreviewIntro] = useState(false);
   const compactPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   const expandedPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
@@ -213,11 +226,15 @@ export function TimelineEditor({
   const lastReportedTimeRef = useRef(0);
   const activationIdRef = useRef(0);
   const activationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const introStartedAtRef = useRef(0);
+  const introActiveIndexRef = useRef(-1);
+  const isPreviewIntroRef = useRef(false);
 
   // Keep refs in sync (state → ref for use in callbacks)
   // Note: isPreviewPlayingRef is also set synchronously in togglePreviewPlayPause to avoid 1-frame stale reads
   useEffect(() => { isPreviewPlayingRef.current = isPreviewPlaying; }, [isPreviewPlaying]);
   useEffect(() => { isPreviewActiveRef.current = isPreviewActive; }, [isPreviewActive]);
+  useEffect(() => { isPreviewIntroRef.current = isPreviewIntro; }, [isPreviewIntro]);
   useEffect(() => { previewActiveIndexRef.current = previewActiveIndex; }, [previewActiveIndex]);
   useEffect(() => { matchesRef.current = matches; }, [matches]);
 
@@ -276,6 +293,9 @@ export function TimelineEditor({
     }
     return null;
   }, []);
+  const getIntroStreamUrl = useCallback((sourceVideoPath: string) =>
+    `${API_URL}/segments/files/${encodeURIComponent(sourceVideoPath)}`, []);
+
   const getPreviewStreamUrl = useCallback((sourceVideoId: string) => {
     if (!profileId) return "";
     return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
@@ -473,6 +493,27 @@ export function TimelineEditor({
 
   // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment switching
   // This replaces timeupdate (which only fires ~4Hz) to eliminate ~250ms segment switch lag
+  const playIntroAt = useCallback((time: number) => {
+    const index = introSegments.findIndex((segment) =>
+      segment.timeline_start <= time && time < segment.timeline_start + segment.timeline_duration
+    );
+    if (index < 0) return;
+    const segment = introSegments[index];
+    const slot = activeSlotRef.current;
+    const video = previewSlotRefs.current[slot];
+    if (!video) return;
+    if (introActiveIndexRef.current !== index) {
+      introActiveIndexRef.current = index;
+      video.pause();
+      video.src = getIntroStreamUrl(segment.source_video_path);
+      video.load();
+      video.onloadedmetadata = () => {
+        video.currentTime = segment.start_time + (time - segment.timeline_start);
+        if (isPreviewPlayingRef.current) video.play().catch(() => {});
+      };
+    }
+  }, [introSegments, getIntroStreamUrl]);
+
   const startPreviewRafLoop = useCallback(() => {
     const loop = () => {
       const audio = previewAudioRef.current;
@@ -480,10 +521,27 @@ export function TimelineEditor({
         previewRafIdRef.current = null;
         return;
       }
+      if (isPreviewIntroRef.current) {
+        const introTime = Math.min(introOffsetSec, (performance.now() - introStartedAtRef.current) / 1000);
+        setPreviewCurrentTime(introTime);
+        playIntroAt(introTime);
+        if (introTime >= introOffsetSec) {
+          isPreviewIntroRef.current = false;
+          setIsPreviewIntro(false);
+          introActiveIndexRef.current = -1;
+          for (const video of previewSlotRefs.current) if (video) video.pause();
+          audio.currentTime = 0;
+          seatActiveSlot(0, true);
+          audio.play().catch(() => { isPreviewPlayingRef.current = false; setIsPreviewPlaying(false); });
+        }
+        previewRafIdRef.current = requestAnimationFrame(loop);
+        return;
+      }
       const time = audio.currentTime;
-      if (Math.abs(time - lastReportedTimeRef.current) > 0.1) {
-        lastReportedTimeRef.current = time;
-        setPreviewCurrentTime(time);
+      const previewTime = time + introOffsetSec;
+      if (Math.abs(previewTime - lastReportedTimeRef.current) > 0.1) {
+        lastReportedTimeRef.current = previewTime;
+        setPreviewCurrentTime(previewTime);
       }
 
       const newIdx = findActiveMatch(time);
@@ -547,7 +605,7 @@ export function TimelineEditor({
     };
     if (previewRafIdRef.current != null) cancelAnimationFrame(previewRafIdRef.current);
     previewRafIdRef.current = requestAnimationFrame(loop);
-  }, [findActiveMatch, commitTransition, findNextTransitionIndex, prepareSlot]);
+  }, [findActiveMatch, commitTransition, findNextTransitionIndex, prepareSlot, introOffsetSec, isPreviewIntro, playIntroAt, seatActiveSlot]);
 
   const stopPreviewRafLoop = useCallback(() => {
     if (previewRafIdRef.current != null) {
@@ -674,14 +732,19 @@ export function TimelineEditor({
       // Re-seat the active slot on the current segment (a single seek is fine on
       // an explicit resume) and force the idle slot to re-stage next rAF tick.
       preparedNextForIndexRef.current = null;
-      seatActiveSlot(previewActiveIndexRef.current, true);
-      audio.play().catch(() => {
-        isPreviewPlayingRef.current = false;
-        setIsPreviewPlaying(false);
-      });
+      if (isPreviewIntro) {
+        introStartedAtRef.current = performance.now() - previewCurrentTime * 1000;
+        playIntroAt(previewCurrentTime);
+      } else {
+        seatActiveSlot(previewActiveIndexRef.current, true);
+        audio.play().catch(() => {
+          isPreviewPlayingRef.current = false;
+          setIsPreviewPlaying(false);
+        });
+      }
       startPreviewRafLoop();
     }
-  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot]);
+  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot, isPreviewIntro, previewCurrentTime, playIntroAt]);
 
   // Discrete user jump (prev/next, scrub-to-segment, segment click). A single
   // direct seek on the active slot is visually acceptable here; ping-pong only
@@ -691,12 +754,12 @@ export function TimelineEditor({
     const match = matchesRef.current[idx];
     if (!audio || !match) return;
     audio.currentTime = match.srt_start;
-    setPreviewCurrentTime(match.srt_start);
+    setPreviewCurrentTime(match.srt_start + introOffsetSec);
     setPreviewActiveIndex(idx);
     previewActiveIndexRef.current = idx;
     preparedNextForIndexRef.current = null;
     seatActiveSlot(idx, isPreviewPlayingRef.current);
-  }, [seatActiveSlot]);
+  }, [seatActiveSlot, introOffsetSec]);
 
   const previewPrevSegment = useCallback(() => {
     if (previewActiveIndexRef.current <= 0) return;
@@ -712,16 +775,28 @@ export function TimelineEditor({
     const audio = previewAudioRef.current;
     if (!audio) return;
     const time = parseFloat(e.target.value);
-    audio.currentTime = time;
     setPreviewCurrentTime(time);
-    const newIdx = findActiveMatch(time);
+    if (time < introOffsetSec) {
+      audio.pause();
+      audio.currentTime = 0;
+      isPreviewIntroRef.current = true;
+      setIsPreviewIntro(true);
+      introStartedAtRef.current = performance.now() - time * 1000;
+      playIntroAt(time);
+      return;
+    }
+    isPreviewIntroRef.current = false;
+    setIsPreviewIntro(false);
+    const audioTime = time - introOffsetSec;
+    audio.currentTime = audioTime;
+    const newIdx = findActiveMatch(audioTime);
     setPreviewActiveIndex(newIdx);
     previewActiveIndexRef.current = newIdx;
     preparedNextForIndexRef.current = null;
     // Scrub lands at an arbitrary audio time; seat the active slot at the
     // segment's start (video doesn't track sub-phrase position — same as before).
     seatActiveSlot(newIdx, isPreviewPlayingRef.current);
-  }, [findActiveMatch, seatActiveSlot]);
+  }, [findActiveMatch, seatActiveSlot, introOffsetSec, playIntroAt]);
 
   const handleSeekToSegment = useCallback((idx: number) => {
     if (!isPreviewActive) return;
@@ -773,6 +848,15 @@ export function TimelineEditor({
         slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
 
         const firstMatch = matchesRef.current[0];
+
+        if (introOffsetSec > 0 && introSegments.length > 0) {
+          isPreviewIntroRef.current = true;
+          setIsPreviewIntro(true);
+          introStartedAtRef.current = performance.now();
+          playIntroAt(0);
+          startPreviewRafLoop();
+          return;
+        }
 
         // Start the audio + rAF loop. The loop stages the first cut when the
         // current media window enters its remaining-time lead window.
@@ -844,7 +928,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo]);
+  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo, introOffsetSec, introSegments.length, playIntroAt]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
@@ -872,6 +956,9 @@ export function TimelineEditor({
     setIsPreviewPlaying(false);
     setIsPreviewBuffering(false);
     setPreviewCurrentTime(0);
+    isPreviewIntroRef.current = false;
+    setIsPreviewIntro(false);
+    introActiveIndexRef.current = -1;
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
@@ -1277,9 +1364,11 @@ export function TimelineEditor({
   const dialogSubLabel = isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
 
   // Calculate total duration for proportional widths in timeline view
-  const totalDuration = audioDuration > 0
+  const bodyDuration = audioDuration > 0
     ? audioDuration
     : matches.reduce((sum, m) => sum + (m.duration_override ?? (m.srt_end - m.srt_start)), 0);
+  const totalDuration = introOffsetSec + bodyDuration;
+  const previewTotalDuration = introOffsetSec + (previewDuration || audioDuration);
 
   // Selected match for inline preview
   const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
@@ -1434,7 +1523,7 @@ export function TimelineEditor({
                     style={{
                       display: "block",
                       opacity:
-                        activeSlot === slot && matches[previewActiveIndex]?.source_video_id
+                        activeSlot === slot && (isPreviewIntro || matches[previewActiveIndex]?.source_video_id)
                           ? 1
                           : 0,
                       zIndex: activeSlot === slot ? 1 : 0,
@@ -1450,7 +1539,7 @@ export function TimelineEditor({
                 )}
 
                 {/* No video fallback */}
-                {!matches[previewActiveIndex]?.source_video_id && (
+                {!isPreviewIntro && !matches[previewActiveIndex]?.source_video_id && (
                   <div className="flex items-center justify-center text-muted-foreground text-sm">
                     No video for this segment
                   </div>
@@ -1466,7 +1555,7 @@ export function TimelineEditor({
                 <input
                   type="range"
                   min={0}
-                  max={previewDuration || 1}
+                  max={previewTotalDuration || 1}
                   step={0.1}
                   value={previewCurrentTime}
                   onChange={handlePreviewSeek}
@@ -1476,7 +1565,7 @@ export function TimelineEditor({
                 {/* Time + segment info + buttons */}
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
-                    {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
+                    {formatTime(previewCurrentTime)} / {formatTime(previewTotalDuration)}
                   </span>
 
                   <div className="flex items-center gap-1">
@@ -1574,7 +1663,7 @@ export function TimelineEditor({
                       </div>
                     )}
 
-                    {!matches[previewActiveIndex]?.source_video_id && (
+                    {!isPreviewIntro && !matches[previewActiveIndex]?.source_video_id && (
                       <div className="flex items-center justify-center text-muted-foreground text-sm">
                         No video for this segment
                       </div>
@@ -1587,7 +1676,7 @@ export function TimelineEditor({
                     <input
                       type="range"
                       min={0}
-                      max={previewDuration || 1}
+                      max={previewTotalDuration || 1}
                       step={0.1}
                       value={previewCurrentTime}
                       onChange={handlePreviewSeek}
@@ -1596,7 +1685,7 @@ export function TimelineEditor({
 
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground font-mono tabular-nums">
-                        {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
+                        {formatTime(previewCurrentTime)} / {formatTime(previewTotalDuration)}
                       </span>
 
                       <div className="flex items-center gap-1">
@@ -1718,6 +1807,11 @@ export function TimelineEditor({
                     </div>
                   );
                 };
+
+                if (introOffsetSec > 0) {
+                  const introWidthPercent = totalDuration > 0 ? (introOffsetSec / totalDuration) * 100 : 10;
+                  elements.push(<div key="rapid-intro" className="flex-shrink-0 rounded-md border-2 border-violet-500 bg-violet-500/15 px-2 flex items-center justify-center text-[10px] font-medium text-violet-700 dark:text-violet-300" style={{ width: `max(60px, ${introWidthPercent}%)`, height: "80px" }} title={`Rapid intro (${introOffsetSec.toFixed(1)}s)`}>Rapid intro</div>);
+                }
 
                 // Insert "before first" button
                 elements.push(renderInsertButton(-1));

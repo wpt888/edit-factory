@@ -14,9 +14,8 @@ function Checkbox({
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        // Interactive controls carry the lime brand accent (user decision
-        // 2026-07-11) — surfaces/cards stay neutral, controls stay lime.
-        "peer border-input dark:bg-input/30 data-[state=checked]:bg-lime data-[state=checked]:text-ink dark:data-[state=checked]:bg-lime data-[state=checked]:border-lime focus-visible:border-ring focus-visible:ring-lime/40 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive size-4 shrink-0 rounded-[4px] border shadow-xs transition-shadow outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+        // Selection is drawn in lime (border + check), never filled with lime.
+        "peer border-input bg-background data-[state=checked]:bg-background data-[state=checked]:text-lime data-[state=checked]:border-lime focus-visible:border-lime focus-visible:ring-lime/40 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive size-4 shrink-0 rounded-[4px] border shadow-xs transition-[border-color,box-shadow,color] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}

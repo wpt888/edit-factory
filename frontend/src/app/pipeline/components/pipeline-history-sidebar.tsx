@@ -78,15 +78,15 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     handlePlayAudio,
   }: PipelineHistorySidebarCtx = ctx;
   return (
-          <div className="w-80 flex-shrink-0">
-            <Card className="sticky top-4">
+          <div className="w-full min-w-0">
+            <Card className="min-[1280px]:sticky min-[1280px]:top-16">
               <CardHeader className="pb-3">
                   <CardTitle className="text-lg flex items-center gap-2">
                     <Clock className="h-4 w-4" />
                     Script History
                   </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">
+              <CardContent className="max-h-[28rem] space-y-2 overflow-y-auto min-[1280px]:max-h-[calc(100vh-5rem)]">
                 {historyLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -98,7 +98,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                     <div key={item.pipeline_id} className="space-y-2">
                       <div
                         className={`w-full text-left p-3 rounded-lg border transition-colors hover:bg-accent ${
-                          selectedHistoryId === item.pipeline_id ? "border-primary bg-accent" : "border-border"
+                          selectedHistoryId === item.pipeline_id ? "border-foreground/20 bg-accent" : "border-border"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -163,7 +163,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                     return next;
                                   });
                                 }}
-                                className="text-[11px] text-primary/70 hover:text-primary mt-0.5"
+                                className="text-[11px] text-muted-foreground hover:text-lime mt-0.5 transition-colors"
                               >
                                 {expandedIdeas.has(item.pipeline_id) ? "Show less" : "Show more"}
                               </button>
@@ -204,7 +204,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
 
                       {/* Expanded: show scripts with checkboxes */}
                       {selectedHistoryId === item.pipeline_id && (
-                        <div className="ml-2 pl-3 border-l-2 border-primary/30 space-y-2">
+                        <div className="ml-2 pl-3 border-l border-border space-y-2">
                           {historyScriptsLoading ? (
                             <div className="flex items-center justify-center py-4">
                               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { GripVerticalIcon } from "lucide-react"
+import { GripHorizontalIcon, GripVerticalIcon } from "lucide-react"
 import { Group, Panel, Separator } from "react-resizable-panels"
 
 import { cn } from "@/lib/utils"
@@ -34,23 +34,36 @@ function ResizablePanel({
 
 function ResizableHandle({
   withHandle,
+  orientation = "horizontal",
   className,
   ...props
 }: React.ComponentProps<typeof Separator> & {
   withHandle?: boolean
+  orientation?: "horizontal" | "vertical"
 }) {
+  const isVertical = orientation === "vertical"
+
   return (
     <Separator
       data-slot="resizable-handle"
+      data-orientation={orientation}
       className={cn(
-        "bg-border focus-visible:ring-ring relative flex w-1 items-center justify-center after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden hover:bg-primary/30 transition-colors cursor-col-resize",
+        "bg-border focus-visible:ring-ring relative z-30 flex items-center justify-center transition-colors focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden hover:bg-primary/40",
+        isVertical
+          ? "h-1 w-full cursor-row-resize after:absolute after:inset-x-0 after:top-1/2 after:h-2 after:-translate-y-1/2"
+          : "h-full w-1 cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2",
         className
       )}
       {...props}
     >
       {withHandle && (
-        <div className="bg-border z-10 flex h-6 w-3 items-center justify-center rounded-sm border shadow-sm">
-          <GripVerticalIcon className="size-3" />
+        <div className={cn(
+          "bg-card z-10 flex items-center justify-center rounded-sm border shadow-sm",
+          isVertical ? "h-3 w-7" : "h-7 w-3"
+        )}>
+          {isVertical
+            ? <GripHorizontalIcon className="size-3" />
+            : <GripVerticalIcon className="size-3" />}
         </div>
       )}
     </Separator>

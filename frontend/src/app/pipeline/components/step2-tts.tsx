@@ -44,6 +44,7 @@ import {
   List,
   LayoutGrid,
   Info,
+  Scissors,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -56,6 +57,7 @@ import {
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
 import type { Dispatch, SetStateAction } from "react";
 import { useRef, useState } from "react";
+import Link from "next/link";
 import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
 
 // Mirrors the inline ttsResults state shape in PipelinePage (page.tsx).
@@ -233,8 +235,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
   };
 
   return (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
+          <div className="grid grid-cols-1 gap-5 min-[1100px]:grid-cols-2">
+            <div className="order-[-2] flex flex-wrap items-center justify-between gap-3 min-[1100px]:col-span-2">
               <h2 ref={step2HeaderRef} className="text-2xl font-semibold scroll-mt-20">Review Scripts ({scripts.length})</h2>
               <div className="flex items-center gap-2">
                 {regeneratingAllScripts ? (
@@ -283,7 +285,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             </div>
 
             {/* ElevenLabs model selector */}
-            <Card>
+            <Card className="min-[1100px]:col-start-2 min-[1100px]:row-start-2">
               <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
                 <ElevenCreditsBadge
@@ -293,7 +295,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                   onRefresh={fetchElevenCredits}
                 />
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 min-[1100px]:grid min-[1100px]:grid-cols-2 min-[1100px]:gap-x-4 min-[1100px]:gap-y-3 min-[1100px]:space-y-0">
                 {elevenCredits?.last_error && (
                   <Alert variant="destructive">
                     <AlertDescription className="text-xs">
@@ -393,8 +395,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 </div>
 
                 {/* Voice Settings */}
-                <div className="border-t pt-4 space-y-4">
-                  <p className="text-sm font-medium">Voice Settings</p>
+                <div className="space-y-4 border-t pt-4 min-[1100px]:col-span-2 min-[1100px]:grid min-[1100px]:grid-cols-2 min-[1100px]:gap-x-5 min-[1100px]:gap-y-4 min-[1100px]:space-y-0">
+                  <p className="text-sm font-medium min-[1100px]:col-span-2">Voice Settings</p>
 
                   <div className="space-y-1.5">
                     <div className="flex justify-between">
@@ -529,7 +531,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             </Card>
 
             {/* Scripts list — single column so each sentence has room */}
-            <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 gap-4 min-[1100px]:col-span-2">
               {scripts.map((script, index) => {
                 const wordCount = countWords(script);
                 const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
@@ -539,30 +541,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          {ttsResults[index] && !ttsResults[index].generating && !ttsResults[index].stale && (
-                            <Checkbox
-                              id={`approve-header-${index}`}
-                              checked={approvedScripts.has(index)}
-                              onCheckedChange={(checked) => {
-                                const approved = checked === true;
-                                setApprovedScripts(prev => {
-                                  const next = new Set(prev);
-                                  if (approved) next.add(index);
-                                  else next.delete(index);
-                                  return next;
-                                });
-                                if (pipelineId) {
-                                  apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
-                                }
-                              }}
-                              className="h-5 w-5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
-                            />
-                          )}
                           <CardTitle className="text-lg">
                             Script {index + 1}
-                            {approvedScripts.has(index) && (
-                              <CheckCircle className="inline-block h-4 w-4 ml-2 text-success" />
-                            )}
                           </CardTitle>
                         </div>
                         <div className="flex items-center gap-2">
@@ -903,7 +883,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             </div>
 
             {/* Source Video Selection */}
-            <Card>
+            <Card className="order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
@@ -958,13 +938,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     {sourceVideos[0].thumbnail_path ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={`${API_URL}/segments/files/${encodeURIComponent(sourceVideos[0].thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
-                        alt=""
-                        className="w-10 h-10 rounded object-cover flex-shrink-0"
+                        src={`${API_URL}/segments/source-videos/${encodeURIComponent(sourceVideos[0].id)}/thumbnail`}
+                        alt={`Thumbnail for ${sourceVideos[0].name}`}
+                        className="w-20 aspect-video rounded object-cover flex-shrink-0"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                       />
                     ) : (
-                      <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                      <div className="w-20 aspect-video rounded bg-muted flex items-center justify-center flex-shrink-0">
                         <Film className="h-5 w-5 text-muted-foreground" />
                       </div>
                     )}
@@ -980,6 +960,14 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     <Badge variant="secondary" className="text-xs flex-shrink-0">
                       {sourceVideos[0].segments_count} segments
                     </Badge>
+                    <Link
+                      href={`/segments?video=${encodeURIComponent(sourceVideos[0].id)}`}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      title={`Edit segments for ${sourceVideos[0].name}`}
+                    >
+                      <Scissors className="h-3.5 w-3.5" />
+                      Edit segments
+                    </Link>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -1043,13 +1031,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                               {video.thumbnail_path ? (
                                 // eslint-disable-next-line @next/next/no-img-element
                                 <img
-                                  src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
-                                  alt=""
-                                  className="w-10 h-10 rounded object-cover flex-shrink-0"
+                                  src={`${API_URL}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
+                                  alt={`Thumbnail for ${video.name}`}
+                                  className="w-20 aspect-video rounded object-cover flex-shrink-0"
                                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                                 />
                               ) : (
-                                <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                                <div className="w-20 aspect-video rounded bg-muted flex items-center justify-center flex-shrink-0">
                                   <Film className="h-5 w-5 text-muted-foreground" />
                                 </div>
                               )}
@@ -1065,6 +1053,15 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                               <Badge variant="secondary" className="text-xs flex-shrink-0">
                                 {video.segments_count} segments
                               </Badge>
+                              <Link
+                                href={`/segments?video=${encodeURIComponent(video.id)}`}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                                title={`Edit segments for ${video.name}`}
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <Scissors className="h-3.5 w-3.5" />
+                                Edit
+                              </Link>
                             </div>
                           ))}
                         </div>
@@ -1094,8 +1091,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                 {video.thumbnail_path ? (
                                   // eslint-disable-next-line @next/next/no-img-element
                                   <img
-                                    src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
-                                    alt=""
+                                    src={`${API_URL}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
+                                    alt={`Thumbnail for ${video.name}`}
                                     className="w-full h-full object-cover"
                                     onError={(e) => { (e.target as HTMLImageElement).src = ""; (e.target as HTMLImageElement).style.display = "none"; }}
                                   />
@@ -1115,6 +1112,15 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                 <Badge variant="secondary" className="text-[10px] px-1 py-0">
                                   {video.segments_count} seg
                                 </Badge>
+                                <Link
+                                  href={`/segments?video=${encodeURIComponent(video.id)}`}
+                                  className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
+                                  title={`Edit segments for ${video.name}`}
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  <Scissors className="h-3 w-3" />
+                                  Edit
+                                </Link>
                               </div>
                             </div>
                           ))}

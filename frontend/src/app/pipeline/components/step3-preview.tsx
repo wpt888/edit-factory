@@ -580,7 +580,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </div>
 
                   {/* Active-tab settings panel (no preview — previews are rendered above) */}
-                  <div className="flex-1 min-w-[320px]">
+                  <div
+                    className="flex-1 min-w-[320px] xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto xl:pr-3"
+                    data-testid="subtitle-style-variant-editor"
+                  >
                     <SubtitleEditor
                       renderMode="settings-only"
                       settings={getSubtitleSettingsFor(activeStyleKey)}
@@ -761,6 +764,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       <TimelineEditor
                         matches={preview.matches}
                         audioDuration={preview.audio_duration}
+                        introOffsetSec={preview.intro_offset_sec ?? 0}
+                        introSegments={preview.intro_segments ?? []}
                         sourceVideoIds={selectedSourceIdsArray}
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}

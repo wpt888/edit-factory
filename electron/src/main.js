@@ -56,10 +56,11 @@ const BACKEND_PORT = 8000;
 // e.g. SITE_ZERO). cleanupOrphans() kills whatever holds this port on launch,
 // so it must NOT be a port other projects use.
 const FRONTEND_PORT = 3947;
-const BACKEND_HEALTH_URL = `http://127.0.0.1:${BACKEND_PORT}/api/v1/health`;
+const BACKEND_HEALTH_URL = `http://127.0.0.1:${BACKEND_PORT}/api/v1/health/live`;
 const FRONTEND_HEALTH_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 const POLL_INTERVAL_MS = 500;
 const MAX_WAIT_MS = 60000;
+const HEALTH_REQUEST_TIMEOUT_MS = 2000;
 
 // ---------- Logging ----------
 // Backend/frontend stdout+stderr are invisible in the packaged app unless
@@ -319,14 +320,49 @@ function startBackend() {
 }
 
 // ---------- SHELL-01: Spawn frontend ----------
+function resolveNodeExecutable() {
+  if (!isDev) return path.join(process.resourcesPath, 'node', 'node.exe');
+
+  // npm exposes the exact Node binary used to launch the script. Prefer it to
+  // PATH because Electron launched through npm/nvm-windows can inherit a PATH
+  // where a bare `node` lookup fails with ENOENT.
+  const candidates = [process.env.npm_node_execpath, process.env.NODE];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+
+  if (process.platform === 'win32') {
+    const result = spawnSync('where.exe', ['node'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.status === 0) {
+      const candidate = result.stdout.split(/\r?\n/).find((line) => line.trim());
+      if (candidate && fs.existsSync(candidate.trim())) return candidate.trim();
+    }
+  }
+
+  return 'node';
+}
+
 function startFrontend() {
   logLine('launcher', 'Starting frontend...');
   logLine('launcher', `Server: ${NEXT_SERVER}`);
   frontendStartedAt = Date.now();
 
-  // Dev mode: use system node from PATH
-  // Packaged mode (Phase 52): bundled portable Node.js
-  const nodeExe = isDev ? 'node' : path.join(process.resourcesPath, 'node', 'node.exe');
+  if (!fs.existsSync(NEXT_SERVER)) {
+    throw new Error(
+      `Frontend bundle is missing: ${NEXT_SERVER}\n`
+      + 'Run npm run dev again; the predev check should rebuild it automatically.'
+    );
+  }
+
+  // Dev mode: use npm's exact Node executable. Packaged mode: bundled Node.js.
+  const nodeExe = resolveNodeExecutable();
+  if (path.isAbsolute(nodeExe) && !fs.existsSync(nodeExe)) {
+    throw new Error(`Node.js runtime is missing: ${nodeExe}`);
+  }
+  logLine('launcher', `Node: ${nodeExe}`);
 
   frontendProcess = spawn(
     nodeExe,
@@ -407,8 +443,23 @@ function startFrontend() {
 // ---------- SHELL-02: Health check polling ----------
 function checkUrl(url) {
   return new Promise((resolve) => {
-    http.get(url, (res) => resolve(res.statusCode >= 200 && res.statusCode < 400))
-      .on('error', () => resolve(false));
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const req = http.get(url, (res) => {
+      const ok = res.statusCode >= 200 && res.statusCode < 400;
+      res.resume();
+      res.once('end', () => finish(ok));
+      res.once('error', () => finish(false));
+    });
+    req.setTimeout(HEALTH_REQUEST_TIMEOUT_MS, () => {
+      req.destroy();
+      finish(false);
+    });
+    req.once('error', () => finish(false));
   });
 }
 
@@ -455,7 +506,10 @@ async function checkStartupState() {
       'http://127.0.0.1:8000/api/v1/desktop/auth/status'
     );
     if (status && status.logged_in === true) {
-      return APP_URL;
+      // The launcher has already authenticated this startup. Tell the renderer
+      // so DesktopAuthGuard does not repeat the same request after the main
+      // window becomes visible (which caused a full-page spinner on launch).
+      return `${APP_URL}/?desktopAuth=confirmed`;
     }
     logLine('launcher', 'Not logged in — routing to login');
     return LOGIN_URL;
@@ -528,45 +582,51 @@ function updateServiceSplash(backOk, frontOk, elapsed) {
   }
 }
 
-function waitForServices() {
-  return new Promise((resolve, reject) => {
-    let elapsed = 0;
-    if (tray) tray.setToolTip('Blipost — Starting...');
+async function waitForServices() {
+  const startedAt = Date.now();
+  let previousBackOk = null;
+  let previousFrontOk = null;
+  if (tray) tray.setToolTip('Blipost — Starting...');
 
-    const interval = setInterval(async () => {
-      elapsed += POLL_INTERVAL_MS;
+  // Poll sequentially. An async setInterval allowed requests to overlap when a
+  // connection stalled, producing request bursts and a false final status.
+  while (true) {
+    const [backOk, frontOk] = await Promise.all([
+      checkUrl(BACKEND_HEALTH_URL),
+      checkUrl(FRONTEND_HEALTH_URL),
+    ]);
+    const elapsed = Date.now() - startedAt;
 
-      const [backOk, frontOk] = await Promise.all([
-        checkUrl(BACKEND_HEALTH_URL),
-        checkUrl(FRONTEND_HEALTH_URL),
-      ]);
+    if (backOk !== previousBackOk || frontOk !== previousFrontOk) {
+      logLine('launcher', `Service status: backend=${backOk ? 'ready' : 'waiting'}, frontend=${frontOk ? 'ready' : 'waiting'}`);
+      previousBackOk = backOk;
+      previousFrontOk = frontOk;
+    }
 
-      // Update tray tooltip with progress
-      if (tray) {
-        const status = [];
-        if (backOk) status.push('API ready');
-        else status.push('API starting...');
-        if (frontOk) status.push('UI ready');
-        else status.push('UI starting...');
-        tray.setToolTip(`Blipost — ${status.join(', ')}`);
-      }
+    if (tray) {
+      const status = [
+        backOk ? 'API ready' : 'API starting...',
+        frontOk ? 'UI ready' : 'UI starting...',
+      ];
+      tray.setToolTip(`Blipost — ${status.join(', ')}`);
+    }
 
-      // Reflect both real service milestones and bounded time-based progress.
-      updateServiceSplash(backOk, frontOk, elapsed);
+    updateServiceSplash(backOk, frontOk, elapsed);
 
-      if (backOk && frontOk) {
-        clearInterval(interval);
-        if (tray) tray.setToolTip('Blipost');
-        resolve();
-      } else if (elapsed >= MAX_WAIT_MS) {
-        clearInterval(interval);
-        const msg = `Services did not start within ${MAX_WAIT_MS / 1000} seconds.\n`
-          + `Backend: ${backOk ? 'ready' : 'not responding'}\n`
-          + `Frontend: ${frontOk ? 'ready' : 'not responding'}`;
-        reject(new Error(msg));
-      }
-    }, POLL_INTERVAL_MS);
-  });
+    if (backOk && frontOk) {
+      if (tray) tray.setToolTip('Blipost');
+      return;
+    }
+    if (elapsed >= MAX_WAIT_MS) {
+      const msg = `Services did not start within ${MAX_WAIT_MS / 1000} seconds.\n`
+        + `Backend: ${backOk ? 'ready' : 'not responding'}\n`
+        + `Frontend: ${frontOk ? 'ready' : 'not responding'}\n`
+        + `Log: ${LOG_FILE}`;
+      throw new Error(msg);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 // ---------- SHELL-03: System tray ----------

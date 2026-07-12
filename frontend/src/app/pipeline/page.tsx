@@ -12,6 +12,7 @@ import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { checkFallbacks } from "@/lib/api-fallback";
+import { getCachedSourceVideos } from "@/lib/source-video-cache";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { ProductPickerDialog } from "@/components/dialogs/product-picker-dialog";
@@ -337,7 +338,7 @@ function PipelinePage() {
   selectedSourceIdsRef.current = selectedSourceIds;
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
-  const [sourceVideoViewMode, setSourceVideoViewMode] = useState<"list" | "grid">("list");
+  const [sourceVideoViewMode, setSourceVideoViewMode] = useState<"list" | "grid">("grid");
   // FE-16: This is a single shared search string for all variants' group tag dropdowns.
   // Ideally this would be Record<number, string> (per-variant) to prevent search state leaking
   // across variants when multiple group tag dropdowns are open. Left as-is for now because
@@ -809,11 +810,15 @@ function PipelinePage() {
 
   // Source videos: fetch list with segment counts
   const fetchSourceVideos = useCallback(async () => {
+    if (!currentProfile?.id) return;
+
     setSourceVideosLoading(true);
     try {
-      const res = await apiGet("/segments/source-videos");
-      const data = await res.json();
-      setSourceVideos(data || []);
+      const data = await getCachedSourceVideos<typeof sourceVideos>(currentProfile.id, async () => {
+        const res = await apiGet("/segments/source-videos");
+        return (await res.json()) || [];
+      });
+      setSourceVideos(data);
     } catch (err) {
       handleApiError(err, "Failed to load source videos");
     } finally {
@@ -3666,15 +3671,15 @@ function PipelinePage() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="mb-8 flex items-start justify-between">
+        <div className="mb-4 flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <Film className="h-8 w-8 text-primary" />
+            <h1 className="flex items-center gap-2 text-2xl font-bold">
+              <Film className="h-6 w-6 text-primary" />
               Multi-Variant Pipeline
             </h1>
-            <p className="text-muted-foreground mt-2">
+            <p className="mt-1 text-sm text-muted-foreground">
               End-to-end workflow: generate scripts {'\u2192'} preview matches {'\u2192'} batch render
             </p>
           </div>
@@ -3684,8 +3689,8 @@ function PipelinePage() {
         <PipelineStepper ctx={pipelineCtx} />
 
         {/* Main content + History sidebar */}
-        <div className="flex gap-6">
-        <div className="flex-1 min-w-0">
+        <div className="grid grid-cols-1 gap-5 min-[1280px]:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="min-w-0">
 
         {/* Step 1 — Idea Input */}
         {step === 1 && <Step1Script ctx={pipelineCtx} />}

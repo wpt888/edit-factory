@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { Loader2 } from "lucide-react";
@@ -24,10 +24,29 @@ export function DesktopAuthGuard({ children }: DesktopAuthGuardProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
+  const startupAuthConfirmed = useRef(
+    typeof window !== "undefined" &&
+      new URL(window.location.href).searchParams.get("desktopAuth") === "confirmed"
+  );
 
   const isPublicRoute = PUBLIC_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(route + "/")
   );
+
+  // Electron's launcher checks the same backend auth endpoint before loading
+  // the app. Consume that one-shot confirmation before the browser paints, then
+  // remove it from the visible URL. Direct web loads still use checkAuth below.
+  useLayoutEffect(() => {
+    if (!DESKTOP_MODE || isPublicRoute) return;
+    if (!startupAuthConfirmed.current) return;
+
+    // Intentional pre-paint hydration from the launcher's one-shot signal.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAuthed(true);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("desktopAuth");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [isPublicRoute]);
 
   const checkAuth = useCallback(async () => {
     try {
@@ -47,6 +66,9 @@ export function DesktopAuthGuard({ children }: DesktopAuthGuardProps) {
 
   useEffect(() => {
     if (!DESKTOP_MODE || isPublicRoute) return;
+    if (startupAuthConfirmed.current) return;
+    // The async callback updates state only after the auth request completes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     checkAuth();
   }, [isPublicRoute, checkAuth]);
 

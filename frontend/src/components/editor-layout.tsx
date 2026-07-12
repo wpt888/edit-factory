@@ -1,7 +1,13 @@
 "use client";
 
-import { useState, useEffect, ReactNode } from "react";
+import { useState, useEffect, useCallback, ReactNode } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,6 +32,24 @@ export function EditorLayout({
 }: EditorLayoutProps) {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const leftPanelRef = usePanelRef();
+  const rightPanelRef = usePanelRef();
+
+  const toggleLeftPanel = useCallback(() => {
+    if (leftPanelRef.current?.isCollapsed()) {
+      leftPanelRef.current.expand();
+    } else {
+      leftPanelRef.current?.collapse();
+    }
+  }, [leftPanelRef]);
+
+  const toggleRightPanel = useCallback(() => {
+    if (rightPanelRef.current?.isCollapsed()) {
+      rightPanelRef.current.expand();
+    } else {
+      rightPanelRef.current?.collapse();
+    }
+  }, [rightPanelRef]);
 
   // Keyboard shortcuts for panel collapse
   useEffect(() => {
@@ -39,25 +63,36 @@ export function EditorLayout({
 
       if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        setLeftCollapsed((prev) => !prev);
+        toggleLeftPanel();
       } else if (e.key === "]" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        setRightCollapsed((prev) => !prev);
+        toggleRightPanel();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [toggleLeftPanel, toggleRightPanel]);
 
   return (
-    <div className="h-[calc(100vh-64px)] w-full bg-background flex">
+    <ResizablePanelGroup
+      id="segments-workspace-layout"
+      orientation="horizontal"
+      className="h-full min-h-0 w-full bg-background"
+    >
       {/* Left Panel - Source Videos */}
-      <div
-        className={`bg-card border-r border-border flex flex-col transition-all duration-200 ${
-          leftCollapsed ? "w-12" : "w-64 min-w-[200px] max-w-[320px]"
-        }`}
+      <ResizablePanel
+        id="source-videos"
+        panelRef={leftPanelRef}
+        defaultSize={256}
+        minSize={200}
+        maxSize={440}
+        collapsible
+        collapsedSize={48}
+        onResize={({ inPixels }) => setLeftCollapsed(inPixels <= 52)}
+        className="min-w-0"
       >
+        <div className="flex h-full min-w-0 flex-col bg-card">
         {/* Panel Header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-border h-12">
           {!leftCollapsed && (
@@ -69,7 +104,7 @@ export function EditorLayout({
             variant="ghost"
             size="icon"
             className="h-7 w-7 flex-shrink-0 ml-auto"
-            onClick={() => setLeftCollapsed(!leftCollapsed)}
+            onClick={toggleLeftPanel}
             title={leftCollapsed ? "Expand panel ([)" : "Collapse panel ([)"}
           >
             {leftCollapsed ? (
@@ -84,26 +119,40 @@ export function EditorLayout({
         <div className={`flex-1 overflow-hidden ${leftCollapsed ? "hidden" : ""}`}>
           {leftPanel}
         </div>
-      </div>
+        </div>
+      </ResizablePanel>
+
+      <ResizableHandle withHandle className={leftCollapsed ? "opacity-40" : undefined} />
 
       {/* Center Panel - Video Player */}
-      <div className="flex-1 bg-background overflow-hidden p-2 min-w-0">
-        {children}
-      </div>
+      <ResizablePanel id="source-editor" minSize={380} className="min-w-0">
+        <div className="h-full min-w-0 overflow-hidden bg-background p-2">
+          {children}
+        </div>
+      </ResizablePanel>
+
+      <ResizableHandle withHandle className={rightCollapsed ? "opacity-40" : undefined} />
 
       {/* Right Panel - Segments Library */}
-      <div
-        className={`bg-card border-l border-border flex flex-col transition-all duration-200 ${
-          rightCollapsed ? "w-12" : "w-80 min-w-[250px] max-w-[400px]"
-        }`}
+      <ResizablePanel
+        id="segments-library"
+        panelRef={rightPanelRef}
+        defaultSize={320}
+        minSize={250}
+        maxSize={520}
+        collapsible
+        collapsedSize={48}
+        onResize={({ inPixels }) => setRightCollapsed(inPixels <= 52)}
+        className="min-w-0"
       >
+        <div className="flex h-full min-w-0 flex-col bg-card">
         {/* Panel Header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-border h-12">
           <Button
             variant="ghost"
             size="icon"
             className="h-7 w-7 flex-shrink-0"
-            onClick={() => setRightCollapsed(!rightCollapsed)}
+            onClick={toggleRightPanel}
             title={rightCollapsed ? "Expand panel (])" : "Collapse panel (])"}
           >
             {rightCollapsed ? (
@@ -123,7 +172,8 @@ export function EditorLayout({
         <div className={`flex-1 overflow-hidden ${rightCollapsed ? "hidden" : ""}`}>
           {rightPanel}
         </div>
-      </div>
-    </div>
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }

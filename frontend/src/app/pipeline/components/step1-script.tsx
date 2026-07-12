@@ -106,7 +106,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
     handleCreateManual,
   }: Step1Ctx = ctx;
   return (
-          <div className="max-w-2xl mx-auto">
+          <div className="mx-auto w-full max-w-5xl">
             <Card>
               <CardHeader>
                 <CardTitle>Video Idea</CardTitle>
@@ -398,7 +398,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 </div>
 
                 {/* Configuration row */}
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   {/* Variant count */}
                   <div className="space-y-2">
                     <Label htmlFor="variant-count">Variants</Label>

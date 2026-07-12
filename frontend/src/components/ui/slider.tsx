@@ -45,9 +45,9 @@ function Slider({
         <SliderPrimitive.Range
           data-slot="slider-range"
           className={cn(
-            // Interactive controls carry the lime brand accent (user decision
-            // 2026-07-11) — surfaces/cards stay neutral, controls stay lime.
-            "bg-lime absolute data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full"
+            // The track stays neutral; the outlined thumb carries the brand
+            // accent without turning the whole control into a lime surface.
+            "bg-muted-foreground/45 absolute data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full"
           )}
         />
       </SliderPrimitive.Track>

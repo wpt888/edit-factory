@@ -247,6 +247,12 @@ async def get_gemini_status(profile: ProfileContext = Depends(get_profile_contex
     return result
 
 
+@router.get("/health/live")
+async def liveness_check():
+    """Fast process liveness probe with no external dependency calls."""
+    return {"status": "ok", "version": APP_VERSION}
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check health of all dependencies."""
@@ -278,10 +284,19 @@ async def health_check():
     try:
         import redis
         settings = get_settings()
-        r = redis.from_url(settings.redis_url)
+        r = redis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=1.0,
+            socket_timeout=1.0,
+            retry_on_timeout=False,
+        )
         try:
-            r.ping()
-            redis_ok = True
+            redis_ok = bool(
+                await asyncio.wait_for(
+                    asyncio.to_thread(r.ping),
+                    timeout=2.0,
+                )
+            )
         finally:
             r.close()
     except Exception:

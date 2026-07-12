@@ -96,9 +96,10 @@
 /* Two themes, one neutral SURFACE system. Dark is the default (class .dark is
    applied pre-hydration in layout.tsx); light is the un-classed :root.
    2026-07-11 (user decision, reverting part of the monochrome restyle):
-   --primary is LIME again in both themes — active accents (Button default,
-   stepper circles, Checkbox, Slider, Switch, Progress) are brand lime with
-   ink text. Surfaces (background, card, secondary, muted) stay neutral. */
+   --primary is LIME again in both themes for semantic accents such as stepper
+   circles and selection states. Standard buttons and slider tracks opt into
+   neutral styling; Checkbox, Switch, Progress and focused handles keep the
+   brand accent. Surfaces (background, card, secondary, muted) stay neutral. */
 :root {
   --background: oklch(0.975 0.003 107);
   --foreground: oklch(0.175 0.006 110);

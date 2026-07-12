@@ -74,7 +74,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
     libraryProjectId,
   }: Step4Ctx = ctx;
   return (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Render Progress</h2>
               <div className="flex gap-2">
@@ -116,7 +116,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                 description="Configure a pipeline to generate videos."
               />
             ) : null}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 min-[1100px]:grid-cols-2">
               {variantStatuses.map((status, statusIdx) => (
                 <Card key={status.visual_version ? `${status.variant_index}_${status.visual_version}` : `${status.variant_index}_${statusIdx}`}>
                   <CardHeader>
@@ -139,10 +139,15 @@ export function Step4Render({ ctx }: { ctx: any }) {
                           <Badge
                             variant={
                               status.status === "completed"
-                                ? "default"
+                                ? "outline"
                                 : status.status === "failed" || status.status === "cancelled"
                                 ? "destructive"
                                 : "secondary"
+                            }
+                            className={
+                              status.status === "completed"
+                                ? "border-primary/70 bg-transparent text-primary"
+                                : undefined
                             }
                           >
                             {status.status}
@@ -289,7 +294,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                         <video
                           key={`video-${status.variant_index}${status.visual_version ? `_${status.visual_version}` : ""}-${getVideoCacheBust(status.variant_index, status.visual_version)}`}
                           controls
-                          className="w-full rounded-md bg-black max-h-64 object-contain"
+                          className="w-full rounded-md bg-black max-h-80 object-contain"
                           poster={
                             status.thumbnail_path
                               ? `${API_URL}/library/files/${encodeURIComponent(status.thumbnail_path)}`
@@ -298,26 +303,29 @@ export function Step4Render({ ctx }: { ctx: any }) {
                           preload="auto"
                           src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}`}
                         />
-                        <Button variant="outline" className="w-full" asChild>
-                          <a
-                            href={`${API_URL}/library/files/${encodeURIComponent(
-                              status.final_video_path
-                            )}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}&download=true`}
-                            download
-                          >
-                            <Download className="h-4 w-4 mr-2" />
-                            Download Video
-                          </a>
-                        </Button>
-                        {status.clip_id && (
-                          <Button
-                            className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-                            onClick={() => setPublishVariant(status)}
-                          >
-                            <Share2 className="h-4 w-4 mr-2" />
-                            Publish to Social Media
+                        <div className="flex gap-2">
+                          <Button variant="outline" className="flex-1" asChild>
+                            <a
+                              href={`${API_URL}/library/files/${encodeURIComponent(
+                                status.final_video_path
+                              )}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}&download=true`}
+                              download
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download Video
+                            </a>
                           </Button>
-                        )}
+                          {status.clip_id && (
+                            <Button
+                              variant="outline"
+                              className="flex-1 border-primary/70 bg-transparent text-primary hover:bg-primary/10 hover:text-primary"
+                              onClick={() => setPublishVariant(status)}
+                            >
+                              <Share2 className="h-4 w-4 mr-2" />
+                              Publish to Social Media
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     )}
 

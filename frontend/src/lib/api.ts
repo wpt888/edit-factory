@@ -16,6 +16,40 @@ interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
   timeout?: number;
   retry?: number;
+  /** Reuse a successful GET response for the lifetime of this renderer. */
+  memoryCache?: boolean;
+}
+
+// Pages are unmounted during App Router navigation, but the API client module
+// remains alive in the Electron renderer. Cache read-only responses here rather
+// than in each page so returning to any section can immediately reuse data
+// already loaded for the current profile. Mutations clear the cache below.
+const getResponseCache = new Map<string, Response>();
+
+const VOLATILE_GET_PATH = /\/(?:status|progress|health|logs|events)(?:[/?]|$)/i;
+
+function activeProfileId() {
+  return typeof window !== "undefined"
+    ? localStorage.getItem("editai_current_profile_id") || "default"
+    : "server";
+}
+
+function getCacheKey(endpoint: string) {
+  const base = API_URL.replace(/\/+$/, "");
+  const url = endpoint.startsWith("http") ? endpoint : `${base}${endpoint}`;
+  return `${activeProfileId()}::${url}`;
+}
+
+function canUseMemoryCache(endpoint: string, options: FetchOptions) {
+  return options.memoryCache !== false
+    && options.cache !== "no-store"
+    && !options.signal
+    && !VOLATILE_GET_PATH.test(endpoint);
+}
+
+/** Clears session-only GET data after a write, preventing stale page restores. */
+export function invalidateApiMemoryCache() {
+  getResponseCache.clear();
 }
 
 /**
@@ -28,7 +62,14 @@ export async function apiFetch(
   options: FetchOptions = {}
 ): Promise<Response> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { headers: customHeaders, skipAuth, timeout = DEFAULT_TIMEOUT_MS, retry: _retry, signal: existingSignal, ...restOptions } = options;
+  const { headers: customHeaders, skipAuth, timeout = DEFAULT_TIMEOUT_MS, retry: _retry, memoryCache: _memoryCache, signal: existingSignal, ...restOptions } = options;
+
+  // Covers the few callers that use apiFetch directly instead of apiPost/
+  // apiPatch/etc. A failed write may still clear the cache; that is safe and
+  // ensures the next read is authoritative.
+  if ((restOptions.method || "GET").toUpperCase() !== "GET") {
+    invalidateApiMemoryCache();
+  }
 
   // Auto-inject profile ID from localStorage (SSR-safe)
   const profileId =
@@ -135,7 +176,14 @@ export async function apiGet(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  return apiFetch(endpoint, { ...options, method: "GET" });
+  const cacheable = canUseMemoryCache(endpoint, options);
+  const cacheKey = cacheable ? getCacheKey(endpoint) : null;
+  const cached = cacheKey ? getResponseCache.get(cacheKey) : undefined;
+  if (cached) return cached.clone();
+
+  const response = await apiFetch(endpoint, { ...options, method: "GET" });
+  if (cacheKey) getResponseCache.set(cacheKey, response.clone());
+  return response;
 }
 
 /**
@@ -180,6 +228,7 @@ export async function apiPost<T = unknown>(
   body?: T,
   options: FetchOptions = {}
 ): Promise<Response> {
+  invalidateApiMemoryCache();
   return apiFetch(endpoint, {
     ...options,
     method: "POST",
@@ -196,6 +245,7 @@ export async function apiPatch<T = unknown>(
   body?: T,
   options: FetchOptions = {}
 ): Promise<Response> {
+  invalidateApiMemoryCache();
   return apiFetch(endpoint, {
     ...options,
     method: "PATCH",
@@ -211,6 +261,7 @@ export async function apiPut<T = unknown>(
   body?: T,
   options: FetchOptions = {}
 ): Promise<Response> {
+  invalidateApiMemoryCache();
   return apiFetch(endpoint, {
     ...options,
     method: "PUT",
@@ -225,6 +276,7 @@ export async function apiDelete(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<Response> {
+  invalidateApiMemoryCache();
   return apiFetch(endpoint, { ...options, method: "DELETE" });
 }
 
@@ -236,6 +288,7 @@ export async function apiUpload(
   formData: FormData,
   options: FetchOptions = {}
 ): Promise<Response> {
+  invalidateApiMemoryCache();
   return apiFetch(endpoint, {
     ...options,
     method: "POST",

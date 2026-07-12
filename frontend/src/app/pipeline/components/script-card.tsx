@@ -134,19 +134,8 @@ export const ScriptCard = memo(function ScriptCard({
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {ttsResult && !ttsResult.generating && !ttsResult.stale && (
-              <Checkbox
-                id={`approve-header-${index}`}
-                checked={isApproved}
-                onCheckedChange={(checked) => onApprove(index, checked === true)}
-                className="h-5 w-5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
-              />
-            )}
             <CardTitle className="text-lg">
               Script {index + 1}
-              {isApproved && (
-                <CheckCircle className="inline-block h-4 w-4 ml-2 text-success" />
-              )}
             </CardTitle>
           </div>
           <div className="flex items-center gap-2">

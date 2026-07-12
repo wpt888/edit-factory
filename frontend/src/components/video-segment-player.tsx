@@ -1109,7 +1109,6 @@ export function VideoSegmentPlayer({
       >
         <div
           className="relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden"
-          style={{ aspectRatio: sourceAspectRatio }}
         onMouseDown={(e) => {
           if (videoZoom > 1) {
             e.preventDefault();
@@ -1118,15 +1117,27 @@ export function VideoSegmentPlayer({
           }
         }}
       >
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            className="h-full w-full object-contain"
-            onClick={() => {
-              if (!isDraggingVideo) togglePlay();
-            }}
-            style={videoStyle}
-          />
+          {/*
+            Keep a fixed source-resolution frame inside the available preview area.
+            Transforming a video that is `w-full h-full` also transforms its
+            letterbox area, which makes a portrait source appear to fill the
+            entire editor at higher scales. The inner frame remains unscaled,
+            so its edges always show the actual output bounds.
+          */}
+          <div
+            className="relative h-full max-w-full overflow-hidden bg-black ring-1 ring-white/15"
+            style={{ aspectRatio: sourceAspectRatio }}
+          >
+            <video
+              ref={videoRef}
+              src={videoUrl}
+              className="h-full w-full object-contain"
+              onClick={() => {
+                if (!isDraggingVideo) togglePlay();
+              }}
+              style={videoStyle}
+            />
+          </div>
         </div>
 
         {isMarking && (
