@@ -30,7 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Type, Loader2, CheckCircle2, Maximize2 } from "lucide-react";
+import { Loader2, CheckCircle2, Maximize2, X } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -39,6 +39,7 @@ import {
   VideoInfo,
   CAPTION_PRESETS,
   CaptionPreset,
+  UserSubtitlePreset,
 } from "@/types/video-processing";
 import { apiPost } from "@/lib/api";
 import {
@@ -81,17 +82,17 @@ interface SubtitleEditorProps {
    * Optional Meta visual version label ("A" or "B"). When set and the active
    * variant has NO explicit user override, the FFmpeg preview endpoint will
    * apply the corresponding Meta profile overlay (Instagram/Facebook). The
-   * caller decides whether to pass this — typically only when there is no
+   * caller decides whether to pass this â€” typically only when there is no
    * override for the current key, to mirror the render-time precedence rule.
    */
   visualVersion?: string;
   /**
    * Controls which sub-panels the component renders.
-   *   "full"          — preview + settings side-by-side (current default).
-   *   "preview-only"  — just the live preview panel, no settings controls.
+   *   "full"          â€” preview + settings side-by-side (current default).
+   *   "preview-only"  â€” just the live preview panel, no settings controls.
    *                     Used by the pipeline page to show an always-on B
    *                     preview while the user edits A (and vice-versa).
-   *   "settings-only" — just the style controls, no preview. The pipeline
+   *   "settings-only" â€” just the style controls, no preview. The pipeline
    *                     page uses this for the active-tab editor; the
    *                     preview is rendered separately via two
    *                     "preview-only" instances so both Meta versions
@@ -100,6 +101,10 @@ interface SubtitleEditorProps {
    * Defaults to "full" so existing call sites keep working unchanged.
    */
   renderMode?: "full" | "preview-only" | "settings-only";
+  previewInteractive?: boolean;
+  userPresets?: UserSubtitlePreset[];
+  onApplyUserPreset?: (preset: UserSubtitlePreset) => void;
+  onDeleteUserPreset?: (preset: UserSubtitlePreset) => void;
 }
 
 export function SubtitleEditor({
@@ -118,6 +123,10 @@ export function SubtitleEditor({
   previewText,
   visualVersion,
   renderMode = "full",
+  previewInteractive = false,
+  userPresets = [],
+  onApplyUserPreset,
+  onDeleteUserPreset,
 }: SubtitleEditorProps) {
   const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>(showPreview);
   // Track which preset is currently selected (null = manual/custom)
@@ -146,7 +155,7 @@ export function SubtitleEditor({
       .catch(() => setFontAccessError("System font access was denied. Use the font picker again to retry."));
   };
   const latestSettingsRef = useRef(settings);
-  // Monotonic request id — any response whose id is not the latest is
+  // Monotonic request id â€” any response whose id is not the latest is
   // discarded so a slow earlier render can't overwrite a newer one.
   const requestSeq = useRef(0);
   const latestAppliedSeq = useRef(0);
@@ -254,7 +263,7 @@ export function SubtitleEditor({
   }, [pipelineId, variantIndex]);
 
   // Mirror the active blob URL into a ref so the unmount cleanup below can
-  // read the *latest* value — a plain state capture with [] deps would freeze
+  // read the *latest* value â€” a plain state capture with [] deps would freeze
   // at the initial null and leak the final URL.
   const ffmpegPreviewUrlRef = useRef<string | null>(null);
   const ffmpegBackgroundUrlRef = useRef<string | null>(null);
@@ -372,10 +381,17 @@ export function SubtitleEditor({
         ? { top: `${settings.positionY}%` }
         : { top: `${settings.positionY}%`, transform: "translateY(-50%)" };
 
+    const updatePositionFromPointer = (clientY: number, preview: HTMLElement) => {
+      const rect = preview.getBoundingClientRect();
+      if (!rect.height) return;
+      updateSetting("positionY", Math.round(Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100))));
+    };
     return (
       <div
-        className={`absolute left-2 right-2 z-[2] text-center pointer-events-none ${className}`}
+        className={`absolute left-2 right-2 z-[2] text-center ${previewInteractive ? "cursor-grab active:cursor-grabbing touch-none" : "pointer-events-none"} ${className}`}
         style={positionStyle}
+        onPointerDown={previewInteractive ? (event) => { const preview = event.currentTarget.parentElement; if (preview) { event.currentTarget.setPointerCapture(event.pointerId); updatePositionFromPointer(event.clientY, preview); } } : undefined}
+        onPointerMove={previewInteractive ? (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const preview = event.currentTarget.parentElement; if (preview) updatePositionFromPointer(event.clientY, preview); } : undefined}
       >
         <p className="inline-block px-2 py-1 font-semibold leading-tight" style={textStyle}>
           {previewOverlayText}
@@ -511,7 +527,18 @@ export function SubtitleEditor({
           <p className="text-xs text-muted-foreground">Click a preset to apply</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-          {CAPTION_PRESETS.map((preset) => {
+          {[
+            ...CAPTION_PRESETS.map((preset) => ({ preset, userPreset: undefined as UserSubtitlePreset | undefined })),
+            ...userPresets.map((userPreset) => ({
+              preset: {
+                ...userPreset,
+                id: `user-${userPreset.id}`,
+                description: "Saved subtitle preset",
+                previewStyle: { backgroundColor: "#18181b", textSample: "Sample Text" },
+              },
+              userPreset,
+            })),
+          ].map(({ preset, userPreset }) => {
             const isSelected = selectedPresetId === preset.id;
             const outlineShadow = `-1px -1px 0 ${preset.settings.outlineColor}, 1px -1px 0 ${preset.settings.outlineColor}, -1px 1px 0 ${preset.settings.outlineColor}, 1px 1px 0 ${preset.settings.outlineColor}`;
             const glowShadow = preset.settings.enableGlow && preset.settings.glowBlur
@@ -520,7 +547,14 @@ export function SubtitleEditor({
             return (
               <button
                 key={preset.id}
-                onClick={() => applyPreset(preset)}
+                onClick={() => {
+                  if (userPreset) {
+                    setSelectedPresetId(preset.id);
+                    onApplyUserPreset?.(userPreset);
+                  } else {
+                    applyPreset(preset);
+                  }
+                }}
                 className={`relative h-20 rounded-lg cursor-pointer transition-all hover:opacity-90 overflow-hidden border-2 ${
                   isSelected
                     ? "ring-2 ring-primary border-primary"
@@ -535,15 +569,15 @@ export function SubtitleEditor({
                     style={{
                       fontFamily: preset.settings.fontFamily,
                       color: preset.settings.textColor,
+                      opacity: (preset.settings.opacity ?? 100) / 100,
                       textShadow: outlineShadow + glowShadow,
                     }}
                   >
                     {preset.previewStyle.textSample}
                   </span>
                 </div>
-                <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-0.5">
-                  <span className="text-[10px] text-white/80 font-medium">{preset.name}</span>
-                </div>
+                <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-0.5"><span className="text-[10px] text-white/80 font-medium">{preset.name}</span></div>
+                {userPreset && onDeleteUserPreset && <span role="button" tabIndex={0} aria-label={`Delete ${preset.name}`} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white hover:bg-destructive" onClick={(event) => { event.stopPropagation(); onDeleteUserPreset(userPreset); }}><X className="h-3 w-3" /></span>}
               </button>
             );
           })}
@@ -552,48 +586,9 @@ export function SubtitleEditor({
 
       <Separator />
 
-      {/* Style Settings */}
-      {!compact && (
-        <div className="flex items-center gap-2">
-          <Type className="h-4 w-4 text-muted-foreground" />
-          <h3 className="font-semibold">Subtitle Style</h3>
-        </div>
-      )}
-
-      {/* Font Size */}
-      <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <Label>Font Size</Label>
-          <span className="text-sm text-muted-foreground">{settings.fontSize}px</span>
-        </div>
-        <Slider
-          value={[settings.fontSize]}
-          onValueChange={([value]) => updateSetting("fontSize", value)}
-          min={12}
-          max={200}
-          step={1}
-          className="w-full"
-        />
-      </div>
-
-      {/* Opacity */}
-      <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <Label>Opacity</Label>
-          <span className="text-sm text-muted-foreground">{settings.opacity ?? 100}%</span>
-        </div>
-        <Slider
-          value={[settings.opacity ?? 100]}
-          onValueChange={([value]) => updateSetting("opacity", value)}
-          min={0}
-          max={100}
-          step={5}
-          className="w-full"
-        />
-      </div>
-
-      {/* Font Family */}
-      <div className="space-y-2">
+      <div className="space-y-4">
+        <h4 className="text-sm font-medium">Text</h4>
+        <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label>Font</Label>
           {typeof window !== "undefined" && window.editFactory?.listSystemFonts && (
@@ -606,7 +601,7 @@ export function SubtitleEditor({
           value={settings.fontFamily}
           onValueChange={(value) => updateSetting("fontFamily", value)}
         >
-          <SelectTrigger className="bg-muted/50">
+          <SelectTrigger className="w-full bg-muted/50">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -635,41 +630,28 @@ export function SubtitleEditor({
           )}
       </div>
 
-      {/* Colors Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Text Color */}
-        <ColorPicker
-          label="Text Color"
-          value={settings.textColor}
-          onChange={(value) => updateSetting("textColor", value)}
-        />
-
-        {/* Outline Color */}
-        <ColorPicker
-          label="Outline Color"
-          value={settings.outlineColor}
-          onChange={(value) => updateSetting("outlineColor", value)}
-        />
-      </div>
-
-      {/* Outline Width */}
-      <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <Label>Outline Width</Label>
-          <span className="text-sm text-muted-foreground">{settings.outlineWidth}px</span>
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Font Size</Label>
+            <span className="text-sm text-muted-foreground">{settings.fontSize}px</span>
+          </div>
+          <Slider value={[settings.fontSize]} onValueChange={([value]) => updateSetting("fontSize", value)} min={12} max={200} step={1} className="w-full" />
         </div>
-        <Slider
-          value={[settings.outlineWidth]}
-          onValueChange={([value]) => updateSetting("outlineWidth", value)}
-          min={0}
-          max={10}
-          step={1}
-          className="w-full"
-        />
+        <ColorPicker label="Text Color" value={settings.textColor} onChange={(value) => updateSetting("textColor", value)} />
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Opacity</Label>
+            <span className="text-sm text-muted-foreground">{settings.opacity ?? 100}%</span>
+          </div>
+          <Slider value={[settings.opacity ?? 100]} onValueChange={([value]) => updateSetting("opacity", value)} min={0} max={100} step={5} className="w-full" />
+        </div>
       </div>
 
-      {/* Position Y */}
-      <div className="space-y-3">
+      <Separator />
+
+      <div className="space-y-4">
+        <h4 className="text-sm font-medium">Position</h4>
+        <div className="space-y-3">
         <div className="flex justify-between items-center">
           <Label>Vertical Position (Y)</Label>
           <span className="text-sm text-muted-foreground">{settings.positionY}%</span>
@@ -683,15 +665,26 @@ export function SubtitleEditor({
           className="w-full"
         />
         <p className="text-xs text-muted-foreground">
-          0% = sus, 50% = centru, 100% = jos
+          0% = top, 50% = center, 100% = bottom
         </p>
+      </div>
+
+        <div className="flex items-center justify-between"><div><Label>Adaptive Sizing</Label><p className="text-xs text-muted-foreground">Auto-reduce font for long text</p></div><Switch checked={settings.adaptiveSizing ?? false} onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)} /></div>
       </div>
 
       <Separator />
 
-      {/* Shadow Settings */}
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium">Shadow</h4>
+      <div className="space-y-4">
+        <h4 className="text-sm font-medium">Effects</h4>
+        <ColorPicker label="Outline Color" value={settings.outlineColor} onChange={(value) => updateSetting("outlineColor", value)} />
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Outline Width</Label>
+            <span className="text-sm text-muted-foreground">{settings.outlineWidth}px</span>
+          </div>
+          <Slider value={[settings.outlineWidth]} onValueChange={([value]) => updateSetting("outlineWidth", value)} min={0} max={10} step={1} className="w-full" />
+        </div>
+        <div className="space-y-3">
         <div className="space-y-3">
           <div className="flex justify-between items-center">
             <Label>Shadow Depth</Label>
@@ -716,10 +709,9 @@ export function SubtitleEditor({
         )}
       </div>
 
-      {/* Glow Settings */}
-      <div className="space-y-3">
+        <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium">Glow Effect</h4>
+          <Label>Glow Effect</Label>
           <Switch
             checked={settings.enableGlow ?? false}
             onCheckedChange={(checked) => updateSetting("enableGlow", checked)}
@@ -747,8 +739,7 @@ export function SubtitleEditor({
         )}
       </div>
 
-      {/* Border Style */}
-      <div className="space-y-2">
+        <div className="space-y-2">
         <Label>Border Style</Label>
         <Select
           value={String(settings.borderStyle ?? 1)}
@@ -764,24 +755,13 @@ export function SubtitleEditor({
         </Select>
       </div>
 
-      {/* Adaptive Sizing */}
-      <div className="flex items-center justify-between">
-        <div>
-          <Label>Adaptive Sizing</Label>
-          <p className="text-xs text-muted-foreground">
-            Auto-reduce font for long text
-          </p>
-        </div>
-        <Switch
-          checked={settings.adaptiveSizing ?? false}
-          onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)}
-        />
+        {settings.karaoke && <ColorPicker label="Highlight Color" value={settings.highlightColor ?? "#FFFF00"} onChange={(value) => updateSetting("highlightColor", value)} />}
       </div>
     </div>
   );
 
-  // ── Render mode branching ─────────────────────────────────────────────
-  // "preview-only" — just the live preview, no settings controls or lines
+  // â”€â”€ Render mode branching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // "preview-only" â€” just the live preview, no settings controls or lines
   // editor. Used by the pipeline page to stack two always-on previews (A/B)
   // side-by-side without duplicating the settings panel.
   if (renderMode === "preview-only") {
@@ -792,7 +772,7 @@ export function SubtitleEditor({
     );
   }
 
-  // "settings-only" — just the style controls (and the subtitle lines editor
+  // "settings-only" â€” just the style controls (and the subtitle lines editor
   // if the caller provides one). No preview. The pipeline page uses this for
   // the active-tab editor; the preview(s) are rendered separately via
   // "preview-only" instances so both A and B stay visible.
@@ -825,7 +805,7 @@ export function SubtitleEditor({
     );
   }
 
-  // "full" (default) — preserves the exact layout from before this refactor.
+  // "full" (default) â€” preserves the exact layout from before this refactor.
   return (
     <div className={className}>
       {/* Side-by-side layout: Preview (left, sticky) + Settings (right, scrollable) */}
