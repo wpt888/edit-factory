@@ -11,3 +11,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Session navigation cache](10-session-navigation-cache.md)
 - [Subtitle Style panel](11-subtitle-style-panel.md)
 - [Preview/render segment parity](12-preview-render-parity.md)
+- [AI Video with Seedance 2.0](13-ai-video-seedance.md)

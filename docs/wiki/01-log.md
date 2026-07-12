@@ -1,5 +1,13 @@
 # Engineering Change Log
 
+## 2026-07-12 â€” AI Video with Seedance 2.0
+
+- Added Seedance 2.0 text-to-video generation through the existing FAL credential flow.
+- Download completed MP4s locally, then register each asset in both Source Videos and Library.
+- Added the AI Video workspace and documented how generated clips retain the normal editing, voiceover, caption, and social publishing workflows.
+
+See [AI Video with Seedance 2.0](13-ai-video-seedance.md).
+
 ## 2026-07-12 â€” Pacing control and timeline card labels
 
 - Added persisted Fast/Normal/Slow Step 3 pacing that re-runs preview matching
