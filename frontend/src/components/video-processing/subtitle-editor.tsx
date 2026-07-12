@@ -163,6 +163,17 @@ export function SubtitleEditor({
     || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
     || "Sample subtitle text";
 
+  // Legacy settings may store a full CSS font stack ("var(--font-x), X, sans-serif");
+  // show the first real family name in the picker instead of the raw stack.
+  const displayFontName = (() => {
+    const raw = settings.fontFamily || "Montserrat";
+    const first = raw
+      .split(",")
+      .map((part) => part.trim().replace(/^["']|["']$/g, ""))
+      .find((part) => part && !part.startsWith("var("));
+    return first || raw;
+  })();
+
   // Debounced FFmpeg frame preview fetch.
   //
   // Radix slider fires onValueChange continuously during drag. The CSS
@@ -602,10 +613,18 @@ export function SubtitleEditor({
           onValueChange={(value) => updateSetting("fontFamily", value)}
         >
           <SelectTrigger className="w-full bg-muted/50" style={{ fontFamily: settings.fontFamily }}>
-            {/* placeholder shows the stored font even when its SelectItem isn't mounted yet (system fonts load on demand) */}
-            <SelectValue placeholder={settings.fontFamily || "Montserrat"} />
+            {/* children override: always show the stored font, even when its SelectItem isn't mounted (system fonts load on demand). Legacy settings may store a full CSS stack — display the first real family name. */}
+            <SelectValue placeholder="Montserrat">{displayFontName}</SelectValue>
           </SelectTrigger>
           <SelectContent>
+            {/* phantom item so an unlisted stored font stays selectable until system fonts load */}
+            {settings.fontFamily &&
+              !FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
+              !systemFonts.includes(settings.fontFamily) && (
+                <SelectItem value={settings.fontFamily} style={{ fontFamily: settings.fontFamily }}>
+                  {displayFontName}
+                </SelectItem>
+              )}
             {FONT_OPTIONS.map((font) => (
               <SelectItem
                 key={font.value}
