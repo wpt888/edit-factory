@@ -601,8 +601,9 @@ export function SubtitleEditor({
           value={settings.fontFamily}
           onValueChange={(value) => updateSetting("fontFamily", value)}
         >
-          <SelectTrigger className="w-full bg-muted/50">
-            <SelectValue />
+          <SelectTrigger className="w-full bg-muted/50" style={{ fontFamily: settings.fontFamily }}>
+            {/* placeholder shows the stored font even when its SelectItem isn't mounted yet (system fonts load on demand) */}
+            <SelectValue placeholder={settings.fontFamily || "Montserrat"} />
           </SelectTrigger>
           <SelectContent>
             {FONT_OPTIONS.map((font) => (
