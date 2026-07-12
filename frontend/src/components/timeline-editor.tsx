@@ -1752,7 +1752,14 @@ export function TimelineEditor({
                     : "bg-amber-50 dark:bg-amber-950/20";
 
                   // Combine texts for tooltip, plus the assembly explanation if present
-                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ")
+                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
+                  const phraseRange = isMulti
+                    ? `#${firstMatch.srt_index + 1}-${matches[lastIdx].srt_index + 1}`
+                    : `#${firstMatch.srt_index + 1}`;
+                  const firstPhraseWords = firstMatch.srt_text.trim().split(/\s+/);
+                  const primaryLabel = firstMatch.matched_keyword?.trim()
+                    || `${firstPhraseWords.slice(0, 3).join(" ")}${firstPhraseWords.length > 3 ? "..." : ""}`;
+                  const cardTitle = `Phrases ${phraseRange}\n${groupTexts}`
                     + (firstMatch.explanation ? `\n\n${firstMatch.explanation}` : "");
 
                   elements.push(
@@ -1783,7 +1790,7 @@ export function TimelineEditor({
                         width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,
                         height: "80px",
                       }}
-                      title={groupTexts}
+                      title={cardTitle}
                     >
                       {/* Thumbnail background */}
                       {firstMatch.thumbnail_path && (
@@ -1807,28 +1814,13 @@ export function TimelineEditor({
                       )}
                       {/* Content overlay */}
                       <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
-                        {isMulti ? (
+                        {(
                           <>
-                            <span className="text-[10px] font-mono font-bold leading-none">
-                              #{firstMatch.srt_index + 1}-{matches[group.matchIndices[group.matchIndices.length - 1]].srt_index + 1}
+                            <span className="max-w-full truncate text-[10px] font-medium leading-tight text-foreground">
+                              {primaryLabel}
                             </span>
-                            <span className="text-[10px] font-medium leading-tight mt-0.5">
+                            <span className="mt-0.5 text-[9px] leading-tight text-muted-foreground">
                               {groupDuration.toFixed(1)}s
-                            </span>
-                            <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
-                              {group.matchIndices.length} phrases
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-[10px] font-mono font-bold leading-none">
-                              #{firstMatch.srt_index + 1}
-                            </span>
-                            <span className="text-[10px] font-medium leading-tight mt-0.5 truncate max-w-full">
-                              {groupDuration.toFixed(1)}s
-                            </span>
-                            <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
-                              {firstMatch.matched_keyword ?? (isAutoFilled ? "auto" : "?")}
                             </span>
                           </>
                         )}

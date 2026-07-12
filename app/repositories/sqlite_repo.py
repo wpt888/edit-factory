@@ -125,7 +125,7 @@ class SQLiteRepository(DataRepository):
         """Add editai_pipelines columns missing from older DBs (F3 fix).
 
         Mirrors Supabase migrations 035 (selected_captions) and 042
-        (subtitle_settings_by_key) plus target_script_duration. Without these,
+        (subtitle_settings_by_key) plus pipeline scalar settings. Without these,
         every _db_save_pipeline upsert failed on SQLite — its
         column-degradation retry can only strip one error per attempt, so
         pipeline state silently never persisted in desktop mode.
@@ -133,6 +133,8 @@ class SQLiteRepository(DataRepository):
         wanted = {
             "selected_captions": "TEXT DEFAULT '{}'",
             "target_script_duration": "REAL",
+            "min_segment_duration": "REAL DEFAULT 3.0",
+            "min_segment_duration": "REAL DEFAULT 3.0",
             "subtitle_settings_by_key": "TEXT",
         }
         try:

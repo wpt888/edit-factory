@@ -44,6 +44,14 @@ def _stable_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _clamp_min_segment_duration(value: Optional[float]) -> float:
+    """Keep pacing within the supported 1â€“8 second range."""
+    try:
+        return max(1.0, min(8.0, float(value)))
+    except (TypeError, ValueError):
+        return 3.0
+
+
 def _increment_segment_usage(supabase_client, segment_ids: list):
     """Increment usage_count for segments after a successful render.
 
@@ -848,6 +856,9 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "captions": captions_json,
                 "selected_captions": selected_captions_json,
                 "target_script_duration": pipeline_dict.get("target_script_duration"),
+                "min_segment_duration": _clamp_min_segment_duration(
+                    pipeline_dict.get("min_segment_duration", 3.0)
+                ),
                 "meta_multiplication": pipeline_dict.get("meta_multiplication", True),
                 "subtitle_settings_by_key": subtitle_overrides_json,
             }
@@ -863,10 +874,12 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                     )
                     row.pop("subtitle_settings_by_key", None)
                     repo.upsert_pipeline(row)
-                elif "selected_captions" in err_str or "target_script_duration" in err_str:
+                elif ("selected_captions" in err_str or "target_script_duration" in err_str
+                      or "min_segment_duration" in err_str):
                     logger.warning(f"Column missing, retrying without it: {err_str[:100]}")
                     row.pop("selected_captions", None)
                     row.pop("target_script_duration", None)
+                    row.pop("min_segment_duration", None)
                     repo.upsert_pipeline(row)
                 else:
                     raise
@@ -1470,6 +1483,9 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "context_products": row.get("context_products") or [],
             "captions": row.get("captions") or {},
             "selected_captions": row.get("selected_captions") or {},
+            "min_segment_duration": _clamp_min_segment_duration(
+                row.get("min_segment_duration", 3.0)
+            ),
             "created_at": row.get("created_at", ""),
             "meta_multiplication": row.get("meta_multiplication", True),
             "subtitle_settings_by_key": subtitle_settings_by_key,
@@ -1658,7 +1674,12 @@ class PipelineRenderRequest(BaseModel):
     # Subtitle word grouping — BUG-PR-19: bounded
     words_per_subtitle: int = Field(default=2, ge=1, le=20)
     # Minimum video segment duration (seconds) — groups short SRT phrases
-    min_segment_duration: float = 3.0
+    min_segment_duration: Optional[float] = None
+
+    @field_validator("min_segment_duration", mode="before")
+    @classmethod
+    def _clamp_pacing(cls, value):
+        return None if value is None else _clamp_min_segment_duration(value)
     # F8: segment-selection scoring preset (keyword_strict|balanced|max_variety|shuffle)
     preset: Optional[str] = "balanced"
     # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
@@ -2779,6 +2800,7 @@ async def generate_pipeline(
                 "preview_renders": {},
                 "render_jobs": {},
                 "meta_multiplication": True,
+                "min_segment_duration": 3.0,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "profile_id": profile.profile_id,
                 "target_script_duration": body.target_script_duration
@@ -3212,6 +3234,7 @@ async def preview_variant(
     )
     script_text = pipeline["scripts"][variant_index]
     cleaned_text = strip_product_group_tags(script_text)
+    min_segment_duration = _clamp_min_segment_duration(min_segment_duration)
 
     logger.info(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
@@ -3396,6 +3419,7 @@ async def preview_variant(
 
         # BUG-PR-20: Reuse state_lock from above (already obtained), single acquisition for all writes
         with state_lock:
+            pipeline["min_segment_duration"] = min_segment_duration
             pipeline.setdefault("segment_usage", {})[preview_key] = used_segment_ids
 
             # Store preview result in pipeline state
@@ -3498,6 +3522,12 @@ async def check_render_skip(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    render_request.min_segment_duration = _clamp_min_segment_duration(
+        render_request.min_segment_duration
+        if render_request.min_segment_duration is not None
+        else pipeline.get("min_segment_duration", 3.0)
+    )
 
     # Build a set of soft-deleted clip IDs so we don't offer skip for deleted clips
     _deleted_clip_ids: set = set()
@@ -3679,6 +3709,13 @@ async def render_variants(
     # Validate ownership
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    render_request.min_segment_duration = _clamp_min_segment_duration(
+        render_request.min_segment_duration
+        if render_request.min_segment_duration is not None
+        else pipeline.get("min_segment_duration", 3.0)
+    )
+    pipeline["min_segment_duration"] = render_request.min_segment_duration
 
     # PIP-17: Validate variant_indices is non-empty
     if not render_request.variant_indices:
@@ -4444,6 +4481,13 @@ async def remake_variant(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    render_request.min_segment_duration = _clamp_min_segment_duration(
+        render_request.min_segment_duration
+        if render_request.min_segment_duration is not None
+        else pipeline.get("min_segment_duration", 3.0)
+    )
+    pipeline["min_segment_duration"] = render_request.min_segment_duration
 
     vid = variant_index
     normalized_visual_version = _normalize_meta_version_label(visual_version)
@@ -5655,7 +5699,12 @@ class PreviewRenderRequest(BaseModel):
     """Request model for server-side FFmpeg preview render."""
     match_overrides: List[dict]
     source_video_ids: Optional[List[str]] = None
-    min_segment_duration: float = 3.0
+    min_segment_duration: Optional[float] = None
+
+    @field_validator("min_segment_duration", mode="before")
+    @classmethod
+    def _clamp_pacing(cls, value):
+        return None if value is None else _clamp_min_segment_duration(value)
     subtitle_settings: Optional[dict] = None
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
     ultra_rapid_intro: bool = True  # Match PipelineRenderRequest default
@@ -5759,6 +5808,12 @@ async def render_preview(
 
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    render_request.min_segment_duration = _clamp_min_segment_duration(
+        render_request.min_segment_duration
+        if render_request.min_segment_duration is not None
+        else pipeline.get("min_segment_duration", 3.0)
+    )
 
     if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
         raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")

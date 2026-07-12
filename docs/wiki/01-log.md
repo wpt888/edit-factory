@@ -1,5 +1,14 @@
 # Engineering Change Log
 
+## 2026-07-12 â€” Pacing control and timeline card labels
+
+- Added persisted Fast/Normal/Slow Step 3 pacing that re-runs preview matching
+  and is shared with preview rendering and final rendering.
+- Replaced visible phrase-index timeline labels with content-focused labels and
+  compact duration metadata while retaining indices in hover tooltips.
+
+See [Preview/render segment parity](12-preview-render-parity.md).
+
 ## 2026-07-12 — Preview/render segment parity
 
 - Matched library footage once per merge group and expanded the shared selection to per-phrase preview data.

@@ -1,11 +1,16 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
-import { handleApiError, apiGet } from "@/lib/api";
+import { API_URL, apiGet } from "@/lib/api";
 import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import {
   Play,
   Pause,
@@ -37,6 +42,7 @@ interface Segment {
   start_time: number;
   end_time: number;
   keywords: string[];
+  thumbnail_path?: string;
   isTemp?: boolean; // For segment being created
 }
 
@@ -83,6 +89,9 @@ interface VideoSegmentPlayerProps {
   productGroups?: ProductGroup[];
   showGroupBands?: boolean;
   fps?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  timelineThumbnailUrl?: string;
 }
 
 export function VideoSegmentPlayer({
@@ -100,6 +109,9 @@ export function VideoSegmentPlayer({
   productGroups = [],
   showGroupBands = true,
   fps = 30,
+  videoWidth,
+  videoHeight,
+  timelineThumbnailUrl,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,6 +189,43 @@ export function VideoSegmentPlayer({
   const maxOffset = Math.max(0, 1 - (1 / zoomLevel));
   const visibleStart = scrollOffset * safeDuration;
   const visibleEnd = visibleStart + visibleDuration;
+
+  const sourceAspectRatio = videoWidth && videoHeight
+    ? `${videoWidth} / ${videoHeight}`
+    : "16 / 9";
+
+  const timelineFrames = useMemo(() => {
+    const frameCount = 12;
+    const candidates = segments
+      .filter((segment) => segment.thumbnail_path)
+      .map((segment) => ({
+        ...segment,
+        thumbnailUrl: `${API_URL}/segments/files/${encodeURIComponent(
+          segment.thumbnail_path!.split(/[\\/]/).pop() || segment.thumbnail_path!
+        )}`,
+      }));
+
+    return Array.from({ length: frameCount }, (_, index) => {
+      const time = visibleStart + ((index + 0.5) / frameCount) * visibleDuration;
+      const exact = candidates.find(
+        (segment) => time >= segment.start_time && time <= segment.end_time
+      );
+      if (exact) return exact.thumbnailUrl;
+
+      const nearest = candidates.reduce<(typeof candidates)[number] | null>(
+        (closest, segment) => {
+          if (!closest) return segment;
+          const midpoint = (segment.start_time + segment.end_time) / 2;
+          const closestMidpoint = (closest.start_time + closest.end_time) / 2;
+          return Math.abs(midpoint - time) < Math.abs(closestMidpoint - time)
+            ? segment
+            : closest;
+        },
+        null
+      );
+      return nearest?.thumbnailUrl || timelineThumbnailUrl || null;
+    });
+  }, [segments, timelineThumbnailUrl, visibleDuration, visibleStart]);
 
   // Stable refs for scrub callbacks (avoids re-registering window listeners on zoom)
   const visibleStartRef = useRef(visibleStart);
@@ -944,8 +993,8 @@ export function VideoSegmentPlayer({
 
     const rect = timeline.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = rect.width;
-    const height = rect.height - 16; // subtract time markers area (top-4 = 16px)
+    const width = Math.max(1, rect.width - 16);
+    const height = 40;
 
     canvas.width = width * dpr;
     canvas.height = height * dpr;
@@ -988,14 +1037,17 @@ export function VideoSegmentPlayer({
       if (sampleIdx < 0 || sampleIdx >= totalSamples) continue;
 
       const amplitude = waveformData[sampleIdx] * normFactor;
-      const barHeight = Math.max(1, amplitude * height * 0.9);
+      const barHeight = Math.max(1, amplitude * height * 0.86);
       const x = i * barWidth;
-      const y = height - barHeight;
+      const y = (height - barHeight) / 2;
+      const sampleTime = sampleIdx * sampleDuration;
+      const isSavedSegment = segments.some(
+        (segment) => sampleTime >= segment.start_time && sampleTime <= segment.end_time
+      );
 
       // Check if this sample falls within a voice region
       let isVoice = false;
       if (voiceActive) {
-        const sampleTime = sampleIdx * sampleDuration;
         for (const region of voiceRegions) {
           if (sampleTime >= region.start && sampleTime <= region.end) {
             isVoice = true;
@@ -1006,11 +1058,13 @@ export function VideoSegmentPlayer({
 
       ctx.fillStyle = isVoice
         ? "rgba(245, 158, 11, 0.7)"  // amber for voice
-        : "rgba(34, 197, 94, 0.5)";  // green for non-voice
+        : isSavedSegment
+          ? "rgba(231, 255, 75, 0.78)" // lime only inside saved ranges
+          : "rgba(161, 161, 170, 0.62)"; // neutral waveform elsewhere
 
       ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
     }
-  }, [waveformData, visibleStart, visibleEnd, voiceRegions, showWaveform, showVoiceOverlay, resizeCounter, safeDuration]);
+  }, [waveformData, visibleStart, visibleEnd, voiceRegions, showWaveform, showVoiceOverlay, resizeCounter, safeDuration, segments]);
 
   // Handle segment click
   const handleSegmentClick = (e: React.MouseEvent, segment: Segment) => {
@@ -1045,11 +1099,17 @@ export function VideoSegmentPlayer({
   }, [activeTransforms, videoZoom, videoPanX, videoPanY, isDraggingVideo]);
 
   return (
-    <div ref={containerRef} className="flex flex-col h-full gap-1">
-      {/* Video Preview - takes remaining space */}
+    <div ref={containerRef} className="flex h-full min-h-0 flex-col gap-2 rounded-xl border border-border/80 bg-card/60 p-2 shadow-sm">
+      <ResizablePanelGroup id="source-video-timeline-layout" orientation="vertical" className="min-h-0">
+      <ResizablePanel id="source-video-preview" defaultSize="68%" minSize={160} className="min-h-0">
+      {/* Source video with playback controls integrated into the picture. */}
       <div
         ref={videoContainerRef}
-        className={`relative bg-black rounded-lg flex-1 min-h-0 flex items-center justify-center ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        className={`group relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black shadow-inner ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+      >
+        <div
+          className="relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden"
+          style={{ aspectRatio: sourceAspectRatio }}
         onMouseDown={(e) => {
           if (videoZoom > 1) {
             e.preventDefault();
@@ -1058,84 +1118,154 @@ export function VideoSegmentPlayer({
           }
         }}
       >
-        {/* Resolution frame - fixed 9:16 aspect ratio, centered, clips all transforms */}
-        <div style={{ aspectRatio: '9/16', height: '100%', maxWidth: '100%', position: 'relative', overflow: 'hidden' }}>
           <video
             ref={videoRef}
             src={videoUrl}
-            className="w-full h-full object-cover"
-            onClick={(e) => {
+            className="h-full w-full object-contain"
+            onClick={() => {
               if (!isDraggingVideo) togglePlay();
             }}
             style={videoStyle}
           />
         </div>
 
-        {/* Marking indicator */}
         {isMarking && (
-          <div className="absolute top-2 left-2 z-10">
-            <Badge variant="destructive" className="animate-pulse text-xs">
-              <Scissors className="w-3 h-3 mr-1" />
-              Marking... C to end
+          <div className="absolute left-3 top-3 z-20">
+            <Badge variant="destructive" className="animate-pulse gap-1 text-xs shadow-lg">
+              <Scissors className="h-3 w-3" />
+              Marking segment · C to finish
             </Badge>
           </div>
         )}
 
-        {/* Playback speed indicator */}
-        {playbackRate !== 1 && (
-          <div className="absolute bottom-2 right-2 z-10 bg-black/70 px-1.5 py-0.5 rounded text-white font-mono text-xs">
-            {playbackRate}x
-          </div>
-        )}
-
-        {/* Video zoom overlay controls - top right */}
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+        <div className="absolute right-3 top-3 z-20 flex items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100">
           {videoZoom > 1 && (
-            <span className="bg-black/70 px-1.5 py-0.5 rounded text-white font-mono text-[10px]">
+            <span className="rounded bg-black/75 px-1.5 py-0.5 font-mono text-[10px] text-white">
               {Math.round(videoZoom * 100)}%
             </span>
           )}
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomFit(); }}
-            title="Fit (0)"
+            title="Fit video (0)"
           >
-            <Locate className="h-3 w-3" />
+            <Locate className="h-3.5 w-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomIn(); }}
-            title="Zoom in (+)"
+            title="Zoom video in (+)"
           >
-            <ZoomIn className="h-3 w-3" />
+            <ZoomIn className="h-3.5 w-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomOut(); }}
-            title="Zoom out (-)"
+            title="Zoom video out (-)"
           >
-            <ZoomOut className="h-3 w-3" />
+            <ZoomOut className="h-3.5 w-3.5" />
           </Button>
         </div>
-      </div>
 
-      {/* Timeline with segments - fixed h-28 */}
+        <div data-player-controls className="z-20 flex h-10 w-full flex-shrink-0 items-center gap-2 border-t border-white/10 bg-black px-3 text-white">
+          <button type="button" onClick={togglePlay} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isPlaying ? "Pause" : "Play"}>
+            {isPlaying ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
+          </button>
+          <span className="min-w-[92px] whitespace-nowrap font-mono text-[11px] text-white/80">
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
+          <div className="flex-1" />
+          <button type="button" onClick={() => setIsMuted(!isMuted)} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isMuted ? "Unmute" : "Mute"}>
+            {isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </button>
+          <Slider
+            value={[isMuted ? 0 : volume * 100]}
+            min={0}
+            max={100}
+            step={1}
+            onValueChange={([value]) => { setVolume(value / 100); if (value > 0) setIsMuted(false); }}
+            className="w-16"
+            aria-label="Volume"
+          />
+          <select value={playbackRate} onChange={(e) => setPlaybackRate(parseFloat(e.target.value))} className="h-7 rounded border border-white/15 bg-black/50 px-1 text-[11px] text-white outline-none hover:bg-black/75" aria-label="Playback speed">
+            <option value="0.5">0.5x</option>
+            <option value="0.75">0.75x</option>
+            <option value="1">1x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+          <button type="button" onClick={toggleFullscreen} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
+      </ResizablePanel>
+
+      <ResizableHandle orientation="vertical" withHandle />
+
+      <ResizablePanel id="source-video-timeline" defaultSize={190} minSize={150} maxSize="55%" className="min-h-0">
+      <div className="flex h-full min-h-0 flex-col gap-1 pt-1">
+      {/* Filmstrip timeline: time ruler, source frames, waveform and numbered ranges. */}
       <div
         ref={timelineRef}
-        className={`relative h-28 flex-shrink-0 bg-muted rounded-md overflow-hidden select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`relative min-h-[108px] flex-1 overflow-hidden rounded-xl border border-border/80 bg-background/80 px-2 shadow-inner select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         onMouseDown={handleTimelineMouseDown}
+        aria-label="Source video timeline"
       >
+        {/* Time scale markers */}
+        <div className="absolute left-2 right-2 top-1 h-6 font-mono text-[9px] text-muted-foreground pointer-events-none">
+          {Array.from({ length: 7 }, (_, index) => {
+            const time = visibleStart + (index / 6) * visibleDuration;
+            const position = (index / 6) * 100;
+            return (
+              <span
+                key={`${time.toFixed(3)}-${index}`}
+                className="absolute top-0"
+                style={{
+                  left: `${position}%`,
+                  transform: index === 0 ? undefined : index === 6 ? "translateX(-100%)" : "translateX(-50%)",
+                }}
+              >
+                {formatTime(time)}
+              </span>
+            );
+          })}
+        </div>
+
+        {/* Source frames */}
+        <div className="absolute left-2 right-2 top-7 flex h-11 overflow-hidden rounded-t-md border border-white/10 bg-black/80 pointer-events-none">
+          {timelineFrames.map((frameUrl, index) => (
+            <div
+              key={`${frameUrl || "empty"}-${index}`}
+              className="h-full flex-1 border-r border-black/35 bg-gradient-to-br from-zinc-800 to-zinc-950 bg-cover bg-center last:border-r-0"
+              style={frameUrl ? {
+                backgroundImage: `linear-gradient(rgba(0,0,0,.1), rgba(0,0,0,.24)), url("${frameUrl}")`,
+              } : undefined}
+            />
+          ))}
+        </div>
+
+        {/* Waveform lane */}
+        <div className="absolute left-2 right-2 top-[72px] h-10 overflow-hidden rounded-b-md border-x border-b border-white/10 bg-zinc-950/95 pointer-events-none">
+          {showWaveform && waveformData.length === 0 && !waveformLoading && (
+            <div className="absolute inset-0 opacity-25" style={{
+              backgroundImage: "repeating-linear-gradient(90deg, transparent 0 5px, rgba(255,255,255,.22) 5px 6px)",
+            }} />
+          )}
+        </div>
+
         {/* Waveform canvas */}
         {showWaveform && waveformData.length > 0 && (
           <canvas
             ref={canvasRef}
-            className="absolute top-4 left-0 right-0 bottom-0 pointer-events-none z-0"
+            className="absolute left-2 right-2 top-[72px] z-[5] h-10 pointer-events-none"
           />
         )}
 
@@ -1151,19 +1281,17 @@ export function VideoSegmentPlayer({
           return (
             <div
               key={group.id}
-              className="absolute bottom-0 z-[5] pointer-events-none"
+              className="absolute bottom-[21px] z-[8] h-1 pointer-events-none"
               style={{
                 left: `${left}%`,
                 width: `${width}%`,
-                height: "6px",
                 backgroundColor: color,
-                opacity: 0.8,
               }}
               title={`${group.label} (${group.segments_count} segments)`}
             >
               {width > 4 && (
                 <span
-                  className="absolute -top-3.5 left-0.5 text-[8px] font-bold truncate"
+                  className="absolute -top-3.5 left-0.5 text-[8px] font-bold truncate drop-shadow"
                   style={{ color, maxWidth: `${width}%` }}
                 >
                   {group.label}
@@ -1173,25 +1301,8 @@ export function VideoSegmentPlayer({
           );
         })}
 
-        {/* Time scale markers */}
-        <div className="absolute top-0 left-0 right-0 h-4 bg-background/50 flex items-center text-[10px] text-muted-foreground font-mono pointer-events-none">
-          {Array.from({ length: Math.min(10, Math.ceil(visibleDuration / 5) + 1) }).map((_, i) => {
-            const time = visibleStart + (i * visibleDuration / Math.min(10, Math.ceil(visibleDuration / 5)));
-            const pos = (i / Math.min(10, Math.ceil(visibleDuration / 5))) * 100;
-            return (
-              <span
-                key={time.toFixed(2)}
-                className="absolute"
-                style={{ left: `${pos}%`, transform: 'translateX(-50%)' }}
-              >
-                {formatTime(time)}
-              </span>
-            );
-          })}
-        </div>
-
         {/* Segment markers */}
-        {segments.map((segment) => {
+        {segments.map((segment, segmentIndex) => {
           const style = getSegmentStyle(segment);
           if (style.display === 'none') return null;
           const isBeingResized = resizingInfo?.segmentId === segment.id;
@@ -1200,33 +1311,36 @@ export function VideoSegmentPlayer({
           return (
             <div
               key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
-              className={`absolute top-4 bottom-0 z-20 border-l-2 border-r-2 cursor-pointer ${
-                isBeingResized ? '' : 'transition-all'
+              className={`absolute top-7 z-20 h-[84px] cursor-pointer rounded-[5px] border-2 ${
+                isBeingResized ? '' : 'transition-[background-color,box-shadow]'
               } ${
                 currentSegment?.id === segment.id
-                  ? "bg-primary/70 border-primary ring-1 ring-primary/50"
-                  : "bg-success/50 hover:bg-success/70 border-success"
+                  ? "border-primary bg-primary/20 shadow-[0_0_14px_rgba(210,255,46,0.3)]"
+                  : "border-primary/90 bg-primary/10 hover:bg-primary/20"
               }`}
               style={style}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => handleSegmentClick(e, segment)}
               title={`${formatTime(displayStart)} - ${formatTime(displayEnd)}\n${segment.keywords.join(", ")}`}
             >
-              {parseFloat(style.width || '0') > 5 && (
-                <span className="absolute top-0.5 left-1 text-[9px] text-white font-medium truncate max-w-full">
-                  {segment.keywords[0] || 'segment'}
+              <span className="absolute -top-[19px] left-1/2 grid h-[19px] min-w-[19px] -translate-x-1/2 place-items-center rounded-[5px] bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground shadow-sm">
+                {segmentIndex + 1}
+              </span>
+              {parseFloat(style.width || '0') > 4 && (
+                <span className="absolute -bottom-[20px] left-1/2 -translate-x-1/2 whitespace-nowrap font-mono text-[9px] font-medium text-primary">
+                  {formatTime(displayStart)} – {formatTime(displayEnd)}
                 </span>
               )}
               {/* Resize drag handles */}
               {onSegmentResize && segment.id && (
                 <>
                   <div
-                    className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-30 hover:bg-white/30"
+                    className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
                     onMouseDown={(e) => startResize(e, segment, 'start')}
                     onClick={(e) => e.stopPropagation()}
                   />
                   <div
-                    className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-30 hover:bg-white/30"
+                    className="absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
                     onMouseDown={(e) => startResize(e, segment, 'end')}
                     onClick={(e) => e.stopPropagation()}
                   />
@@ -1234,8 +1348,8 @@ export function VideoSegmentPlayer({
               )}
               {/* Time tooltip during resize */}
               {isBeingResized && resizePreview && (
-                <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap z-40 font-mono">
-                  {formatTime(resizePreview.start)} - {formatTime(resizePreview.end)}
+                <div className="absolute -top-7 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1.5 py-0.5 font-mono text-[10px] text-white shadow-lg">
+                  {formatTime(resizePreview.start)} – {formatTime(resizePreview.end)}
                 </div>
               )}
             </div>
@@ -1245,7 +1359,7 @@ export function VideoSegmentPlayer({
         {/* Current marking range */}
         {getCurrentMarkStyle() && (
           <div
-            className="absolute top-4 bottom-0 bg-yellow-500/40 border-2 border-yellow-500 border-dashed z-10"
+            className="absolute top-7 z-10 h-[84px] rounded border-2 border-dashed border-amber-400 bg-amber-400/20"
             style={getCurrentMarkStyle()!}
           />
         )}
@@ -1253,7 +1367,7 @@ export function VideoSegmentPlayer({
         {/* Start mark point */}
         {getMarkStartPosition() !== null && (
           <div
-            className="absolute top-4 bottom-0 w-1 bg-yellow-500 z-30"
+            className="absolute top-6 z-30 h-[88px] w-0.5 bg-amber-400"
             style={{ left: `${getMarkStartPosition()}%` }}
           />
         )}
@@ -1261,17 +1375,17 @@ export function VideoSegmentPlayer({
         {/* Group marking range (purple) */}
         {getGroupMarkStyle() && (
           <div
-            className="absolute top-4 bottom-0 bg-chart-2/40 border-2 border-chart-2 border-dashed z-10"
+            className="absolute top-7 z-10 h-[84px] rounded border-2 border-dashed border-chart-2 bg-chart-2/20"
             style={getGroupMarkStyle()!}
           >
-            <span className="absolute top-0.5 left-1 text-[9px] text-foreground font-medium">Group</span>
+            <span className="absolute left-1 top-0.5 text-[9px] font-medium text-foreground">Group</span>
           </div>
         )}
 
         {/* Group mark start point */}
         {getGroupMarkStartPosition() !== null && (
           <div
-            className="absolute top-4 bottom-0 w-1 bg-chart-2 z-30"
+            className="absolute top-6 z-30 h-[88px] w-0.5 bg-chart-2"
             style={{ left: `${getGroupMarkStartPosition()}%` }}
           />
         )}
@@ -1281,7 +1395,7 @@ export function VideoSegmentPlayer({
             the playhead starts off-screen and scrubs into view. */}
         <div
           ref={playheadRef}
-          className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-40"
+          className="absolute top-5 bottom-4 z-40 w-px bg-white shadow-[0_0_4px_rgba(255,255,255,0.8)]"
           style={{
             left: `${getPlayheadPosition()}%`,
             pointerEvents: 'none',
@@ -1289,28 +1403,26 @@ export function VideoSegmentPlayer({
           }}
         >
           <div
-            className="absolute -top-1 -left-2 w-4 h-4 bg-red-500 rounded-full shadow-md cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
+            className="absolute -left-1.5 -top-0.5 h-3 w-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
             style={{ pointerEvents: 'auto' }}
             onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
           />
-          <div className="absolute top-3 bottom-0 left-0 w-0.5 bg-red-500" />
-          <div className="absolute -bottom-0.5 -left-1 w-2 h-2 bg-red-500 rotate-45" style={{ pointerEvents: 'none' }} />
         </div>
 
         {/* Zoom indicator + inline zoom controls */}
         {zoomLevel > 1 && (
-          <div className="absolute bottom-1 right-1 z-50 flex items-center gap-1">
+          <div className="absolute bottom-0 right-1 z-50 flex items-center gap-1 rounded bg-background/90 px-1.5 py-0.5">
             <Slider
               value={[scrollOffset * 100]}
               min={0}
               max={maxOffset * 100}
               step={0.1}
               onValueChange={([val]) => setScrollOffset(val / 100)}
-              className="w-24"
+              className="w-20"
               onMouseDown={(e) => e.stopPropagation()}
             />
             <button
-              className="bg-black/70 px-1.5 py-0.5 rounded text-[10px] text-white font-mono hover:bg-black/90"
+              className="font-mono text-[9px] text-muted-foreground hover:text-foreground"
               onClick={(e) => { e.stopPropagation(); setZoomLevel(1); setScrollOffset(0); }}
               onMouseDown={(e) => e.stopPropagation()}
             >
@@ -1320,42 +1432,24 @@ export function VideoSegmentPlayer({
         )}
       </div>
 
-      {/* Controls - single compact row */}
-      <div className="flex items-center gap-1 px-1 h-8 flex-shrink-0">
-        {/* Go to beginning */}
+      {/* Secondary editing controls stay quiet under the visual timeline. */}
+      <div className="flex min-h-8 flex-shrink-0 flex-wrap items-center gap-1 border-t border-border/60 px-1 pt-1">
+        <div className="mr-2 flex items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
+          <span className="h-2.5 w-2.5 rounded-[3px] bg-primary" />
+          Saved segment
+        </div>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goToBeginning} title="Go to beginning (Home)">
           <ChevronsLeft className="h-4 w-4" />
         </Button>
-
-        {/* Play/Pause */}
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={togglePlay}>
-          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-        </Button>
-
-        {/* Skip */}
         <Button variant="ghost" size="icon" className="h-7 w-7"
-          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)} title="5s back">
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)} title="5 seconds back">
           <SkipBack className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="icon" className="h-7 w-7"
-          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)} title="5s forward">
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)} title="5 seconds forward">
           <SkipForward className="h-3.5 w-3.5" />
         </Button>
-
-        {/* Time */}
-        <span className="text-[11px] font-mono text-muted-foreground whitespace-nowrap">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
-
-        <div className="flex-1" />
-
-        {/* Volume */}
-        <Button variant="ghost" size="icon" className="h-7 w-7"
-          onClick={() => setIsMuted(!isMuted)}>
-          {isMuted || volume === 0 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-        </Button>
-
-        {/* Waveform toggle */}
+        <div className="mx-1 h-4 w-px bg-border" />
         <Button
           variant={showWaveform ? "default" : "ghost"}
           size="icon"
@@ -1364,10 +1458,8 @@ export function VideoSegmentPlayer({
           disabled={waveformData.length === 0 && !waveformLoading}
           title="Waveform"
         >
-          {waveformLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <AudioLines className="h-3 w-3" />}
+          {waveformLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
         </Button>
-
-        {/* Voice toggle */}
         <Button
           variant={showVoiceOverlay ? "default" : "ghost"}
           size="icon"
@@ -1376,51 +1468,53 @@ export function VideoSegmentPlayer({
           disabled={!sourceVideoId}
           title="Voice detection"
         >
-          {voiceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mic className="h-3 w-3" />}
+          {voiceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mic className="h-3.5 w-3.5" />}
         </Button>
-
-        {/* Speed */}
-        <select
-          value={playbackRate}
-          onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
-          className="bg-muted border border-border rounded px-1 py-0.5 text-xs h-7"
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => {
+            const nextZoom = Math.max(1, zoomLevel / 1.25);
+            setZoomLevel(nextZoom);
+            setScrollOffset((offset) => Math.min(offset, Math.max(0, 1 - 1 / nextZoom)));
+          }}
+          disabled={zoomLevel <= 1}
+          title="Zoom timeline out"
         >
-          <option value="0.5">0.5x</option>
-          <option value="0.75">0.75x</option>
-          <option value="1">1x</option>
-          <option value="1.25">1.25x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-        </select>
-
-        {/* Mark */}
+          <ZoomOut className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => setZoomLevel((level) => Math.min(20, level * 1.25))}
+          disabled={zoomLevel >= 20}
+          title="Zoom timeline in"
+        >
+          <ZoomIn className="h-3.5 w-3.5" />
+        </Button>
+        <div className="flex-1" />
         <Button
           variant={isMarking ? "destructive" : "outline"}
           size="sm"
           onClick={toggleMark}
-          className="h-7 text-xs gap-1 px-2"
+          className="h-7 gap-1 px-2 text-xs"
         >
           <Scissors className="h-3 w-3" />
-          {isMarking ? "End(C)" : "Mark(C)"}
+          {isMarking ? "End (C)" : "Mark (C)"}
         </Button>
-
-        {/* Group */}
         {onGroupCreate && (
           <Button
             variant={isGroupMarking ? "destructive" : "outline"}
             size="sm"
             onClick={toggleGroupMark}
-            className="h-7 text-xs gap-1 px-2"
+            className="h-7 gap-1 px-2 text-xs"
           >
             <Layers className="h-3 w-3" />
-            {isGroupMarking ? "End(G)" : "Group(G)"}
+            {isGroupMarking ? "End (G)" : "Group (G)"}
           </Button>
         )}
-
-        {/* Fullscreen */}
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={toggleFullscreen} title="Fullscreen (F)">
-          {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-        </Button>
 
         {/* Keyboard shortcuts - popover */}
         <Popover>
@@ -1449,6 +1543,9 @@ export function VideoSegmentPlayer({
           </PopoverContent>
         </Popover>
       </div>
+      </div>
+      </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }

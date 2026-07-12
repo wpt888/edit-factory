@@ -150,6 +150,21 @@ def test_grouped_matching_keeps_one_segment_per_merge_group(service):
         assert len({matches[i].segment_id for i in group}) == 1
 
 
+def test_pacing_changes_merge_group_count(service):
+    segs = [_seg(f"s{i}", f"v{i}") for i in range(5)]
+    srt = _srt(10)
+
+    _fast_matches, fast_groups = service.match_srt_groups(
+        srt, segs, min_segment_duration=2.0
+    )
+    _slow_matches, slow_groups = service.match_srt_groups(
+        srt, segs, min_segment_duration=5.0
+    )
+
+    assert len(fast_groups) >= len(slow_groups)
+    assert len(fast_groups) > len(slow_groups)
+
+
 def test_visual_cluster_cooldown_avoids_overlapping_windows(service):
     segs = [
         _seg("overlap-a", "same", 0.0, 4.0),

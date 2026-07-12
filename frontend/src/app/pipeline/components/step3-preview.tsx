@@ -296,25 +296,27 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <Label htmlFor="min-shot-length">Min shot length</Label>
+                    <Label htmlFor="pacing">Pacing</Label>
                     <p className="text-xs text-muted-foreground">
-                      Shortest a single library segment is allowed to be before merging.
+                      Choose how quickly the visual cuts change.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 w-40">
-                    <Slider
-                      id="min-shot-length"
-                      min={1}
-                      max={6}
-                      step={0.5}
-                      value={[minSegmentDuration]}
-                      onValueChange={([v]) => setMinSegmentDuration(v)}
-                      onValueCommit={() => scheduleReassemblePreviews()}
-                    />
-                    <span className="text-xs font-mono tabular-nums w-8 text-right">
-                      {minSegmentDuration.toFixed(1)}s
-                    </span>
-                  </div>
+                  <Select
+                    value={String(minSegmentDuration)}
+                    onValueChange={(value) => {
+                      setMinSegmentDuration(Number(value));
+                      scheduleReassemblePreviews();
+                    }}
+                  >
+                    <SelectTrigger id="pacing" className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="2">Fast (2s)</SelectItem>
+                      <SelectItem value="3">Normal (3s)</SelectItem>
+                      <SelectItem value="5">Slow (5s)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="flex items-center justify-between gap-4">

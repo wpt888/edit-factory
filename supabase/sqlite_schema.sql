@@ -430,6 +430,9 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     -- _db_save_pipeline and /pipeline/list since v12)
     target_script_duration REAL,
 
+    -- Per-pipeline pacing selection (seconds)
+    min_segment_duration REAL DEFAULT 3.0,
+
     -- Per-Meta-version subtitle overrides (from 042)
     subtitle_settings_by_key TEXT,
 
