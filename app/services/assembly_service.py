@@ -57,6 +57,27 @@ MATCH_PRESETS: Dict[str, Dict[str, float]] = {
 }
 _SHUFFLE_EPSILON = 0.25  # scores within this of the max are tie-broken by seeded RNG
 
+# ponytail: warned-once set never resets (cleared on restart) — fine for a log dedup
+_warned_missing_sources: set = set()
+
+
+def _existing_source_path(raw_path: Optional[str]) -> Optional[str]:
+    """Normalize a source video path and require it to exist on THIS machine.
+
+    Segments whose file isn't present locally (deleted, moved, or added on
+    another machine — DB is cloud, media is local) must never enter matching:
+    extraction would fail and strict_segments aborts the whole render.
+    """
+    p = normalize_path(raw_path or "")
+    if not p:
+        return None
+    if Path(p).exists():
+        return p
+    if p not in _warned_missing_sources:
+        _warned_missing_sources.add(p)
+        logger.warning(f"Source video missing on disk — its segments are excluded from matching: {p}")
+    return None
+
 
 @dataclass
 class MatchResult:
@@ -2091,7 +2112,7 @@ class AssemblyService:
             # Build segments data with source video paths
             segments_data = []
             for seg in segments_result.data:
-                source_video_path = normalize_path((seg.get("editai_source_videos") or {}).get("file_path", ""))
+                source_video_path = _existing_source_path((seg.get("editai_source_videos") or {}).get("file_path"))
                 if source_video_path:
                     segments_data.append({
                         "id": seg["id"],
@@ -2111,8 +2132,8 @@ class AssemblyService:
 
             if not segments_data:
                 raise RuntimeError(
-                    "No usable segments found — all segments are missing source video file paths. "
-                    "Please re-upload source videos or re-create segments."
+                    "No usable segments found — source video files are missing on this "
+                    "machine or segments have no file paths. Re-add the files in Segments."
                 )
 
             # When match_overrides are present, ensure ALL referenced segments
@@ -2138,7 +2159,7 @@ class AssemblyService:
                     missing_result = repo.table_query("editai_segments", "select", filters=missing_filters)
                     added = 0
                     for seg in (missing_result.data or []):
-                        sv_path = (seg.get("editai_source_videos") or {}).get("file_path")
+                        sv_path = _existing_source_path((seg.get("editai_source_videos") or {}).get("file_path"))
                         if sv_path:
                             segments_data.append({
                                 "id": seg["id"],
@@ -2147,10 +2168,7 @@ class AssemblyService:
                                 "end_time": seg["end_time"],
                                 "duration": seg["end_time"] - seg["start_time"],
                                 "keywords": seg.get("keywords") or [],
-                                # Normalize like the main build path (line ~1966) so a
-                                # WSL /mnt/... path stored on a web machine resolves on
-                                # Windows desktop, keeping exists()/ffmpeg consistent.
-                                "source_video_path": normalize_path(sv_path),
+                                "source_video_path": sv_path,
                                 "transforms": seg.get("transforms"),
                                 "thumbnail_path": seg.get("thumbnail_path"),
                                 "product_group": seg.get("product_group"),
@@ -2183,7 +2201,8 @@ class AssemblyService:
                     )
                     # Store as synthetic segment entries so build_timeline can find sv_path
                     for sv in (sv_result.data or []):
-                        if sv.get("file_path"):
+                        _sv_path = _existing_source_path(sv.get("file_path"))
+                        if _sv_path:
                             segments_data.append({
                                 "id": f"_sv_placeholder_{sv['id']}",
                                 "source_video_id": sv["id"],
@@ -2191,7 +2210,7 @@ class AssemblyService:
                                 "end_time": 0.0,
                                 "duration": 0.0,
                                 "keywords": [],
-                                "source_video_path": normalize_path(sv["file_path"]),
+                                "source_video_path": _sv_path,
                                 "transforms": None,
                                 "thumbnail_path": None,
                                 "product_group": None,
@@ -2745,7 +2764,7 @@ class AssemblyService:
 
         segments_data = []
         for seg in segments_result.data:
-            source_video_path = (seg.get("editai_source_videos") or {}).get("file_path")
+            source_video_path = _existing_source_path((seg.get("editai_source_videos") or {}).get("file_path"))
             if source_video_path:
                 segments_data.append({
                     "id": seg["id"],
@@ -2762,8 +2781,8 @@ class AssemblyService:
 
         if not segments_data:
             raise RuntimeError(
-                "No usable segments found — all segments are missing source video file paths. "
-                "Please re-upload source videos or re-create segments."
+                "No usable segments found — source video files are missing on this "
+                "machine or segments have no file paths. Re-add the files in Segments."
             )
 
         # Step 4: Match and build timeline
