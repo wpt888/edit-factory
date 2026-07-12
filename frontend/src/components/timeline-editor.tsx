@@ -164,8 +164,8 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
-  const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>(isPreviewActive, isPreviewExpanded);
-  const previewContainerHeight = previewMeasurement.height;
+  const compactPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
+  const expandedPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
   const [activeSlot, setActiveSlot] = useState(0);
 
@@ -175,6 +175,16 @@ export function TimelineEditor({
   // pre-seeked & paused on the NEXT segment, so a boundary crossing is a pure
   // visibility swap — no async seek at the seam (that seek was the stutter cause).
   const previewSlotRefs = useRef<(HTMLVideoElement | null)[]>([null, null]);
+  // The compact player and expanded dialog share these two logical slots. During
+  // the dialog exit animation, React can mount the compact video before it calls
+  // the old dialog video's ref with `null`. Only clear a ref if that old element
+  // still owns the slot; otherwise the newly-mounted compact player loses its
+  // video element and remains black.
+  const setPreviewSlotRef = useCallback((slot: number, element: HTMLVideoElement | null) => {
+    if (element || previewSlotRefs.current[slot] === element) {
+      previewSlotRefs.current[slot] = element;
+    }
+  }, []);
   const activeSlotRef = useRef(0);
   const slotStateRef = useRef<Array<{
     sourceVideoId: string | null;   // source currently loaded into the slot
@@ -1274,28 +1284,28 @@ export function TimelineEditor({
   // Selected match for inline preview
   const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
 
-  const renderPreviewSubtitleOverlay = (minimumFontSize: number) => {
+  const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
     const subtitleText = matches[previewActiveIndex]?.srt_text;
-    if (!subtitleText || previewContainerHeight <= 0) return null;
+    if (!subtitleText || containerHeight <= 0) return null;
 
     const fontSize = scaleSubtitlePx(
       subtitleSettings?.fontSize ?? 48,
-      previewContainerHeight,
+      containerHeight,
       minimumFontSize
     );
     const outlineWidth = scaleSubtitlePx(
       subtitleSettings?.outlineWidth ?? 3,
-      previewContainerHeight,
+      containerHeight,
       0
     );
     const shadowDepth = scaleSubtitlePx(
       subtitleSettings?.shadowDepth ?? 0,
-      previewContainerHeight,
+      containerHeight,
       0
     );
     const glowBlur = scaleSubtitlePx(
       subtitleSettings?.glowBlur ?? 0,
-      previewContainerHeight,
+      containerHeight,
       0
     );
     const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
@@ -1404,7 +1414,7 @@ export function TimelineEditor({
             <div className="rounded-lg border bg-card mb-3 overflow-hidden">
               {/* Video display with subtitle overlay */}
               <div
-                ref={previewMeasurement.ref}
+                ref={compactPreviewMeasurement.ref}
                 className="relative mx-auto bg-black flex items-center justify-center"
                 style={compactPreviewFrameStyle}
               >
@@ -1413,7 +1423,7 @@ export function TimelineEditor({
                 {[0, 1].map((slot) => (
                   <video
                     key={`slot-${slot}`}
-                    ref={(el) => { previewSlotRefs.current[slot] = el; }}
+                    ref={(el) => setPreviewSlotRef(slot, el)}
                     muted
                     playsInline
                     preload="auto"
@@ -1447,7 +1457,7 @@ export function TimelineEditor({
                 )}
 
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
-                {renderPreviewSubtitleOverlay(8)}
+                {renderPreviewSubtitleOverlay(8, compactPreviewMeasurement.height)}
               </div>
 
               {/* Controls */}
@@ -1530,7 +1540,7 @@ export function TimelineEditor({
               <div className="px-6 pb-6">
                 <div className="rounded-lg border bg-card overflow-hidden">
                   <div
-                    ref={previewMeasurement.ref}
+                    ref={expandedPreviewMeasurement.ref}
                     className="relative mx-auto bg-black flex items-center justify-center"
                     style={expandedPreviewFrameStyle}
                   >
@@ -1539,7 +1549,7 @@ export function TimelineEditor({
                     {[0, 1].map((slot) => (
                       <video
                         key={`expanded-slot-${slot}`}
-                        ref={(el) => { previewSlotRefs.current[slot] = el; }}
+                        ref={(el) => setPreviewSlotRef(slot, el)}
                         muted
                         playsInline
                         preload="auto"
@@ -1570,7 +1580,7 @@ export function TimelineEditor({
                       </div>
                     )}
 
-                    {renderPreviewSubtitleOverlay(10)}
+                    {renderPreviewSubtitleOverlay(10, expandedPreviewMeasurement.height)}
                   </div>
 
                   <div className="px-4 py-3 space-y-2">

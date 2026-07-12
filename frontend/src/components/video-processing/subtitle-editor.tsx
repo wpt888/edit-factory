@@ -128,7 +128,7 @@ export function SubtitleEditor({
   onApplyUserPreset,
   onDeleteUserPreset,
 }: SubtitleEditorProps) {
-  const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>(showPreview);
+  const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   // Track which preset is currently selected (null = manual/custom)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
 

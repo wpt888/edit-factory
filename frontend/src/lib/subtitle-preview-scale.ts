@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 // Keep this aligned with the backend subtitle PlayResY/original_size reference.
 export const SUBTITLE_REFERENCE_HEIGHT = 1920;
@@ -32,21 +32,22 @@ export function observeSubtitlePreviewHeight(
   };
 }
 
-export function useSubtitlePreviewHeight<T extends HTMLElement>(
-  enabled = true,
-  layoutKey?: unknown
-) {
-  const ref = useRef<T | null>(null);
+export function useSubtitlePreviewHeight<T extends HTMLElement>() {
   const [height, setHeight] = useState(0);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
-  useLayoutEffect(() => {
-    if (!enabled || !ref.current) return;
-    return observeSubtitlePreviewHeight(ref.current, (nextHeight) => {
+  // Callback ref: observes whenever the element actually mounts (portal,
+  // dialog, conditional render), independent of effect timing.
+  const ref = useCallback((element: T | null) => {
+    cleanupRef.current?.();
+    cleanupRef.current = null;
+    if (!element) return;
+    cleanupRef.current = observeSubtitlePreviewHeight(element, (nextHeight) => {
       setHeight((current) =>
         Math.abs(current - nextHeight) < 0.1 ? current : nextHeight
       );
     });
-  }, [enabled, layoutKey]);
+  }, []);
 
   return { ref, height };
 }
