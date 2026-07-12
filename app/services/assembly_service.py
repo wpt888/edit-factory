@@ -56,6 +56,7 @@ MATCH_PRESETS: Dict[str, Dict[str, float]] = {
     "ai_smart":       {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
 }
 _SHUFFLE_EPSILON = 0.25  # scores within this of the max are tie-broken by seeded RNG
+MAX_CLUSTER_COOLDOWN_SECONDS = 10.0
 
 # ponytail: warned-once set never resets (cleared on restart) — fine for a log dedup
 _warned_missing_sources: set = set()
@@ -111,6 +112,44 @@ class TimelineEntry:
     timeline_duration: float
     transforms: Optional[dict] = None  # Per-segment visual transforms
     pinned: bool = False  # F6: originates from a pinned match — never absorbed/swapped
+
+
+def _merge_srt_groups(srt_entries: List[dict], min_segment_duration: float) -> List[List[int]]:
+    """Return consecutive phrase indices that form one visual shot."""
+    if min_segment_duration <= 0:
+        return [[i] for i in range(len(srt_entries))]
+    groups: List[List[int]] = []
+    i = 0
+    while i < len(srt_entries):
+        group = [i]
+        duration = srt_entries[i]["end_time"] - srt_entries[i]["start_time"]
+        while duration < min_segment_duration and group[-1] + 1 < len(srt_entries):
+            group.append(group[-1] + 1)
+            entry = srt_entries[group[-1]]
+            duration += entry["end_time"] - entry["start_time"]
+        groups.append(group)
+        i = group[-1] + 1
+    return groups
+
+
+def _segment_visual_clusters(segments_data: List[dict]) -> Dict[str, str]:
+    """Cluster transitively overlapping intervals from the same source video."""
+    clusters: Dict[str, str] = {}
+    by_source: Dict[str, List[dict]] = {}
+    for segment in segments_data:
+        by_source.setdefault(str(segment.get("source_video_id") or ""), []).append(segment)
+    for source_id, source_segments in by_source.items():
+        cluster_index = 0
+        cluster_end: Optional[float] = None
+        for segment in sorted(source_segments, key=lambda s: (s.get("start_time", 0.0), s["id"])):
+            start, end = segment.get("start_time", 0.0), segment.get("end_time", 0.0)
+            if cluster_end is None or start >= cluster_end:
+                cluster_index += 1
+                cluster_end = end
+            else:
+                cluster_end = max(cluster_end, end)
+            clusters[segment["id"]] = f"{source_id}:{cluster_index}"
+    return clusters
 
 
 def strip_product_group_tags(text: str) -> str:
@@ -631,6 +670,65 @@ class AssemblyService:
             logger.warning(f"AI smart match failed, falling back to keyword scoring: {e}")
             return None
 
+    def match_srt_groups(
+        self,
+        srt_entries: List[dict],
+        segments_data: List[dict],
+        min_segment_duration: float,
+        **kwargs,
+    ) -> Tuple[List[MatchResult], List[List[int]]]:
+        """Assign once per merge group, then expand that choice to its phrases."""
+        groups = _merge_srt_groups(srt_entries, min_segment_duration)
+        product_groups = kwargs.pop("srt_product_groups", None) or []
+        pins = kwargs.pop("pinned_assignments", None) or {}
+        ai_assignments = kwargs.pop("ai_assignments", None) or {}
+        grouped_entries, grouped_product_groups = [], []
+        grouped_pins: Dict[int, str] = {}
+        grouped_ai: Dict[int, str] = {}
+        for group_index, indices in enumerate(groups):
+            longest = max(indices, key=lambda i: srt_entries[i]["end_time"] - srt_entries[i]["start_time"])
+            first, last = srt_entries[indices[0]], srt_entries[indices[-1]]
+            grouped_entries.append({
+                "text": " ".join(srt_entries[i]["text"] for i in indices),
+                "start_time": first["start_time"], "end_time": last["end_time"],
+            })
+            grouped_product_groups.append(product_groups[longest] if longest < len(product_groups) else None)
+            group_pin = next((pins[i] for i in indices if pins.get(i)), None)
+            if group_pin:
+                grouped_pins[group_index] = group_pin
+            ai_id = ai_assignments.get(longest)
+            if ai_id:
+                grouped_ai[group_index] = ai_id
+        grouped_matches = self.match_srt_to_segments(
+            grouped_entries, segments_data,
+            srt_product_groups=grouped_product_groups,
+            pinned_assignments=grouped_pins,
+            ai_assignments=grouped_ai,
+            **kwargs,
+        )
+        expanded: List[MatchResult] = []
+        for group, group_match in zip(groups, grouped_matches):
+            for phrase_index in group:
+                entry = srt_entries[phrase_index]
+                expanded.append(MatchResult(
+                    srt_index=phrase_index, srt_text=entry["text"],
+                    srt_start=entry["start_time"], srt_end=entry["end_time"],
+                    segment_id=group_match.segment_id,
+                    segment_keywords=group_match.segment_keywords,
+                    matched_keyword=group_match.matched_keyword,
+                    confidence=group_match.confidence,
+                    is_auto_filled=group_match.is_auto_filled,
+                    product_group=group_match.product_group,
+                    source_video_id=group_match.source_video_id,
+                    segment_start_time=group_match.segment_start_time,
+                    segment_end_time=group_match.segment_end_time,
+                    thumbnail_path=group_match.thumbnail_path,
+                    transforms=group_match.transforms,
+                    explanation=group_match.explanation,
+                    pinned=group_match.pinned,
+                ))
+        return expanded, groups
+
     def match_srt_to_segments(
         self,
         srt_entries: List[dict],
@@ -642,6 +740,7 @@ class AssemblyService:
         preset: str = "balanced",
         pinned_assignments: Optional[Dict[int, str]] = None,
         ai_assignments: Optional[Dict[int, str]] = None,
+        cooldown_seconds: Optional[float] = None,
     ) -> List[MatchResult]:
         """
         Assign one library segment to each SRT phrase via a transparent scoring
@@ -689,6 +788,13 @@ class AssemblyService:
         n = len(segments_data)
         segment_lookup: Dict[str, dict] = {s["id"]: s for s in segments_data}
         groups_present = {s.get("product_group") for s in segments_data}
+        cluster_by_segment = _segment_visual_clusters(segments_data)
+        unique_clusters = len(set(cluster_by_segment.values()))
+        if cooldown_seconds is None:
+            audio_end = max((entry.get("end_time", 0.0) for entry in srt_entries), default=0.0)
+            cooldown_seconds = min(MAX_CLUSTER_COOLDOWN_SECONDS, audio_end / 3.0)
+        last_cluster_at: Dict[str, float] = {}
+        cooldown_relaxed = False
 
         # Recency ledger: srt index each segment was last used at (-inf = never).
         last_used: Dict[str, int] = {}
@@ -702,6 +808,10 @@ class AssemblyService:
         prev_segment_start: Optional[float] = None
         prev_segment_end: Optional[float] = None
         current_product_group: Optional[str] = None
+
+        def _cluster_allowed(seg: dict, timeline_time: float, cooldown: float) -> bool:
+            last = last_cluster_at.get(cluster_by_segment.get(seg["id"], seg["id"]))
+            return last is None or timeline_time - last >= cooldown
 
         def _keyword_affinity(seg: dict, srt_text_lower: str, words: set,
                               forced_group: Optional[str]) -> Tuple[float, Optional[str]]:
@@ -736,6 +846,7 @@ class AssemblyService:
             srt_text = entry["text"]
             srt_start = entry["start_time"]
             srt_end = entry["end_time"]
+            effective_cooldown = cooldown_seconds
 
             # --- F6: pinned assignment short-circuits scoring ---
             pin_id = pinned_assignments.get(idx)
@@ -826,21 +937,30 @@ class AssemblyService:
             else:
                 group_constraint = None
 
-            # --- Score every eligible candidate ---
+            # --- Score every eligible candidate. Overlapping source windows are
+            # one visual cluster, so they cannot recur inside the output cooldown.
             best_seg = None
             best_kw = None
             best_conf = 0.0
             best_score = None
             tie_pool: list = []  # (segment, kw, conf) within epsilon of best (shuffle only)
 
-            for seg in segments_data:
+            eligible = []
+            for relaxation in (cooldown_seconds, cooldown_seconds / 2.0, 0.0):
+                eligible = [seg for seg in segments_data
+                            if _cluster_allowed(seg, srt_start, relaxation)
+                            and not (seg.get("single_use") and seg["id"] in _used_single_use_ids)
+                            and (group_constraint is None or seg.get("product_group") == group_constraint)
+                            and not (n > 1 and seg["id"] == prev_segment_id)]
+                if eligible:
+                    effective_cooldown = relaxation
+                    if relaxation < cooldown_seconds:
+                        cooldown_relaxed = True
+                    break
+            for seg in eligible:
                 sid = seg["id"]
                 # Hard constraints
                 if group_constraint is not None and seg.get("product_group") != group_constraint:
-                    continue
-                if seg.get("single_use") and sid in _used_single_use_ids:
-                    continue
-                if n > 1 and sid == prev_segment_id:
                     continue
 
                 affinity, kw = _keyword_affinity(seg, srt_text_lower, words, group_constraint)
@@ -890,6 +1010,7 @@ class AssemblyService:
                     break
                 if best_seg is None and segments_data:
                     best_seg = segments_data[0]
+                cooldown_relaxed = True
 
             if best_seg is None:
                 logger.warning("No segment matched for SRT entry %d: %s", idx, srt_text[:80])
@@ -906,9 +1027,7 @@ class AssemblyService:
                     sid = seg["id"]
                     if group_constraint is not None and seg.get("product_group") != group_constraint:
                         continue
-                    if seg.get("single_use") and sid in _used_single_use_ids:
-                        continue
-                    if n > 1 and sid == prev_segment_id:
+                    if seg not in eligible:
                         continue
                     affinity, kw = _keyword_affinity(seg, srt_text_lower, words, group_constraint)
                     kw_term = affinity if affinity >= min_confidence else 0.0
@@ -959,6 +1078,7 @@ class AssemblyService:
 
             # Record ledger + single_use before advancing prev-state.
             last_used[sid] = idx
+            last_cluster_at[cluster_by_segment.get(sid, sid)] = srt_start
             if best_seg.get("single_use"):
                 _used_single_use_ids.add(sid)
             if seg_group:
@@ -987,6 +1107,12 @@ class AssemblyService:
             "%d pinned, %d total (variant=%d)",
             preset, keyword_matched, auto_filled, pinned_count, len(matches), variant_index,
         )
+        self._last_match_variety = {
+            "relaxed": cooldown_relaxed,
+            "unique_clusters": unique_clusters,
+            "slots": len(srt_entries),
+            "cooldown_seconds": cooldown_seconds,
+        }
 
         return matches
 
@@ -2359,9 +2485,10 @@ class AssemblyService:
                     _ai_assignments = await asyncio.to_thread(
                         self._ai_match_segments, srt_entries, segments_data, profile_id
                     )
-                match_results = self.match_srt_to_segments(
+                match_results, _ = self.match_srt_groups(
                     srt_entries=srt_entries,
                     segments_data=segments_data,
+                    min_segment_duration=min_segment_duration,
                     min_confidence=0.3,
                     variant_index=variant_index,
                     srt_product_groups=srt_product_groups,
@@ -2792,9 +2919,10 @@ class AssemblyService:
             _ai_assignments = await asyncio.to_thread(
                 self._ai_match_segments, srt_entries, segments_data, profile_id
             )
-        match_results = self.match_srt_to_segments(
+        match_results, merge_groups = self.match_srt_groups(
             srt_entries=srt_entries,
             segments_data=segments_data,
+            min_segment_duration=min_segment_duration,
             min_confidence=0.3,
             variant_index=variant_index,
             srt_product_groups=srt_product_groups,
@@ -2816,21 +2944,13 @@ class AssemblyService:
         matched_count = sum(1 for m in match_results if m.segment_id is not None)
         unmatched_count = len(match_results) - matched_count
 
-        # Build merge group mapping (mirrors build_timeline merge logic)
+        # Grouping was performed before matching; annotations describe that exact
+        # assignment rather than a later, divergent render-only merge pass.
         match_group_map = {}  # match_index -> (group_idx, group_duration)
-        if min_segment_duration > 0 and len(match_results) > 1:
-            group_idx = 0
-            i = 0
-            while i < len(match_results):
-                duration = match_results[i].srt_end - match_results[i].srt_start
-                last = i
-                while duration < min_segment_duration and last + 1 < len(match_results):
-                    last += 1
-                    duration += match_results[last].srt_end - match_results[last].srt_start
-                for j in range(i, last + 1):
-                    match_group_map[j] = (group_idx, round(duration, 2))
-                group_idx += 1
-                i = last + 1
+        for group_idx, indices in enumerate(merge_groups):
+            duration = sum(match_results[i].srt_end - match_results[i].srt_start for i in indices)
+            for i in indices:
+                match_group_map[i] = (group_idx, round(duration, 2))
 
         # Convert to serializable format
         matches_data = [
@@ -2975,6 +3095,20 @@ class AssemblyService:
             _cleanup_timer.start()
             self._cleanup_timers[str(temp_dir)] = _cleanup_timer
 
+        variety = getattr(self, "_last_match_variety", {})
+        variety_warning = None
+        if variety.get("relaxed"):
+            variety_warning = {
+                "level": "low_variety",
+                "unique_clusters": variety.get("unique_clusters", 0),
+                "slots": len(merge_groups),
+                "message": (
+                    f"Source material is too short for a varied video — "
+                    f"{variety.get('unique_clusters', 0)} unique scenes for {len(merge_groups)} slots. "
+                    "Add more source videos or shorten the script."
+                ),
+            }
+
         return {
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
@@ -2984,7 +3118,8 @@ class AssemblyService:
             "total_phrases": len(match_results),
             "matched_count": matched_count,
             "unmatched_count": unmatched_count,
-            "available_segments": available_segments
+            "available_segments": available_segments,
+            "variety_warning": variety_warning,
         }
 
 

@@ -1,4 +1,11 @@
 # Engineering Change Log
+
+## 2026-07-12 — Preview/render segment parity
+
+- Matched library footage once per merge group and expanded the shared selection to per-phrase preview data.
+- Added overlap-aware visual clusters, cooldown relaxation reporting, and an amber low-variety warning in Step 3.
+
+See [Preview/render segment parity](12-preview-render-parity.md).
 ## 2026-07-12 - Step-3 MP4 subtitle-style fidelity
 
 - Changed the variant-preview MP4 request to submit the resolved A/B subtitle-style object shown by the editor, including karaoke fields.

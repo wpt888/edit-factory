@@ -688,6 +688,12 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
+                      {preview.variety_warning && (
+                        <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                          <AlertCircle className="h-4 w-4 text-amber-600" />
+                          <AlertDescription>{preview.variety_warning.message}</AlertDescription>
+                        </Alert>
+                      )}
                       {/* Match summary counts */}
                       <div className="flex items-center gap-4 text-sm">
                         <div className="flex items-center gap-1 text-success">

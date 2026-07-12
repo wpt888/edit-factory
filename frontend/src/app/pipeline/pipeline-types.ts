@@ -32,6 +32,12 @@ export interface PreviewData {
   matched_count: number;
   unmatched_count: number;
   available_segments?: SegmentOption[];
+  variety_warning?: {
+    level: "low_variety";
+    unique_clusters: number;
+    slots: number;
+    message: string;
+  } | null;
 }
 
 export type PreviewKey = string;

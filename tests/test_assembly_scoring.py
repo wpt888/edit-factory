@@ -142,6 +142,33 @@ def test_pinned_honored(service):
     assert res[3].explanation == "pinned by user"
 
 
+def test_grouped_matching_keeps_one_segment_per_merge_group(service):
+    segs = [_seg(f"s{i}", f"v{i}") for i in range(5)]
+    srt = _srt(6)
+    matches, groups = service.match_srt_groups(srt, segs, min_segment_duration=3.0)
+    for group in groups:
+        assert len({matches[i].segment_id for i in group}) == 1
+
+
+def test_visual_cluster_cooldown_avoids_overlapping_windows(service):
+    segs = [
+        _seg("overlap-a", "same", 0.0, 4.0),
+        _seg("overlap-b", "same", 3.0, 7.0),  # same transitive cluster as overlap-a
+        _seg("other-a", "other-a", 0.0, 4.0),
+        _seg("other-b", "other-b", 0.0, 4.0),
+    ]
+    matches = service.match_srt_to_segments(_srt(3), segs, cooldown_seconds=10.0)
+    chosen = [m.segment_id for m in matches]
+    assert not ({"overlap-a", "overlap-b"} <= set(chosen))
+
+
+def test_small_cluster_pool_records_variety_relaxation(service):
+    segs = [_seg("a", "same", 0.0, 4.0), _seg("b", "same", 2.0, 6.0)]
+    service.match_srt_to_segments(_srt(3), segs, cooldown_seconds=10.0)
+    assert service._last_match_variety["relaxed"]
+    assert service._last_match_variety["unique_clusters"] == 1
+
+
 # --- F1/F2: build_timeline invariants ----------------------------------------
 
 @pytest.fixture
