@@ -8,3 +8,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Desktop application health audit](08-desktop-health-audit.md)
 
 - [Subtitle preview scaling](09-subtitle-preview-scaling.md)
+- [Subtitle Style panel](11-subtitle-style-panel.md)

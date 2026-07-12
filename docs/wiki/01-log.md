@@ -56,3 +56,14 @@ See [Desktop startup and subtitle preview reliability](06-desktop-preview-reliab
 - Kept backend subtitle rendering unchanged as the pixel ground truth.
 
 See [Subtitle preview scaling](09-subtitle-preview-scaling.md).
+
+## 2026-07-12 — Subtitle Style panel restructure
+
+- Large sticky A/B preview cards (click to select which Meta version you edit) replacing the small previews with dead space below.
+- Drag-to-position: subtitle text draggable vertically on the active preview, mapped to positionY.
+- Controls regrouped into Text / Position / Effects; duplicated heading removed; RO helper text translated.
+- Full-width font picker with per-option font rendering; Load system fonts as adjacent button.
+- Saved presets unified into the visual preset grid (delete affordance, Apply preset dropdown removed) and applied to the active A/B version.
+- Karaoke-only Highlight Color control added (backend highlightColor was previously unreachable).
+
+See [Subtitle Style panel](11-subtitle-style-panel.md).
