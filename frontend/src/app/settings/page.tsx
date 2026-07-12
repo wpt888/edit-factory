@@ -23,6 +23,12 @@ import { ApiKeyManager } from "@/components/api-key-manager"
 import { friendlyPlatformName } from "@/lib/platforms"
 import { MLBundleInstaller } from "@/components/ml-bundle-installer"
 
+// Postiz/Buffer are legacy publishing backends, superseded by the Blipost platform
+// connection above. Schedule/Calendar still call the Postiz-backed endpoints under
+// the hood, so the functionality stays — only the config surface is hidden from the
+// normal Settings view pre-launch. Flip to true to show them again (e.g. support debugging).
+const SHOW_LEGACY_INTEGRATIONS = false
+
 interface Voice {
   voice_id: string
   name: string
@@ -1463,6 +1469,12 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {SHOW_LEGACY_INTEGRATIONS && (
+      <details className="group rounded-lg border">
+        <summary className="cursor-pointer select-none list-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+          Legacy integrations (Postiz, Buffer)
+        </summary>
+        <div className="space-y-6 p-4 pt-0">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
@@ -1878,6 +1890,9 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+        </div>
+      </details>
+      )}
 
       <Card>
         <CardHeader>
