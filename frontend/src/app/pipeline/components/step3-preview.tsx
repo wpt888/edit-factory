@@ -66,7 +66,6 @@ import {
   PreviewData,
   PreviewKey,
   StyleKey,
-  toStyleKey,
   PreviewCard,
 } from "../pipeline-types";
 import { formatDuration } from "../pipeline-utils";
@@ -803,7 +802,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               // the visualVersion so the preview backend does NOT layer the
               // Meta profile on top. Otherwise the preview would show the
               // overlay while the final render does not — visible divergence.
-              const _activeStyleKey = toStyleKey(activeCard);
               const _previewPipOverlays = buildPipOverlaysForMatches(previews[previewVariant]?.matches);
               return (
                 <VariantPreviewPlayer

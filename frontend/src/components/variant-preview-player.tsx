@@ -46,6 +46,9 @@ interface VariantPreviewPlayerProps {
   voiceVolume?: number;
   audioFadeIn?: number;
   audioFadeOut?: number;
+  // The caller can resolve the Meta style before posting. Keep visualVersion
+  // for the preview key/segment offset without applying a second style overlay.
+  applyMetaSubtitleStyle?: boolean;
 }
 
 export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
@@ -75,6 +78,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   voiceVolume = 1.0,
   audioFadeIn = 0.0,
   audioFadeOut = 0.0,
+  applyMetaSubtitleStyle = true,
 }: VariantPreviewPlayerProps) {
   const [status, setStatus] = useState<string>("idle");
   const [progress, setProgress] = useState(0);
@@ -152,23 +156,10 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             })),
             source_video_ids: sourceVideoIds,
             min_segment_duration: minSegmentDuration,
-            subtitle_settings: subtitleSettings
-              ? {
-                  fontSize: subtitleSettings.fontSize,
-                  fontFamily: subtitleSettings.fontFamily,
-                  textColor: subtitleSettings.textColor,
-                  outlineColor: subtitleSettings.outlineColor,
-                  outlineWidth: subtitleSettings.outlineWidth,
-                  positionY: subtitleSettings.positionY,
-                  shadowDepth: subtitleSettings.shadowDepth,
-                  shadowColor: subtitleSettings.shadowColor,
-                  borderStyle: subtitleSettings.borderStyle,
-                  enableGlow: subtitleSettings.enableGlow,
-                  glowBlur: subtitleSettings.glowBlur,
-                  adaptiveSizing: subtitleSettings.adaptiveSizing,
-                  opacity: subtitleSettings.opacity,
-                }
-              : undefined,
+            // Do not reconstruct this field-by-field. The Subtitle Style panel
+            // owns the effective style (including Meta A/B and karaoke fields),
+            // so the FFmpeg preview must receive that exact object.
+            subtitle_settings: subtitleSettings ? { ...subtitleSettings } : undefined,
             words_per_subtitle: wordsPerSubtitle,
             ultra_rapid_intro: ultraRapidIntro,
             interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
@@ -185,6 +176,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             audio_fade_in: audioFadeIn,
             audio_fade_out: audioFadeOut,
             visual_version: visualVersion,
+            apply_meta_subtitle_style: applyMetaSubtitleStyle,
           }
         );
 

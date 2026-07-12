@@ -5668,6 +5668,7 @@ class PreviewRenderRequest(BaseModel):
     enable_color: bool = False
     brightness: float = 0.0
     contrast: float = 1.0
+    apply_meta_subtitle_style: bool = True
     saturation: float = 1.0
     # Audio adjust
     voice_volume: float = Field(default=1.0, ge=0.0, le=3.0)
@@ -5766,6 +5767,8 @@ async def render_preview(
         variant_index,
         render_request.visual_version,
     )
+    if not render_request.apply_meta_subtitle_style:
+        subtitle_style_override = None
 
     # Validate TTS audio exists
     _tts = pipeline.get("tts_previews", {})
@@ -5821,6 +5824,7 @@ async def render_preview(
         "pip_overlays": render_request.pip_overlays or {},
         "subtitle_settings": render_request.subtitle_settings or {},
         "subtitle_style_override": subtitle_style_override or {},
+        "apply_meta_subtitle_style": render_request.apply_meta_subtitle_style,
         "filters": {
             "enable_denoise": render_request.enable_denoise,
             "denoise_strength": render_request.denoise_strength,
