@@ -1762,6 +1762,8 @@ function PipelinePage() {
       glow_blur: subtitleSettings.glowBlur ?? 0,
       adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
       opacity: subtitleSettings.opacity ?? 100,
+      horizontal_alignment: subtitleSettings.horizontalAlignment ?? "center",
+      letter_spacing: subtitleSettings.letterSpacing ?? 0,
       // Per-Meta-version overrides. Only non-empty entries are sent — the
       // backend's PUT regex rejects `{}` entries, so we filter them out to
       // match the same contract when we POST to /render. When no overrides
@@ -3671,7 +3673,9 @@ function PipelinePage() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
+      <div className={`mx-auto w-full px-4 py-5 sm:px-6 lg:px-8 ${
+        step === 1 || step === 3 ? "max-w-none 2xl:px-10" : "max-w-[1600px]"
+      }`}>
         {/* Header */}
         <div className="mb-4 flex items-center justify-between gap-4">
           <div>
@@ -3707,7 +3711,9 @@ function PipelinePage() {
         </div>{/* end main content */}
 
         {/* History Sidebar */}
-          <PipelineHistorySidebar ctx={pipelineCtx} />
+          <div className={step === 2 || step === 3 ? "min-[1280px]:pt-[3.65rem]" : ""}>
+            <PipelineHistorySidebar ctx={pipelineCtx} />
+          </div>
 
         </div>{/* end flex container */}
       </div>

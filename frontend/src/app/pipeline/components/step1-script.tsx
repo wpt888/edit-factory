@@ -106,7 +106,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
     handleCreateManual,
   }: Step1Ctx = ctx;
   return (
-          <div className="mx-auto w-full max-w-5xl">
+          <div className="w-full">
             <Card>
               <CardHeader>
                 <CardTitle>Video Idea</CardTitle>
@@ -173,36 +173,44 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   )}
                 </div>
 
-                {/* Script set name */}
-                <div className="space-y-2">
-                  <Label htmlFor="pipeline-name">Script Set Name</Label>
-                  <DebouncedInput
-                    id="pipeline-name"
-                    placeholder="e.g. Nike Air Max Campaign, Summer Sale Promo..."
-                    value={pipelineName}
-                    onCommit={setPipelineName}
-                    maxLength={200}
-                  />
-                </div>
+                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+                  <div className="space-y-4">
+                    {/* Script set name */}
+                    <div className="space-y-2">
+                      <Label htmlFor="pipeline-name">Script Set Name</Label>
+                      <DebouncedInput
+                        id="pipeline-name"
+                        placeholder="e.g. Nike Air Max Campaign, Summer Sale Promo..."
+                        value={pipelineName}
+                        onCommit={setPipelineName}
+                        maxLength={200}
+                      />
+                    </div>
 
-                {/* Idea textarea */}
-                <div className="space-y-2">
-                  <Label htmlFor="idea">Video Idea *</Label>
-                  <DebouncedTextarea
-                    id="idea"
-                    placeholder="Describe your video idea..."
-                    rows={5}
-                    value={idea}
-                    onCommit={setIdea}
-                    className="resize-y [field-sizing:fixed]"
-                  />
-                </div>
+                    {/* Idea textarea */}
+                    <div className="space-y-2">
+                      <Label htmlFor="idea">Video Idea *</Label>
+                      <DebouncedTextarea
+                        id="idea"
+                        placeholder="Describe your video idea..."
+                        rows={8}
+                        value={idea}
+                        onCommit={setIdea}
+                        className="resize-y [field-sizing:fixed]"
+                      />
+                    </div>
+                  </div>
 
-                {/* Context textarea (collapsible) */}
-                <div className="space-y-2">
+                  {/* Reference context: product data is optional, not required */}
+                  <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
                   {/* Header row */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Label htmlFor="context" className="mr-auto">Context (Optional)</Label>
+                    <div className="mr-auto">
+                      <Label htmlFor="context">Reference Context</Label>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Optional product details, brand information, or creative direction
+                      </p>
+                    </div>
                     {contextProductCount > 0 && (
                       <Badge variant="secondary" className="text-xs">
                         {contextProductCount} {contextProductCount === 1 ? "product" : "products"}
@@ -231,7 +239,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       onClick={handleOpenCatalog}
                     >
                       <BookOpen className="h-3.5 w-3.5 mr-1" />
-                      {catalogOpen ? "Close My Products" : "Add from My Products"}
+                      {catalogOpen ? "Close Catalog" : "Browse Catalog"}
                     </Button>
                   </div>
 
@@ -273,8 +281,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   {catalogOpen && (
                     <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
                       {/* Filters row */}
-                      <div className="flex gap-2">
-                        <div className="flex-1 relative">
+                      <div className="flex flex-wrap gap-2">
+                        <div className="min-w-[180px] flex-1 relative">
                           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                           <Input
                             placeholder="Search your products..."
@@ -284,7 +292,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                           />
                         </div>
                         <Select value={catalogBrand} onValueChange={(v) => handleCatalogFilterChange("brand", v)}>
-                          <SelectTrigger className="w-[140px] h-9">
+                          <SelectTrigger className="h-9 min-w-[130px]">
                             <SelectValue placeholder="Brand" />
                           </SelectTrigger>
                           <SelectContent>
@@ -295,7 +303,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                           </SelectContent>
                         </Select>
                         <Select value={catalogCategory} onValueChange={(v) => handleCatalogFilterChange("category", v)}>
-                          <SelectTrigger className="w-[140px] h-9">
+                          <SelectTrigger className="h-9 min-w-[130px]">
                             <SelectValue placeholder="Category" />
                           </SelectTrigger>
                           <SelectContent>
@@ -395,6 +403,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       </div>
                     </div>
                   )}
+                </div>
                 </div>
 
                 {/* Configuration row */}

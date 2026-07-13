@@ -285,8 +285,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             </div>
 
             {/* ElevenLabs model selector */}
-            <Card className="min-[1100px]:col-start-2 min-[1100px]:row-start-2">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <Card className="overflow-hidden min-[1100px]:col-start-2 min-[1100px]:row-start-2">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b pb-3">
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
                 <ElevenCreditsBadge
                   credits={elevenCredits}
@@ -295,7 +295,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                   onRefresh={fetchElevenCredits}
                 />
               </CardHeader>
-              <CardContent className="space-y-4 min-[1100px]:grid min-[1100px]:grid-cols-2 min-[1100px]:gap-x-4 min-[1100px]:gap-y-3 min-[1100px]:space-y-0">
+              <CardContent className="space-y-5 pt-5">
                 {elevenCredits?.last_error && (
                   <Alert variant="destructive">
                     <AlertDescription className="text-xs">
@@ -303,6 +303,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </AlertDescription>
                   </Alert>
                 )}
+                <div className="grid grid-cols-1 gap-4 min-[640px]:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="tts-model">ElevenLabs Model</Label>
                   <Select value={elevenlabsModel} onValueChange={setElevenlabsModel}>
@@ -393,10 +394,12 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </p>
                   )}
                 </div>
+                </div>
 
                 {/* Voice Settings */}
-                <div className="space-y-4 border-t pt-4 min-[1100px]:col-span-2 min-[1100px]:grid min-[1100px]:grid-cols-2 min-[1100px]:gap-x-5 min-[1100px]:gap-y-4 min-[1100px]:space-y-0">
-                  <p className="text-sm font-medium min-[1100px]:col-span-2">Voice Settings</p>
+                <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+                  <p className="text-sm font-medium">Voice Settings</p>
+                  <div className="grid grid-cols-1 gap-x-5 gap-y-4 min-[640px]:grid-cols-2">
 
                   <div className="space-y-1.5">
                     <div className="flex justify-between">
@@ -462,8 +465,9 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </div>
                     <p className="text-[10px] text-muted-foreground">High values increase latency</p>
                   </div>
+                  </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 rounded-md bg-background/60 px-3 py-2.5">
                     <Checkbox
                       id="speaker-boost"
                       checked={voiceSpeakerBoost}
@@ -475,7 +479,10 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     <span className="text-[10px] text-muted-foreground">Enhances voice clarity</span>
                   </div>
 
-                  <div className="border-t pt-3 space-y-1.5">
+                  <div className="border-t pt-4">
+                    <p className="mb-3 text-sm font-medium">Timing &amp; subtitles</p>
+                    <div className="grid grid-cols-1 gap-x-5 gap-y-4 min-[640px]:grid-cols-2">
+                  <div className="space-y-1.5">
                     <div className="flex justify-between">
                       <Label className="text-xs">Words per subtitle</Label>
                       <span className="text-xs text-muted-foreground">{wordsPerSubtitle}</span>
@@ -492,7 +499,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     <p className="text-[10px] text-muted-foreground">Fewer words = more dynamic subtitles (TikTok style)</p>
                   </div>
 
-                  <div className="border-t pt-3 space-y-1.5">
+                  <div className="space-y-1.5">
                     <div className="flex justify-between">
                       <Label className="text-xs">Minimum segment duration (sec)</Label>
                       <span className="text-xs text-muted-foreground">{minSegmentDuration}s</span>
@@ -508,8 +515,10 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </div>
                     <p className="text-[10px] text-muted-foreground">Video segments won&apos;t change faster than this duration</p>
                   </div>
+                    </div>
+                  </div>
 
-                  <div className="border-t pt-3">
+                  <div className="rounded-md border bg-background/60 px-3 py-2.5">
                     <div className="flex items-center gap-2">
                       <Checkbox
                         id="ultra-rapid-intro"
