@@ -638,10 +638,14 @@ export function TimelineEditor({
     introHeldTimelineTimeRef.current = null;
     setIsPreviewBuffering(false);
     audio.currentTime = 0;
-    audio.play().catch(() => {
-      isPreviewPlayingRef.current = false;
-      setIsPreviewPlaying(false);
-    });
+    audio.loop = false;
+    audio.muted = false;
+    if (audio.paused) {
+      audio.play().catch(() => {
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+      });
+    }
     return true;
   }, [applySlotVisibility, prepareSlot, setSegmentEndBoundary]);
 
@@ -880,10 +884,22 @@ export function TimelineEditor({
       // an explicit resume) and force the idle slot to re-stage next rAF tick.
       preparedNextForIndexRef.current = null;
       if (isPreviewIntro) {
+        // Keep an audio playback authorized by this explicit user gesture alive
+        // while the silent rapid intro runs. The voiceover is restarted and
+        // unmuted only when the body begins.
+        audio.currentTime = 0;
+        audio.loop = true;
+        audio.muted = true;
+        audio.play().catch(() => {
+          isPreviewPlayingRef.current = false;
+          setIsPreviewPlaying(false);
+        });
         introHeldTimelineTimeRef.current = null;
         introStartedAtRef.current = performance.now() - previewCurrentTime * 1000;
         playIntroAt(previewCurrentTime);
       } else {
+        audio.loop = false;
+        audio.muted = false;
         seatActiveSlot(previewActiveIndexRef.current, true);
         audio.play().catch(() => {
           isPreviewPlayingRef.current = false;
@@ -901,7 +917,17 @@ export function TimelineEditor({
     const audio = previewAudioRef.current;
     const match = matchesRef.current[idx];
     if (!audio || !match) return;
+    audio.loop = false;
+    audio.muted = false;
     audio.currentTime = match.srt_start;
+    isPreviewIntroRef.current = false;
+    setIsPreviewIntro(false);
+    if (isPreviewPlayingRef.current && audio.paused) {
+      audio.play().catch(() => {
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+      });
+    }
     setPreviewCurrentTime(match.srt_start + introOffsetSec);
     setPreviewActiveIndex(idx);
     previewActiveIndexRef.current = idx;
@@ -925,8 +951,17 @@ export function TimelineEditor({
     const time = parseFloat(e.target.value);
     setPreviewCurrentTime(time);
     if (time < introOffsetSec) {
-      audio.pause();
       audio.currentTime = 0;
+      audio.loop = true;
+      audio.muted = true;
+      if (isPreviewPlayingRef.current) {
+        audio.play().catch(() => {
+          isPreviewPlayingRef.current = false;
+          setIsPreviewPlaying(false);
+        });
+      } else {
+        audio.pause();
+      }
       isPreviewIntroRef.current = true;
       setIsPreviewIntro(true);
       introHeldTimelineTimeRef.current = null;
@@ -940,7 +975,15 @@ export function TimelineEditor({
     isPreviewIntroRef.current = false;
     setIsPreviewIntro(false);
     const audioTime = time - introOffsetSec;
+    audio.loop = false;
+    audio.muted = false;
     audio.currentTime = audioTime;
+    if (isPreviewPlayingRef.current && audio.paused) {
+      audio.play().catch(() => {
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+      });
+    }
     const newIdx = findActiveMatch(audioTime);
     setPreviewActiveIndex(newIdx);
     previewActiveIndexRef.current = newIdx;
@@ -956,6 +999,22 @@ export function TimelineEditor({
   }, [isPreviewActive, jumpToIndex]);
 
   const activatePreview = useCallback(() => {
+    // Call play() synchronously from the click handler. Chromium can reject a
+    // first play() made later from canplay/seek callbacks because the transient
+    // user activation has expired. Keep this authorized playback muted and
+    // looping while the first video frame is prepared, then restart/unmute it.
+    const primedAudio = previewAudioRef.current;
+    if (primedAudio) {
+      primedAudio.currentTime = 0;
+      primedAudio.loop = true;
+      primedAudio.muted = true;
+      primedAudio.play().catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("[TimelineEditor] Could not prime preview audio from the user gesture", error);
+        }
+      });
+    }
+
     // Increment activation ID — any pending async work from previous activations
     // will check this and bail out if it's stale (prevents audio restarting after Stop).
     const thisActivation = ++activationIdRef.current;
@@ -1057,11 +1116,16 @@ export function TimelineEditor({
         // current media window enters its remaining-time lead window.
         const startAudioAndLoop = () => {
           if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
+          audio.currentTime = 0;
+          audio.loop = false;
+          audio.muted = false;
           startPreviewRafLoop();
-          audio.play().catch(() => {
-            isPreviewPlayingRef.current = false;
-            setIsPreviewPlaying(false);
-          });
+          if (audio.paused) {
+            audio.play().catch(() => {
+              isPreviewPlayingRef.current = false;
+              setIsPreviewPlaying(false);
+            });
+          }
         };
 
         // Pre-seek the first segment into the ACTIVE slot BEFORE starting audio —
@@ -1075,6 +1139,10 @@ export function TimelineEditor({
           const onReady = () => {
             if (started) return;
             started = true;
+            if (activationTimeoutRef.current != null) {
+              clearTimeout(activationTimeoutRef.current);
+              activationTimeoutRef.current = null;
+            }
             if (activationIdRef.current !== thisActivation) return; // stale
             const el = previewSlotRefs.current[0];
             slotStateRef.current[0].segmentStartTime = targetTime;
@@ -1087,7 +1155,7 @@ export function TimelineEditor({
           activationTimeoutRef.current = setTimeout(() => {
             activationTimeoutRef.current = null;
             if (activationIdRef.current !== thisActivation) return; // stale
-            if (!audio.paused) return; // already started
+            if (started) return;
             onReady();
           }, 3000);
         } else {
@@ -1142,6 +1210,8 @@ export function TimelineEditor({
       }
       audio.pause();
       audio.currentTime = 0;
+      audio.loop = false;
+      audio.muted = false;
     }
     for (const vid of previewSlotRefs.current) {
       if (vid) vid.pause();
