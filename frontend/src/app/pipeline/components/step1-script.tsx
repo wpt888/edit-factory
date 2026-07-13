@@ -42,6 +42,7 @@ import {
 import { DebouncedInput, DebouncedTextarea } from "../pipeline-utils";
 import type { Dispatch, SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
+import { SourceVideosCard } from "./source-videos-card";
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
 // inline callbacks below are typed precisely; everything else stays `any`.
@@ -106,7 +107,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
     handleCreateManual,
   }: Step1Ctx = ctx;
   return (
-          <div className="w-full">
+          <div className="w-full space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle>Video Idea</CardTitle>
@@ -532,6 +533,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 )}
               </CardContent>
             </Card>
+
+            <SourceVideosCard ctx={ctx} />
 
           </div>
   );
