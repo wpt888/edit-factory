@@ -11,13 +11,14 @@ The token never appears in responses or logs — only masked hints and balances.
 import asyncio
 import logging
 import mimetypes
+import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
@@ -26,6 +27,7 @@ from app.repositories.models import QueryFilters
 from app.services.blipost_platform_client import (
     BlipostAuthError,
     BlipostCreditsError,
+    BlipostNotFoundError,
     BlipostPlatformClient,
     BlipostPlatformError,
     BlipostRateLimitError,
@@ -85,6 +87,23 @@ class PublishResponse(BaseModel):
     status: str
     job_id: Optional[str] = None
     message: str
+
+
+class ClippingCreateRequest(BaseModel):
+    source_media_id: str
+    max_clips: int = Field(default=5, ge=1, le=20)
+    duration_mode: str = "ai"
+    target_duration_sec: Optional[int] = None
+    captions: bool = True
+    hook_overlay: bool = True
+    keep_source: bool = True
+    render_target: str = "desktop"
+    language: Optional[str] = None
+    whisper_quality: str = "fast"
+
+
+class ClippingReviewRequest(BaseModel):
+    highlights: List[Dict]
 
 
 # ---- AI video generation (D2) ----
@@ -245,6 +264,155 @@ async def accounts(profile: ProfileContext = Depends(get_profile_context)):
         for a in raw
         if a.get("id")
     ]
+
+
+# ============== SHARED CLOUD MEDIA + CLIPPING ==============
+
+def _raise_platform_bridge_error(error: Exception) -> None:
+    if isinstance(error, BlipostAuthError):
+        raise HTTPException(status_code=401, detail="Token invalid or revoked.")
+    if isinstance(error, BlipostCreditsError):
+        detail = str(error)
+        if error.balance is not None:
+            detail = f"{detail} Balance: {error.balance:g} credits."
+        raise HTTPException(status_code=402, detail=detail)
+    if isinstance(error, BlipostRateLimitError):
+        raise HTTPException(status_code=429, detail=str(error))
+    if isinstance(error, BlipostNotFoundError):
+        raise HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, BlipostPlatformError):
+        raise HTTPException(status_code=502, detail=str(error))
+    raise error
+
+
+@router.get("/media")
+async def cloud_media(
+    origin: Optional[str] = Query(default=None),
+    kind: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=100),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Read the same canonical media library shown by the web app."""
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError:
+        return {"connected": False, "media": []}
+    try:
+        rows = await client.get_media(limit=limit, origin=origin, kind=kind)
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+    return {"connected": True, "media": rows}
+
+
+@router.post("/media/upload")
+async def upload_cloud_media(
+    file: UploadFile = File(...),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Stage an Electron upload on disk, then stream it to the web account's R2
+    library. The staging file is always removed, including failed uploads."""
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    raw_filename = Path(file.filename or "source-video").name
+    filename = (
+        "".join(char if char.isalnum() or char in "._-" else "_" for char in raw_filename)
+        or "source-video"
+    )
+    content_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    if not content_type.startswith("video/") and not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Upload an image or video file.")
+    temp_dir = get_settings().base_dir / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"platform-{uuid.uuid4().hex}-{filename}"
+    try:
+        with temp_path.open("wb") as destination:
+            await asyncio.to_thread(shutil.copyfileobj, file.file, destination, 8 * 1024 * 1024)
+        media_id = await client.upload_media_file(temp_path, content_type, origin="upload")
+        return {"mediaId": media_id}
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+    finally:
+        await file.close()
+        temp_path.unlink(missing_ok=True)
+
+
+@router.get("/clipping")
+async def clipping_jobs(
+    limit: int = Query(default=20, ge=1, le=50),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError:
+        return {"connected": False, "jobs": []}
+    try:
+        jobs = await client.list_clipping_jobs(limit)
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+    return {"connected": True, "jobs": jobs}
+
+
+@router.post("/clipping")
+async def create_clipping(
+    request: ClippingCreateRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    if request.duration_mode not in {"ai", "exact"}:
+        raise HTTPException(status_code=400, detail="duration_mode must be ai or exact")
+    if request.duration_mode == "exact" and request.target_duration_sec not in {10, 15, 20, 30}:
+        raise HTTPException(status_code=400, detail="Exact duration must be 10, 15, 20, or 30 seconds")
+    if request.render_target not in {"cloud", "desktop"}:
+        raise HTTPException(status_code=400, detail="render_target must be cloud or desktop")
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    params = {
+        "maxClips": request.max_clips,
+        "durationMode": request.duration_mode,
+        "targetDurationSec": request.target_duration_sec,
+        "captions": request.captions,
+        "captionStyles": ["karaoke" if request.captions else "none"],
+        "hookOverlay": request.hook_overlay,
+        "keepSource": request.keep_source,
+        "renderTarget": request.render_target,
+        "language": request.language,
+        "whisperQuality": "accurate" if request.whisper_quality == "accurate" else None,
+        "autoDispatch": False,
+    }
+    try:
+        return await client.create_clipping_job(request.source_media_id, params)
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+
+
+@router.get("/clipping/{job_id}")
+async def clipping_job(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
+    try:
+        client = get_client_for_profile(profile.profile_id)
+        return await client.get_clipping_job(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+
+
+@router.patch("/clipping/{job_id}/highlights")
+async def review_clipping_job(
+    job_id: str,
+    request: ClippingReviewRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    try:
+        client = get_client_for_profile(profile.profile_id)
+        return await client.confirm_clipping_highlights(job_id, request.highlights)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        _raise_platform_bridge_error(error)
 
 
 # ============== PUBLISHING (runs beside the Postiz path) ==============

@@ -29,6 +29,7 @@ import {
   Wallet,
   ChevronLeft,
   ChevronRight,
+  Cloud,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -44,6 +45,7 @@ const allNavGroups = [
     label: "Create",
     items: [
       { label: "Pipeline", href: "/pipeline", icon: Clapperboard },
+      { label: "Clipping", href: "/clipping", icon: Scissors },
       { label: "Segments", href: "/segments", icon: Scissors },
       { label: "AI Image", href: "/create-image", icon: ImageIcon },
       { label: "AI Video", href: "/create-video", icon: Clapperboard },
@@ -53,6 +55,7 @@ const allNavGroups = [
     label: "Library",
     items: [
       { label: "Local Projects", href: "/librarie", icon: Film },
+      { label: "Media Library", href: "/media-library", icon: Cloud },
       { label: "TTS", href: "/tts-library", icon: Music },
       { label: "Schedule", href: "/schedule", icon: CalendarClock },
     ],

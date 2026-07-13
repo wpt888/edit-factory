@@ -197,6 +197,46 @@ def test_video_failed_status():
     asyncio.run(run())
 
 
+def test_shared_media_and_clipping_contract():
+    """Desktop and web operate on the same media ids and clipping jobs."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/media"):
+            assert request.url.params["origin"] == "clipping"
+            return httpx.Response(200, json={"media": [{
+                "id": "media-source", "origin": "clipping", "mimeType": "video/mp4",
+                "previewUrl": "https://r2.example/get/source.mp4",
+            }]})
+        if request.method == "POST" and path.endswith("/clipping"):
+            body = request.read()
+            assert b'"durationMode":"exact"' in body
+            return httpx.Response(201, json={"jobId": "clip-job", "status": "pending"})
+        if request.method == "GET" and path.endswith("/clipping"):
+            return httpx.Response(200, json={"jobs": [{"id": "clip-job", "status": "rendering"}]})
+        if request.method == "GET" and path.endswith("/clipping/clip-job"):
+            return httpx.Response(200, json={"id": "clip-job", "highlights": [{"start": 1, "end": 11}]})
+        if request.method == "PATCH" and path.endswith("/clipping/clip-job"):
+            return httpx.Response(200, json={"count": 1, "status": "queued"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    async def run():
+        client = _client(handler)
+        media = await client.get_media(origin="clipping", kind="video")
+        assert media[0]["id"] == "media-source"
+        created = await client.create_clipping_job("media-source", {
+            "durationMode": "exact", "targetDurationSec": 10, "captions": False,
+        })
+        assert created["jobId"] == "clip-job"
+        assert (await client.list_clipping_jobs())[0]["status"] == "rendering"
+        assert (await client.get_clipping_job("clip-job"))["highlights"][0]["end"] == 11
+        confirmed = await client.confirm_clipping_highlights(
+            "clip-job", [{"start": 1, "end": 11, "enabled": True}]
+        )
+        assert confirmed["count"] == 1
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     test_full_flow()
     test_error_mapping()

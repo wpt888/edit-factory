@@ -1083,6 +1083,53 @@ def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
     )
 
 
+async def _mirror_pipeline_output_to_cloud(
+    profile_id: str,
+    pipeline_id: str,
+    final_video_path: Path,
+    render_fingerprint: str,
+    job: dict,
+    render_jobs_lock: threading.Lock,
+) -> None:
+    """Best-effort mirror of a completed local pipeline render into the
+    canonical web library. Local rendering never fails because the account is
+    disconnected or the cloud upload is temporarily unavailable."""
+    if job.get("cloud_render_fingerprint") == render_fingerprint:
+        return
+    try:
+        from app.services.blipost_platform_client import get_client_for_profile
+
+        client = get_client_for_profile(profile_id)
+        media_id = await client.upload_media_file(
+            final_video_path,
+            "video/mp4",
+            origin="pipeline",
+            origin_ref=pipeline_id,
+        )
+        with render_jobs_lock:
+            job["cloud_media_id"] = media_id
+            job["cloud_render_fingerprint"] = render_fingerprint
+            job.pop("cloud_library_error", None)
+        logger.info(
+            "[Profile %s] Pipeline %s output mirrored to cloud media %s",
+            profile_id,
+            pipeline_id,
+            media_id,
+        )
+    except ValueError:
+        # A platform token is optional; disconnected workspaces remain local.
+        return
+    except Exception as error:
+        with render_jobs_lock:
+            job["cloud_library_error"] = str(error)
+        logger.warning(
+            "[Profile %s] Pipeline %s cloud mirror failed: %s",
+            profile_id,
+            pipeline_id,
+            error,
+        )
+
+
 async def _save_clip_to_library(
     pipeline: dict,
     pipeline_id: str,
@@ -1353,6 +1400,15 @@ async def _save_clip_to_library(
                     f"[Profile {profile_id}] Failed to increment segment "
                     f"usage_count for variant {vid}: {usage_err}"
                 )
+
+            await _mirror_pipeline_output_to_cloud(
+                profile_id,
+                pipeline_id,
+                final_video_path,
+                render_fingerprint,
+                job,
+                render_jobs_lock,
+            )
         else:
             with render_jobs_lock:
                 job["library_error"] = "Failed to create or find library project"

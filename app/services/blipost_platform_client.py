@@ -15,6 +15,8 @@ token).
 """
 import asyncio
 import logging
+import math
+from pathlib import Path
 from typing import List, Optional
 
 import httpx
@@ -27,6 +29,8 @@ _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # we can honor it, but the contract says a flat 60/min limit — a short sleep is enough.
 _RATE_LIMIT_RETRIES = 3
 _RATE_LIMIT_BACKOFF_S = 2.0
+_MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024
+_MULTIPART_PART_BYTES = 20 * 1024 * 1024
 
 
 class BlipostPlatformError(Exception):
@@ -47,6 +51,10 @@ class BlipostCreditsError(BlipostPlatformError):
 
 class BlipostRateLimitError(BlipostPlatformError):
     """429 — rate limit exceeded even after backoff retries."""
+
+
+class BlipostNotFoundError(BlipostPlatformError):
+    """404 — endpoint or owned resource is not available on the web server."""
 
 
 class BlipostPlatformClient:
@@ -110,7 +118,7 @@ class BlipostPlatformClient:
         if resp.status_code == 402:
             raise BlipostCreditsError(error_msg or "Insufficient credits.", balance=balance)
         if resp.status_code == 404:
-            raise BlipostPlatformError(error_msg or "Not found.")
+            raise BlipostNotFoundError(error_msg or "Not found.")
         raise BlipostPlatformError(error_msg or f"Platform API error ({resp.status_code}).")
 
     # ==================== Endpoints ====================
@@ -125,11 +133,25 @@ class BlipostPlatformClient:
         resp = await self._request("GET", "/accounts")
         return resp.json().get("accounts", [])
 
-    async def request_media_upload(self, filename: str, content_type: str, size_bytes: int) -> dict:
+    async def request_media_upload(
+        self,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        origin: str = "upload",
+        origin_ref: Optional[str] = None,
+    ) -> dict:
         """POST /media — request a presigned upload slot. Returns { mediaId, uploadUrl }."""
         resp = await self._request(
             "POST", "/media",
-            json={"filename": filename, "contentType": content_type, "sizeBytes": size_bytes},
+            json={
+                "filename": filename,
+                "displayName": filename,
+                "contentType": content_type,
+                "sizeBytes": size_bytes,
+                "origin": origin,
+                "originRef": origin_ref,
+            },
         )
         return resp.json()
 
@@ -140,6 +162,146 @@ class BlipostPlatformClient:
         if not resp.is_success:
             logger.warning("Blipost media PUT failed: %d", resp.status_code)
             raise BlipostPlatformError(f"Media upload failed ({resp.status_code}).")
+
+    async def get_media(
+        self,
+        limit: int = 100,
+        origin: Optional[str] = None,
+        kind: Optional[str] = None,
+    ) -> List[dict]:
+        """GET /media — the canonical cloud library, including preview URLs."""
+        params = {"limit": min(max(limit, 1), 100)}
+        if origin:
+            params["origin"] = origin
+        if kind:
+            params["kind"] = kind
+        resp = await self._request("GET", "/media", params=params)
+        return resp.json().get("media", [])
+
+    async def upload_media_file(
+        self,
+        path: Path,
+        content_type: str,
+        origin: str = "upload",
+        origin_ref: Optional[str] = None,
+    ) -> str:
+        """Upload a local file to the shared library. Large sources use R2
+        multipart URLs, so their bytes never pass through the web process."""
+        size_bytes = path.stat().st_size
+        if size_bytes <= _MULTIPART_THRESHOLD_BYTES:
+            slot = await self.request_media_upload(
+                path.name, content_type, size_bytes, origin, origin_ref
+            )
+
+            async def file_chunks():
+                with path.open("rb") as handle:
+                    while True:
+                        chunk = await asyncio.to_thread(handle.read, _MULTIPART_PART_BYTES)
+                        if not chunk:
+                            break
+                        yield chunk
+
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(900.0, connect=10.0), transport=self._transport
+            ) as client:
+                response = await client.put(
+                    slot["uploadUrl"],
+                    content=file_chunks(),
+                    headers={"Content-Type": content_type, "Content-Length": str(size_bytes)},
+                )
+            if not response.is_success:
+                raise BlipostPlatformError(f"Media upload failed ({response.status_code}).")
+            if origin != "upload":
+                await self._request("POST", f"/media/{slot['mediaId']}/complete")
+            return slot["mediaId"]
+
+        init = await self._request(
+            "POST",
+            "/media/multipart",
+            json={
+                "action": "init",
+                "filename": path.name,
+                "contentType": content_type,
+                "sizeBytes": size_bytes,
+            },
+        )
+        state = init.json()
+        key, upload_id = state["key"], state["uploadId"]
+        try:
+            count = math.ceil(size_bytes / _MULTIPART_PART_BYTES)
+            signed = await self._request(
+                "POST",
+                "/media/multipart",
+                json={
+                    "action": "parts",
+                    "key": key,
+                    "uploadId": upload_id,
+                    "partNumbers": list(range(1, count + 1)),
+                },
+            )
+            url_by_part = {item["partNumber"]: item["url"] for item in signed.json()["urls"]}
+            completed = []
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(900.0, connect=10.0), transport=self._transport
+            ) as client:
+                with path.open("rb") as handle:
+                    for part_number in range(1, count + 1):
+                        chunk = await asyncio.to_thread(handle.read, _MULTIPART_PART_BYTES)
+                        response = await client.put(url_by_part[part_number], content=chunk)
+                        if not response.is_success:
+                            raise BlipostPlatformError(
+                                f"Media part {part_number} failed ({response.status_code})."
+                            )
+                        etag = response.headers.get("etag")
+                        if not etag:
+                            raise BlipostPlatformError(f"Media part {part_number} returned no ETag.")
+                        completed.append({"partNumber": part_number, "etag": etag})
+            done = await self._request(
+                "POST",
+                "/media/multipart",
+                json={
+                    "action": "complete",
+                    "key": key,
+                    "uploadId": upload_id,
+                    "filename": path.name,
+                    "contentType": content_type,
+                    "sizeBytes": size_bytes,
+                    "origin": origin,
+                    "originRef": origin_ref,
+                    "parts": completed,
+                },
+            )
+            return done.json()["mediaId"]
+        except Exception:
+            try:
+                await self._request(
+                    "POST",
+                    "/media/multipart",
+                    json={"action": "abort", "key": key, "uploadId": upload_id},
+                )
+            except Exception:
+                logger.warning("Could not abort failed Blipost multipart upload")
+            raise
+
+    async def create_clipping_job(self, source_media_id: str, params: dict) -> dict:
+        resp = await self._request(
+            "POST", "/clipping", json={"sourceMediaId": source_media_id, "params": params}
+        )
+        return resp.json()
+
+    async def list_clipping_jobs(self, limit: int = 20) -> List[dict]:
+        resp = await self._request("GET", "/clipping", params={"limit": limit})
+        return resp.json().get("jobs", [])
+
+    async def get_clipping_job(self, job_id: str) -> dict:
+        resp = await self._request("GET", f"/clipping/{job_id}")
+        return resp.json()
+
+    async def confirm_clipping_highlights(self, job_id: str, highlights: List[dict]) -> dict:
+        resp = await self._request(
+            "PATCH", f"/clipping/{job_id}", json={"highlights": highlights}
+        )
+        return resp.json()
 
     async def create_post(
         self,
