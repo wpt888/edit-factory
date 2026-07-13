@@ -33,7 +33,7 @@ export interface PreviewData {
   unmatched_count: number;
   available_segments?: SegmentOption[];
   intro_offset_sec?: number;
-  intro_segments?: Array<{ source_video_path: string; start_time: number; end_time: number; timeline_start: number; timeline_duration: number }>;
+  intro_segments?: Array<{ source_video_path: string; source_video_id?: string; start_time: number; end_time: number; timeline_start: number; timeline_duration: number }>;
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;

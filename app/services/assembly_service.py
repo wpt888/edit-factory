@@ -114,6 +114,29 @@ class TimelineEntry:
     pinned: bool = False  # F6: originates from a pinned match — never absorbed/swapped
 
 
+def _serialize_preview_timeline(
+    timeline: List[TimelineEntry],
+    segments_data: List[dict],
+) -> List[dict]:
+    """Serialize timeline entries with source ids needed by browser proxies."""
+    source_video_ids_by_path = {
+        seg.get("source_video_path"): seg.get("source_video_id")
+        for seg in segments_data
+        if seg.get("source_video_path") and seg.get("source_video_id")
+    }
+    return [
+        {
+            "source_video_path": entry.source_video_path,
+            "source_video_id": source_video_ids_by_path.get(entry.source_video_path),
+            "start_time": entry.start_time,
+            "end_time": entry.end_time,
+            "timeline_start": entry.timeline_start,
+            "timeline_duration": entry.timeline_duration,
+        }
+        for entry in timeline
+    ]
+
+
 def _merge_srt_groups(srt_entries: List[dict], min_segment_duration: float) -> List[List[int]]:
     """Return consecutive phrase indices that form one visual shot."""
     if min_segment_duration <= 0:
@@ -2986,16 +3009,10 @@ class AssemblyService:
             m_data["merge_group"] = g
             m_data["merge_group_duration"] = d
 
-        timeline_data = [
-            {
-                "source_video_path": e.source_video_path,
-                "start_time": e.start_time,
-                "end_time": e.end_time,
-                "timeline_start": e.timeline_start,
-                "timeline_duration": e.timeline_duration
-            }
-            for e in timeline
-        ]
+        # Keep the source id alongside the path so the browser can use the
+        # seek-friendly preview proxy for ultra-rapid intro clips. Older saved
+        # previews may not have it, so the frontend still supports path fallback.
+        timeline_data = _serialize_preview_timeline(timeline, segments_data)
 
         intro_segments = [
             entry for entry in timeline_data

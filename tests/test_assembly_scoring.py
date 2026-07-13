@@ -257,6 +257,25 @@ def test_build_timeline_pinned_survives_merge(service, no_ffprobe):
     assert any(e.source_video_path == "/fake/v2.mp4" for e in pinned_entries)
 
 
+def test_preview_timeline_includes_source_id_for_seek_proxy():
+    from app.services.assembly_service import TimelineEntry, _serialize_preview_timeline
+
+    timeline = [
+        TimelineEntry(
+            source_video_path="/fake/v7.mp4",
+            start_time=4.0,
+            end_time=4.5,
+            timeline_start=0.0,
+            timeline_duration=0.5,
+        )
+    ]
+
+    serialized = _serialize_preview_timeline(timeline, [_seg("s7", "v7")])
+
+    assert serialized[0]["source_video_id"] == "v7"
+    assert serialized[0]["source_video_path"] == "/fake/v7.mp4"
+
+
 # --- F7: merge_group collapse sums duration_overrides ------------------------
 
 def test_collapse_sums_duration_overrides(service):

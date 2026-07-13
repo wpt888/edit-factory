@@ -97,6 +97,7 @@ export interface SegmentOption {
 
 export interface IntroSegment {
   source_video_path: string;
+  source_video_id?: string;
   start_time: number;
   end_time: number;
   timeline_start: number;
@@ -214,6 +215,14 @@ export function TimelineEditor({
   // Invalidates late seek callbacks when a slot is repurposed before an async
   // load/seek finishes (most likely after a fallback transition).
   const slotPreparationIdRef = useRef([0, 0]);
+  const introSlotStateRef = useRef<Array<{
+    preparedForIndex: number | null;
+    preparationId: number;
+    ready: boolean;
+  }>>([
+    { preparedForIndex: null, preparationId: 0, ready: false },
+    { preparedForIndex: null, preparationId: 0, ready: false },
+  ]);
   const isPreviewPlayingRef = useRef(false);
   const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
@@ -228,6 +237,8 @@ export function TimelineEditor({
   const activationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const introStartedAtRef = useRef(0);
   const introActiveIndexRef = useRef(-1);
+  const introHeldTimelineTimeRef = useRef<number | null>(null);
+  const introHoldStartedAtRef = useRef(0);
   const isPreviewIntroRef = useRef(false);
 
   // Keep refs in sync (state → ref for use in callbacks)
@@ -293,13 +304,17 @@ export function TimelineEditor({
     }
     return null;
   }, []);
-  const getIntroStreamUrl = useCallback((sourceVideoPath: string) =>
-    `${API_URL}/segments/files/${encodeURIComponent(sourceVideoPath)}`, []);
-
   const getPreviewStreamUrl = useCallback((sourceVideoId: string) => {
     if (!profileId) return "";
     return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
   }, [profileId]);
+
+  const getIntroStreamUrl = useCallback((segment: IntroSegment) => {
+    if (segment.source_video_id) {
+      return getPreviewStreamUrl(segment.source_video_id);
+    }
+    return `${API_URL}/segments/files/${encodeURIComponent(segment.source_video_path)}`;
+  }, [getPreviewStreamUrl]);
 
   // --- Continuous (live, client-side) preview helpers ---
   // NOTE: this is a client-side segment stitcher driven by the TTS audio clock,
@@ -493,26 +508,142 @@ export function TimelineEditor({
 
   // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment switching
   // This replaces timeupdate (which only fires ~4Hz) to eliminate ~250ms segment switch lag
-  const playIntroAt = useCallback((time: number) => {
+  const prepareIntroSlot = useCallback((
+    slot: number,
+    index: number,
+    onReady?: () => void,
+  ): boolean => {
+    const segment = introSegments[index];
+    const video = previewSlotRefs.current[slot];
+    if (!segment || !video) return false;
+
+    const st = slotStateRef.current[slot];
+    const preparationId = ++slotPreparationIdRef.current[slot];
+    const introState = {
+      preparedForIndex: index,
+      preparationId,
+      ready: false,
+    };
+    introSlotStateRef.current[slot] = introState;
+    st.sourceVideoId = null;
+    st.segmentStartTime = null;
+    st.preparedForIndex = null;
+    st.ready = false;
+
+    video.pause();
+    video.src = getIntroStreamUrl(segment);
+    video.load();
+    seekSlotTo(slot, segment.start_time, () => {
+      if (
+        slotPreparationIdRef.current[slot] !== preparationId ||
+        introSlotStateRef.current[slot] !== introState
+      ) return;
+      st.segmentStartTime = segment.start_time;
+      introState.ready = true;
+      onReady?.();
+    });
+    return true;
+  }, [getIntroStreamUrl, introSegments, seekSlotTo]);
+
+  // Switch the ultra-rapid intro only to an already decoded slot. If the next
+  // 0.5s clip is still seeking, keep the previous frame visible and let the
+  // intro clock wait instead of consuming the clip behind a black frame.
+  const playIntroAt = useCallback((time: number): boolean => {
     const index = introSegments.findIndex((segment) =>
       segment.timeline_start <= time && time < segment.timeline_start + segment.timeline_duration
     );
-    if (index < 0) return;
-    const segment = introSegments[index];
-    const slot = activeSlotRef.current;
-    const video = previewSlotRefs.current[slot];
-    if (!video) return;
-    if (introActiveIndexRef.current !== index) {
-      introActiveIndexRef.current = index;
-      video.pause();
-      video.src = getIntroStreamUrl(segment.source_video_path);
-      video.load();
-      video.onloadedmetadata = () => {
-        video.currentTime = segment.start_time + (time - segment.timeline_start);
-        if (isPreviewPlayingRef.current) video.play().catch(() => {});
-      };
+    if (index < 0) return false;
+
+    if (introActiveIndexRef.current === index) {
+      const activeVideo = previewSlotRefs.current[activeSlotRef.current];
+      if (isPreviewPlayingRef.current && activeVideo?.paused) {
+        activeVideo.play().catch(() => {});
+      }
+      return true;
     }
-  }, [introSegments, getIntroStreamUrl]);
+
+    const nextSlot = activeSlotRef.current ^ 1;
+    const nextState = introSlotStateRef.current[nextSlot];
+    if (
+      nextState.preparedForIndex !== index ||
+      nextState.preparationId !== slotPreparationIdRef.current[nextSlot] ||
+      !nextState.ready
+    ) {
+      previewSlotRefs.current[activeSlotRef.current]?.pause();
+      setIsPreviewBuffering(true);
+      if (
+        nextState.preparedForIndex !== index ||
+        nextState.preparationId !== slotPreparationIdRef.current[nextSlot]
+      ) {
+        prepareIntroSlot(nextSlot, index);
+      }
+      return false;
+    }
+
+    const previousSlot = activeSlotRef.current;
+    const nextVideo = previewSlotRefs.current[nextSlot];
+    const previousVideo = previewSlotRefs.current[previousSlot];
+    introActiveIndexRef.current = index;
+    activeSlotRef.current = nextSlot;
+    applySlotVisibility(nextSlot);
+    setActiveSlot(nextSlot);
+    setIsPreviewBuffering(false);
+    if (isPreviewPlayingRef.current) nextVideo?.play().catch(() => {});
+    previousVideo?.pause();
+    nextState.ready = false;
+
+    const followingIntroIndex = index + 1;
+    if (followingIntroIndex < introSegments.length) {
+      prepareIntroSlot(previousSlot, followingIntroIndex);
+    } else {
+      prepareSlot(previousSlot, 0);
+    }
+    return true;
+  }, [applySlotVisibility, introSegments, prepareIntroSlot, prepareSlot]);
+
+  const finishIntroPlayback = useCallback((audio: HTMLAudioElement): boolean => {
+    const firstMatch = matchesRef.current[0];
+    const previousSlot = activeSlotRef.current;
+
+    if (firstMatch?.source_video_id && firstMatch.segment_start_time != null) {
+      const bodySlot = previousSlot ^ 1;
+      const bodyState = slotStateRef.current[bodySlot];
+      if (
+        bodyState.preparedForIndex !== 0 ||
+        !bodyState.ready
+      ) {
+        previewSlotRefs.current[previousSlot]?.pause();
+        setIsPreviewBuffering(true);
+        if (bodyState.preparedForIndex !== 0) {
+          prepareSlot(bodySlot, 0);
+        }
+        return false;
+      }
+
+      setSegmentEndBoundary(firstMatch);
+      activeSlotRef.current = bodySlot;
+      applySlotVisibility(bodySlot);
+      setActiveSlot(bodySlot);
+      seekGraceTimestampRef.current = performance.now();
+      previewSlotRefs.current[bodySlot]?.play().catch(() => {});
+      previewSlotRefs.current[previousSlot]?.pause();
+      bodyState.ready = false;
+    } else {
+      previewSlotRefs.current[previousSlot]?.pause();
+    }
+
+    isPreviewIntroRef.current = false;
+    setIsPreviewIntro(false);
+    introActiveIndexRef.current = -1;
+    introHeldTimelineTimeRef.current = null;
+    setIsPreviewBuffering(false);
+    audio.currentTime = 0;
+    audio.play().catch(() => {
+      isPreviewPlayingRef.current = false;
+      setIsPreviewPlaying(false);
+    });
+    return true;
+  }, [applySlotVisibility, prepareSlot, setSegmentEndBoundary]);
 
   const startPreviewRafLoop = useCallback(() => {
     const loop = () => {
@@ -522,17 +653,33 @@ export function TimelineEditor({
         return;
       }
       if (isPreviewIntroRef.current) {
-        const introTime = Math.min(introOffsetSec, (performance.now() - introStartedAtRef.current) / 1000);
-        setPreviewCurrentTime(introTime);
-        playIntroAt(introTime);
+        const now = performance.now();
+        const heldTimelineTime = introHeldTimelineTimeRef.current;
+        if (heldTimelineTime != null) {
+          setPreviewCurrentTime(heldTimelineTime);
+          if (playIntroAt(heldTimelineTime + 0.001)) {
+            introStartedAtRef.current += now - introHoldStartedAtRef.current;
+            introHeldTimelineTimeRef.current = null;
+          }
+          previewRafIdRef.current = requestAnimationFrame(loop);
+          return;
+        }
+
+        const introTime = Math.min(introOffsetSec, (now - introStartedAtRef.current) / 1000);
         if (introTime >= introOffsetSec) {
-          isPreviewIntroRef.current = false;
-          setIsPreviewIntro(false);
-          introActiveIndexRef.current = -1;
-          for (const video of previewSlotRefs.current) if (video) video.pause();
-          audio.currentTime = 0;
-          seatActiveSlot(0, true);
-          audio.play().catch(() => { isPreviewPlayingRef.current = false; setIsPreviewPlaying(false); });
+          setPreviewCurrentTime(introOffsetSec);
+          finishIntroPlayback(audio);
+        } else if (playIntroAt(introTime)) {
+          setPreviewCurrentTime(introTime);
+        } else {
+          const pendingSegment = introSegments.find((segment) =>
+            segment.timeline_start <= introTime &&
+            introTime < segment.timeline_start + segment.timeline_duration
+          );
+          const holdAt = pendingSegment?.timeline_start ?? introTime;
+          introHeldTimelineTimeRef.current = holdAt;
+          introHoldStartedAtRef.current = now;
+          setPreviewCurrentTime(holdAt);
         }
         previewRafIdRef.current = requestAnimationFrame(loop);
         return;
@@ -605,7 +752,7 @@ export function TimelineEditor({
     };
     if (previewRafIdRef.current != null) cancelAnimationFrame(previewRafIdRef.current);
     previewRafIdRef.current = requestAnimationFrame(loop);
-  }, [findActiveMatch, commitTransition, findNextTransitionIndex, prepareSlot, introOffsetSec, isPreviewIntro, playIntroAt, seatActiveSlot]);
+  }, [findActiveMatch, commitTransition, findNextTransitionIndex, finishIntroPlayback, prepareSlot, introOffsetSec, introSegments, playIntroAt]);
 
   const stopPreviewRafLoop = useCallback(() => {
     if (previewRafIdRef.current != null) {
@@ -733,6 +880,7 @@ export function TimelineEditor({
       // an explicit resume) and force the idle slot to re-stage next rAF tick.
       preparedNextForIndexRef.current = null;
       if (isPreviewIntro) {
+        introHeldTimelineTimeRef.current = null;
         introStartedAtRef.current = performance.now() - previewCurrentTime * 1000;
         playIntroAt(previewCurrentTime);
       } else {
@@ -781,8 +929,12 @@ export function TimelineEditor({
       audio.currentTime = 0;
       isPreviewIntroRef.current = true;
       setIsPreviewIntro(true);
+      introHeldTimelineTimeRef.current = null;
       introStartedAtRef.current = performance.now() - time * 1000;
-      playIntroAt(time);
+      if (!playIntroAt(time)) {
+        introHeldTimelineTimeRef.current = time;
+        introHoldStartedAtRef.current = performance.now();
+      }
       return;
     }
     isPreviewIntroRef.current = false;
@@ -834,6 +986,14 @@ export function TimelineEditor({
 
       const beginPlayback = () => {
         if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
+        if (
+          introOffsetSec > 0 &&
+          introSegments.length > 0 &&
+          !previewSlotRefs.current[0]
+        ) {
+          if (++attempts <= 100) requestAnimationFrame(beginPlayback);
+          return;
+        }
         audio.currentTime = 0;
         isPreviewPlayingRef.current = true;
         setIsPreviewPlaying(true);
@@ -846,15 +1006,50 @@ export function TimelineEditor({
         preparedNextForIndexRef.current = null;
         slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
         slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+        introSlotStateRef.current[0] = { preparedForIndex: null, preparationId: 0, ready: false };
+        introSlotStateRef.current[1] = { preparedForIndex: null, preparationId: 0, ready: false };
 
         const firstMatch = matchesRef.current[0];
 
         if (introOffsetSec > 0 && introSegments.length > 0) {
           isPreviewIntroRef.current = true;
           setIsPreviewIntro(true);
-          introStartedAtRef.current = performance.now();
-          playIntroAt(0);
-          startPreviewRafLoop();
+          introActiveIndexRef.current = -1;
+          introHeldTimelineTimeRef.current = null;
+          setIsPreviewBuffering(true);
+
+          let introStarted = false;
+          const startIntroClock = () => {
+            if (introStarted || activationIdRef.current !== thisActivation) return;
+            introStarted = true;
+            if (activationTimeoutRef.current != null) {
+              clearTimeout(activationTimeoutRef.current);
+              activationTimeoutRef.current = null;
+            }
+            introActiveIndexRef.current = 0;
+            activeSlotRef.current = 0;
+            applySlotVisibility(0);
+            setActiveSlot(0);
+            setIsPreviewBuffering(false);
+            previewSlotRefs.current[0]?.play().catch(() => {});
+            introStartedAtRef.current = performance.now();
+            startPreviewRafLoop();
+          };
+
+          prepareIntroSlot(0, 0, startIntroClock);
+          if (introSegments.length > 1) {
+            prepareIntroSlot(1, 1);
+          } else {
+            prepareSlot(1, 0);
+          }
+          activationTimeoutRef.current = setTimeout(() => {
+            activationTimeoutRef.current = null;
+            if (introStarted || activationIdRef.current !== thisActivation) return;
+            introStarted = true;
+            console.warn("[TimelineEditor] Rapid intro media timed out; continuing with the body");
+            introStartedAtRef.current = performance.now() - introOffsetSec * 1000;
+            startPreviewRafLoop();
+          }, 5000);
           return;
         }
 
@@ -928,7 +1123,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo, introOffsetSec, introSegments.length, playIntroAt]);
+  }, [applySlotVisibility, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seekSlotTo, setSegmentEndBoundary, startPreviewRafLoop]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
@@ -959,6 +1154,7 @@ export function TimelineEditor({
     isPreviewIntroRef.current = false;
     setIsPreviewIntro(false);
     introActiveIndexRef.current = -1;
+    introHeldTimelineTimeRef.current = null;
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
@@ -969,6 +1165,8 @@ export function TimelineEditor({
     preparedNextForIndexRef.current = null;
     slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
     slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+    introSlotStateRef.current[0] = { preparedForIndex: null, preparationId: 0, ready: false };
+    introSlotStateRef.current[1] = { preparedForIndex: null, preparationId: 0, ready: false };
   }, [stopPreviewRafLoop]);
 
   // Expanding/collapsing moves the preview into a different DOM subtree, so the
@@ -980,6 +1178,8 @@ export function TimelineEditor({
       if (!isPreviewActiveRef.current) return;
       slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
       slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+      introSlotStateRef.current[0] = { preparedForIndex: null, preparationId: 0, ready: false };
+      introSlotStateRef.current[1] = { preparedForIndex: null, preparationId: 0, ready: false };
       activeSlotRef.current = activeSlot; // keep ref aligned with the visible slot
       preparedNextForIndexRef.current = null;
       seatActiveSlot(previewActiveIndexRef.current, isPreviewPlayingRef.current);
