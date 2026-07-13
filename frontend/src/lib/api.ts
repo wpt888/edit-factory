@@ -8,7 +8,10 @@ import { createClient } from "@/lib/supabase/client";
 
 export { ApiError, handleApiError } from "./api-error";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const DESKTOP_API_URL = "http://127.0.0.1:8000/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true"
+  ? DESKTOP_API_URL
+  : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes — video uploads can be large
 
@@ -26,7 +29,7 @@ interface FetchOptions extends RequestInit {
 // already loaded for the current profile. Mutations clear the cache below.
 const getResponseCache = new Map<string, Response>();
 
-const VOLATILE_GET_PATH = /\/(?:status|progress|health|logs|events)(?:[/?]|$)/i;
+const VOLATILE_GET_PATH = /(?:\/(?:status|progress|health|logs|events)(?:[/?]|$)|\/segments\/source-videos(?:\/[^/?]+)?(?:\?|$))/i;
 
 function activeProfileId() {
   return typeof window !== "undefined"
@@ -130,6 +133,10 @@ export async function apiFetch(
       ...restOptions,
       headers,
       signal,
+      // Required for the desktop's HttpOnly source-media session cookie.
+      // The frontend and backend use different localhost ports, so the fetch
+      // is cross-origin even though both services are on the same machine.
+      credentials: restOptions.credentials ?? "include",
     });
   } catch (err) {
     const fetchErr = err as Error;

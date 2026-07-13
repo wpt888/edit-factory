@@ -64,11 +64,19 @@ def test_generate_preview_proxy_success(tmp_path, monkeypatch):
     settings = SimpleNamespace(base_dir=tmp_path)
     monkeypatch.setattr(segments_routes, "get_settings", lambda: settings)
 
-    def _fake_ffmpeg(*_args, **_kwargs):
+    command = []
+
+    def _fake_ffmpeg(args, **_kwargs):
+        command.extend(args)
         (tmp_path / "source_videos" / "proxies" / "vid_preview.mp4").write_bytes(b"proxy")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(segments_routes, "safe_ffmpeg_run", _fake_ffmpeg)
+    monkeypatch.setattr(
+        segments_routes,
+        "get_prep_codec_params",
+        lambda **_kwargs: ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "28"],
+    )
 
     result = segments_routes._generate_preview_proxy("vid", source)
 
@@ -76,6 +84,7 @@ def test_generate_preview_proxy_success(tmp_path, monkeypatch):
     assert result["preview_proxy_path"].endswith("vid_preview.mp4")
     assert Path(result["preview_proxy_path"]).exists()
     assert result["preview_proxy_error"] is None
+    assert "h264_nvenc" in command
 
 
 def test_generate_preview_proxy_failure_does_not_raise(tmp_path, monkeypatch):

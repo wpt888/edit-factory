@@ -18,6 +18,10 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.media_session import (
+    get_profile_context_with_media_session,
+    get_source_media_profile_context,
+)
 from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 from app.core.rate_limit import limiter
@@ -271,9 +275,7 @@ def _generate_preview_proxy(video_id: str, source_path: Path) -> dict:
             "-i", str(source_path),
             "-an",
             "-vf", vf,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "28",
+            *get_prep_codec_params(preset="veryfast", crf=28, include_audio=False),
             "-pix_fmt", "yuv420p",
             "-g", "15",
             "-keyint_min", "15",
@@ -767,7 +769,7 @@ async def add_local_source_video(
     request: Request,
     background_tasks: BackgroundTasks,
     body: LocalVideoRequest,
-    profile: ProfileContext = Depends(get_profile_context),
+    profile: ProfileContext = Depends(get_profile_context_with_media_session),
 ):
     """Add a source video by local file path — no upload, no copy.
 
@@ -898,7 +900,7 @@ async def upload_source_video(
     video: UploadFile = File(...),
     name: str = Form(...),
     description: Optional[str] = Form(default=None),
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context_with_media_session)
 ):
     """Upload a source video for segment extraction.
 
@@ -988,7 +990,7 @@ async def upload_source_video(
 async def list_source_videos(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context_with_media_session)
 ):
     """List all source videos for the current profile."""
     repo = get_repository()
@@ -1006,7 +1008,7 @@ async def list_source_videos(
 @router.get("/source-videos/{video_id}", response_model=SourceVideoResponse)
 async def get_source_video(
     video_id: str,
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context_with_media_session)
 ):
     """Get source video details, correcting legacy orientation metadata when needed."""
     repo = get_repository()
@@ -1113,7 +1115,7 @@ async def delete_source_video(
 @router.get("/source-videos/{video_id}/stream")
 async def stream_source_video(
     video_id: str,
-    profile: ProfileContext = Depends(get_profile_context),
+    profile: ProfileContext = Depends(get_source_media_profile_context),
 ):
     """Stream source video for playback."""
     repo = get_repository()
@@ -1134,7 +1136,7 @@ async def stream_source_video(
 async def preview_stream_source_video(
     video_id: str,
     background_tasks: BackgroundTasks,
-    profile: ProfileContext = Depends(get_profile_context),
+    profile: ProfileContext = Depends(get_source_media_profile_context),
 ):
     """Stream the optimized preview proxy when available, falling back to the original."""
     effective_profile_id = profile.profile_id
@@ -2731,7 +2733,7 @@ async def serve_segment_file(
 @router.get("/source-videos/{video_id}/thumbnail")
 async def serve_source_video_thumbnail(
     video_id: str,
-    profile: ProfileContext = Depends(get_profile_context),
+    profile: ProfileContext = Depends(get_source_media_profile_context),
 ):
     """Serve a source video's thumbnail, resolving against the CURRENT base_dir.
 

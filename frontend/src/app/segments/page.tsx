@@ -701,7 +701,10 @@ export default function SegmentsPage() {
         if (newVideo.status === "processing") {
           uploadPollRef.current = setInterval(async () => {
             try {
-              const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);
+              const pollRes = await apiGetWithRetry(
+                `/segments/source-videos/${newVideo.id}`,
+                { cache: "no-store", memoryCache: false }
+              );
               if (!pollRes.ok) { if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; } return; }
               const updated: SourceVideo = await pollRes.json();
               if (updated.status === "ready" || updated.status === "error") {
@@ -790,7 +793,10 @@ export default function SegmentsPage() {
         if (newVideo.status === "processing") {
           uploadPollRef.current = setInterval(async () => {
             try {
-              const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);
+              const pollRes = await apiGetWithRetry(
+                `/segments/source-videos/${newVideo.id}`,
+                { cache: "no-store", memoryCache: false }
+              );
               if (!pollRes.ok) { if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; } return; }
               const updated: SourceVideo = await pollRes.json();
               if (updated.status === "ready" || updated.status === "error") {
@@ -1451,7 +1457,10 @@ export default function SegmentsPage() {
                       uploadPollRef.current = setInterval(async () => {
                         for (const vid of [...processingIds]) {
                           try {
-                            const pollRes = await apiGetWithRetry(`/segments/source-videos/${vid}`);
+                            const pollRes = await apiGetWithRetry(
+                              `/segments/source-videos/${vid}`,
+                              { cache: "no-store", memoryCache: false }
+                            );
                             if (!pollRes.ok) { processingIds.delete(vid); continue; }
                             const updated: SourceVideo = await pollRes.json();
                             if (updated.status === "ready" || updated.status === "error") {
