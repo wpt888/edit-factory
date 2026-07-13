@@ -1,5 +1,18 @@
 # Engineering Change Log
 
+## 2026-07-13 — Pipeline source-video prerequisite
+
+- Extracted the Pipeline Source Videos selector into a shared card used by
+  Steps 1 and 2 without changing the four-step workflow.
+- Surfaced available video material while users write the idea and configure
+  script generation.
+- Added an actionable warning when no material exists, with a direct link to
+  Segments, while keeping script generation available.
+- Added Playwright coverage and screenshots for Step 1 placement, the empty
+  state action, and the non-blocking Generate Scripts behavior.
+
+See [Session navigation cache](10-session-navigation-cache.md).
+
 ## 2026-07-13 — Pre-launch cosmetic pass
 
 - Hid legacy Postiz/Buffer config cards in Settings behind a collapsed
