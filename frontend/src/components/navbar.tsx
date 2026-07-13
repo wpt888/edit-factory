@@ -44,7 +44,6 @@ const allNavGroups = [
     label: "Create",
     items: [
       { label: "Pipeline", href: "/pipeline", icon: Clapperboard },
-      { label: "Batch", href: "/batch", icon: ListChecks },
       { label: "Segments", href: "/segments", icon: Scissors },
       { label: "AI Image", href: "/create-image", icon: ImageIcon },
       { label: "AI Video", href: "/create-video", icon: Clapperboard },
