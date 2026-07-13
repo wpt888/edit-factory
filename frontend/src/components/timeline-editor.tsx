@@ -134,7 +134,7 @@ interface TimelineEditorProps {
 export function TimelineEditor({
   matches,
   audioDuration,
-  introOffsetSec = 0,
+  introOffsetSec: requestedIntroOffsetSec = 0,
   introSegments = [],
   sourceVideoIds: _sourceVideoIds,
   availableSegments,
@@ -146,6 +146,16 @@ export function TimelineEditor({
   interstitialSlides = [],
   onInterstitialSlidesChange,
 }: TimelineEditorProps) {
+  // Legacy restored previews may contain only an absolute source path. Those
+  // paths are intentionally forbidden by the backend file endpoint, so never
+  // enter intro mode unless every clip can use the scoped preview proxy.
+  const introOffsetSec =
+    requestedIntroOffsetSec > 0 &&
+    introSegments.length > 0 &&
+    introSegments.every((segment) => Boolean(segment.source_video_id))
+      ? requestedIntroOffsetSec
+      : 0;
+
   // View mode: "timeline" (horizontal) or "list" (vertical)
   const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
 
@@ -308,13 +318,6 @@ export function TimelineEditor({
     if (!profileId) return "";
     return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
   }, [profileId]);
-
-  const getIntroStreamUrl = useCallback((segment: IntroSegment) => {
-    if (segment.source_video_id) {
-      return getPreviewStreamUrl(segment.source_video_id);
-    }
-    return `${API_URL}/segments/files/${encodeURIComponent(segment.source_video_path)}`;
-  }, [getPreviewStreamUrl]);
 
   // --- Continuous (live, client-side) preview helpers ---
   // NOTE: this is a client-side segment stitcher driven by the TTS audio clock,
@@ -515,7 +518,7 @@ export function TimelineEditor({
   ): boolean => {
     const segment = introSegments[index];
     const video = previewSlotRefs.current[slot];
-    if (!segment || !video) return false;
+    if (!segment?.source_video_id || !video) return false;
 
     const st = slotStateRef.current[slot];
     const preparationId = ++slotPreparationIdRef.current[slot];
@@ -531,7 +534,7 @@ export function TimelineEditor({
     st.ready = false;
 
     video.pause();
-    video.src = getIntroStreamUrl(segment);
+    video.src = getPreviewStreamUrl(segment.source_video_id);
     video.load();
     seekSlotTo(slot, segment.start_time, () => {
       if (
@@ -543,7 +546,7 @@ export function TimelineEditor({
       onReady?.();
     });
     return true;
-  }, [getIntroStreamUrl, introSegments, seekSlotTo]);
+  }, [getPreviewStreamUrl, introSegments, seekSlotTo]);
 
   // Switch the ultra-rapid intro only to an already decoded slot. If the next
   // 0.5s clip is still seeking, keep the previous frame visible and let the

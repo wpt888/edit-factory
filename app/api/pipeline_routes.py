@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json as _json
 import logging
+import ntpath
 import subprocess
 import threading
 import uuid
@@ -5512,6 +5513,76 @@ async def sync_pipeline_to_library(
     }
 
 
+def _preview_source_path_key(raw_path: Any) -> str:
+    """Return a stable comparison key for legacy Windows/WSL media paths."""
+    if not raw_path:
+        return ""
+    return ntpath.normcase(ntpath.normpath(normalize_path(str(raw_path))))
+
+
+def _legacy_preview_source_ids_by_path(
+    pipeline: dict,
+    stored_previews: dict,
+    profile_id: str,
+) -> Dict[str, str]:
+    """Resolve source IDs used by previews saved before intro proxy IDs existed."""
+    source_video_ids = {
+        str(source_id)
+        for source_id in pipeline.get("source_video_ids", [])
+        if source_id
+    }
+    for preview_entry in stored_previews.values():
+        preview_data = preview_entry.get("preview_data", {}) if isinstance(preview_entry, dict) else {}
+        for collection_name in ("matches", "available_segments", "intro_segments"):
+            for item in preview_data.get(collection_name, []) or []:
+                if isinstance(item, dict) and item.get("source_video_id"):
+                    source_video_ids.add(str(item["source_video_id"]))
+
+    if not source_video_ids:
+        return {}
+
+    try:
+        source_videos = get_repository().list_source_videos(
+            profile_id,
+            QueryFilters(
+                in_={"id": sorted(source_video_ids)},
+                select="id,file_path,profile_id",
+            ),
+        ).data
+    except Exception as exc:
+        logger.warning("Could not resolve legacy preview source paths: %s", exc)
+        return {}
+
+    return {
+        _preview_source_path_key(source_video.get("file_path")): str(source_video["id"])
+        for source_video in source_videos
+        if source_video.get("id") and _preview_source_path_key(source_video.get("file_path"))
+    }
+
+
+def _restore_intro_proxy_segments(
+    raw_segments: Any,
+    source_ids_by_path: Dict[str, str],
+) -> List[dict]:
+    """Attach proxy IDs to legacy intro segments or disable an incomplete intro."""
+    if not isinstance(raw_segments, list):
+        return []
+
+    restored: List[dict] = []
+    for raw_segment in raw_segments:
+        if not isinstance(raw_segment, dict):
+            return []
+        segment = dict(raw_segment)
+        source_video_id = segment.get("source_video_id") or source_ids_by_path.get(
+            _preview_source_path_key(segment.get("source_video_path"))
+        )
+        if not source_video_id:
+            return []
+        segment["source_video_id"] = str(source_video_id)
+        restored.append(segment)
+    return restored
+
+
 @router.get("/{pipeline_id}/restore-previews")
 async def restore_previews(
     pipeline_id: str,
@@ -5537,6 +5608,11 @@ async def restore_previews(
 
     result_previews = {}
     all_available_segments = []
+    source_ids_by_path = _legacy_preview_source_ids_by_path(
+        pipeline,
+        stored_previews,
+        profile.profile_id,
+    )
 
     for idx_key, preview_entry in stored_previews.items():
         pd = preview_entry.get("preview_data", {}) if isinstance(preview_entry, dict) else {}
@@ -5566,6 +5642,16 @@ async def restore_previews(
             for m in pd.get("matches", [])
         ]
 
+        raw_intro_segments = pd.get("intro_segments", [])
+        intro_segments = _restore_intro_proxy_segments(raw_intro_segments, source_ids_by_path)
+        intro_offset_sec = pd.get("intro_offset_sec", 0.0) if intro_segments else 0.0
+        if raw_intro_segments and not intro_segments:
+            logger.warning(
+                "Pipeline %s preview %s has legacy intro media without a source ID; skipping intro",
+                pipeline_id,
+                idx_key,
+            )
+
         result_previews[str(idx_key)] = {
             "audio_duration": pd.get("audio_duration", 0),
             "srt_content": pd.get("srt_content", ""),
@@ -5574,8 +5660,8 @@ async def restore_previews(
             "matched_count": pd.get("matched_count", 0),
             "unmatched_count": pd.get("unmatched_count", 0),
             "available_segments": pd.get("available_segments", []),
-            "intro_offset_sec": pd.get("intro_offset_sec", 0.0),
-            "intro_segments": pd.get("intro_segments", []),
+            "intro_offset_sec": intro_offset_sec,
+            "intro_segments": intro_segments,
         }
 
         # Grab available_segments from the first preview that has them

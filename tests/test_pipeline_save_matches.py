@@ -95,6 +95,60 @@ def test_save_matches_persists_across_restart(sqlite_backend):
     assert previews["0"]["unmatched_count"] == 1
 
 
+def test_restore_previews_uses_proxy_ids_for_legacy_intro_paths(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    source_video_id = str(uuid.uuid4())
+    repo.create_source_video({
+        "id": source_video_id,
+        "filename": "legacy-intro.mov",
+        "file_path": r"C:\Media\Legacy Intro.mov",
+        "duration": 30.0,
+        "width": 1080,
+        "height": 1920,
+        "file_size": 1024,
+        "status": "ready",
+        "profile_id": profile_id,
+    })
+    pipeline_id = _seed_pipeline_with_preview(repo, profile_id)
+    pipeline = repo.get_pipeline(pipeline_id)
+    pipeline["source_video_ids"] = [source_video_id]
+    preview_data = pipeline["previews"]["0"]["preview_data"]
+    preview_data["intro_offset_sec"] = 2.0
+    preview_data["intro_segments"] = [{
+        "source_video_path": r"c:\media\legacy intro.mov",
+        "start_time": 1.0,
+        "end_time": 1.5,
+        "timeline_start": 0.0,
+        "timeline_duration": 0.5,
+    }]
+    pipeline["previews"]["1"] = {
+        "preview_data": {
+            **preview_data,
+            "intro_segments": [{
+                "source_video_path": r"D:\Missing\intro.mov",
+                "start_time": 0.0,
+                "end_time": 0.5,
+                "timeline_start": 0.0,
+                "timeline_duration": 0.5,
+            }],
+        }
+    }
+    repo.upsert_pipeline(pipeline)
+    _drop_memory_cache(pipeline_id)
+
+    response = client.get(
+        f"/api/v1/pipeline/{pipeline_id}/restore-previews",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    previews = response.json()["previews"]
+    assert previews["0"]["intro_offset_sec"] == 2.0
+    assert previews["0"]["intro_segments"][0]["source_video_id"] == source_video_id
+    assert previews["1"]["intro_offset_sec"] == 0.0
+    assert previews["1"]["intro_segments"] == []
+
+
 def test_save_matches_unknown_pipeline_404(sqlite_backend):
     client, repo, profile_id = sqlite_backend
     r = client.put(
