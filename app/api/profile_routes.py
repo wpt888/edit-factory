@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
-from app.api.auth import get_current_user, AuthUser
+from app.api.auth import get_current_user, ensure_default_profile, AuthUser
 from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
@@ -36,6 +36,8 @@ class SubtitleSettingsUpdate(BaseModel):
     outlineColor: str = "#000000"
     outlineWidth: int = 3
     positionY: int = 85
+    horizontalAlignment: str = "center"
+    letterSpacing: float = 0
     shadowDepth: int = 0
     shadowColor: str = "#000000"
     borderStyle: int = 1
@@ -95,6 +97,9 @@ async def list_profiles(current_user: AuthUser = Depends(get_current_user)):
         result = repo.list_profiles(current_user.id)
 
         profiles = result.data or []
+        if not profiles:
+            ensure_default_profile(repo, current_user)
+            profiles = repo.list_profiles(current_user.id).data or []
         logger.info(f"[User {current_user.id}] Listed {len(profiles)} profiles")
         return profiles
 
@@ -506,6 +511,8 @@ DEFAULT_SUBTITLE_SETTINGS = {
     "outlineColor": "#000000",
     "outlineWidth": 3,
     "positionY": 85,
+    "horizontalAlignment": "center",
+    "letterSpacing": 0,
     "shadowDepth": 0,
     "shadowColor": "#000000",
     "borderStyle": 1,

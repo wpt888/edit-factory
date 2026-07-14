@@ -185,58 +185,6 @@ async def mark_first_run_complete():
     return {"completed": True}
 
 
-# --- Desktop test auth (temporary UI gate) ---
-#
-# Simple username/password gate so the app can be tested before the real
-# website-based user system exists. Credentials default to 1234/1234 and are
-# configurable via DESKTOP_TEST_USER / DESKTOP_TEST_PASSWORD. This is NOT API
-# security — backend API auth is already bypassed in desktop_mode (see
-# app/api/auth.py). The login state is persisted to config.json so Electron's
-# startup logic and the frontend guard can read it.
-
-class DesktopLoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-def _set_logged_in(config_file: Path, value: bool) -> None:
-    existing = _read_config(config_file)
-    existing["desktop_logged_in"] = value
-    try:
-        config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    except OSError as e:
-        logger.error(f"Failed to write config.json: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save login state")
-
-
-@router.post("/auth/login")
-async def desktop_login(body: DesktopLoginRequest):
-    """Validate test credentials and persist the logged-in flag to config.json."""
-    settings = get_settings()
-    if body.username != settings.desktop_test_user or body.password != settings.desktop_test_password:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    _set_logged_in(settings.base_dir / "config.json", True)
-    logger.info("Desktop test login succeeded")
-    return {"ok": True}
-
-
-@router.get("/auth/status")
-async def desktop_auth_status():
-    """Return whether the desktop test user is currently logged in (local read only)."""
-    settings = get_settings()
-    config = _read_config(settings.base_dir / "config.json")
-    return {"logged_in": bool(config.get("desktop_logged_in", False))}
-
-
-@router.post("/auth/logout")
-async def desktop_logout():
-    """Clear the logged-in flag so the login screen is shown again."""
-    settings = get_settings()
-    _set_logged_in(settings.base_dir / "config.json", False)
-    logger.info("Desktop test logout")
-    return {"ok": True}
-
-
 @router.post("/test-connection")
 async def test_connection(body: TestConnectionRequest):
     """Test API connectivity for a service. Used by Setup Wizard Step 2."""

@@ -6,11 +6,9 @@ const PUBLIC_ROUTES = ["/login", "/signup", "/auth/callback", "/setup"]
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Desktop build: auth is the local backend gate (/desktop/auth + 1234 login),
-  // NOT a Supabase SSR session. Skip the Supabase auth gate entirely so a
-  // packaged/clean/CI build never redirect-loops to /login or returns 503 when
-  // the Supabase env vars aren't baked in. Inlined at build time from
-  // .env.production (NEXT_PUBLIC_DESKTOP_MODE=true) → deterministic.
+  // Electron restores Supabase auth in the renderer. Its local standalone
+  // server starts without assuming a server-readable session cookie; the
+  // client guard still blocks protected content and API calls validate JWTs.
   if (process.env.NEXT_PUBLIC_DESKTOP_MODE === "true") {
     return NextResponse.next()
   }

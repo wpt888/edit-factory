@@ -1,0 +1,54 @@
+export type AttentionAnimationPreset =
+  | "static"
+  | "pop"
+  | "zoom"
+  | "slide"
+  | "spin"
+  | "tornado";
+
+export type AttentionLayer = {
+  id: string;
+  assetId: string;
+  /** Browser-safe URL. Persisted for legacy/remote assets until imported. */
+  assetUrl?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  fit: "contain" | "cover";
+  animation: {
+    preset: AttentionAnimationPreset;
+    enterMs: number;
+    exitMs: number;
+    delayMs: number;
+    intensity: number;
+  };
+};
+
+export type AttentionCue = {
+  id: string;
+  startMs: number;
+  durationMs: number;
+  layers: AttentionLayer[];
+  sfxAssetId?: string;
+  sfxUrl?: string;
+  sfxVolumeDb: number;
+  templateId?: string;
+};
+
+export type AttentionTimeline = {
+  revision: number;
+  cues: AttentionCue[];
+};
+
+export const EMPTY_ATTENTION_TIMELINE: AttentionTimeline = {
+  revision: 0,
+  cues: [],
+};
+
+export function cueAtTime(timeline: AttentionTimeline, timeMs: number): AttentionCue[] {
+  return timeline.cues.filter(
+    (cue) => timeMs >= cue.startMs && timeMs < cue.startMs + cue.durationMs,
+  );
+}

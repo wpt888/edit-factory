@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     # Base URL of the web app. Default = production; override for dev (e.g. http://localhost:3002).
     blipost_platform_base_url: str = "https://blipost.com"
 
+    # Auth.js -> FastAPI server-to-server bridge for the web Studio proxy.
+    studio_service_token: str = ""
+
     # Gemini API
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -124,6 +127,9 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = ""
     elevenlabs_model: str = "eleven_flash_v2_5"
     elevenlabs_encryption_key: str = ""  # Fernet key for encrypting API keys; if empty, derived from SUPABASE_KEY
+    # Included monthly credits for a newly seen profile. Operators can override
+    # an individual profile through the admin credits endpoint. -1 = unlimited.
+    elevenlabs_default_user_credit_limit: int = 10000
 
     # Anthropic Claude AI
     anthropic_api_key: str = ""
@@ -140,7 +146,7 @@ class Settings(BaseSettings):
     minio_public_url: str = ""  # e.g. https://supabase.nortia.ro/s3/buffer-videos
 
     # Security
-    allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro"
+    allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro,https://blipstudio.blipost.com"
     auth_disabled: bool = False  # Set to True to disable authentication (local development only!)
     trusted_proxy_ips: str = "127.0.0.1,::1"  # Only trusted proxies may supply X-Forwarded-For
 
@@ -151,11 +157,6 @@ class Settings(BaseSettings):
 
     # Desktop mode
     desktop_mode: bool = False  # Set to True when running as Electron desktop app
-
-    # Desktop test login (temporary UI gate until website-based user accounts exist).
-    # Overridable via DESKTOP_TEST_USER / DESKTOP_TEST_PASSWORD in .env.
-    desktop_test_user: str = "1234"
-    desktop_test_password: str = "1234"
 
     # Gemini Vision frame analysis at upload. None = auto: enabled on web,
     # disabled in desktop mode (product vision: AI only for scripts + voiceover;

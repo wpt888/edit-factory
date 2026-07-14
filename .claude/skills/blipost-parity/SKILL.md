@@ -71,6 +71,7 @@ cealaltă (grep în `app/(app)/settings/` pe web, `frontend/src/app/settings/` p
 | Concept | Web | Desktop |
 |---|---|---|
 | Programare postări | "Schedule" / CalendarClock | "Schedule" / CalendarClock |
+| Automatizări cloud | "Automations" / Workflow | "Automations" / Workflow (canonical cloud sync) |
 | Setări | "Settings" / Settings | "Settings" / Settings |
 | Sold credite | widget sidebar "AI Credits Remaining" | pill sidebar cu balanța (după conectare) |
 | Avatar user | cerc lime cu inițiale, în footer-ul sidebarului | idem |
@@ -121,6 +122,12 @@ complet (decizie user: iconițele trebuie să rămână). Web persistă prin coo
   redusă; taburile interne ("Video Clips" în pagina Local Projects) și dashboard-ul
   ("Clips Generated"/"Clips Rendered") încă folosesc "Clips" ca termen generic de
   conținut — nu fac parte din nav/title, rămân neschimbate deliberat.
+- [x] **Desktop Automations sync** — REZOLVAT 2026-07-13: desktop are intrarea
+  `Automations` / `Workflow` și folosește aceeași înregistrare canonică din web
+  pentru listare, creare, salvare, activare/dezactivare și ștergere. Sesiunea
+  desktop este validată prin bridge-ul Supabase de încredere, fără un al doilea
+  token cerut în UI; tokenurile `blp_` rămân fallback legacy. Desktop nu duplică
+  DB-ul și nu persistă definițiile workflow-urilor local.
 - [ ] **Desktop "Schedule" + "Calendar"** — două intrări de meniu cu suprapunere;
   candidat de consolidare internă (nu e problemă de paritate web).
 

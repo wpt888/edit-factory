@@ -12,7 +12,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Columns known to store JSON data (TEXT in SQLite, parsed on read)
 _JSON_COLUMNS = frozenset({
     "tts_settings", "cloned_voices", "video_template_settings",
-    "subtitle_settings", "postiz_integration_ids", "scripts",
+    "subtitle_settings", "postiz_integration_ids", "scripts", "script_names",
     "previews", "render_jobs", "source_video_ids", "data",
     "metadata", "selected_image_urls", "pip_config", "slide_config",
     "tts_timestamps", "tags", "product_ids", "integration_ids",
@@ -37,7 +37,7 @@ _JSON_COLUMNS = frozenset({
     "tts_previews", "preview_renders", "segment_usage", "captions",
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
-    "selected_captions", "subtitle_settings_by_key",
+    "selected_captions", "subtitle_settings_by_key", "attention_timeline", "config",
     # F5 — segment columns written as JSON by segment CRUD routes
     "keywords", "transforms",
 })
@@ -131,11 +131,13 @@ class SQLiteRepository(DataRepository):
         pipeline state silently never persisted in desktop mode.
         """
         wanted = {
+            "script_names": "TEXT DEFAULT '[]'",
             "selected_captions": "TEXT DEFAULT '{}'",
             "target_script_duration": "REAL",
             "min_segment_duration": "REAL DEFAULT 3.0",
             "min_segment_duration": "REAL DEFAULT 3.0",
             "subtitle_settings_by_key": "TEXT",
+            "attention_timeline": "TEXT DEFAULT '{}'",
         }
         try:
             cur = self._conn.execute('PRAGMA table_info("editai_pipelines")')
@@ -1011,11 +1013,6 @@ class SQLiteRepository(DataRepository):
     ) -> Dict[str, Any]:
         return self._insert("editai_project_segments", data)
 
-    def update_project_segment(
-        self, segment_id: str, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        return self._update("editai_project_segments", "id", segment_id, data)
-
     def delete_project_segments(self, project_id: str) -> None:
         table = self._t("editai_project_segments")
         with self._write_lock:
@@ -1090,6 +1087,25 @@ class SQLiteRepository(DataRepository):
         return QueryResult(data=rows, count=len(rows))
 
     # ──────────────────────────────────────────────
+    def list_attention_templates(self, profile_id: str) -> List[Dict[str, Any]]:
+        cur = self._conn.execute(
+            'SELECT * FROM "editai_attention_templates" WHERE "profile_id" = ? ORDER BY "created_at"',
+            (profile_id,),
+        )
+        return [self._row_to_dict(row) for row in cur.fetchall()]
+
+    def get_attention_template(self, template_id: str) -> Optional[Dict[str, Any]]:
+        return self._get_one("editai_attention_templates", "id", template_id)
+
+    def create_attention_template(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._insert("editai_attention_templates", data)
+
+    def update_attention_template(self, template_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._update("editai_attention_templates", "id", template_id, data)
+
+    def delete_attention_template(self, template_id: str) -> None:
+        self._delete("editai_attention_templates", "id", template_id)
+
     # 8. Assembly Jobs
     # ──────────────────────────────────────────────
 
@@ -1517,6 +1533,236 @@ class SQLiteRepository(DataRepository):
 
     def delete_elevenlabs_account(self, account_id: str) -> None:
         self._delete("editai_elevenlabs_accounts", "id", account_id)
+
+    # ElevenLabs tenant governance (migration 053 / sqlite_schema.sql). BEGIN
+    # IMMEDIATE plus the repository write lock makes check-and-reserve atomic.
+    @staticmethod
+    def _elevenlabs_credit_period() -> tuple[str, str]:
+        start = datetime.now(timezone.utc).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        end = (
+            start.replace(year=start.year + 1, month=1)
+            if start.month == 12
+            else start.replace(month=start.month + 1)
+        )
+        return start.date().isoformat(), end.date().isoformat()
+
+    def _ensure_elevenlabs_credit_balance_locked(
+        self, profile_id: str, default_limit: int
+    ) -> Dict[str, Any]:
+        period_start, period_end = self._elevenlabs_credit_period()
+        row = self._conn.execute(
+            'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+            (profile_id,),
+        ).fetchone()
+        if row is None:
+            self._conn.execute(
+                'INSERT INTO "editai_elevenlabs_credit_balances" '
+                '("profile_id", "credit_limit", "period_start", "period_end") '
+                'VALUES (?, ?, ?, ?)',
+                (profile_id, max(-1, int(default_limit)), period_start, period_end),
+            )
+        elif row["period_start"] != period_start:
+            self._conn.execute(
+                'UPDATE "editai_elevenlabs_credit_balances" '
+                'SET "credits_used" = 0, "credits_reserved" = 0, '
+                '"period_start" = ?, "period_end" = ?, "updated_at" = ? '
+                'WHERE "profile_id" = ?',
+                (period_start, period_end, self._now(), profile_id),
+            )
+            self._conn.execute(
+                'UPDATE "editai_elevenlabs_credit_reservations" '
+                'SET "status" = \'expired\', "settled_at" = ? '
+                'WHERE "profile_id" = ? AND "status" = \'reserved\'',
+                (self._now(), profile_id),
+            )
+        current = self._conn.execute(
+            'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+            (profile_id,),
+        ).fetchone()
+        return self._row_to_dict(current)
+
+    @staticmethod
+    def _credit_balance_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+        limit = int(row.get("credit_limit", 0))
+        used = int(row.get("credits_used", 0))
+        reserved = int(row.get("credits_reserved", 0))
+        return {
+            **row,
+            "credits_remaining": -1 if limit < 0 else max(0, limit - used - reserved),
+        }
+
+    def get_elevenlabs_credit_balance(
+        self, profile_id: str, default_limit: int
+    ) -> Dict[str, Any]:
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._ensure_elevenlabs_credit_balance_locked(profile_id, default_limit)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return self._credit_balance_payload(row)
+
+    def reserve_elevenlabs_credits(
+        self, profile_id: str, reservation_id: str, credits: int,
+        text_characters: int, model_id: str, voice_id: str, default_limit: int,
+    ) -> Dict[str, Any]:
+        credits = max(0, int(credits))
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._ensure_elevenlabs_credit_balance_locked(profile_id, default_limit)
+                existing = self._conn.execute(
+                    'SELECT "status" FROM "editai_elevenlabs_credit_reservations" WHERE "id" = ?',
+                    (reservation_id,),
+                ).fetchone()
+                if existing is not None:
+                    self._conn.commit()
+                    return {"allowed": True, **self._credit_balance_payload(row)}
+
+                limit = int(row["credit_limit"])
+                used = int(row["credits_used"])
+                reserved = int(row["credits_reserved"])
+                if limit >= 0 and used + reserved + credits > limit:
+                    self._conn.commit()
+                    return {"allowed": False, **self._credit_balance_payload(row)}
+
+                self._conn.execute(
+                    'INSERT INTO "editai_elevenlabs_credit_reservations" '
+                    '("id", "profile_id", "reserved_credits", "text_characters", '
+                    '"model_id", "voice_id", "period_start") VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (
+                        reservation_id, profile_id, credits, max(0, int(text_characters)),
+                        model_id, voice_id, row["period_start"],
+                    ),
+                )
+                self._conn.execute(
+                    'UPDATE "editai_elevenlabs_credit_balances" '
+                    'SET "credits_reserved" = "credits_reserved" + ?, "updated_at" = ? '
+                    'WHERE "profile_id" = ?',
+                    (credits, self._now(), profile_id),
+                )
+                updated = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+                    (profile_id,),
+                ).fetchone()
+                self._conn.commit()
+                return {"allowed": True, **self._credit_balance_payload(self._row_to_dict(updated))}
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def settle_elevenlabs_credits(
+        self, reservation_id: str, actual_credits: int,
+        provider_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        actual_credits = max(0, int(actual_credits))
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                reservation = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_reservations" WHERE "id" = ?',
+                    (reservation_id,),
+                ).fetchone()
+                if reservation is None:
+                    raise ValueError(f"Unknown ElevenLabs credit reservation: {reservation_id}")
+                if reservation["status"] == "settled":
+                    balance = self._conn.execute(
+                        'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+                        (reservation["profile_id"],),
+                    ).fetchone()
+                    self._conn.commit()
+                    return self._credit_balance_payload(self._row_to_dict(balance))
+                if reservation["status"] != "reserved":
+                    raise ValueError(
+                        f"Cannot settle ElevenLabs reservation in status {reservation['status']}"
+                    )
+
+                self._conn.execute(
+                    'UPDATE "editai_elevenlabs_credit_balances" '
+                    'SET "credits_reserved" = MAX(0, "credits_reserved" - ?), '
+                    '"credits_used" = "credits_used" + ?, "updated_at" = ? '
+                    'WHERE "profile_id" = ?',
+                    (
+                        reservation["reserved_credits"], actual_credits,
+                        self._now(), reservation["profile_id"],
+                    ),
+                )
+                self._conn.execute(
+                    'UPDATE "editai_elevenlabs_credit_reservations" '
+                    'SET "actual_credits" = ?, "provider_request_id" = ?, '
+                    '"status" = \'settled\', "settled_at" = ? WHERE "id" = ?',
+                    (actual_credits, provider_request_id, self._now(), reservation_id),
+                )
+                balance = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+                    (reservation["profile_id"],),
+                ).fetchone()
+                self._conn.commit()
+                return self._credit_balance_payload(self._row_to_dict(balance))
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def release_elevenlabs_credits(self, reservation_id: str) -> Dict[str, Any]:
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                reservation = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_reservations" WHERE "id" = ?',
+                    (reservation_id,),
+                ).fetchone()
+                if reservation is None:
+                    self._conn.commit()
+                    return {}
+                if reservation["status"] == "reserved":
+                    self._conn.execute(
+                        'UPDATE "editai_elevenlabs_credit_balances" '
+                        'SET "credits_reserved" = MAX(0, "credits_reserved" - ?), '
+                        '"updated_at" = ? WHERE "profile_id" = ?',
+                        (reservation["reserved_credits"], self._now(), reservation["profile_id"]),
+                    )
+                    self._conn.execute(
+                        'UPDATE "editai_elevenlabs_credit_reservations" '
+                        'SET "status" = \'released\', "settled_at" = ? WHERE "id" = ?',
+                        (self._now(), reservation_id),
+                    )
+                balance = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+                    (reservation["profile_id"],),
+                ).fetchone()
+                self._conn.commit()
+                return self._credit_balance_payload(self._row_to_dict(balance))
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def set_elevenlabs_credit_limit(
+        self, profile_id: str, credit_limit: int, default_limit: int
+    ) -> Dict[str, Any]:
+        if credit_limit < -1:
+            raise ValueError("ElevenLabs credit limit must be -1 or greater")
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._ensure_elevenlabs_credit_balance_locked(profile_id, default_limit)
+                self._conn.execute(
+                    'UPDATE "editai_elevenlabs_credit_balances" '
+                    'SET "credit_limit" = ?, "updated_at" = ? WHERE "profile_id" = ?',
+                    (credit_limit, self._now(), profile_id),
+                )
+                row = self._conn.execute(
+                    'SELECT * FROM "editai_elevenlabs_credit_balances" WHERE "profile_id" = ?',
+                    (profile_id,),
+                ).fetchone()
+                self._conn.commit()
+                return self._credit_balance_payload(self._row_to_dict(row))
+            except Exception:
+                self._conn.rollback()
+                raise
 
     # ──────────────────────────────────────────────
     # 16. Products & Feeds

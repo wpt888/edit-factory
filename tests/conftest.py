@@ -46,6 +46,7 @@ class MockSettings:
     fal_base_url: str = "https://fal.run"
     gemini_model: str = "gemini-2.5-flash"
     elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_default_user_credit_limit: int = 10000
     anthropic_model: str = "claude-sonnet-4-6"
 
     def __init__(self, logs_dir: Path, base_dir: Path = None):

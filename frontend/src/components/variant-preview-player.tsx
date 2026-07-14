@@ -11,6 +11,7 @@ import { Loader2 } from "lucide-react";
 import { apiPost, apiGet, API_URL } from "@/lib/api";
 import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
+import type { AttentionTimeline } from "@/types/attention-timeline";
 
 type PreviewPipOverlayConfig = {
   image_url: string;
@@ -34,6 +35,7 @@ interface VariantPreviewPlayerProps {
   wordsPerSubtitle?: number;
   ultraRapidIntro?: boolean;
   interstitialSlides?: InterstitialSlide[];
+  attentionTimeline?: AttentionTimeline;
   pipOverlays?: Record<string, PreviewPipOverlayConfig>;
   enableDenoise?: boolean;
   denoiseStrength?: number;
@@ -66,6 +68,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   wordsPerSubtitle = 2,
   ultraRapidIntro = true,
   interstitialSlides,
+  attentionTimeline,
   pipOverlays,
   enableDenoise = false,
   denoiseStrength = 2.0,
@@ -163,6 +166,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             words_per_subtitle: wordsPerSubtitle,
             ultra_rapid_intro: ultraRapidIntro,
             interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
+            attention_timeline: attentionTimeline,
             pip_overlays: pipOverlays,
             enable_denoise: enableDenoise,
             denoise_strength: denoiseStrength,

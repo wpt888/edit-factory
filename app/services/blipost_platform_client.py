@@ -133,6 +133,25 @@ class BlipostPlatformClient:
         resp = await self._request("GET", "/accounts")
         return resp.json().get("accounts", [])
 
+    async def get_automations(self) -> List[dict]:
+        """GET /automations — canonical cloud workflow DAGs."""
+        resp = await self._request("GET", "/automations")
+        return resp.json().get("automations", [])
+
+    async def create_automation(self, payload: dict) -> dict:
+        """POST /automations — create in the canonical cloud database."""
+        resp = await self._request("POST", "/automations", json=payload)
+        return resp.json()
+
+    async def update_automation(self, automation_id: str, payload: dict) -> dict:
+        """PATCH /automations/{id} — save/toggle the canonical workflow."""
+        resp = await self._request("PATCH", f"/automations/{automation_id}", json=payload)
+        return resp.json()
+
+    async def delete_automation(self, automation_id: str) -> None:
+        """DELETE /automations/{id} — delete the canonical workflow."""
+        await self._request("DELETE", f"/automations/{automation_id}")
+
     async def request_media_upload(
         self,
         filename: str,

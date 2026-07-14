@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.font_manager import DEFAULT_SUBTITLE_FONT, prepare_render_fonts
-from app.services.video_effects.subtitle_styler import build_subtitle_filter
+from app.services.video_effects.subtitle_styler import SubtitleStyleConfig, build_subtitle_filter
 
 
 def test_prepare_render_fonts_copies_exact_installed_font(tmp_path: Path):
@@ -45,3 +45,15 @@ def test_filter_includes_fontsdir_and_effective_family(tmp_path: Path):
 
     assert ":fontsdir='" in result
     assert "FontName=Custom Family" in result
+
+
+def test_subtitle_style_supports_horizontal_alignment_and_letter_spacing():
+    style = SubtitleStyleConfig.from_dict(
+        {"positionY": 85, "horizontalAlignment": "left", "letterSpacing": 1.5},
+        1080,
+        1920,
+    )
+
+    assert style.alignment == 1
+    assert "Alignment=1" in style.to_force_style_string()
+    assert "Spacing=1.5" in style.to_force_style_string()

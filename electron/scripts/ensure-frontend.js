@@ -24,9 +24,13 @@ function sourceFiles(target) {
 
 function sourceFingerprint() {
   const files = [
+    // Desktop build policy is part of the bundle fingerprint. Otherwise a
+    // change such as enabling auth here can leave an old standalone build
+    // incorrectly classified as current.
+    __filename,
     ...sourceFiles(path.join(frontendDir, 'src')),
     ...sourceFiles(path.join(frontendDir, 'public')),
-    ...['next.config.ts', 'package.json', 'package-lock.json', 'postcss.config.mjs', 'tsconfig.json']
+    ...['.env.production', 'next.config.ts', 'package.json', 'package-lock.json', 'postcss.config.mjs', 'tsconfig.json']
       .map((file) => path.join(frontendDir, file))
       .filter((file) => fs.existsSync(file)),
   ].sort();
@@ -56,7 +60,15 @@ const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const result = spawnSync(npmCommand, ['run', 'build'], {
   cwd: frontendDir,
   stdio: 'inherit',
-  env: { ...process.env, NODE_ENV: 'production' },
+  env: {
+    ...process.env,
+    NODE_ENV: 'production',
+    // NEXT_PUBLIC_* values are compiled into browser JavaScript. Setting this
+    // only when Electron starts server.js is too late.
+    NEXT_PUBLIC_AUTH_DISABLED: 'false',
+    NEXT_PUBLIC_DESKTOP_MODE: 'true',
+    AUTH_DISABLED: 'false',
+  },
   // Windows cannot execute npm.cmd directly through spawnSync reliably.
   shell: process.platform === 'win32',
 });

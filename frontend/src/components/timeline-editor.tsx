@@ -36,9 +36,10 @@ import {
   Pin,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
-import { scaleSubtitlePx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
+import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
+import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import { Sparkles } from "lucide-react";
 
@@ -54,6 +55,21 @@ const expandedPreviewFrameStyle: React.CSSProperties = {
   maxWidth: "100%",
 };
 
+const RENDER_WIDTH = 1080;
+const RENDER_HEIGHT = 1920;
+
+function previewVideoTransform(transforms: Record<string, unknown> | null | undefined): string | undefined {
+  if (!transforms) return undefined;
+  const numberValue = (value: unknown, fallback: number) => {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const scale = numberValue(transforms.scale, 1);
+  const panX = numberValue(transforms.pan_x, 0);
+  const panY = numberValue(transforms.pan_y, 0);
+  if (Math.abs(scale - 1) < 0.01 && panX === 0 && panY === 0) return undefined;
+  return `translate(${-panX / RENDER_WIDTH * 100}%, ${-panY / RENDER_HEIGHT * 100}%) scale(${scale})`;
+}
 // Start staging before the current media window reaches its seam. Shorter
 // windows stage immediately; longer windows are re-checked by the rAF loop
 // until they enter this lead-time window.
@@ -128,6 +144,8 @@ interface TimelineEditorProps {
   subtitleSettings?: SubtitleSettings;
   interstitialSlides?: InterstitialSlide[];
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
+  attentionTimeline?: AttentionTimeline;
+  onAttentionTimelineChange?: (timeline: AttentionTimeline) => void;
 }
 
 
@@ -143,9 +161,136 @@ export function TimelineEditor({
   pipelineId,
   variantIndex,
   subtitleSettings,
-  interstitialSlides = [],
+  interstitialSlides: legacyInterstitialSlides = [],
   onInterstitialSlidesChange,
+  attentionTimeline,
+  onAttentionTimelineChange,
 }: TimelineEditorProps) {
+  const cueBoundaryIndex = useCallback((startMs: number) => {
+    let result = -1;
+    matches.forEach((match, index) => {
+      if (match.srt_end * 1000 <= startMs + 50) result = index;
+    });
+    return result;
+  }, [matches]);
+
+  const interstitialSlides = useMemo<InterstitialSlide[]>(() => {
+    if (!attentionTimeline) return legacyInterstitialSlides;
+    return attentionTimeline.cues.map((cue) => {
+      const layer = cue.layers[0];
+      const preset = layer?.animation.preset ?? "static";
+      return {
+        id: cue.id,
+        afterMatchIndex: cueBoundaryIndex(cue.startMs),
+        imageUrl: layer?.assetUrl ?? layer?.assetId ?? "",
+        duration: cue.durationMs / 1000,
+        animation: preset === "static" ? "static" : "kenburns",
+        kenBurnsDirection: preset === "zoom" ? "zoom-in" : undefined,
+        productTitle: "Attention overlay",
+      };
+    });
+  }, [attentionTimeline, legacyInterstitialSlides, cueBoundaryIndex]);
+
+  const emitSlides = useCallback((slides: InterstitialSlide[]) => {
+    if (onAttentionTimelineChange && attentionTimeline) {
+      const existing = new Map(attentionTimeline.cues.map((cue) => [cue.id, cue]));
+      const cues: AttentionCue[] = slides.map((slide) => {
+        const old = existing.get(slide.id);
+        const boundary = slide.afterMatchIndex < 0
+          ? 0
+          : Math.round((matches[slide.afterMatchIndex]?.srt_end ?? 0) * 1000);
+        const assetUrl = slide.imageUrl;
+        return {
+          id: slide.id,
+          startMs: old?.startMs ?? boundary,
+          durationMs: Math.round(slide.duration * 1000),
+          layers: old?.layers?.length ? old.layers.map((layer, index) => index === 0 ? {
+            ...layer,
+            assetId: assetUrl || layer.assetId,
+            assetUrl: assetUrl || layer.assetUrl,
+            animation: {
+              ...layer.animation,
+              preset: slide.animation === "static" ? "static" : "zoom",
+            },
+          } : layer) : [{
+            id: crypto.randomUUID(),
+            assetId: assetUrl || `pending:${slide.id}`,
+            assetUrl: assetUrl || undefined,
+            x: 0.1, y: 0.1, width: 0.8, height: 0.8, zIndex: 1, fit: "contain",
+            animation: {
+              preset: slide.animation === "static" ? "static" : "zoom",
+              enterMs: 250, exitMs: 200, delayMs: 0, intensity: 1,
+            },
+          }],
+          sfxAssetId: old?.sfxAssetId,
+          sfxUrl: old?.sfxUrl,
+          sfxVolumeDb: old?.sfxVolumeDb ?? 0,
+          templateId: old?.templateId,
+        };
+      });
+      onAttentionTimelineChange({ ...attentionTimeline, cues });
+      return;
+    }
+    onInterstitialSlidesChange?.(slides);
+  }, [attentionTimeline, matches, onAttentionTimelineChange, onInterstitialSlidesChange]);
+
+  const updateCueTiming = useCallback((cueId: string, startMs: number, durationMs: number) => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    const maxMs = Math.max(1, audioDuration * 1000);
+    onAttentionTimelineChange({
+      ...attentionTimeline,
+      cues: attentionTimeline.cues.map(cue => cue.id === cueId ? {
+        ...cue,
+        startMs: Math.max(0, Math.min(Math.round(startMs), maxMs - 100)),
+        durationMs: Math.max(100, Math.min(Math.round(durationMs), maxMs)),
+      } : cue),
+    });
+  }, [attentionTimeline, audioDuration, onAttentionTimelineChange]);
+
+  const updateCueLayer = useCallback((cueId: string, changes: Partial<AttentionCue["layers"][number]>) => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    onAttentionTimelineChange({
+      ...attentionTimeline,
+      cues: attentionTimeline.cues.map(cue => cue.id === cueId ? {
+        ...cue,
+        layers: cue.layers.map((layer, index) => index === 0 ? { ...layer, ...changes } : layer),
+      } : cue),
+    });
+  }, [attentionTimeline, onAttentionTimelineChange]);
+
+  const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize") => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = (event.currentTarget as HTMLElement).closest("[data-attention-track]") as HTMLElement | null;
+    if (!track) return;
+    const startX = event.clientX;
+    const originalStart = cue.startMs;
+    const originalDuration = cue.durationMs;
+    const totalMs = Math.max(1, audioDuration * 1000);
+    const snapPoints = matches.flatMap(match => [match.srt_start * 1000, match.srt_end * 1000]);
+    const snap = (value: number, disabled: boolean) => {
+      if (disabled) return value;
+      const nearest = snapPoints.reduce((best, point) => Math.abs(point - value) < Math.abs(best - value) ? point : best, value);
+      return Math.abs(nearest - value) <= 150 ? nearest : value;
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      const deltaMs = (moveEvent.clientX - startX) / Math.max(1, track.clientWidth) * totalMs;
+      if (edge === "resize") {
+        const end = snap(originalStart + originalDuration + deltaMs, moveEvent.altKey);
+        updateCueTiming(cue.id, originalStart, end - originalStart);
+      } else {
+        const start = snap(originalStart + deltaMs, moveEvent.altKey);
+        updateCueTiming(cue.id, start, originalDuration);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [attentionTimeline, audioDuration, matches, onAttentionTimelineChange, updateCueTiming]);
   // Legacy restored previews may contain only an absolute source path. Those
   // paths are intentionally forbidden by the backend file endpoint, so never
   // enter intro mode unless every clip can use the scoped preview proxy.
@@ -187,6 +332,7 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+  const [previewSlotMatchIndexes, setPreviewSlotMatchIndexes] = useState<Array<number | null>>([null, null]);
   const [isPreviewIntro, setIsPreviewIntro] = useState(false);
   const compactPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   const expandedPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
@@ -245,10 +391,8 @@ export function TimelineEditor({
   const lastReportedTimeRef = useRef(0);
   const activationIdRef = useRef(0);
   const activationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const introStartedAtRef = useRef(0);
   const introActiveIndexRef = useRef(-1);
   const introHeldTimelineTimeRef = useRef<number | null>(null);
-  const introHoldStartedAtRef = useRef(0);
   const isPreviewIntroRef = useRef(false);
 
   // Keep refs in sync (state → ref for use in callbacks)
@@ -394,6 +538,11 @@ export function TimelineEditor({
     if (!el || !match?.source_video_id || match.segment_start_time == null) return false;
     const st = slotStateRef.current[slot];
     const preparationId = ++slotPreparationIdRef.current[slot];
+    setPreviewSlotMatchIndexes((current) => {
+      const next = [...current];
+      next[slot] = idx;
+      return next;
+    });
     st.preparedForIndex = idx;
     st.ready = false;
     loadSlotSource(slot, match.source_video_id);
@@ -430,6 +579,11 @@ export function TimelineEditor({
     const targetTime = match.segment_start_time;
     const st = slotStateRef.current[slot];
     const preparationId = ++slotPreparationIdRef.current[slot];
+    setPreviewSlotMatchIndexes((current) => {
+      const next = [...current];
+      next[slot] = idx;
+      return next;
+    });
     st.preparedForIndex = idx;
     seekGraceTimestampRef.current = performance.now();
     seekSlotTo(slot, targetTime, () => {
@@ -599,34 +753,38 @@ export function TimelineEditor({
     if (followingIntroIndex < introSegments.length) {
       prepareIntroSlot(previousSlot, followingIntroIndex);
     } else {
-      prepareSlot(previousSlot, 0);
+      prepareSlot(previousSlot, findActiveMatch(introOffsetSec));
     }
     return true;
-  }, [applySlotVisibility, introSegments, prepareIntroSlot, prepareSlot]);
+  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments, prepareIntroSlot, prepareSlot]);
 
   const finishIntroPlayback = useCallback((audio: HTMLAudioElement): boolean => {
-    const firstMatch = matchesRef.current[0];
+    const bodyIndex = findActiveMatch(Math.max(audio.currentTime, introOffsetSec));
+    const bodyMatch = matchesRef.current[bodyIndex];
     const previousSlot = activeSlotRef.current;
 
-    if (firstMatch?.source_video_id && firstMatch.segment_start_time != null) {
+    if (bodyMatch?.source_video_id && bodyMatch.segment_start_time != null) {
       const bodySlot = previousSlot ^ 1;
       const bodyState = slotStateRef.current[bodySlot];
       if (
-        bodyState.preparedForIndex !== 0 ||
+        bodyState.preparedForIndex !== bodyIndex ||
         !bodyState.ready
       ) {
         previewSlotRefs.current[previousSlot]?.pause();
+        audio.pause();
         setIsPreviewBuffering(true);
-        if (bodyState.preparedForIndex !== 0) {
-          prepareSlot(bodySlot, 0);
+        if (bodyState.preparedForIndex !== bodyIndex) {
+          prepareSlot(bodySlot, bodyIndex);
         }
         return false;
       }
 
-      setSegmentEndBoundary(firstMatch);
+      setSegmentEndBoundary(bodyMatch);
       activeSlotRef.current = bodySlot;
       applySlotVisibility(bodySlot);
       setActiveSlot(bodySlot);
+      setPreviewActiveIndex(bodyIndex);
+      previewActiveIndexRef.current = bodyIndex;
       seekGraceTimestampRef.current = performance.now();
       previewSlotRefs.current[bodySlot]?.play().catch(() => {});
       previewSlotRefs.current[previousSlot]?.pause();
@@ -640,7 +798,6 @@ export function TimelineEditor({
     introActiveIndexRef.current = -1;
     introHeldTimelineTimeRef.current = null;
     setIsPreviewBuffering(false);
-    audio.currentTime = 0;
     audio.loop = false;
     audio.muted = false;
     if (audio.paused) {
@@ -650,7 +807,7 @@ export function TimelineEditor({
       });
     }
     return true;
-  }, [applySlotVisibility, prepareSlot, setSegmentEndBoundary]);
+  }, [applySlotVisibility, findActiveMatch, introOffsetSec, prepareSlot, setSegmentEndBoundary]);
 
   const startPreviewRafLoop = useCallback(() => {
     const loop = () => {
@@ -660,19 +817,28 @@ export function TimelineEditor({
         return;
       }
       if (isPreviewIntroRef.current) {
-        const now = performance.now();
         const heldTimelineTime = introHeldTimelineTimeRef.current;
         if (heldTimelineTime != null) {
           setPreviewCurrentTime(heldTimelineTime);
           if (playIntroAt(heldTimelineTime + 0.001)) {
-            introStartedAtRef.current += now - introHoldStartedAtRef.current;
             introHeldTimelineTimeRef.current = null;
+            if (isPreviewPlayingRef.current && audio.paused) {
+              audio.play().catch(() => {
+                isPreviewPlayingRef.current = false;
+                setIsPreviewPlaying(false);
+              });
+            }
           }
           previewRafIdRef.current = requestAnimationFrame(loop);
           return;
         }
 
-        const introTime = Math.min(introOffsetSec, (now - introStartedAtRef.current) / 1000);
+        const introTime = Math.min(introOffsetSec, audio.currentTime);
+        const introMatchIndex = findActiveMatch(introTime);
+        if (introMatchIndex !== previewActiveIndexRef.current) {
+          setPreviewActiveIndex(introMatchIndex);
+          previewActiveIndexRef.current = introMatchIndex;
+        }
         if (introTime >= introOffsetSec) {
           setPreviewCurrentTime(introOffsetSec);
           finishIntroPlayback(audio);
@@ -685,14 +851,14 @@ export function TimelineEditor({
           );
           const holdAt = pendingSegment?.timeline_start ?? introTime;
           introHeldTimelineTimeRef.current = holdAt;
-          introHoldStartedAtRef.current = now;
+          audio.pause();
           setPreviewCurrentTime(holdAt);
         }
         previewRafIdRef.current = requestAnimationFrame(loop);
         return;
       }
       const time = audio.currentTime;
-      const previewTime = time + introOffsetSec;
+      const previewTime = time;
       if (Math.abs(previewTime - lastReportedTimeRef.current) > 0.1) {
         lastReportedTimeRef.current = previewTime;
         setPreviewCurrentTime(previewTime);
@@ -887,19 +1053,19 @@ export function TimelineEditor({
       // an explicit resume) and force the idle slot to re-stage next rAF tick.
       preparedNextForIndexRef.current = null;
       if (isPreviewIntro) {
-        // Keep an audio playback authorized by this explicit user gesture alive
-        // while the silent rapid intro runs. The voiceover is restarted and
-        // unmuted only when the body begins.
-        audio.currentTime = 0;
-        audio.loop = true;
-        audio.muted = true;
+        // The intro is visual-only: resume the voiceover from the same timeline
+        // position so it remains audible under the rapid shots.
+        audio.loop = false;
+        audio.muted = false;
         audio.play().catch(() => {
           isPreviewPlayingRef.current = false;
           setIsPreviewPlaying(false);
         });
         introHeldTimelineTimeRef.current = null;
-        introStartedAtRef.current = performance.now() - previewCurrentTime * 1000;
-        playIntroAt(previewCurrentTime);
+        if (!playIntroAt(audio.currentTime)) {
+          audio.pause();
+          introHeldTimelineTimeRef.current = audio.currentTime;
+        }
       } else {
         audio.loop = false;
         audio.muted = false;
@@ -911,7 +1077,33 @@ export function TimelineEditor({
       }
       startPreviewRafLoop();
     }
-  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot, isPreviewIntro, previewCurrentTime, playIntroAt]);
+  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot, isPreviewIntro, playIntroAt]);
+
+  const restartPreviewFromZero = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    const wasPlaying = isPreviewPlayingRef.current;
+    audio.pause();
+    for (const video of previewSlotRefs.current) video?.pause();
+    audio.currentTime = 0;
+    setPreviewCurrentTime(0);
+    setPreviewActiveIndex(0);
+    previewActiveIndexRef.current = 0;
+    preparedNextForIndexRef.current = null;
+    const hasIntro = introOffsetSec > 0 && introSegments.length > 0;
+    isPreviewIntroRef.current = hasIntro;
+    setIsPreviewIntro(hasIntro);
+    if (hasIntro) playIntroAt(0);
+    else seatActiveSlot(0, false);
+    if (wasPlaying) {
+      audio.play().catch(() => {
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+      });
+      if (!hasIntro) seatActiveSlot(0, true);
+      startPreviewRafLoop();
+    }
+  }, [introOffsetSec, introSegments.length, playIntroAt, seatActiveSlot, startPreviewRafLoop]);
 
   // Discrete user jump (prev/next, scrub-to-segment, segment click). A single
   // direct seek on the active slot is visually acceptable here; ping-pong only
@@ -923,20 +1115,30 @@ export function TimelineEditor({
     audio.loop = false;
     audio.muted = false;
     audio.currentTime = match.srt_start;
-    isPreviewIntroRef.current = false;
-    setIsPreviewIntro(false);
-    if (isPreviewPlayingRef.current && audio.paused) {
+    const jumpsIntoIntro = match.srt_start < introOffsetSec && introSegments.length > 0;
+    isPreviewIntroRef.current = jumpsIntoIntro;
+    setIsPreviewIntro(jumpsIntoIntro);
+    introHeldTimelineTimeRef.current = null;
+    if (jumpsIntoIntro) {
+      if (!playIntroAt(match.srt_start)) {
+        audio.pause();
+        introHeldTimelineTimeRef.current = match.srt_start;
+      }
+    }
+    if (isPreviewPlayingRef.current && audio.paused && introHeldTimelineTimeRef.current == null) {
       audio.play().catch(() => {
         isPreviewPlayingRef.current = false;
         setIsPreviewPlaying(false);
       });
     }
-    setPreviewCurrentTime(match.srt_start + introOffsetSec);
+    setPreviewCurrentTime(match.srt_start);
     setPreviewActiveIndex(idx);
     previewActiveIndexRef.current = idx;
     preparedNextForIndexRef.current = null;
-    seatActiveSlot(idx, isPreviewPlayingRef.current);
-  }, [seatActiveSlot, introOffsetSec]);
+    if (!jumpsIntoIntro) {
+      seatActiveSlot(idx, isPreviewPlayingRef.current);
+    }
+  }, [introOffsetSec, introSegments.length, playIntroAt, seatActiveSlot]);
 
   const previewPrevSegment = useCallback(() => {
     if (previewActiveIndexRef.current <= 0) return;
@@ -954,9 +1156,9 @@ export function TimelineEditor({
     const time = parseFloat(e.target.value);
     setPreviewCurrentTime(time);
     if (time < introOffsetSec) {
-      audio.currentTime = 0;
-      audio.loop = true;
-      audio.muted = true;
+      audio.currentTime = time;
+      audio.loop = false;
+      audio.muted = false;
       if (isPreviewPlayingRef.current) {
         audio.play().catch(() => {
           isPreviewPlayingRef.current = false;
@@ -968,16 +1170,19 @@ export function TimelineEditor({
       isPreviewIntroRef.current = true;
       setIsPreviewIntro(true);
       introHeldTimelineTimeRef.current = null;
-      introStartedAtRef.current = performance.now() - time * 1000;
       if (!playIntroAt(time)) {
+        audio.pause();
         introHeldTimelineTimeRef.current = time;
-        introHoldStartedAtRef.current = performance.now();
       }
+      const introMatchIndex = findActiveMatch(time);
+      setPreviewActiveIndex(introMatchIndex);
+      previewActiveIndexRef.current = introMatchIndex;
       return;
     }
     isPreviewIntroRef.current = false;
     setIsPreviewIntro(false);
-    const audioTime = time - introOffsetSec;
+    introHeldTimelineTimeRef.current = null;
+    const audioTime = time;
     audio.loop = false;
     audio.muted = false;
     audio.currentTime = audioTime;
@@ -1094,7 +1299,15 @@ export function TimelineEditor({
             setActiveSlot(0);
             setIsPreviewBuffering(false);
             previewSlotRefs.current[0]?.play().catch(() => {});
-            introStartedAtRef.current = performance.now();
+            audio.currentTime = 0;
+            audio.loop = false;
+            audio.muted = false;
+            if (audio.paused) {
+              audio.play().catch(() => {
+                isPreviewPlayingRef.current = false;
+                setIsPreviewPlaying(false);
+              });
+            }
             startPreviewRafLoop();
           };
 
@@ -1102,15 +1315,27 @@ export function TimelineEditor({
           if (introSegments.length > 1) {
             prepareIntroSlot(1, 1);
           } else {
-            prepareSlot(1, 0);
+            prepareSlot(1, findActiveMatch(introOffsetSec));
           }
           activationTimeoutRef.current = setTimeout(() => {
             activationTimeoutRef.current = null;
             if (introStarted || activationIdRef.current !== thisActivation) return;
             introStarted = true;
             console.warn("[TimelineEditor] Rapid intro media timed out; continuing with the body");
-            introStartedAtRef.current = performance.now() - introOffsetSec * 1000;
+            isPreviewIntroRef.current = false;
+            setIsPreviewIntro(false);
+            setIsPreviewBuffering(false);
+            audio.currentTime = 0;
+            audio.loop = false;
+            audio.muted = false;
+            seatActiveSlot(0, true);
             startPreviewRafLoop();
+            if (audio.paused) {
+              audio.play().catch(() => {
+                isPreviewPlayingRef.current = false;
+                setIsPreviewPlaying(false);
+              });
+            }
           }, 5000);
           return;
         }
@@ -1194,7 +1419,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [applySlotVisibility, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seekSlotTo, setSegmentEndBoundary, startPreviewRafLoop]);
+  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seatActiveSlot, seekSlotTo, setSegmentEndBoundary, startPreviewRafLoop]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
@@ -1525,7 +1750,7 @@ export function TimelineEditor({
   // --- Interstitial slide handlers ---
 
   const handleInsertSlide = (afterMatchIndex: number) => {
-    if (!onInterstitialSlidesChange) return;
+    if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return;
     const newSlide: InterstitialSlide = {
       id: crypto.randomUUID(),
       afterMatchIndex,
@@ -1536,23 +1761,23 @@ export function TimelineEditor({
       productTitle: "",
     };
     const updated = [...interstitialSlides, newSlide];
-    onInterstitialSlidesChange(updated);
+    emitSlides(updated);
     setSelectedSlideId(newSlide.id);
     setSelectedBlockIndex(null);
   };
 
   const handleUpdateSlide = (slideId: string, changes: Partial<InterstitialSlide>) => {
-    if (!onInterstitialSlidesChange) return;
+    if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return;
     const updated = interstitialSlides.map((s) =>
       s.id === slideId ? { ...s, ...changes } : s
     );
-    onInterstitialSlidesChange(updated);
+    emitSlides(updated);
   };
 
   const handleRemoveSlide = (slideId: string) => {
-    if (!onInterstitialSlidesChange) return;
+    if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return;
     const updated = interstitialSlides.filter((s) => s.id !== slideId);
-    onInterstitialSlidesChange(updated);
+    emitSlides(updated);
     if (selectedSlideId === slideId) setSelectedSlideId(null);
   };
 
@@ -1640,8 +1865,8 @@ export function TimelineEditor({
   const bodyDuration = audioDuration > 0
     ? audioDuration
     : matches.reduce((sum, m) => sum + (m.duration_override ?? (m.srt_end - m.srt_start)), 0);
-  const totalDuration = introOffsetSec + bodyDuration;
-  const previewTotalDuration = introOffsetSec + (previewDuration || audioDuration);
+  const totalDuration = bodyDuration;
+  const previewTotalDuration = previewDuration || audioDuration;
 
   // Selected match for inline preview
   const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
@@ -1650,7 +1875,7 @@ export function TimelineEditor({
     const subtitleText = matches[previewActiveIndex]?.srt_text;
     if (!subtitleText || containerHeight <= 0) return null;
 
-    const fontSize = scaleSubtitlePx(
+    const fontSize = scaleSubtitleFontPx(
       subtitleSettings?.fontSize ?? 48,
       containerHeight,
       minimumFontSize
@@ -1670,6 +1895,11 @@ export function TimelineEditor({
       containerHeight,
       0
     );
+    const letterSpacing = scaleSubtitlePx(
+      subtitleSettings?.letterSpacing ?? 0,
+      containerHeight,
+      -Infinity
+    );
     const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
     const baseShadow = shadowDepth > 0
       ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
@@ -1684,8 +1914,8 @@ export function TimelineEditor({
 
     return (
       <div
-        className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
-        style={positionStyle}
+        className="absolute left-2 right-2 z-[50] pointer-events-none"
+        style={{ ...positionStyle, textAlign: subtitleSettings?.horizontalAlignment ?? "center" }}
       >
         <p
           className="inline-block px-2 py-1 font-semibold leading-tight"
@@ -1699,12 +1929,42 @@ export function TimelineEditor({
               ? `${outlineWidth}px ${subtitleSettings?.outlineColor ?? "#000000"}`
               : undefined,
             paintOrder: "stroke fill",
+            letterSpacing: `${letterSpacing}px`,
           }}
         >
           {subtitleText}
         </p>
       </div>
     );
+  };
+
+  const renderAttentionOverlays = () => {
+    if (!attentionTimeline) return null;
+    const nowMs = previewCurrentTime * 1000;
+    return attentionTimeline.cues.flatMap((cue) => {
+      if (nowMs < cue.startMs || nowMs >= cue.startMs + cue.durationMs) return [];
+      return cue.layers.map((layer) => {
+        const url = layer.assetUrl || layer.assetId;
+        const localMs = nowMs - cue.startMs - layer.animation.delayMs;
+        if (!url || localMs < 0) return null;
+        const duration = Math.max(1, cue.durationMs - layer.animation.delayMs);
+        return (
+          <img
+            key={`${cue.id}:${layer.id}`}
+            src={url}
+            alt=""
+            className={`pointer-events-none absolute attention-${layer.animation.preset}`}
+            style={{
+              left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
+              width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
+              objectFit: layer.fit, zIndex: 10 + layer.zIndex,
+              animationDuration: `${duration}ms`,
+              ["--attention-intensity" as string]: layer.animation.intensity,
+            }}
+          />
+        );
+      });
+    });
   };
 
   return (
@@ -1800,6 +2060,9 @@ export function TimelineEditor({
                           ? 1
                           : 0,
                       zIndex: activeSlot === slot ? 1 : 0,
+                      transform: previewVideoTransform(
+                        matches[previewSlotMatchIndexes[slot] ?? -1]?.transforms
+                      ),
                     }}
                   />
                 ))}
@@ -1819,6 +2082,8 @@ export function TimelineEditor({
                 )}
 
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
+                {renderAttentionOverlays()}
+                <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
                 {renderPreviewSubtitleOverlay(8, compactPreviewMeasurement.height)}
               </div>
 
@@ -1842,6 +2107,9 @@ export function TimelineEditor({
                   </span>
 
                   <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={restartPreviewFromZero} title="Restart from 0" aria-label="Restart from 0">
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1922,10 +2190,13 @@ export function TimelineEditor({
                         style={{
                           display: "block",
                           opacity:
-                            activeSlot === slot && matches[previewActiveIndex]?.source_video_id
+                            activeSlot === slot && (isPreviewIntro || matches[previewActiveIndex]?.source_video_id)
                               ? 1
                               : 0,
                           zIndex: activeSlot === slot ? 1 : 0,
+                          transform: previewVideoTransform(
+                            matches[previewSlotMatchIndexes[slot] ?? -1]?.transforms
+                          ),
                         }}
                       />
                     ))}
@@ -1942,6 +2213,8 @@ export function TimelineEditor({
                       </div>
                     )}
 
+                    {renderAttentionOverlays()}
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
                     {renderPreviewSubtitleOverlay(10, expandedPreviewMeasurement.height)}
                   </div>
 
@@ -1962,6 +2235,9 @@ export function TimelineEditor({
                       </span>
 
                       <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={restartPreviewFromZero} title="Restart from 0" aria-label="Restart from 0">
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -2022,7 +2298,7 @@ export function TimelineEditor({
 
                 // Helper: render a "+" insertion button
                 const renderInsertButton = (afterMatchIndex: number) => {
-                  if (!onInterstitialSlidesChange) return null;
+                  if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return null;
                   return (
                     <button
                       key={`insert-${afterMatchIndex}`}
@@ -2083,7 +2359,7 @@ export function TimelineEditor({
 
                 if (introOffsetSec > 0) {
                   const introWidthPercent = totalDuration > 0 ? (introOffsetSec / totalDuration) * 100 : 10;
-                  elements.push(<div key="rapid-intro" className="flex-shrink-0 rounded-md border-2 border-violet-500 bg-violet-500/15 px-2 flex items-center justify-center text-[10px] font-medium text-violet-700 dark:text-violet-300" style={{ width: `max(60px, ${introWidthPercent}%)`, height: "80px" }} title={`Rapid intro (${introOffsetSec.toFixed(1)}s)`}>Rapid intro</div>);
+                  elements.push(<div key="rapid-intro" className="flex-shrink-0 rounded-md border-2 border-violet-500 bg-violet-500/15 px-2 flex items-center justify-center text-[10px] font-medium text-violet-700 dark:text-violet-300" style={{ width: `max(60px, ${introWidthPercent}%)`, height: "80px" }} title={`Rapid intro over soundtrack (${introOffsetSec.toFixed(1)}s)`}>Rapid intro</div>);
                 }
 
                 // Insert "before first" button
@@ -2099,7 +2375,13 @@ export function TimelineEditor({
                   const lastIdx = group.matchIndices[group.matchIndices.length - 1];
                   const firstMatch = matches[firstIdx];
                   const isMulti = group.matchIndices.length > 1;
-                  const groupDuration = group.groupDuration;
+                  const groupEndTime = matches[lastIdx]?.srt_end ?? firstMatch.srt_end;
+                  const coveredByIntro = Math.max(
+                    0,
+                    Math.min(groupEndTime, introOffsetSec) - firstMatch.srt_start,
+                  );
+                  const groupDuration = Math.max(0, group.groupDuration - coveredByIntro);
+                  if (groupDuration <= 0.001) return;
                   const widthPercent = totalDuration > 0 ? (groupDuration / totalDuration) * 100 : 10;
 
                   // Use first match for color/status
@@ -2219,6 +2501,46 @@ export function TimelineEditor({
             </div>
           </div>
 
+          {attentionTimeline && (
+            <div className="overflow-hidden rounded-md border bg-card text-[10px]" aria-label="Multi-track timeline">
+              {[
+                { label: "Video", content: <div className="absolute inset-y-1 left-0 right-0 rounded bg-slate-500/25" /> },
+                { label: "Attention images", content: attentionTimeline.cues.map(cue => (
+                  <button
+                    type="button"
+                    key={cue.id}
+                    className="absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded bg-primary/70 px-1 text-left text-primary-foreground active:cursor-grabbing"
+                    style={{ left: `${cue.startMs / Math.max(1, audioDuration * 1000) * 100}%`, width: `${cue.durationMs / Math.max(1, audioDuration * 1000) * 100}%` }}
+                    onPointerDown={(event) => beginCueTimingDrag(event, cue, "move")}
+                    onClick={() => setSelectedSlideId(cue.id)}
+                    title="Drag to move. Hold Alt to disable subtitle snapping."
+                  >
+                    {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
+                    <span
+                      className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-black/20"
+                      onPointerDown={(event) => beginCueTimingDrag(event, cue, "resize")}
+                    />
+                  </button>
+                )) },
+                { label: "Subtitles", content: matches.map(match => (
+                  <div key={match.srt_index} className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1"
+                    style={{ left: `${match.srt_start / Math.max(.001, audioDuration) * 100}%`, width: `${(match.srt_end - match.srt_start) / Math.max(.001, audioDuration) * 100}%` }}>
+                    {match.srt_text}
+                  </div>
+                )) },
+                { label: "Voiceover", content: <div className="absolute inset-y-1 left-0 right-0 rounded bg-emerald-500/20 bg-[repeating-linear-gradient(90deg,transparent_0_3px,currentColor_3px_4px)] text-emerald-500/30" /> },
+                { label: "SFX", content: attentionTimeline.cues.filter(cue => cue.sfxAssetId || cue.sfxUrl).map(cue => (
+                  <div key={cue.id} className="absolute inset-y-1 w-2 rounded bg-amber-500" style={{ left: `${cue.startMs / Math.max(1, audioDuration * 1000) * 100}%` }} />
+                )) },
+              ].map(track => (
+                <div key={track.label} className="grid grid-cols-[7rem_minmax(0,1fr)] border-t first:border-t-0">
+                  <div className="flex h-7 items-center border-r bg-muted/40 px-2 font-medium">{track.label}</div>
+                  <div className="relative h-7" data-attention-track>{track.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Interstitial slide config panel (shown when a slide block is selected) */}
           {selectedSlideId !== null && (() => {
             const slide = interstitialSlides.find((s) => s.id === selectedSlideId);
@@ -2259,7 +2581,10 @@ export function TimelineEditor({
                   <div className="flex-1 min-w-0 space-y-2">
                     {/* Image URL */}
                     <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Image URL</label>
+                      <div className="flex gap-1 text-[10px] text-muted-foreground" role="tablist" aria-label="Asset picker">
+                        {['Gallery', 'Upload', 'Products', 'Generate with AI', 'URL'].map(name => <span key={name} className={`rounded px-1.5 py-0.5 ${name === 'URL' ? 'bg-muted text-foreground' : ''}`}>{name}</span>)}
+                      </div>
+                      <label className="text-xs font-medium text-muted-foreground">Image URL (advanced)</label>
                       <input
                         type="text"
                         value={slide.imageUrl}
@@ -2268,6 +2593,31 @@ export function TimelineEditor({
                         className="w-full h-7 text-xs px-2 rounded border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                       />
                     </div>
+
+                    {attentionTimeline?.cues.find(cue => cue.id === slide.id)?.layers[0] && (() => {
+                      const layer = attentionTimeline.cues.find(cue => cue.id === slide.id)!.layers[0];
+                      return (
+                        <div className="grid grid-cols-3 gap-2 rounded border p-2">
+                          {(["x", "y", "width", "height"] as const).map(field => (
+                            <label key={field} className="space-y-0.5 text-[10px] uppercase text-muted-foreground">
+                              {field}
+                              <Input type="number" min={0} max={1} step={0.01} className="h-7 text-xs" value={layer[field]}
+                                onChange={event => updateCueLayer(slide.id, { [field]: Math.max(0, Math.min(1, Number(event.target.value))) })} />
+                            </label>
+                          ))}
+                          <label className="space-y-0.5 text-[10px] uppercase text-muted-foreground">Layer
+                            <Input type="number" min={0} max={1000} className="h-7 text-xs" value={layer.zIndex}
+                              onChange={event => updateCueLayer(slide.id, { zIndex: Number(event.target.value) })} />
+                          </label>
+                          <label className="space-y-0.5 text-[10px] uppercase text-muted-foreground">Fit
+                            <select className="h-7 w-full rounded border bg-background px-1 text-xs" value={layer.fit}
+                              onChange={event => updateCueLayer(slide.id, { fit: event.target.value as "contain" | "cover" })}>
+                              <option value="contain">Contain</option><option value="cover">Cover</option>
+                            </select>
+                          </label>
+                        </div>
+                      );
+                    })()}
 
                     {/* Duration */}
                     <div className="flex items-center gap-2">
@@ -2492,7 +2842,7 @@ export function TimelineEditor({
         <div className="max-h-[500px] overflow-y-auto rounded-md border">
           <div className="divide-y">
             {/* "+" insert before first row */}
-            {onInterstitialSlidesChange && (
+            {(onInterstitialSlidesChange || onAttentionTimelineChange) && (
               <div className="flex items-center px-3 py-1 bg-muted/20">
                 <button
                   onClick={() => handleInsertSlide(-1)}
@@ -2798,7 +3148,7 @@ export function TimelineEditor({
                   </div>
                 ))}
                 {/* "+" insert after this match */}
-                {onInterstitialSlidesChange && (
+                {(onInterstitialSlidesChange || onAttentionTimelineChange) && (
                   <div className="flex items-center px-3 py-1 bg-muted/20">
                     <button
                       onClick={() => handleInsertSlide(idx)}

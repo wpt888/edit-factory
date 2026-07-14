@@ -33,6 +33,8 @@ import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { apiGetWithRetry, handleApiError } from "@/lib/api";
 import { ApiError } from "@/lib/api-error";
+import { useProfile } from "@/contexts/profile-context";
+import { readWorkspaceStorage, writeWorkspaceStorage } from "@/lib/workspace-session";
 import { useRouter } from "next/navigation";
 
 interface CostSummary {
@@ -109,6 +111,7 @@ interface GeminiStatus {
 
 export default function UsagePage() {
   const router = useRouter();
+  const { currentProfile } = useProfile();
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
@@ -118,7 +121,8 @@ export default function UsagePage() {
   const [testingGemini, setTestingGemini] = useState(false);
   const [budget, setBudget] = useState<number>(() => { // Bug #163: lazy init from localStorage
     if (typeof window === "undefined") return 50;
-    const stored = localStorage.getItem("editai_budget");
+    if (!currentProfile?.id) return 50;
+    const stored = readWorkspaceStorage(currentProfile.id, "usage.budget", "editai_budget");
     if (stored) { const n = parseFloat(stored); if (!isNaN(n) && n > 0) return n; }
     return 50;
   });
@@ -188,7 +192,7 @@ export default function UsagePage() {
 
   const saveBudget = (value: number) => {
     setBudget(value);
-    localStorage.setItem("editai_budget", value.toString());
+    if (currentProfile?.id) writeWorkspaceStorage(currentProfile.id, "usage.budget", value.toString());
   };
 
   const totalSpent = costSummary?.total_all || 0;

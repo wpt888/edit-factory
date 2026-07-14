@@ -26,6 +26,12 @@ import {
   Eye,
 } from "lucide-react";
 import { apiGetWithRetry, apiPost } from "@/lib/api";
+import { useProfile } from "@/contexts/profile-context";
+import {
+  readWorkspaceStorage,
+  removeWorkspaceStorage,
+  writeWorkspaceStorage,
+} from "@/lib/workspace-session";
 import { toast } from "sonner";
 import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 import {
@@ -104,18 +110,19 @@ const META_PLATFORM_TYPES = new Set([
 
 /* ---------- Module-level integrations cache (survives remounts) ---------- */
 
-let _integrationsCache: Integration[] | undefined;
-let _integrationsFetchPromise: Promise<void> | null = null;
-let _integrationsFetchFailed = false;
+const _integrationsCache = new Map<string, Integration[]>();
+const _integrationsFetchPromise = new Map<string, Promise<void>>();
+const _integrationsFetchFailed = new Set<string>();
 
 /* ---------- Module-level Buffer channels cache ---------- */
 
-let _bufferChannelsCache: BufferChannel[] | undefined;
-let _bufferFetchPromise: Promise<void> | null = null;
+const _bufferChannelsCache = new Map<string, BufferChannel[]>();
+const _bufferFetchPromise = new Map<string, Promise<void>>();
 
 /* ---------- Draft persistence ---------- */
 
-const DRAFT_KEY = "editai_schedule_draft";
+const DRAFT_KEY = "pipeline.schedule-draft";
+const LEGACY_DRAFT_KEY = "editai_schedule_draft";
 
 interface ScheduleDraft {
   perVariantCaptions: Record<string, string>;
@@ -127,14 +134,14 @@ interface ScheduleDraft {
   savedAt: number;
 }
 
-function loadDraft(): ScheduleDraft | null {
-  if (typeof window === "undefined") return null;
+function loadDraft(profileId?: string): ScheduleDraft | null {
+  if (!profileId) return null;
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const raw = readWorkspaceStorage(profileId, DRAFT_KEY, LEGACY_DRAFT_KEY);
     if (!raw) return null;
     const draft: ScheduleDraft = JSON.parse(raw);
     if (Date.now() - draft.savedAt > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(DRAFT_KEY);
+      removeWorkspaceStorage(profileId, DRAFT_KEY);
       return null;
     }
     return draft;
@@ -143,43 +150,47 @@ function loadDraft(): ScheduleDraft | null {
   }
 }
 
-function saveDraft(draft: Omit<ScheduleDraft, "savedAt">) {
-  if (typeof window === "undefined") return;
+function saveDraft(profileId: string | undefined, draft: Omit<ScheduleDraft, "savedAt">) {
+  if (!profileId) return;
   try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, savedAt: Date.now() }));
+    writeWorkspaceStorage(profileId, DRAFT_KEY, JSON.stringify({ ...draft, savedAt: Date.now() }));
   } catch { /* quota exceeded — ignore */ }
 }
 
-function clearDraft() {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(DRAFT_KEY);
+function clearDraft(profileId?: string) {
+  if (!profileId) return;
+  removeWorkspaceStorage(profileId, DRAFT_KEY);
 }
 
 /* ---------- Component ---------- */
 
 export function PipelineSchedule({ completedClips, initialCaptions, projectId, allLibrarySaved }: PipelineScheduleProps) {
+  const { currentProfile } = useProfile();
+  const profileId = currentProfile?.id;
+  const cachedIntegrations = profileId ? _integrationsCache.get(profileId) : undefined;
+  const cachedBufferChannels = profileId ? _bufferChannelsCache.get(profileId) : undefined;
 
-  const draftRef = useRef(loadDraft());
+  const draftRef = useRef(loadDraft(profileId));
   const draft = draftRef.current;
 
   // Integrations state
-  const [integrations, setIntegrations] = useState<Integration[]>(_integrationsCache || []);
+  const [integrations, setIntegrations] = useState<Integration[]>(cachedIntegrations || []);
   const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(() => {
     if (draft?.selectedIntegrationIds?.length) return new Set(draft.selectedIntegrationIds);
-    return new Set((_integrationsCache || []).map(i => i.id));
+    return new Set((cachedIntegrations || []).map(i => i.id));
   });
   const [integrationTimes, setIntegrationTimes] = useState<Record<string, string>>(
     draft?.integrationTimes || {}
   );
-  const [loadingIntegrations, setLoadingIntegrations] = useState(_integrationsCache === undefined);
+  const [loadingIntegrations, setLoadingIntegrations] = useState(cachedIntegrations === undefined);
   const [integrationError, setIntegrationError] = useState(false);
 
   // Buffer channels
-  const [bufferChannels, setBufferChannels] = useState<BufferChannel[]>(_bufferChannelsCache || []);
+  const [bufferChannels, setBufferChannels] = useState<BufferChannel[]>(cachedBufferChannels || []);
   const [selectedBufferIds, setSelectedBufferIds] = useState<Set<string>>(
-    new Set((_bufferChannelsCache || []).map(c => c.id))
+    new Set((cachedBufferChannels || []).map(c => c.id))
   );
-  const [loadingBuffer, setLoadingBuffer] = useState(_bufferChannelsCache === undefined);
+  const [loadingBuffer, setLoadingBuffer] = useState(cachedBufferChannels === undefined);
 
   // Clip selection
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
@@ -215,7 +226,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   useEffect(() => {
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     autoSaveTimeoutRef.current = setTimeout(() => {
-      saveDraft({
+      saveDraft(profileId, {
         perVariantCaptions,
         scheduleDate,
         timezone,
@@ -225,7 +236,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
       });
     }, 500);
     return () => { if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current); };
-  }, [perVariantCaptions, scheduleDate, timezone, selectedIntegrationIds, integrationTimes, jitterMinutes]);
+  }, [perVariantCaptions, scheduleDate, timezone, selectedIntegrationIds, integrationTimes, jitterMinutes, profileId]);
 
   // Auto-select all completed clips
   useEffect(() => {
@@ -272,17 +283,21 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   }, []);
 
   const fetchIntegrations = useCallback(async (forceRefresh = false) => {
-    if (_integrationsCache && !forceRefresh && !_integrationsFetchFailed) {
-      applyIntegrations(_integrationsCache, !!draft);
+    if (!profileId) return;
+    const cached = _integrationsCache.get(profileId);
+    const pending = _integrationsFetchPromise.get(profileId);
+    if (cached && !forceRefresh && !_integrationsFetchFailed.has(profileId)) {
+      applyIntegrations(cached, !!draft);
       return;
     }
-    if (_integrationsFetchPromise && !forceRefresh) {
-      await _integrationsFetchPromise;
-      if (_integrationsFetchFailed) {
+    if (pending && !forceRefresh) {
+      await pending;
+      if (_integrationsFetchFailed.has(profileId)) {
         setIntegrationError(true);
         setLoadingIntegrations(false);
-      } else if (_integrationsCache) {
-        applyIntegrations(_integrationsCache, !!draft);
+      } else {
+        const resolved = _integrationsCache.get(profileId);
+        if (resolved) applyIntegrations(resolved, !!draft);
       }
       return;
     }
@@ -290,33 +305,35 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
     setLoadingIntegrations(true);
     setIntegrationError(false);
     if (forceRefresh) {
-      _integrationsCache = undefined;
-      _integrationsFetchFailed = false;
+      _integrationsCache.delete(profileId);
+      _integrationsFetchFailed.delete(profileId);
     }
 
-    _integrationsFetchPromise = (async () => {
+    const request = (async () => {
       try {
         const res = await apiGetWithRetry("/postiz/integrations", { timeout: 30000, retry: 3 });
         const data = await res.json();
-        _integrationsCache = Array.isArray(data) ? data : data.integrations || [];
-        _integrationsFetchFailed = false;
+        _integrationsCache.set(profileId, Array.isArray(data) ? data : data.integrations || []);
+        _integrationsFetchFailed.delete(profileId);
       } catch {
-        _integrationsCache = undefined;
-        _integrationsFetchFailed = true;
+        _integrationsCache.delete(profileId);
+        _integrationsFetchFailed.add(profileId);
       } finally {
-        _integrationsFetchPromise = null;
+        _integrationsFetchPromise.delete(profileId);
       }
     })();
+    _integrationsFetchPromise.set(profileId, request);
 
-    await _integrationsFetchPromise;
+    await request;
 
-    if (_integrationsFetchFailed) {
+    if (_integrationsFetchFailed.has(profileId)) {
       setIntegrationError(true);
       setLoadingIntegrations(false);
-    } else if (_integrationsCache) {
-      applyIntegrations(_integrationsCache, !!draft);
+    } else {
+      const resolved = _integrationsCache.get(profileId);
+      if (resolved) applyIntegrations(resolved, !!draft);
     }
-  }, [applyIntegrations, draft]);
+  }, [applyIntegrations, draft, profileId]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
@@ -338,44 +355,50 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
 
   // Fetch Buffer channels
   const fetchBufferChannels = useCallback(async (forceRefresh = false) => {
-    if (_bufferChannelsCache && !forceRefresh) {
-      setBufferChannels(_bufferChannelsCache);
-      setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+    if (!profileId) return;
+    const cached = _bufferChannelsCache.get(profileId);
+    const pending = _bufferFetchPromise.get(profileId);
+    if (cached && !forceRefresh) {
+      setBufferChannels(cached);
+      setSelectedBufferIds(new Set(cached.map(c => c.id)));
       setLoadingBuffer(false);
       return;
     }
-    if (_bufferFetchPromise && !forceRefresh) {
-      await _bufferFetchPromise;
-      if (_bufferChannelsCache) {
-        setBufferChannels(_bufferChannelsCache);
-        setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+    if (pending && !forceRefresh) {
+      await pending;
+      const resolved = _bufferChannelsCache.get(profileId);
+      if (resolved) {
+        setBufferChannels(resolved);
+        setSelectedBufferIds(new Set(resolved.map(c => c.id)));
       }
       setLoadingBuffer(false);
       return;
     }
 
     setLoadingBuffer(true);
-    if (forceRefresh) _bufferChannelsCache = undefined;
+    if (forceRefresh) _bufferChannelsCache.delete(profileId);
 
-    _bufferFetchPromise = (async () => {
+    const request = (async () => {
       try {
         const res = await apiGetWithRetry("/buffer/channels", { timeout: 15000, retry: 2 });
         const data = await res.json();
-        _bufferChannelsCache = Array.isArray(data) ? data : [];
+        _bufferChannelsCache.set(profileId, Array.isArray(data) ? data : []);
       } catch {
-        _bufferChannelsCache = [];
+        _bufferChannelsCache.set(profileId, []);
       } finally {
-        _bufferFetchPromise = null;
+        _bufferFetchPromise.delete(profileId);
       }
     })();
+    _bufferFetchPromise.set(profileId, request);
 
-    await _bufferFetchPromise;
-    if (_bufferChannelsCache) {
-      setBufferChannels(_bufferChannelsCache);
-      setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+    await request;
+    const resolved = _bufferChannelsCache.get(profileId);
+    if (resolved) {
+      setBufferChannels(resolved);
+      setSelectedBufferIds(new Set(resolved.map(c => c.id)));
     }
     setLoadingBuffer(false);
-  }, []);
+  }, [profileId]);
 
   useEffect(() => { fetchBufferChannels(); }, [fetchBufferChannels]);
 
@@ -520,7 +543,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
 
       toast.success(data.message || "Schedule confirmed! Publishing plan created.");
       setPreview(null);
-      clearDraft();
+      clearDraft(profileId);
       setDraftRestored(false);
     } catch (err: unknown) {
       console.error("Confirm failed:", err);
@@ -686,7 +709,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                   variant="ghost"
                   size="sm"
                   className="text-xs h-7"
-                  onClick={() => { clearDraft(); setDraftRestored(false); }}
+                  onClick={() => { clearDraft(profileId); setDraftRestored(false); }}
                 >
                   Discard draft
                 </Button>

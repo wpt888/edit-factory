@@ -7,17 +7,24 @@ import { usePathname } from "next/navigation";
 import blipostLogo from "../../public/blipost-logo.png";
 import { cn } from "@/lib/utils";
 import { ProfileSwitcher } from "@/components/profile-switcher";
+import { ProductSwitcher } from "@/components/product-switcher";
 import { useProfile } from "@/contexts/profile-context";
 import { useAuth } from "@/components/auth-provider";
 import { apiGet } from "@/lib/api";
+import {
+  completeWorkspaceNavigation,
+  getPendingWorkspaceNavigation,
+  isActiveWorkspace,
+  saveLastWorkspaceRoute,
+} from "@/lib/workspace-session";
 import {
   Clapperboard,
   Film,
   Scissors,
   ShoppingBag,
-  Tag,
   Video,
   ListChecks,
+  ListVideo,
   Settings,
   BarChart3,
   Music,
@@ -29,6 +36,7 @@ import {
   Wallet,
   ChevronLeft,
   ChevronRight,
+  Workflow,
   Cloud,
 } from "lucide-react";
 
@@ -44,9 +52,9 @@ const allNavGroups = [
   {
     label: "Create",
     items: [
-      { label: "Pipeline", href: "/pipeline", icon: Clapperboard },
+      { label: "Video Pipeline", href: "/pipeline", icon: Clapperboard },
+      { label: "Footage & Segments", href: "/segments", icon: ListVideo },
       { label: "Clipping", href: "/clipping", icon: Scissors },
-      { label: "Segments", href: "/segments", icon: Scissors },
       { label: "AI Image", href: "/create-image", icon: ImageIcon },
       { label: "AI Video", href: "/create-video", icon: Clapperboard },
     ],
@@ -54,7 +62,7 @@ const allNavGroups = [
   {
     label: "Library",
     items: [
-      { label: "Local Projects", href: "/librarie", icon: Film },
+      { label: "Local Exports", href: "/librarie", icon: Film },
       { label: "Media Library", href: "/media-library", icon: Cloud },
       { label: "TTS", href: "/tts-library", icon: Music },
       { label: "Schedule", href: "/schedule", icon: CalendarClock },
@@ -65,8 +73,7 @@ const allNavGroups = [
     items: [
       // D1: local product library is the default source; the Gomag catalog is
       // gated off (see /products page + CATALOG_GOMAG_ENABLED backend flag).
-      { label: "My Products", href: "/product-library", icon: ShoppingBag },
-      { label: "Feed Import", href: "/products", icon: Tag },
+      { label: "Products", href: "/product-library", icon: ShoppingBag },
       { label: "Generate", href: "/product-video", icon: Video },
       { label: "Batch Generate", href: "/batch-generate", icon: ListChecks },
     ],
@@ -75,6 +82,7 @@ const allNavGroups = [
     label: "Workspace",
     items: [
       { label: "Calendar", href: "/calendar", icon: Calendar },
+      { label: "Automations", href: "/automations", icon: Workflow },
       { label: "Notes", href: "/wiki", icon: NotebookPen },
       { label: "Settings", href: "/settings", icon: Settings },
       { label: "Usage", href: "/usage", icon: BarChart3 },
@@ -100,7 +108,11 @@ function NavLink({
   pathname,
   collapsed = false,
 }: {
-  item: { label: string; href: string; icon: React.ComponentType<{ className?: string }> };
+  item: {
+    label: string;
+    href: string;
+    icon: React.ComponentType<{ className?: string }>;
+  };
   pathname: string;
   collapsed?: boolean;
 }) {
@@ -114,7 +126,7 @@ function NavLink({
         collapsed ? "justify-center py-2" : "px-3 py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-lime"
+          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-lime",
       )}
     >
       <item.icon className="size-4" />
@@ -123,13 +135,21 @@ function NavLink({
   );
 }
 
-function AppNav({ horizontal = false, collapsed = false }: { horizontal?: boolean; collapsed?: boolean }) {
+function AppNav({
+  horizontal = false,
+  collapsed = false,
+}: {
+  horizontal?: boolean;
+  collapsed?: boolean;
+}) {
   const pathname = usePathname();
   if (horizontal) {
     return (
       <nav className="flex items-center gap-1 overflow-x-auto">
         {navGroups.flatMap((group) =>
-          group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)
+          group.items.map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} />
+          )),
         )}
       </nav>
     );
@@ -140,8 +160,13 @@ function AppNav({ horizontal = false, collapsed = false }: { horizontal?: boolea
       <nav className="flex flex-col gap-1">
         {navGroups.flatMap((group) =>
           group.items.map((item) => (
-            <NavLink key={item.href} item={item} pathname={pathname} collapsed />
-          ))
+            <NavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              collapsed
+            />
+          )),
         )}
       </nav>
     );
@@ -180,8 +205,12 @@ function CreditBalance() {
           setBalance(null);
         }
       })
-      .catch(() => { if (!cancelled) setBalance(null); });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) setBalance(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [currentProfile]);
 
   if (balance === null) return null;
@@ -199,20 +228,17 @@ function CreditBalance() {
 }
 
 function Wordmark({ className }: { className?: string }) {
-  // The PNG is white-on-dark artwork — invisible on the light sidebar, so
-  // light mode falls back to the text wordmark used on the auth pages.
+  // Keep the brand artwork identical across themes. Its white lettering needs
+  // a stable dark field for contrast on the light sidebar.
   return (
-    <>
+    <span className="inline-flex rounded-md bg-ink px-2 py-1.5">
       <Image
         src={blipostLogo}
         alt="Blipost"
         priority
-        className={cn("hidden w-auto dark:block", className)}
+        className={cn("w-auto", className)}
       />
-      <span className="font-heading text-2xl font-bold tracking-tight dark:hidden">
-        bli<span className="text-lime">post</span>
-      </span>
-    </>
+    </span>
   );
 }
 
@@ -221,12 +247,49 @@ const SIDEBAR_STORAGE_KEY = "blipost.sidebar.collapsed";
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { currentProfile } = useProfile();
   const { user, signOut } = useAuth();
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
+  const routeProfileRef = React.useRef(currentProfile?.id);
+  const pendingWorkspaceNavigation = getPendingWorkspaceNavigation();
+  const workspaceTransitioning = Boolean(
+    pendingWorkspaceNavigation &&
+    (currentProfile?.id !== pendingWorkspaceNavigation.profileId ||
+      pathname !== pendingWorkspaceNavigation.pathname),
+  );
+
+  // Remember navigation independently for every profile/workspace. Skip the
+  // transitional render immediately after switching profiles: it can still
+  // carry the previous workspace's pathname until router.push settles.
+  React.useEffect(() => {
+    const profileId = currentProfile?.id;
+    if (!profileId) return;
+    const pendingNavigation = getPendingWorkspaceNavigation();
+    if (pendingNavigation) {
+      if (
+        pendingNavigation.profileId === profileId &&
+        pendingNavigation.pathname === pathname
+      ) {
+        routeProfileRef.current = profileId;
+        completeWorkspaceNavigation(profileId, pathname);
+      }
+      return;
+    }
+    if (routeProfileRef.current !== profileId) {
+      routeProfileRef.current = profileId;
+      return;
+    }
+    // setCurrentProfile persists the new profile before router.push settles.
+    // If the URL moves first, do not attribute that transitional route to the
+    // workspace that is already being left.
+    if (!isActiveWorkspace(profileId)) return;
+    saveLastWorkspaceRoute(profileId, pathname);
+  }, [currentProfile?.id, pathname]);
 
   // Restore the persisted preference after mount — reading localStorage during
   // render would break hydration (the server has no localStorage).
   React.useEffect(() => {
-    if (localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true") setCollapsed(true);
+    if (localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true")
+      setCollapsed(true);
   }, []);
 
   const toggleSidebar = React.useCallback(() => {
@@ -260,6 +323,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <ChevronRight className="size-4" />
             </button>
           </div>
+          <div className="flex justify-center px-2 pb-2">
+            <ProductSwitcher
+              activeProduct="studio"
+              compact
+              compactMenuPlacement="side"
+            />
+          </div>
           <div className="flex-1 overflow-y-auto px-2 pt-2">
             <AppNav collapsed />
           </div>
@@ -284,19 +354,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
       ) : (
         <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-          <div className="flex items-start justify-between px-5 pt-6 pb-4">
-            <Link href="/pipeline" className="flex items-center">
-              <Wordmark className="h-8" />
-            </Link>
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              title="Collapse sidebar"
-              aria-label="Collapse sidebar"
-              className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            >
-              <ChevronLeft className="size-4" />
-            </button>
+          <div className="px-5 pt-6 pb-4">
+            <div className="flex items-start justify-between">
+              <Link href="/pipeline" className="flex items-center">
+                <Wordmark className="h-8" />
+              </Link>
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                title="Collapse sidebar"
+                aria-label="Collapse sidebar"
+                className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            </div>
+            <div className="mt-3">
+              <ProductSwitcher activeProduct="studio" />
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto px-3 pt-2">
             <AppNav />
@@ -311,7 +386,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{displayName}</p>
                 <p className="truncate text-xs font-medium text-sidebar-foreground/60">
-                  {currentProfile?.name || "No profile"}
+                  {currentProfile?.name || "No workspace"}
                 </p>
               </div>
               {user && (
@@ -333,13 +408,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-40 flex flex-col gap-2 border-b border-sidebar-border bg-sidebar px-4 pt-3 pb-2 text-sidebar-foreground md:hidden">
           <div className="flex items-center justify-between">
-            <Link href="/pipeline" className="flex items-center">
-              <Wordmark className="h-7" />
-            </Link>
+            <div className="flex min-w-0 items-center gap-3">
+              <Link href="/pipeline" className="flex shrink-0 items-center">
+                <Wordmark className="h-7" />
+              </Link>
+              <ProductSwitcher activeProduct="studio" compact />
+            </div>
             <div className="flex items-center gap-3">
               <ProfileSwitcher />
               {user && (
-                <button type="button" onClick={signOut} title="Sign out" className="flex items-center">
+                <button
+                  type="button"
+                  onClick={signOut}
+                  title="Sign out"
+                  className="flex items-center"
+                >
                   <LogOut className="size-4 text-sidebar-foreground/70" />
                 </button>
               )}
@@ -347,7 +430,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <AppNav horizontal />
         </header>
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main
+          key={currentProfile?.id || "workspace-loading"}
+          className="flex-1 overflow-y-auto"
+        >
+          {workspaceTransitioning ? (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              Switching workspace…
+            </div>
+          ) : (
+            children
+          )}
+        </main>
       </div>
     </div>
   );

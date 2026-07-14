@@ -2,18 +2,28 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError, ApiError } from "@/lib/api";
 import {
   Loader2,
-  Film,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
+import { useLocalStorageConfig } from "@/hooks/use-local-storage-config";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { checkFallbacks } from "@/lib/api-fallback";
 import { getCachedSourceVideos } from "@/lib/source-video-cache";
+import {
+  DEFAULT_PIPELINE_LAYOUT,
+  PIPELINE_LAYOUT_STORAGE_KEY,
+  type PipelineLayoutMode,
+} from "@/lib/pipeline-layout";
+import {
+  readWorkspaceStorage,
+  removeWorkspaceStorage,
+  writeWorkspaceStorage,
+} from "@/lib/workspace-session";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
+import { WorkspaceSplit } from "./components/workspace-split";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { ProductPickerDialog } from "@/components/dialogs/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/dialogs/image-picker-dialog";
@@ -24,6 +34,7 @@ import { ThumbnailSelection } from "@/components/thumbnail-picker";
 import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
+import type { AttentionTimeline } from "@/types/attention-timeline";
 import {
   MatchPreview,
   PreviewData,
@@ -58,8 +69,13 @@ const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
 // Persist enough to survive route unmount (clicking away in the left nav).
 // The pointer lets us reuse the existing backend restore path (?id=); the draft
 // covers Step-1 text typed before a pipeline id exists yet.
-const PIPELINE_SESSION_KEY = "ef_pipeline_session"; // { pipelineId, step }
-const PIPELINE_DRAFT_KEY = "ef_pipeline_draft"; // { pipelineName, idea, context, variantCount, provider, targetScriptDuration }
+const PIPELINE_SESSION_KEY = "pipeline.session"; // { pipelineId, step }
+const PIPELINE_DRAFT_KEY = "pipeline.draft"; // { pipelineName, idea, context, variantCount, provider, targetScriptDuration }
+const LEGACY_PIPELINE_SESSION_KEY = "ef_pipeline_session";
+const LEGACY_PIPELINE_DRAFT_KEY = "ef_pipeline_draft";
+
+const defaultScriptNames = (count: number) =>
+  Array.from({ length: count }, (_, index) => `Script ${index + 1}`);
 
 export default function PipelinePageWrapper() {
   return (
@@ -72,6 +88,10 @@ export default function PipelinePageWrapper() {
 }
 
 function PipelinePage() {
+  const [pipelineLayout] = useLocalStorageConfig<PipelineLayoutMode>(
+    PIPELINE_LAYOUT_STORAGE_KEY,
+    DEFAULT_PIPELINE_LAYOUT,
+  );
   const { currentProfile } = useProfile();
   // Ref to avoid stale closure in debounced setTimeout callbacks
   const currentProfileIdRef = useRef(currentProfile?.id);
@@ -131,21 +151,22 @@ function PipelinePage() {
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [scripts, setScripts] = useState<string[]>([]);
+  const [scriptNames, setScriptNames] = useState<string[]>([]);
   const [approvedScripts, setApprovedScripts] = useState<Set<number>>(new Set());
   const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
 
-  // ElevenLabs active-account credits (shown in Step 2)
+  // Per-profile ElevenLabs allowance (the shared provider pool stays private)
   type ElevenCredits = {
     label: string;
-    api_key_hint: string;
-    is_env_default: boolean;
     tier: string;
-    characters_used: number;
-    character_limit: number;
-    characters_remaining: number;
+    credits_used: number;
+    credits_reserved: number;
+    credit_limit: number;
+    credits_remaining: number;
     usage_percent: number;
     last_error: string | null;
-    last_checked_at: string | null;
+    period_start?: string | null;
+    period_end?: string | null;
   };
   const [elevenCredits, setElevenCredits] = useState<ElevenCredits | null>(null);
   const [elevenCreditsLoading, setElevenCreditsLoading] = useState(false);
@@ -161,7 +182,7 @@ function PipelinePage() {
         setElevenCredits(data.account);
       } else {
         setElevenCredits(null);
-        setElevenCreditsError(data.error || "No ElevenLabs account configured");
+        setElevenCreditsError(data.error || "No ElevenLabs allowance configured");
       }
     } catch (err) {
       setElevenCredits(null);
@@ -241,6 +262,7 @@ function PipelinePage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [historyScripts, setHistoryScripts] = useState<string[]>([]);
+  const [historyScriptNames, setHistoryScriptNames] = useState<string[]>([]);
   const [historyScriptsLoading, setHistoryScriptsLoading] = useState(false);
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
   const [historyImporting, setHistoryImporting] = useState(false);
@@ -321,6 +343,7 @@ function PipelinePage() {
 
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scriptNameSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // TTS library duplicate check debounce timer
   const ttsLibraryCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -365,6 +388,7 @@ function PipelinePage() {
 
   // Interstitial slides: keyed by variant index
   const [interstitialSlides, setInterstitialSlides] = useState<Record<PreviewKey, InterstitialSlide[]>>({});
+  const [attentionTimelines, setAttentionTimelines] = useState<Record<PreviewKey, AttentionTimeline>>({});
 
   // Per-variant thumbnail selection (becomes first frame of rendered video)
   const [variantThumbnails, setVariantThumbnails] = useState<Record<PreviewKey, ThumbnailSelection>>({});
@@ -544,6 +568,33 @@ function PipelinePage() {
     return interstitialSlidesChangeHandlers.current[previewKey];
   }, []);
 
+  const attentionSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const getAttentionTimelineChangeHandler = useCallback((previewKey: string) => {
+    return (timeline: AttentionTimeline) => {
+      setAttentionTimelines(prev => ({ ...prev, [previewKey]: timeline }));
+      const pid = pipelineIdRef.current;
+      if (!pid) return;
+      if (attentionSaveTimers.current[previewKey]) clearTimeout(attentionSaveTimers.current[previewKey]);
+      attentionSaveTimers.current[previewKey] = setTimeout(async () => {
+        delete attentionSaveTimers.current[previewKey];
+        try {
+          const response = await apiPut(`/pipeline/${pid}/attention-timeline/${previewKey}`, timeline);
+          const saved = await response.json() as AttentionTimeline;
+          setAttentionTimelines(prev => {
+            const current = prev[previewKey];
+            return current === timeline ? { ...prev, [previewKey]: saved } : prev;
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) {
+            toast.error("Attention timeline changed in another window. Reload the pipeline before editing again.");
+          } else {
+            toast.error("Could not save attention timeline");
+          }
+        }
+      }, 800);
+    };
+  }, []);
+
   // Keep pipelineIdRef in sync with state + URL
   useEffect(() => {
     pipelineIdRef.current = pipelineId;
@@ -565,10 +616,16 @@ function PipelinePage() {
   // start after the one-time rehydration below has applied (avoids clobbering).
   const [hydrated, setHydrated] = useState(false);
 
-  // Rehydrate once on mount (post-hydration: localStorage is unavailable during SSR)
+  // Rehydrate for this profile/workspace. Global pre-workspace keys are
+  // migrated once into the active profile so existing drafts are not lost.
   useEffect(() => {
+    if (!currentProfile?.id) return;
     try {
-      const draftRaw = localStorage.getItem(PIPELINE_DRAFT_KEY);
+      const draftRaw = readWorkspaceStorage(
+        currentProfile.id,
+        PIPELINE_DRAFT_KEY,
+        LEGACY_PIPELINE_DRAFT_KEY,
+      );
       if (draftRaw) {
         const d = JSON.parse(draftRaw);
         if (d && typeof d === "object") {
@@ -587,7 +644,11 @@ function PipelinePage() {
     // URL so the existing restore effect (keyed on urlPipelineId) picks it up.
     try {
       if (!urlPipelineId) {
-        const sessRaw = localStorage.getItem(PIPELINE_SESSION_KEY);
+        const sessRaw = readWorkspaceStorage(
+          currentProfile.id,
+          PIPELINE_SESSION_KEY,
+          LEGACY_PIPELINE_SESSION_KEY,
+        );
         if (sessRaw) {
           const s = JSON.parse(sessRaw);
           if (s && s.pipelineId) {
@@ -600,20 +661,28 @@ function PipelinePage() {
     } catch { /* corrupt pointer — ignore */ }
 
     setHydrated(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one-time mount rehydrate
+  }, [currentProfile?.id]); // eslint-disable-line react-hooks/exhaustive-deps -- workspace remount owns the remaining initial values
 
   // Persist pointer + Step-1 draft on change. ponytail: no debounce, add if profiling shows jank
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !currentProfile?.id) return;
     try {
       if (pipelineId) {
-        localStorage.setItem(PIPELINE_SESSION_KEY, JSON.stringify({ pipelineId, step }));
+        writeWorkspaceStorage(
+          currentProfile.id,
+          PIPELINE_SESSION_KEY,
+          JSON.stringify({ pipelineId, step }),
+        );
       }
-      localStorage.setItem(PIPELINE_DRAFT_KEY, JSON.stringify({
-        pipelineName, idea, context, variantCount, provider, targetScriptDuration,
-      }));
+      writeWorkspaceStorage(
+        currentProfile.id,
+        PIPELINE_DRAFT_KEY,
+        JSON.stringify({
+          pipelineName, idea, context, variantCount, provider, targetScriptDuration,
+        }),
+      );
     } catch { /* storage full/blocked — non-fatal */ }
-  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, targetScriptDuration]);
+  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, targetScriptDuration, currentProfile?.id]);
 
   // Restore pipeline from URL ?id=<pipeline_id> on mount
   const urlRestoreAttempted = useRef(false);
@@ -638,6 +707,11 @@ function PipelinePage() {
           }, []);
           return sentences.map((sent: string) => sent.trim()).filter(Boolean).join('\n');
         }));
+        setScriptNames(
+          data.script_names?.length === data.scripts.length
+            ? data.script_names
+            : defaultScriptNames(data.scripts.length),
+        );
         if (data.context_products) setContextProducts(data.context_products);
 
         // Restore pipeline metadata so "Back to Input" shows the original form
@@ -739,7 +813,9 @@ function PipelinePage() {
       } catch {
         // Pipeline not found or expired — clear ID from URL and drop the dead pointer
         updateUrlParams(step, null);
-        try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
+        try {
+          if (currentProfile?.id) removeWorkspaceStorage(currentProfile.id, PIPELINE_SESSION_KEY);
+        } catch { /* ignore */ }
       }
     })();
   }, [urlPipelineId]); // eslint-disable-line react-hooks/exhaustive-deps -- re-fires once when rehydrate injects ?id=
@@ -776,26 +852,30 @@ function PipelinePage() {
     void brand; void category; void page; // kept for call-site compatibility; library has no taxonomy/pagination
     setCatalogLoading(true);
     try {
-      const res = await apiGet("/product-library");
+      const params = new URLSearchParams({ search, page: String(page), page_size: "50" });
+      const res = await apiGet(`/product-library?${params}`);
       const data = await res.json();
       const q = search.trim().toLowerCase();
-      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[] }
+      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[]; brand?: string; category?: string; sku?: string; price?: string; sale_price?: string; product_url?: string; extra_fields?: Record<string, unknown> }
       const all = ((data.products || []) as LibraryProduct[])
         .filter((p) => !q || p.title.toLowerCase().includes(q))
         .map((p) => ({
           id: p.id,
           title: p.title,
           description: p.description || "",
-          brand: "",
-          sku: "",
-          image_link: p.image_urls?.[0] ? `${API_URL}${p.image_urls[0]}` : "",
-          category: "",
-          price: 0,
-          sale_price: 0,
+          brand: p.brand || "",
+          sku: p.sku || "",
+          image_link: p.image_urls?.[0] ? (p.image_urls[0].startsWith("http") ? p.image_urls[0] : `${API_URL}${p.image_urls[0]}`) : "",
+          image_urls: p.image_urls || [],
+          category: p.category || "",
+          price: Number(p.price) || 0,
+          sale_price: Number(p.sale_price) || 0,
+          product_url: p.product_url || "",
+          extra_fields: p.extra_fields || {},
           is_on_sale: false,
         }));
       setCatalogProducts(all);
-      setCatalogPagination({ page: 1, page_size: all.length || 20, total: all.length, total_pages: 1 });
+      setCatalogPagination(data.pagination || { page, page_size: all.length || 20, total: all.length, total_pages: 1 });
     } catch (err) {
       handleApiError(err, "Failed to load products");
     } finally {
@@ -979,6 +1059,29 @@ function PipelinePage() {
       },
     ]));
   }, [buildPreviewKey, metaMultiplication, scripts]);
+
+  const attentionLoadedForPipeline = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pipelineId) return;
+    if (attentionLoadedForPipeline.current !== pipelineId) {
+      attentionLoadedForPipeline.current = pipelineId;
+      setAttentionTimelines({});
+    }
+    for (const card of previewCards) {
+      if (attentionTimelines[card.key]) continue;
+      apiGet(`/pipeline/${pipelineId}/attention-timeline/${card.key}`)
+        .then(async response => {
+          const document = await response.json() as AttentionTimeline;
+          setAttentionTimelines(prev => prev[card.key] ? prev : { ...prev, [card.key]: document });
+        })
+        .catch(() => {
+          setAttentionTimelines(prev => prev[card.key] ? prev : {
+            ...prev,
+            [card.key]: { revision: 0, cues: [] },
+          });
+        });
+    }
+  }, [pipelineId, previewCards, attentionTimelines]);
 
   // Keep activeStyleKey consistent with metaMultiplication. When Meta is ON
   // the user picks between A and B; when OFF, there's only "default". This
@@ -1180,8 +1283,17 @@ function PipelinePage() {
     const selected = catalogProducts.filter(p => selectedCatalogIds.has(p.id));
     if (selected.length === 0) return;
     const newProducts = selected.map(p => ({
+      product_id: p.id,
       title: stripHtml(p.title),
       description: stripHtml(p.description) || "No description available.",
+      images: p.image_urls || (p.image_link ? [p.image_link] : []),
+      brand: p.brand,
+      category: p.category,
+      sku: p.sku,
+      price: String(p.price || ""),
+      sale_price: String(p.sale_price || ""),
+      product_url: p.product_url || "",
+      extra_fields: p.extra_fields || {},
     }));
     setContextProducts(prev => [...prev, ...newProducts]);
     setSelectedCatalogIds(new Set());
@@ -1402,6 +1514,7 @@ function PipelinePage() {
       if (!isMountedRef.current) return;
       setPipelineId(data.pipeline_id);
       setScripts((data.scripts || []).map(formatScript));
+      setScriptNames(defaultScriptNames((data.scripts || []).length));
       setTotalSegmentDuration(data.total_segment_duration || 0);
       setStep(2);
       if (!isMountedRef.current) return;
@@ -1451,6 +1564,7 @@ function PipelinePage() {
       if (!isMountedRef.current) return;
       setPipelineId(data.pipeline_id);
       setScripts(emptyScripts);
+      setScriptNames(defaultScriptNames(emptyScripts.length));
       setTotalSegmentDuration(0);
       setStep(2);
       fetchHistory();
@@ -1720,6 +1834,11 @@ function PipelinePage() {
       source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
       match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
       interstitial_slides: filteredInterstitialSlides,
+      attention_timelines: Object.fromEntries(
+        selectedPreviewCards
+          .filter(card => attentionTimelines[card.key]?.cues.length)
+          .map(card => [card.key, attentionTimelines[card.key]])
+      ),
       pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
       encoding_mode: renderSettings.encoding_mode,
       target_bitrate_kbps: renderSettings.encoding_mode !== "crf" ? renderSettings.target_bitrate_kbps : undefined,
@@ -1960,6 +2079,7 @@ function PipelinePage() {
     setError(null);
     setPipelineId(null);
     setScripts([]);
+    setScriptNames([]);
     setPreviews({});
     setPreviewError(null);
     setSelectedVariants(new Set());
@@ -1978,8 +2098,10 @@ function PipelinePage() {
     // Starting fresh — drop the persisted session/draft so navigating away and
     // back doesn't resurrect the old pipeline.
     try {
-      localStorage.removeItem(PIPELINE_SESSION_KEY);
-      localStorage.removeItem(PIPELINE_DRAFT_KEY);
+      if (currentProfile?.id) {
+        removeWorkspaceStorage(currentProfile.id, PIPELINE_SESSION_KEY);
+        removeWorkspaceStorage(currentProfile.id, PIPELINE_DRAFT_KEY);
+      }
     } catch { /* ignore */ }
   };
 
@@ -2003,6 +2125,7 @@ function PipelinePage() {
     if (selectedHistoryId === id) {
       setSelectedHistoryId(null);
       setHistoryScripts([]);
+      setHistoryScriptNames([]);
       setHistorySelectedScripts(new Set());
       setHistoryPreviewInfo({});
       setHistoryTtsInfo({});
@@ -2016,6 +2139,11 @@ function PipelinePage() {
       const data = await res.json();
       const scriptsArr = data.scripts || data || [];
       setHistoryScripts(scriptsArr);
+      setHistoryScriptNames(
+        data.script_names?.length === scriptsArr.length
+          ? data.script_names
+          : defaultScriptNames(scriptsArr.length),
+      );
       // Select all by default
       setHistorySelectedScripts(new Set(scriptsArr.map((_: string, i: number) => i)));
       // Store preview info for audio indicators
@@ -2058,11 +2186,14 @@ function PipelinePage() {
           if (pipelineId === id) {
             setPipelineId(null);
             setScripts([]);
+            setScriptNames([]);
             setPreviews({});
             setTtsResults({});
             setPreviewError(null);
             setStep(1);
-            try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
+            try {
+              if (currentProfile?.id) removeWorkspaceStorage(currentProfile.id, PIPELINE_SESSION_KEY);
+            } catch { /* ignore */ }
           }
         } catch (err) {
           handleApiError(err, "Failed to delete pipeline");
@@ -2125,6 +2256,7 @@ function PipelinePage() {
       const pid = data.pipeline_id;
       setPipelineId(pid);
       setScripts((data.scripts || []).map(formatScript));
+      setScriptNames(defaultScriptNames((data.scripts || []).length));
 
       // Auto-adopt each TTS library asset into the pipeline
       const newTtsResults: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
@@ -2446,18 +2578,49 @@ function PipelinePage() {
   }, [currentProfile?.id, refreshUserSubtitlePresets]);
 
   // Debounced auto-save scripts to backend
-  const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[]) => {
+  const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[], updatedNames?: string[]) => {
     if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
     scriptSaveTimer.current = setTimeout(async () => {
       try {
         const currentPid = pipelineIdRef.current;
         if (!currentPid) return;
-        await apiPut(`/pipeline/${currentPid}/scripts`, { scripts: updatedScripts });
+        await apiPut(`/pipeline/${currentPid}/scripts`, {
+          scripts: updatedScripts,
+          ...(updatedNames ? { script_names: updatedNames } : {}),
+        });
       } catch {
         // Silent — scripts still work locally, will retry on next edit
       }
     }, 1000);
   }, []);
+
+  const saveScriptNamesToBackend = useCallback((pId: string, names: string[]) => {
+    if (scriptNameSaveTimer.current) clearTimeout(scriptNameSaveTimer.current);
+    scriptNameSaveTimer.current = setTimeout(async () => {
+      try {
+        await apiPatch(`/pipeline/${pId}/script-names`, { script_names: names });
+      } catch {
+        toast.error("Script name could not be saved");
+      }
+    }, 1500);
+  }, []);
+
+  const handleScriptNameChange = useCallback((index: number, value: string) => {
+    setScriptNames((prev) => {
+      const next = [...prev];
+      next[index] = value.slice(0, 80);
+      return next;
+    });
+  }, []);
+
+  const handleScriptNameCommit = useCallback((index: number) => {
+    setScriptNames((prev) => {
+      const next = [...prev];
+      next[index] = next[index]?.trim() || `Script ${index + 1}`;
+      if (pipelineId) saveScriptNamesToBackend(pipelineId, next);
+      return next;
+    });
+  }, [pipelineId, saveScriptNamesToBackend]);
 
   const handleScriptCommit = useCallback((index: number, nextValue: string) => {
     setScripts((prev) => {
@@ -2616,6 +2779,7 @@ function PipelinePage() {
   // History sidebar: import selected scripts
   const handleHistoryImport = async () => {
     const selected = historyScripts.filter((_, i) => historySelectedScripts.has(i));
+    const selectedNames = historyScriptNames.filter((_, i) => historySelectedScripts.has(i));
     if (selected.length === 0) return;
 
     // If all scripts are selected, reuse the existing pipeline (no duplicate)
@@ -2623,6 +2787,11 @@ function PipelinePage() {
       const pid = selectedHistoryId;
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
+      setScriptNames(
+        historyScriptNames.length === historyScripts.length
+          ? historyScriptNames
+          : defaultScriptNames(historyScripts.length),
+      );
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
       const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
       setTtsResults(restored.tts);
@@ -2722,6 +2891,11 @@ function PipelinePage() {
       const pid = data.pipeline_id;
       setPipelineId(pid);
       setScripts((data.scripts || []).map(formatScript));
+      const importedNames = selectedNames.length === selected.length
+        ? selectedNames
+        : defaultScriptNames((data.scripts || []).length);
+      setScriptNames(importedNames);
+      saveScriptNamesToBackend(pid, importedNames);
       setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -2822,6 +2996,7 @@ function PipelinePage() {
       if (sourceSelectionTimer.current) { clearTimeout(sourceSelectionTimer.current); sourceSelectionTimer.current = null; }
       if (ttsLibraryCheckTimer.current) { clearTimeout(ttsLibraryCheckTimer.current); ttsLibraryCheckTimer.current = null; }
       if (scriptSaveTimer.current) { clearTimeout(scriptSaveTimer.current); scriptSaveTimer.current = null; }
+      if (scriptNameSaveTimer.current) { clearTimeout(scriptNameSaveTimer.current); scriptNameSaveTimer.current = null; }
       if (catalogSearchTimer.current) { clearTimeout(catalogSearchTimer.current); catalogSearchTimer.current = null; }
       if (voiceSettingsSaveTimer.current) { clearTimeout(voiceSettingsSaveTimer.current); voiceSettingsSaveTimer.current = null; }
       if (subtitleSaveTimer.current) { clearTimeout(subtitleSaveTimer.current); subtitleSaveTimer.current = null; }
@@ -2865,14 +3040,15 @@ function PipelinePage() {
 
   // Load voice settings from localStorage after hydration
   useEffect(() => {
+    if (!currentProfile?.id) return;
     try {
-      const stability = localStorage.getItem("ef_voice_stability");
-      const similarity = localStorage.getItem("ef_voice_similarity");
-      const style = localStorage.getItem("ef_voice_style");
-      const speed = localStorage.getItem("ef_voice_speed");
-      const boost = localStorage.getItem("ef_voice_speaker_boost");
-      const wps = localStorage.getItem("ef_words_per_subtitle");
-      const elModel = localStorage.getItem("ef_elevenlabs_model");
+      const stability = readWorkspaceStorage(currentProfile.id, "pipeline.voice.stability", "ef_voice_stability");
+      const similarity = readWorkspaceStorage(currentProfile.id, "pipeline.voice.similarity", "ef_voice_similarity");
+      const style = readWorkspaceStorage(currentProfile.id, "pipeline.voice.style", "ef_voice_style");
+      const speed = readWorkspaceStorage(currentProfile.id, "pipeline.voice.speed", "ef_voice_speed");
+      const boost = readWorkspaceStorage(currentProfile.id, "pipeline.voice.speaker-boost", "ef_voice_speaker_boost");
+      const wps = readWorkspaceStorage(currentProfile.id, "pipeline.words-per-subtitle", "ef_words_per_subtitle");
+      const elModel = readWorkspaceStorage(currentProfile.id, "pipeline.elevenlabs-model", "ef_elevenlabs_model");
       const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
       if (stability !== null) setVoiceStability(parseFloat(stability));
       if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
@@ -2881,11 +3057,11 @@ function PipelinePage() {
       if (boost !== null) setVoiceSpeakerBoost(boost === "true");
       if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
       if (elModel !== null) setElevenlabsModel(elModel);
-      const msd = localStorage.getItem("ef_min_segment_duration");
+      const msd = readWorkspaceStorage(currentProfile.id, "pipeline.min-segment-duration", "ef_min_segment_duration");
       if (msd !== null) setMinSegmentDuration(parseFloat(msd));
-      const uri = localStorage.getItem("ef_ultra_rapid_intro");
+      const uri = readWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", "ef_ultra_rapid_intro");
       if (uri !== null) setUltraRapidIntro(uri === "true");
-      const preset = localStorage.getItem("ef_assembly_preset");
+      const preset = readWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", "ef_assembly_preset");
       if (preset === "keyword_strict" || preset === "balanced" || preset === "max_variety" || preset === "shuffle") {
         setAssemblyPreset(preset);
       }
@@ -2896,7 +3072,7 @@ function PipelinePage() {
       // FE-16: SecurityError or QuotaExceededError — use defaults
     }
     setVoiceSettingsLoaded(true);
-  }, []);
+  }, [currentProfile?.id]);
 
   // Keep voice settings ref in sync for debounced save (Bug #87)
   useEffect(() => {
@@ -2905,18 +3081,18 @@ function PipelinePage() {
 
   // Persist voice settings to localStorage (skip initial render before load)
   useEffect(() => {
-    if (!voiceSettingsLoaded) return;
-    localStorage.setItem("ef_voice_stability", String(voiceStability));
-    localStorage.setItem("ef_voice_similarity", String(voiceSimilarity));
-    localStorage.setItem("ef_voice_style", String(voiceStyle));
-    localStorage.setItem("ef_voice_speed", String(voiceSpeed));
-    localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
-    localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
-    localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
-    localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
-    localStorage.setItem("ef_elevenlabs_model", elevenlabsModel);
-    localStorage.setItem("ef_assembly_preset", assemblyPreset);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset]);
+    if (!voiceSettingsLoaded || !currentProfile?.id) return;
+    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.stability", String(voiceStability));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.similarity", String(voiceSimilarity));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.style", String(voiceStyle));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.speed", String(voiceSpeed));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.speaker-boost", String(voiceSpeakerBoost));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.words-per-subtitle", String(wordsPerSubtitle));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.min-segment-duration", String(minSegmentDuration));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", String(ultraRapidIntro));
+    writeWorkspaceStorage(currentProfile.id, "pipeline.elevenlabs-model", elevenlabsModel);
+    writeWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", assemblyPreset);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset, currentProfile?.id]);
 
   // Debounced auto-save voice settings to profile.
   // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
@@ -3469,6 +3645,10 @@ function PipelinePage() {
     step2HeaderRef,
     scripts,
     setScripts,
+    scriptNames,
+    setScriptNames,
+    handleScriptNameChange,
+    handleScriptNameCommit,
     regeneratingAllScripts,
     regeneratingAllScriptsIndex,
     handleRegenerateAllScripts,
@@ -3604,8 +3784,10 @@ function PipelinePage() {
     currentProfile,
     getPreviewSubtitleSettingsFor,
     interstitialSlides,
+    attentionTimelines,
     EMPTY_SLIDES,
     getInterstitialSlidesChangeHandler,
+    getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
@@ -3669,32 +3851,40 @@ function PipelinePage() {
     setHistorySelectedScripts,
     historySelectedScripts,
     handleHistoryImport,
+    pipelineLayout,
   };
 
+  const isEditingWorkspace = step >= 1 && step <= 3;
+  // Preview always needs the wide live-editing workspace. The preference is
+  // applied elsewhere, where a linear reading order is more approachable.
+  const usesWideWorkspace = step === 3 || pipelineLayout === "workspace";
+  const usesFixedWorkspace = isEditingWorkspace && usesWideWorkspace;
+
   return (
-    <div className="min-h-full bg-background">
-      <div className={`mx-auto w-full px-4 py-5 sm:px-6 lg:px-8 ${
-        step === 1 || step === 3 ? "max-w-none 2xl:px-10" : "max-w-[1600px]"
+    <div className={`min-h-full bg-background ${
+      usesFixedWorkspace
+        ? "min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:overflow-hidden"
+        : ""
+    }`}>
+      {/* One shared toolbar keeps the pipeline identity and progress stable at every step. */}
+      <PipelineStepper ctx={pipelineCtx} />
+
+      <div className={`mx-auto w-full ${
+        usesFixedWorkspace
+          ? "max-w-none p-0 min-[1280px]:min-h-0 min-[1280px]:flex-1"
+          : "max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8"
       }`}>
-        {/* Header */}
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-bold">
-              <Film className="h-6 w-6 text-primary" />
-              Multi-Variant Pipeline
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              End-to-end workflow: generate scripts {'\u2192'} preview matches {'\u2192'} batch render
-            </p>
-          </div>
-        </div>
-
-        {/* Step indicator */}
-        <PipelineStepper ctx={pipelineCtx} />
-
         {/* Main content + History sidebar */}
-        <div className="grid grid-cols-1 gap-5 min-[1280px]:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="min-w-0">
+        <WorkspaceSplit
+          splitId="history"
+          enabled={usesFixedWorkspace}
+          fallbackClassName={`grid grid-cols-1 ${usesWideWorkspace ? "min-[1280px]:grid-cols-[minmax(0,1fr)_20rem]" : ""} ${
+            usesFixedWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:bg-border" : "gap-5"
+          }`}
+          leftSizing={{ minSize: "40%" }}
+          rightSizing={{ defaultSize: "20rem", minSize: "13rem" }}
+        >
+        <div className={`min-w-0 ${usesFixedWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0" : ""}`}>
 
         {/* Step 1 — Idea Input */}
         {step === 1 && <Step1Script ctx={pipelineCtx} />}
@@ -3711,11 +3901,15 @@ function PipelinePage() {
         </div>{/* end main content */}
 
         {/* History Sidebar */}
-          <div className={step === 2 || step === 3 ? "min-[1280px]:pt-[3.65rem]" : ""}>
+          <div className={
+            usesFixedWorkspace
+              ? "min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:overflow-hidden"
+              : ""
+          }>
             <PipelineHistorySidebar ctx={pipelineCtx} />
           </div>
 
-        </div>{/* end flex container */}
+        </WorkspaceSplit>{/* end main + history split */}
       </div>
 
       {/* Product Picker Dialog — gated: association is Gomag-catalog only */}

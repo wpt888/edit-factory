@@ -57,6 +57,14 @@ class _ProxyRepo:
         self.videos[video_id].update(data)
 
 
+class _RecordingRepo:
+    def __init__(self):
+        self.updates = []
+
+    def update_source_video(self, video_id, data):
+        self.updates.append((video_id, data))
+
+
 def test_generate_preview_proxy_success(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
@@ -104,6 +112,83 @@ def test_generate_preview_proxy_failure_does_not_raise(tmp_path, monkeypatch):
     assert result["preview_proxy_status"] == "failed"
     assert result["preview_proxy_path"] is None
     assert "bad codec" in result["preview_proxy_error"]
+
+
+def test_local_video_is_ready_before_preview_proxy_generation(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    thumbnail = tmp_path / "source_videos" / "video-id_thumb.jpg"
+    repo = _RecordingRepo()
+    events = []
+
+    monkeypatch.setattr(segments_routes, "get_repository", lambda: repo)
+    monkeypatch.setattr(
+        segments_routes,
+        "get_settings",
+        lambda: SimpleNamespace(base_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        segments_routes,
+        "_get_video_info",
+        lambda _path: {
+            "duration": 42.0,
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "file_size_bytes": 5,
+        },
+    )
+
+    def _thumbnail(_source, output, timestamp):
+        output.write_bytes(b"thumb")
+        return True
+
+    def _proxy(video_id, video_path, profile_id):
+        events.append(("proxy", repo.updates[-1][1]["status"]))
+
+    monkeypatch.setattr(segments_routes, "_generate_thumbnail", _thumbnail)
+    monkeypatch.setattr(segments_routes, "_generate_preview_proxy_background", _proxy)
+
+    segments_routes._process_local_video_background(
+        "video-id", source, "profile-id"
+    )
+
+    assert repo.updates[0][1]["status"] == "ready"
+    assert repo.updates[0][1]["duration"] == 42.0
+    assert repo.updates[0][1]["thumbnail_path"] == str(thumbnail)
+    assert events == [("proxy", "ready")]
+
+
+def test_preview_proxy_background_reserves_output_path(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    repo = _RecordingRepo()
+
+    monkeypatch.setattr(segments_routes, "get_repository", lambda: repo)
+    monkeypatch.setattr(
+        segments_routes,
+        "get_settings",
+        lambda: SimpleNamespace(base_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        segments_routes,
+        "_generate_preview_proxy",
+        lambda _video_id, _source: {
+            "preview_proxy_path": str(tmp_path / "finished.mp4"),
+            "preview_proxy_status": "ready",
+            "preview_proxy_error": None,
+            "preview_proxy_created_at": "now",
+        },
+    )
+
+    segments_routes._generate_preview_proxy_background(
+        "video-id", source, "profile-id"
+    )
+
+    pending = repo.updates[0][1]
+    assert pending["preview_proxy_status"] == "pending"
+    assert pending["preview_proxy_path"].endswith("video-id_preview.mp4")
+    assert repo.updates[1][1]["preview_proxy_status"] == "ready"
 
 
 def test_eager_preview_proxies_schedule_unique_owned_unproxied_videos(tmp_path, monkeypatch):

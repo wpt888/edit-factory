@@ -5,14 +5,18 @@ declare global {
   interface Window {
     editFactory?: {
       isDesktop: boolean;
+      /** Open an HTTP(S) URL in the user's default browser. */
+      openExternal: (url: string) => Promise<boolean>;
       /** Native multi-select video picker. [] = user cancelled. */
       selectVideoFiles: () => Promise<string[]>;
-      listSystemFonts: () => Promise<Array<{
-        family: string;
-        fullName: string;
-        postscriptName: string;
-        style: string;
-      }>>;
+      listSystemFonts: () => Promise<
+        Array<{
+          family: string;
+          fullName: string;
+          postscriptName: string;
+          style: string;
+        }>
+      >;
       /** Custom title bar controls (main window runs frameless). */
       window: {
         minimize: () => void;

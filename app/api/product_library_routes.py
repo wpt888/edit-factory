@@ -16,17 +16,26 @@ Endpoints:
 """
 import asyncio
 import base64
+import json
 import logging
 import mimetypes
 import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.product_library import get_product_library
+from app.services.product_importer import (
+    decode_mapping,
+    google_sheet_csv_url,
+    normalize_rows,
+    parse_product_data,
+    suggest_mapping,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,7 @@ router = APIRouter(prefix="/product-library", tags=["product-library"])
 _ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 _MAX_IMAGES_PER_PRODUCT = 10
 _MAX_VISION_IMAGES = 3  # cap images sent to Gemini per request
+_MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +54,13 @@ _MAX_VISION_IMAGES = 3  # cap images sent to Gemini per request
 def _serialize(product: dict) -> dict:
     """Add image_urls (API-relative) so the frontend can render thumbnails."""
     pid = product["id"]
+    local_urls = [
+        f"/product-library/{pid}/image/{i}"
+        for i in range(len(product.get("image_paths") or []))
+    ]
     return {
         **product,
-        "image_urls": [
-            f"/product-library/{pid}/image/{i}"
-            for i in range(len(product.get("image_paths") or []))
-        ],
+        "image_urls": [*local_urls, *(product.get("image_links") or [])],
     }
 
 
@@ -136,6 +147,133 @@ def _generate_description_sync(title: str, images: List[tuple], profile_id: str)
 # Routes
 # ---------------------------------------------------------------------------
 
+async def _read_import_payload(
+    source_type: str,
+    source_url: str,
+    upload: Optional[UploadFile],
+) -> tuple[bytes, str, str]:
+    if upload and upload.filename:
+        data = await upload.read()
+        if len(data) > _MAX_IMPORT_BYTES:
+            raise HTTPException(status_code=413, detail="Import file cannot exceed 50 MB")
+        return data, upload.filename, source_type
+    url = source_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Choose a file or provide a source URL")
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Source URL must use http or https")
+    fetch_url = google_sheet_csv_url(url) if source_type == "google_sheets" else url
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            response = await client.get(fetch_url)
+            response.raise_for_status()
+            data = response.content
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not download source: {exc}") from exc
+    if len(data) > _MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Downloaded source cannot exceed 50 MB")
+    filename = Path(url.split("?", 1)[0]).name or "products.csv"
+    effective_type = "csv" if source_type == "google_sheets" else source_type
+    return data, filename, effective_type
+
+
+@router.post("/import/preview")
+async def preview_import(
+    source_type: str = Form(...),
+    source_url: str = Form(default=""),
+    file: Optional[UploadFile] = File(default=None),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Read headers and sample rows without persisting anything."""
+    del profile
+    data, filename, effective_type = await _read_import_payload(source_type, source_url, file)
+    try:
+        headers, rows = await asyncio.to_thread(parse_product_data, data, effective_type, filename)
+    except Exception as exc:
+        logger.warning("Product import preview failed: %s", exc)
+        raise HTTPException(status_code=400, detail=f"Could not parse source: {exc}") from exc
+    if not headers:
+        raise HTTPException(status_code=400, detail="The source has no header row")
+    return {
+        "headers": headers,
+        "rows": rows[:20],
+        "row_count": len(rows),
+        "suggested_mapping": suggest_mapping(headers),
+    }
+
+
+@router.post("/import")
+async def import_products(
+    name: str = Form(...),
+    source_type: str = Form(...),
+    mapping_json: str = Form(...),
+    source_url: str = Form(default=""),
+    file: Optional[UploadFile] = File(default=None),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Import a flexible table while retaining every original column."""
+    try:
+        mapping = decode_mapping(mapping_json)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    data, filename, effective_type = await _read_import_payload(source_type, source_url, file)
+    try:
+        headers, rows = await asyncio.to_thread(parse_product_data, data, effective_type, filename)
+        normalized, errors = normalize_rows(rows, mapping)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not import source: {exc}") from exc
+
+    if rows and not normalized:
+        raise HTTPException(status_code=400, detail="No valid products found; check the Product name mapping")
+    store = get_product_library()
+    source = store.create_source(
+        profile.profile_id,
+        name.strip() or "Product import",
+        source_type,
+        source_url.strip(),
+        mapping,
+        headers,
+    )
+    result = store.import_products(profile.profile_id, source, normalized)
+    store.set_source_status(source["id"], profile.profile_id, "idle")
+    return {**result, "skipped": len(errors), "errors": errors[:100], "source": source}
+
+
+@router.get("/sources")
+async def list_product_sources(profile: ProfileContext = Depends(get_profile_context)):
+    return {"sources": get_product_library().list_sources(profile.profile_id)}
+
+
+@router.post("/sources/{source_id}/sync")
+async def sync_product_source(
+    source_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    store = get_product_library()
+    source = store.get_source(source_id, profile.profile_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Product source not found")
+    if not source.get("source_url"):
+        raise HTTPException(status_code=400, detail="Uploaded files must be imported again")
+    store.set_source_status(source_id, profile.profile_id, "syncing")
+    try:
+        data, filename, effective_type = await _read_import_payload(
+            source["source_type"], source["source_url"], None
+        )
+        headers, rows = await asyncio.to_thread(parse_product_data, data, effective_type, filename)
+        normalized, errors = normalize_rows(rows, source["mapping"])
+        if rows and not normalized:
+            raise HTTPException(status_code=400, detail="No valid products found; source was not changed")
+        result = store.import_products(profile.profile_id, source, normalized)
+        store.set_source_status(source_id, profile.profile_id, "idle")
+        return {**result, "skipped": len(errors), "errors": errors[:100]}
+    except HTTPException:
+        store.set_source_status(source_id, profile.profile_id, "error", "Source sync failed")
+        raise
+    except Exception as exc:
+        store.set_source_status(source_id, profile.profile_id, "error", str(exc))
+        raise HTTPException(status_code=400, detail=f"Could not sync source: {exc}") from exc
+
 @router.post("")
 async def create_product(
     title: str = Form(...),
@@ -159,9 +297,29 @@ async def create_product(
 
 
 @router.get("")
-async def list_products(profile: ProfileContext = Depends(get_profile_context)):
+async def list_products(
+    search: str = Query(default="", max_length=200),
+    page: Optional[int] = Query(default=None, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+    profile: ProfileContext = Depends(get_profile_context),
+):
     store = get_product_library()
-    return {"products": [_serialize(p) for p in store.list(profile.profile_id)]}
+    if page is None:
+        products = store.list(profile.profile_id, search=search)
+        total = len(products)
+        return {"products": [_serialize(p) for p in products], "pagination": {"page": 1, "page_size": total, "total": total, "total_pages": 1}}
+    total = store.count(profile.profile_id, search)
+    products = store.list(
+        profile.profile_id,
+        search=search,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    return {
+        "products": [_serialize(p) for p in products],
+        "pagination": {"page": page, "page_size": page_size, "total": total, "total_pages": total_pages},
+    }
 
 
 @router.post("/generate-description")

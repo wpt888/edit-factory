@@ -441,6 +441,7 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     variant_count   INTEGER NOT NULL DEFAULT 3,
     keyword_count   INTEGER NOT NULL DEFAULT 0,
     scripts         TEXT NOT NULL DEFAULT '[]',
+    script_names    TEXT NOT NULL DEFAULT '[]',
     previews        TEXT NOT NULL DEFAULT '{}',
     render_jobs     TEXT NOT NULL DEFAULT '{}',
     tts_previews    TEXT NOT NULL DEFAULT '{}',
@@ -461,6 +462,9 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     -- Per-Meta-version subtitle overrides (from 042)
     subtitle_settings_by_key TEXT,
 
+    -- Versioned attention overlay documents, keyed by PreviewKey.
+    attention_timeline TEXT NOT NULL DEFAULT '{}',
+
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',
 
@@ -475,6 +479,17 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
 );
 
 CREATE INDEX IF NOT EXISTS idx_editai_pipelines_profile_id ON editai_pipelines(profile_id);
+
+CREATE TABLE IF NOT EXISTS editai_attention_templates (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_attention_templates_profile ON editai_attention_templates(profile_id);
 
 -- =====================================================
 -- TABLE: video_caption_templates
@@ -863,3 +878,83 @@ CREATE TABLE IF NOT EXISTS editai_wiki_pages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_pages_profile_slug ON editai_wiki_pages(profile_id, slug);
 CREATE INDEX IF NOT EXISTS idx_wiki_pages_profile_category ON editai_wiki_pages(profile_id, category, sort_order);
+
+-- =====================================================
+-- TABLES: ElevenLabs tenant governance
+-- Source: migration 053
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS editai_elevenlabs_voice_access (
+    id              TEXT PRIMARY KEY,
+    profile_id      TEXT NOT NULL,
+    voice_id        TEXT NOT NULL,
+    voice_name      TEXT,
+    category        TEXT,
+    language        TEXT,
+    preview_url     TEXT,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    assigned_by     TEXT NOT NULL DEFAULT 'admin',
+    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(profile_id, voice_id),
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_elevenlabs_voice_access_profile
+ON editai_elevenlabs_voice_access(profile_id, is_active);
+
+CREATE TABLE IF NOT EXISTS editai_elevenlabs_credit_balances (
+    profile_id       TEXT PRIMARY KEY,
+    credit_limit     INTEGER NOT NULL CHECK (credit_limit >= -1),
+    credits_used     INTEGER NOT NULL DEFAULT 0 CHECK (credits_used >= 0),
+    credits_reserved INTEGER NOT NULL DEFAULT 0 CHECK (credits_reserved >= 0),
+    period_start     TEXT NOT NULL,
+    period_end       TEXT NOT NULL,
+    created_at       TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at       TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS editai_elevenlabs_credit_reservations (
+    id                  TEXT PRIMARY KEY,
+    profile_id          TEXT NOT NULL,
+    reserved_credits    INTEGER NOT NULL CHECK (reserved_credits >= 0),
+    actual_credits      INTEGER,
+    text_characters     INTEGER NOT NULL DEFAULT 0,
+    model_id            TEXT,
+    voice_id            TEXT,
+    provider_request_id TEXT,
+    status              TEXT NOT NULL DEFAULT 'reserved'
+                        CHECK (status IN ('reserved', 'settled', 'released', 'expired')),
+    period_start        TEXT NOT NULL,
+    created_at          TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    settled_at          TEXT,
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_elevenlabs_credit_reservations_profile
+ON editai_elevenlabs_credit_reservations(profile_id, created_at DESC);
+
+-- Backfill voice ownership from the profile defaults that existed before the
+-- governance tables. INSERT OR IGNORE keeps startup schema execution idempotent.
+INSERT OR IGNORE INTO editai_elevenlabs_voice_access (
+    id, profile_id, voice_id, voice_name, assigned_by
+)
+SELECT
+    lower(hex(randomblob(16))),
+    p.id,
+    CASE WHEN json_valid(p.tts_settings) THEN COALESCE(
+        json_extract(p.tts_settings, '$.elevenlabs.voice_id'),
+        json_extract(p.tts_settings, '$.voice_id')
+    ) END,
+    CASE WHEN json_valid(p.tts_settings) THEN COALESCE(
+        json_extract(p.tts_settings, '$.elevenlabs.voice_name'),
+        json_extract(p.tts_settings, '$.voice_name')
+    ) END,
+    'migration'
+FROM profiles p
+WHERE json_valid(p.tts_settings)
+AND COALESCE(
+    json_extract(p.tts_settings, '$.elevenlabs.voice_id'),
+    json_extract(p.tts_settings, '$.voice_id')
+) IS NOT NULL;

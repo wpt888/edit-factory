@@ -56,3 +56,12 @@ a separate follow-up.
 ## Verification
 
 `npx tsc --noEmit` in `frontend/` passed with no errors after each change.
+
+## Follow-up: input, project, and output terminology (2026-07-13)
+
+The initial `Local Projects` rename still described a flat library of rendered
+clips and generated images, not actual project records. The navigation and page
+copy now use `Local Exports`, while the source-video editor is labeled
+`Footage & Segments`. The misleading back link from the Segments workspace to
+the exports library was also removed, so the two destinations are presented as
+sibling workflows rather than parent and child.

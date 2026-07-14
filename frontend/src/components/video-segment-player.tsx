@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
-import { API_URL, apiGet } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -43,6 +43,7 @@ interface Segment {
   end_time: number;
   keywords: string[];
   thumbnail_path?: string;
+  transforms?: SegmentTransformPreview | null;
   isTemp?: boolean; // For segment being created
 }
 
@@ -60,7 +61,6 @@ interface SegmentTransformPreview {
   pan_y: number;
   flip_h: boolean;
   flip_v: boolean;
-  opacity: number;
 }
 
 interface ProductGroup {
@@ -143,6 +143,7 @@ export function VideoSegmentPlayer({
 
   // Scrubbing state (drag on timeline)
   const [isScrubbing, setIsScrubbing] = useState(false); // CSS cursor class + scrub useEffect gate
+  const [scrubbedSegment, setScrubbedSegment] = useState<Segment | null | undefined>(undefined);
   const wasPlayingBeforeScrub = useRef(false);
 
   // Scrub optimization refs — bypass React re-renders during scrubbing
@@ -156,9 +157,11 @@ export function VideoSegmentPlayer({
   // Segment resize state
   const [resizingInfo, setResizingInfo] = useState<{
     segmentId: string;
-    edge: 'start' | 'end';
+    edge: 'start' | 'end' | 'move';
     originalStart: number;
     originalEnd: number;
+    grabOffset?: number;
+    startClientX?: number;
   } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ start: number; end: number } | null>(null);
   const resizePreviewRef = useRef<{ start: number; end: number } | null>(null);
@@ -196,36 +199,13 @@ export function VideoSegmentPlayer({
 
   const timelineFrames = useMemo(() => {
     const frameCount = 12;
-    const candidates = segments
-      .filter((segment) => segment.thumbnail_path)
-      .map((segment) => ({
-        ...segment,
-        thumbnailUrl: `${API_URL}/segments/files/${encodeURIComponent(
-          segment.thumbnail_path!.split(/[\\/]/).pop() || segment.thumbnail_path!
-        )}`,
-      }));
-
-    return Array.from({ length: frameCount }, (_, index) => {
-      const time = visibleStart + ((index + 0.5) / frameCount) * visibleDuration;
-      const exact = candidates.find(
-        (segment) => time >= segment.start_time && time <= segment.end_time
-      );
-      if (exact) return exact.thumbnailUrl;
-
-      const nearest = candidates.reduce<(typeof candidates)[number] | null>(
-        (closest, segment) => {
-          if (!closest) return segment;
-          const midpoint = (segment.start_time + segment.end_time) / 2;
-          const closestMidpoint = (closest.start_time + closest.end_time) / 2;
-          return Math.abs(midpoint - time) < Math.abs(closestMidpoint - time)
-            ? segment
-            : closest;
-        },
-        null
-      );
-      return nearest?.thumbnailUrl || timelineThumbnailUrl || null;
-    });
-  }, [segments, timelineThumbnailUrl, visibleDuration, visibleStart]);
+    // This lane represents the source video, so its artwork must not depend on
+    // saved segments. Segment thumbnails are protected API resources and CSS
+    // background requests cannot attach the API client's auth headers; as soon
+    // as the first segment was saved, those URLs replaced the source thumbnail
+    // and left the whole filmstrip black.
+    return Array.from({ length: frameCount }, () => timelineThumbnailUrl || null);
+  }, [timelineThumbnailUrl]);
 
   // Stable refs for scrub callbacks (avoids re-registering window listeners on zoom)
   const visibleStartRef = useRef(visibleStart);
@@ -791,6 +771,18 @@ export function VideoSegmentPlayer({
     return visibleStartRef.current + (percent * visibleDurationRef.current);
   }, []);
 
+  // Keep the transform preview in sync while scrubbing without re-rendering for
+  // every mouse movement. React state changes only when the playhead crosses a
+  // segment boundary (including entering or leaving an empty timeline gap).
+  const updateScrubbedSegment = useCallback((time: number) => {
+    const nextSegment = segments.find(
+      (segment) => time >= segment.start_time && time < segment.end_time
+    ) ?? null;
+    setScrubbedSegment((previousSegment) =>
+      previousSegment === nextSegment ? previousSegment : nextSegment
+    );
+  }, [segments]);
+
   // Start scrubbing on mousedown
   const handleTimelineMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -807,9 +799,10 @@ export function VideoSegmentPlayer({
     const time = getTimeFromMouseEvent(e);
     if (time !== null) {
       updatePlayheadDOM(time);
+      updateScrubbedSegment(time);
       throttledSeek(time);
     }
-  }, [isPlaying, getTimeFromMouseEvent, updatePlayheadDOM, throttledSeek]);
+  }, [isPlaying, getTimeFromMouseEvent, updatePlayheadDOM, updateScrubbedSegment, throttledSeek]);
 
   // Update position during scrub
   useEffect(() => {
@@ -819,6 +812,7 @@ export function VideoSegmentPlayer({
       const time = getTimeFromMouseEvent(e);
       if (time !== null) {
         updatePlayheadDOM(time);
+        updateScrubbedSegment(time);
         throttledSeek(time);
       }
     };
@@ -838,6 +832,7 @@ export function VideoSegmentPlayer({
       // Final precise seek + sync React state
       seekTo(currentTimeRef.current);
       setCurrentTime(currentTimeRef.current);
+      setScrubbedSegment(undefined);
       setIsScrubbing(false);
 
       // Resume playback if was playing before scrub
@@ -855,9 +850,36 @@ export function VideoSegmentPlayer({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isScrubbing, getTimeFromMouseEvent, throttledSeek, updatePlayheadDOM, seekTo]);
+  }, [isScrubbing, getTimeFromMouseEvent, throttledSeek, updatePlayheadDOM, updateScrubbedSegment, seekTo]);
 
-  // Segment resize drag logic
+  // Segment move/resize drag logic
+  const startMove = useCallback((e: React.MouseEvent, segment: Segment) => {
+    e.stopPropagation();
+    e.preventDefault();
+    seekTo(segment.start_time);
+    onSegmentClick?.(segment);
+
+    if (!segment.id || !onSegmentResize) return;
+    const pointerTime = getTimeFromMouseEvent(e);
+    if (pointerTime === null) return;
+
+    wasPlayingBeforeResize.current = isPlaying;
+    if (videoRef.current && isPlaying) {
+      videoRef.current.pause();
+    }
+    setResizingInfo({
+      segmentId: segment.id,
+      edge: 'move',
+      originalStart: segment.start_time,
+      originalEnd: segment.end_time,
+      grabOffset: pointerTime - segment.start_time,
+      startClientX: e.clientX,
+    });
+    const initial = { start: segment.start_time, end: segment.end_time };
+    setResizePreview(initial);
+    resizePreviewRef.current = initial;
+  }, [getTimeFromMouseEvent, isPlaying, onSegmentClick, onSegmentResize, seekTo]);
+
   const startResize = useCallback((e: React.MouseEvent, segment: Segment, edge: 'start' | 'end') => {
     if (!segment.id || !onSegmentResize) return;
     e.stopPropagation();
@@ -881,6 +903,11 @@ export function VideoSegmentPlayer({
     if (!resizingInfo) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (
+        resizingInfo.edge === 'move' &&
+        Math.abs(e.clientX - (resizingInfo.startClientX ?? e.clientX)) < 3
+      ) return;
+
       const time = getTimeFromMouseEvent(e);
       if (time === null) return;
       const clampedTime = Math.max(0, Math.min(safeDuration, time));
@@ -889,7 +916,15 @@ export function VideoSegmentPlayer({
         if (!prev) return prev;
         const MIN_GAP = 0.1;
         let updated: { start: number; end: number };
-        if (resizingInfo.edge === 'start') {
+        if (resizingInfo.edge === 'move') {
+          const segmentDuration = resizingInfo.originalEnd - resizingInfo.originalStart;
+          const maxStart = Math.max(0, safeDuration - segmentDuration);
+          const newStart = Math.max(
+            0,
+            Math.min(maxStart, clampedTime - (resizingInfo.grabOffset ?? 0))
+          );
+          updated = { start: newStart, end: newStart + segmentDuration };
+        } else if (resizingInfo.edge === 'start') {
           const newStart = Math.min(clampedTime, prev.end - MIN_GAP);
           updated = { start: newStart, end: prev.end };
         } else {
@@ -905,7 +940,11 @@ export function VideoSegmentPlayer({
 
     const handleMouseUp = () => {
       const finalPreview = resizePreviewRef.current;
-      if (finalPreview && onSegmentResize) {
+      const positionChanged = finalPreview && (
+        Math.abs(finalPreview.start - resizingInfo.originalStart) > 0.0005 ||
+        Math.abs(finalPreview.end - resizingInfo.originalEnd) > 0.0005
+      );
+      if (finalPreview && positionChanged && onSegmentResize) {
         onSegmentResize(resizingInfo.segmentId, finalPreview.start, finalPreview.end);
       }
       setResizingInfo(null);
@@ -1066,25 +1105,37 @@ export function VideoSegmentPlayer({
     }
   }, [waveformData, visibleStart, visibleEnd, voiceRegions, showWaveform, showVoiceOverlay, resizeCounter, safeDuration, segments]);
 
-  // Handle segment click
-  const handleSegmentClick = (e: React.MouseEvent, segment: Segment) => {
-    e.stopPropagation(); // Prevent timeline seek
-    seekTo(segment.start_time);
-    onSegmentClick?.(segment);
-  };
+  // Resolve transforms from the playhead position, not only from the segment
+  // selected in the editor. Unsaved edits still take precedence while the
+  // playhead is inside the selected segment; gaps use the source video as-is.
+  const timelineTransforms = useMemo(() => {
+    const segmentAtPlayhead = scrubbedSegment !== undefined
+      ? scrubbedSegment
+      : segments.find(
+          (segment) => currentTime >= segment.start_time && currentTime < segment.end_time
+        );
+    if (!segmentAtPlayhead) return undefined;
 
-  // Build video transform style combining active transforms + preview zoom/pan
+    const isSelectedSegment = currentSegment?.id !== undefined
+      ? segmentAtPlayhead.id === currentSegment.id
+      : segmentAtPlayhead === currentSegment;
+
+    if (isSelectedSegment && activeTransforms) return activeTransforms;
+    return segmentAtPlayhead.transforms ?? undefined;
+  }, [segments, currentTime, scrubbedSegment, currentSegment, activeTransforms]);
+
+  // Build video transform style combining timeline transforms + preview zoom/pan
   // All transforms (scale, rotation, pan, flip) use CSS transform inside a clipping resolution frame
   const videoStyle = useMemo<React.CSSProperties>(() => {
     const transforms: string[] = [];
-    if (activeTransforms) {
+    if (timelineTransforms) {
       // Order: translate → rotate → scale → flip (pan operates in original coordinate space)
-      if (activeTransforms.pan_x || activeTransforms.pan_y)
-        transforms.push(`translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`);
-      if (activeTransforms.rotation) transforms.push(`rotate(${activeTransforms.rotation}deg)`);
-      if (activeTransforms.scale !== 1.0) transforms.push(`scale(${activeTransforms.scale})`);
-      if (activeTransforms.flip_h) transforms.push("scaleX(-1)");
-      if (activeTransforms.flip_v) transforms.push("scaleY(-1)");
+      if (timelineTransforms.pan_x || timelineTransforms.pan_y)
+        transforms.push(`translate(${timelineTransforms.pan_x}px, ${timelineTransforms.pan_y}px)`);
+      if (timelineTransforms.rotation) transforms.push(`rotate(${timelineTransforms.rotation}deg)`);
+      if (timelineTransforms.scale !== 1.0) transforms.push(`scale(${timelineTransforms.scale})`);
+      if (timelineTransforms.flip_h) transforms.push("scaleX(-1)");
+      if (timelineTransforms.flip_v) transforms.push("scaleY(-1)");
     }
     // Video zoom (preview zoom, separate from segment transforms)
     if (videoZoom !== 1) transforms.push(`scale(${videoZoom})`);
@@ -1093,19 +1144,18 @@ export function VideoSegmentPlayer({
     return {
       transform: transforms.length > 0 ? transforms.join(" ") : undefined,
       transformOrigin: 'center center',
-      opacity: activeTransforms?.opacity,
-      transition: (isDraggingVideo || activeTransforms) ? undefined : "transform 0.15s ease, opacity 0.15s ease",
+      transition: (isDraggingVideo || timelineTransforms) ? undefined : "transform 0.15s ease",
     };
-  }, [activeTransforms, videoZoom, videoPanX, videoPanY, isDraggingVideo]);
+  }, [timelineTransforms, videoZoom, videoPanX, videoPanY, isDraggingVideo]);
 
   return (
-    <div ref={containerRef} className="flex h-full min-h-0 flex-col gap-2 rounded-xl border border-border/80 bg-card/60 p-2 shadow-sm">
+    <div ref={containerRef} className="flex h-full min-h-0 flex-col gap-1 bg-card p-1">
       <ResizablePanelGroup id="source-video-timeline-layout" orientation="vertical" className="min-h-0">
       <ResizablePanel id="source-video-preview" defaultSize="68%" minSize={160} className="min-h-0">
       {/* Source video with playback controls integrated into the picture. */}
       <div
         ref={videoContainerRef}
-        className={`group relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black shadow-inner ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        className={`group relative flex h-full min-h-0 flex-col overflow-hidden bg-black ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       >
         <div
           className="relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden"
@@ -1219,14 +1269,14 @@ export function VideoSegmentPlayer({
       </div>
       </ResizablePanel>
 
-      <ResizableHandle orientation="vertical" withHandle />
+      <ResizableHandle orientation="vertical" className="h-px bg-border/70" />
 
       <ResizablePanel id="source-video-timeline" defaultSize={190} minSize={150} maxSize="55%" className="min-h-0">
       <div className="flex h-full min-h-0 flex-col gap-1 pt-1">
       {/* Filmstrip timeline: time ruler, source frames, waveform and numbered ranges. */}
       <div
         ref={timelineRef}
-        className={`relative min-h-[108px] flex-1 overflow-hidden rounded-xl border border-border/80 bg-background/80 px-2 shadow-inner select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`relative min-h-[108px] flex-1 overflow-hidden border-y border-border/60 bg-background/80 px-2 select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         onMouseDown={handleTimelineMouseDown}
         aria-label="Source video timeline"
       >
@@ -1317,12 +1367,15 @@ export function VideoSegmentPlayer({
           const style = getSegmentStyle(segment);
           if (style.display === 'none') return null;
           const isBeingResized = resizingInfo?.segmentId === segment.id;
+          const isBeingMoved = isBeingResized && resizingInfo?.edge === 'move';
           const displayStart = isBeingResized && resizePreview ? resizePreview.start : segment.start_time;
           const displayEnd = isBeingResized && resizePreview ? resizePreview.end : segment.end_time;
           return (
             <div
               key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
-              className={`absolute top-7 z-20 h-[84px] cursor-pointer rounded-[5px] border-2 ${
+              className={`absolute top-7 z-20 h-[84px] rounded-[5px] border-2 ${
+                isBeingMoved ? 'cursor-grabbing' : 'cursor-grab'
+              } ${
                 isBeingResized ? '' : 'transition-[background-color,box-shadow]'
               } ${
                 currentSegment?.id === segment.id
@@ -1330,8 +1383,8 @@ export function VideoSegmentPlayer({
                   : "border-primary/90 bg-primary/10 hover:bg-primary/20"
               }`}
               style={style}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => handleSegmentClick(e, segment)}
+              onMouseDown={(e) => startMove(e, segment)}
+              onClick={(e) => e.stopPropagation()}
               title={`${formatTime(displayStart)} - ${formatTime(displayEnd)}\n${segment.keywords.join(", ")}`}
             >
               <span className="absolute -top-[19px] left-1/2 grid h-[19px] min-w-[19px] -translate-x-1/2 place-items-center rounded-[5px] bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground shadow-sm">
@@ -1357,7 +1410,7 @@ export function VideoSegmentPlayer({
                   />
                 </>
               )}
-              {/* Time tooltip during resize */}
+              {/* Time tooltip during move/resize */}
               {isBeingResized && resizePreview && (
                 <div className="absolute -top-7 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1.5 py-0.5 font-mono text-[10px] text-white shadow-lg">
                   {formatTime(resizePreview.start)} – {formatTime(resizePreview.end)}

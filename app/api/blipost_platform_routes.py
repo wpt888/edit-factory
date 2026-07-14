@@ -13,11 +13,12 @@ import logging
 import mimetypes
 import shutil
 import uuid
+import httpx
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.api.auth import ProfileContext, get_profile_context
@@ -59,6 +60,19 @@ class ConnectRequest(BaseModel):
     token: str
 
 
+class BlipostSessionRequest(BaseModel):
+    email: str
+    password: str
+
+
+class BlipostSessionResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    expires_in: Optional[int] = None
+    expires_at: Optional[int] = None
+    token_type: Optional[str] = None
+
+
 class MeResponse(BaseModel):
     connected: bool
     email: Optional[str] = None
@@ -73,6 +87,41 @@ class PlatformAccount(BaseModel):
     handle: Optional[str] = None
     displayName: Optional[str] = None
     status: Optional[str] = None
+
+
+class AutomationMirror(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    triggerType: str
+    triggerConfig: Dict = Field(default_factory=dict)
+    definition: Dict
+    lastRunAt: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class AutomationsResponse(BaseModel):
+    connected: bool
+    automations: List[AutomationMirror] = Field(default_factory=list)
+    webUrl: Optional[str] = None
+    error: Optional[str] = None
+    errorCode: Optional[str] = None
+
+
+def _automation_client(profile_id: str, authorization: Optional[str]) -> Optional[BlipostPlatformClient]:
+    """Signed-in desktop identity first; legacy vault token as fallback."""
+    if authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value.strip():
+            return BlipostPlatformClient(
+                base_url=get_settings().blipost_platform_base_url,
+                token=value.strip(),
+            )
+    try:
+        return get_client_for_profile(profile_id)
+    except ValueError:
+        return None
 
 
 class PublishRequest(BaseModel):
@@ -133,6 +182,44 @@ class VideoStatusResponse(BaseModel):
 
 
 # ============== CONNECTION MANAGEMENT ==============
+
+@router.post("/session", response_model=BlipostSessionResponse)
+async def create_blipost_session(body: BlipostSessionRequest):
+    """Exchange real blipost.com credentials for the desktop Supabase session.
+
+    The local backend only proxies the TLS request. The password is never
+    logged or persisted, and the returned refresh token is stored by the
+    Electron renderer's persistent Supabase client.
+    """
+    email = (body.email or "").strip().lower()
+    if not email or not body.password:
+        raise HTTPException(status_code=400, detail="Enter your Blipost email and password.")
+
+    url = f"{get_settings().blipost_platform_base_url.rstrip('/')}/api/desktop/v1/session"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, json={"email": email, "password": body.password})
+    except httpx.HTTPError as exc:
+        logger.warning("Blipost identity bridge unavailable: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not reach blipost.com.") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Invalid response from blipost.com.") from exc
+
+    if response.status_code in {400, 401}:
+        raise HTTPException(status_code=401, detail="Incorrect Blipost email or password.")
+    if response.status_code == 403:
+        raise HTTPException(status_code=403, detail=payload.get("error", "Blipost login is unavailable."))
+    if response.status_code == 429:
+        raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
+    if response.status_code >= 500:
+        raise HTTPException(status_code=502, detail=payload.get("error", "Blipost login is unavailable."))
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Unexpected response from blipost.com.")
+
+    return BlipostSessionResponse(**payload)
 
 def _store_token(profile_id: str, token: str) -> None:
     """Persist the token in the vault, replacing any existing one for this profile."""
@@ -264,6 +351,113 @@ async def accounts(profile: ProfileContext = Depends(get_profile_context)):
         for a in raw
         if a.get("id")
     ]
+
+
+@router.get("/automations", response_model=AutomationsResponse)
+async def automations(
+    profile: ProfileContext = Depends(get_profile_context),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    """Load canonical web workflows for the signed-in desktop identity.
+
+    Legacy profile tokens remain supported, but a normal authenticated desktop
+    session no longer needs a second token pasted in Settings. The web Platform
+    API validates the forwarded Supabase session against its configured trusted
+    project and maps its verified email to the web account.
+    """
+    base_url = get_settings().blipost_platform_base_url
+    client = _automation_client(profile.profile_id, authorization)
+    if client is None:
+        return AutomationsResponse(
+            connected=False,
+            webUrl=base_url,
+            error="Your desktop session could not be forwarded to Blipost web.",
+            errorCode="desktop_session_missing",
+        )
+
+    try:
+        # Validate the token first. A production server that does not have the
+        # mirror endpoint yet returns 404 before auth, which would otherwise
+        # hide a revoked token behind the misleading message "Not found".
+        await client.get_me()
+        rows = await client.get_automations()
+    except BlipostAuthError:
+        return AutomationsResponse(
+            connected=False,
+            webUrl=base_url,
+            error="Your Blipost web workspace could not be matched to this signed-in desktop account.",
+            errorCode="identity_not_linked",
+        )
+    except BlipostNotFoundError:
+        return AutomationsResponse(
+            connected=True,
+            webUrl=base_url,
+            error="Cloud Automations is not available on the connected Blipost server yet.",
+            errorCode="endpoint_unavailable",
+        )
+    except BlipostPlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error("[Profile %s] Blipost /automations failed: %s", profile.profile_id, e)
+        raise HTTPException(status_code=502, detail="Could not load cloud automations.")
+
+    mirrors = []
+    for row in rows:
+        if not row.get("id") or not isinstance(row.get("definition"), dict):
+            continue
+        try:
+            mirrors.append(AutomationMirror(**row))
+        except Exception:
+            logger.warning("Skipped malformed automation mirror row %s", row.get("id"))
+
+    return AutomationsResponse(connected=True, automations=mirrors, webUrl=base_url)
+
+
+@router.post("/automations", response_model=AutomationMirror)
+async def create_automation(
+    body: Dict,
+    profile: ProfileContext = Depends(get_profile_context),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    client = _automation_client(profile.profile_id, authorization)
+    if client is None:
+        raise HTTPException(status_code=401, detail="Desktop cloud session is unavailable.")
+    try:
+        return AutomationMirror(**(await client.create_automation(body)))
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+
+
+@router.patch("/automations/{automation_id}", response_model=AutomationMirror)
+async def update_automation(
+    automation_id: str,
+    body: Dict,
+    profile: ProfileContext = Depends(get_profile_context),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    client = _automation_client(profile.profile_id, authorization)
+    if client is None:
+        raise HTTPException(status_code=401, detail="Desktop cloud session is unavailable.")
+    try:
+        return AutomationMirror(**(await client.update_automation(automation_id, body)))
+    except Exception as error:
+        _raise_platform_bridge_error(error)
+
+
+@router.delete("/automations/{automation_id}")
+async def delete_automation(
+    automation_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    client = _automation_client(profile.profile_id, authorization)
+    if client is None:
+        raise HTTPException(status_code=401, detail="Desktop cloud session is unavailable.")
+    try:
+        await client.delete_automation(automation_id)
+        return {"ok": True}
+    except Exception as error:
+        _raise_platform_bridge_error(error)
 
 
 # ============== SHARED CLOUD MEDIA + CLIPPING ==============

@@ -44,6 +44,7 @@ import {
 import { apiPost } from "@/lib/api";
 import {
   scaleSubtitlePx,
+  scaleSubtitleFontPx,
   SUBTITLE_REFERENCE_HEIGHT,
   useSubtitlePreviewHeight,
 } from "@/lib/subtitle-preview-scale";
@@ -64,6 +65,8 @@ interface SubtitleEditorProps {
   showPreview?: boolean;
   /** Preview height in pixels */
   previewHeight?: number;
+  /** Optional viewport cap used by persistent editor previews */
+  previewMaxViewportHeight?: number;
   /** Video info for correct aspect ratio preview */
   videoInfo?: VideoInfo;
   /** Loading state for video info */
@@ -114,6 +117,7 @@ export function SubtitleEditor({
   onLinesChange,
   showPreview = true,
   previewHeight = 600,
+  previewMaxViewportHeight,
   videoInfo = DEFAULT_VIDEO_INFO,
   isLoadingVideoInfo = false,
   className = "",
@@ -138,6 +142,7 @@ export function SubtitleEditor({
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontSearch, setFontSearch] = useState("");
   const [fontAccessError, setFontAccessError] = useState<string | null>(null);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const prevFingerprint = useRef("");
@@ -173,6 +178,13 @@ export function SubtitleEditor({
       .find((part) => part && !part.startsWith("var("));
     return first || raw;
   })();
+  const normalizedFontSearch = fontSearch.trim().toLocaleLowerCase();
+  const filteredCuratedFonts = FONT_OPTIONS.filter(({ label }) =>
+    label.toLocaleLowerCase().includes(normalizedFontSearch)
+  );
+  const filteredSystemFonts = systemFonts.filter((family) =>
+    family.toLocaleLowerCase().includes(normalizedFontSearch)
+  );
 
   // Debounced FFmpeg frame preview fetch.
   //
@@ -364,10 +376,11 @@ export function SubtitleEditor({
     dimensions: { height: number },
     className = ""
   ) => {
-    const fontSize = scaleSubtitlePx(settings.fontSize, dimensions.height);
+    const fontSize = scaleSubtitleFontPx(settings.fontSize, dimensions.height);
     const outlineWidth = scaleSubtitlePx(settings.outlineWidth, dimensions.height, 0);
     const shadowDepth = scaleSubtitlePx(settings.shadowDepth ?? 0, dimensions.height, 0);
     const glowBlur = scaleSubtitlePx(settings.glowBlur ?? 0, dimensions.height, 0);
+    const letterSpacing = scaleSubtitlePx(settings.letterSpacing ?? 0, dimensions.height, -Infinity);
     const opacity = Math.max(0, Math.min(100, settings.opacity ?? 100)) / 100;
     const baseShadow =
       shadowDepth > 0
@@ -386,6 +399,7 @@ export function SubtitleEditor({
       WebkitTextStroke:
         outlineWidth > 0 ? `${outlineWidth}px ${settings.outlineColor}` : undefined,
       paintOrder: "stroke fill",
+      letterSpacing: `${letterSpacing}px`,
     };
     const positionStyle: CSSProperties =
       settings.positionY <= 20
@@ -399,8 +413,8 @@ export function SubtitleEditor({
     };
     return (
       <div
-        className={`absolute left-2 right-2 z-[2] text-center ${previewInteractive ? "cursor-grab active:cursor-grabbing touch-none" : "pointer-events-none"} ${className}`}
-        style={positionStyle}
+        className={`absolute left-2 right-2 z-[2] ${previewInteractive ? "cursor-grab active:cursor-grabbing touch-none" : "pointer-events-none"} ${className}`}
+        style={{ ...positionStyle, textAlign: settings.horizontalAlignment ?? "center" }}
         onPointerDown={previewInteractive ? (event) => { const preview = event.currentTarget.parentElement; if (preview) { event.currentTarget.setPointerCapture(event.pointerId); updatePositionFromPointer(event.clientY, preview); } } : undefined}
         onPointerMove={previewInteractive ? (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const preview = event.currentTarget.parentElement; if (preview) updatePositionFromPointer(event.clientY, preview); } : undefined}
       >
@@ -423,10 +437,15 @@ export function SubtitleEditor({
 
       <div className="flex justify-center">
         <div
+          ref={previewMeasurement.ref}
           className="relative bg-black rounded-lg overflow-hidden border-2 border-border shadow-xl"
           style={{
-            width: `${previewDimensions.width}px`,
-            height: `${previewDimensions.height}px`,
+            width: previewMaxViewportHeight
+              ? `min(${previewDimensions.width}px, ${previewMaxViewportHeight * (previewDimensions.width / previewDimensions.height)}dvh)`
+              : `${previewDimensions.width}px`,
+            height: previewMaxViewportHeight
+              ? `min(${previewDimensions.height}px, ${previewMaxViewportHeight}dvh)`
+              : `${previewDimensions.height}px`,
           }}
         >
           {!ffmpegLoading && ffmpegPreviewUrl ? (
@@ -456,6 +475,7 @@ export function SubtitleEditor({
               <Loader2 className="h-4 w-4 animate-spin text-white/60" />
             </div>
           )}
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
           <button
             type="button"
             onClick={() => setFullscreenOpen(true)}
@@ -503,6 +523,7 @@ export function SubtitleEditor({
                 {renderLocalSubtitleOverlay({ height: 900 })}
               </>
             )}
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
           </div>
         </DialogContent>
       </Dialog>
@@ -617,6 +638,15 @@ export function SubtitleEditor({
             <SelectValue placeholder="Montserrat">{displayFontName}</SelectValue>
           </SelectTrigger>
           <SelectContent>
+            <div className="p-2">
+              <Input
+                value={fontSearch}
+                onChange={(event) => setFontSearch(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+                placeholder="Search fonts..."
+                aria-label="Search fonts"
+              />
+            </div>
             {/* phantom item so an unlisted stored font stays selectable until system fonts load */}
             {settings.fontFamily &&
               !FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
@@ -625,7 +655,7 @@ export function SubtitleEditor({
                   {displayFontName}
                 </SelectItem>
               )}
-            {FONT_OPTIONS.map((font) => (
+            {filteredCuratedFonts.map((font) => (
               <SelectItem
                 key={font.value}
                 value={font.value}
@@ -634,11 +664,14 @@ export function SubtitleEditor({
                 {font.label}
               </SelectItem>
             ))}
-            {systemFonts.map((family) => (
+            {filteredSystemFonts.map((family) => (
               <SelectItem key={`system-${family}`} value={family} style={{ fontFamily: family }}>
                 {family} (System)
               </SelectItem>
             ))}
+            {filteredCuratedFonts.length === 0 && filteredSystemFonts.length === 0 && (
+              <p className="px-2 pb-2 text-xs text-muted-foreground">No fonts found.</p>
+            )}
           </SelectContent>
         </Select>
         {fontAccessError && <p className="text-xs text-amber-500">{fontAccessError}</p>}
@@ -688,6 +721,36 @@ export function SubtitleEditor({
           0% = top, 50% = center, 100% = bottom
         </p>
       </div>
+
+        <div className="space-y-2">
+          <Label>Horizontal Alignment</Label>
+          <Select
+            value={settings.horizontalAlignment ?? "center"}
+            onValueChange={(value) => updateSetting("horizontalAlignment", value as "left" | "center" | "right")}
+          >
+            <SelectTrigger className="bg-muted/50"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="left">Left</SelectItem>
+              <SelectItem value="center">Center</SelectItem>
+              <SelectItem value="right">Right</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Letter Spacing</Label>
+            <span className="text-sm text-muted-foreground">{settings.letterSpacing ?? 0}px</span>
+          </div>
+          <Slider
+            value={[settings.letterSpacing ?? 0]}
+            onValueChange={([value]) => updateSetting("letterSpacing", value)}
+            min={-2}
+            max={10}
+            step={0.5}
+            className="w-full"
+          />
+        </div>
 
         <div className="flex items-center justify-between"><div><Label>Adaptive Sizing</Label><p className="text-xs text-muted-foreground">Auto-reduce font for long text</p></div><Switch checked={settings.adaptiveSizing ?? false} onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)} /></div>
       </div>

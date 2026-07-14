@@ -20,6 +20,13 @@ const nextConfig: NextConfig = {
   // .next/standalone/server.js so the copied assets line up.
   outputFileTracingRoot: path.join(__dirname),
 
+  // Same lockfile ambiguity, Turbopack edition: the stray root package-lock
+  // makes Turbopack infer the repo root as its workspace root, so globals.css
+  // fails to resolve "tailwindcss" (no node_modules at the repo root).
+  turbopack: {
+    root: path.join(__dirname),
+  },
+
   images: {
     remotePatterns: [
       {

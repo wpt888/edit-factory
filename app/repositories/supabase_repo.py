@@ -372,9 +372,6 @@ class SupabaseRepository(DataRepository):
     def create_project_segment(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._insert("editai_project_segments", data)
 
-    def update_project_segment(self, segment_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._update("editai_project_segments", "id", segment_id, data)
-
     def delete_project_segments(self, project_id: str) -> None:
         sb = get_supabase()
         sb.table("editai_project_segments").delete().eq("project_id", project_id).execute()
@@ -417,6 +414,21 @@ class SupabaseRepository(DataRepository):
         return QueryResult(data=data, count=len(data))
 
     # ──────────────────────────────────────────────
+    def list_attention_templates(self, profile_id: str) -> List[Dict[str, Any]]:
+        return self._select("editai_attention_templates", QueryFilters(eq={"profile_id": profile_id})).data
+
+    def get_attention_template(self, template_id: str) -> Optional[Dict[str, Any]]:
+        return self._get_one("editai_attention_templates", "id", template_id)
+
+    def create_attention_template(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._insert("editai_attention_templates", data)
+
+    def update_attention_template(self, template_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._update("editai_attention_templates", "id", template_id, data)
+
+    def delete_attention_template(self, template_id: str) -> None:
+        self._delete("editai_attention_templates", "id", template_id)
+
     # 8. Assembly Jobs
     # ──────────────────────────────────────────────
 
@@ -701,6 +713,65 @@ class SupabaseRepository(DataRepository):
 
     def delete_elevenlabs_account(self, account_id: str) -> None:
         self._delete("elevenlabs_accounts", "id", account_id)
+
+    # ElevenLabs tenant governance (migration 050). Database RPCs keep the
+    # balance check and reservation atomic across multiple API workers.
+    @staticmethod
+    def _rpc_first(result) -> Dict[str, Any]:
+        data = result.data or []
+        if isinstance(data, dict):
+            return data
+        return data[0] if data else {}
+
+    def get_elevenlabs_credit_balance(
+        self, profile_id: str, default_limit: int
+    ) -> Dict[str, Any]:
+        result = get_supabase().rpc("get_elevenlabs_credit_balance", {
+            "p_profile_id": profile_id,
+            "p_default_limit": default_limit,
+        }).execute()
+        return self._rpc_first(result)
+
+    def reserve_elevenlabs_credits(
+        self, profile_id: str, reservation_id: str, credits: int,
+        text_characters: int, model_id: str, voice_id: str, default_limit: int,
+    ) -> Dict[str, Any]:
+        result = get_supabase().rpc("reserve_elevenlabs_credits", {
+            "p_profile_id": profile_id,
+            "p_reservation_id": reservation_id,
+            "p_credits": credits,
+            "p_text_characters": text_characters,
+            "p_model_id": model_id,
+            "p_voice_id": voice_id,
+            "p_default_limit": default_limit,
+        }).execute()
+        return self._rpc_first(result)
+
+    def settle_elevenlabs_credits(
+        self, reservation_id: str, actual_credits: int,
+        provider_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = get_supabase().rpc("settle_elevenlabs_credits", {
+            "p_reservation_id": reservation_id,
+            "p_actual_credits": actual_credits,
+            "p_provider_request_id": provider_request_id,
+        }).execute()
+        return self._rpc_first(result)
+
+    def release_elevenlabs_credits(self, reservation_id: str) -> Dict[str, Any]:
+        result = get_supabase().rpc("release_elevenlabs_credits", {
+            "p_reservation_id": reservation_id,
+        }).execute()
+        return self._rpc_first(result)
+
+    def set_elevenlabs_credit_limit(
+        self, profile_id: str, credit_limit: int, default_limit: int
+    ) -> Dict[str, Any]:
+        self.get_elevenlabs_credit_balance(profile_id, default_limit)
+        return self._update(
+            "editai_elevenlabs_credit_balances", "profile_id", profile_id,
+            {"credit_limit": credit_limit, "updated_at": datetime.utcnow().isoformat()},
+        )
 
     # ──────────────────────────────────────────────
     # 26. API Key Vault

@@ -1,5 +1,42 @@
 # Engineering Change Log
 
+## 2026-07-14 — Remediere sistem segmente (transforms v2 + curățenie API)
+
+- Executat planul din [analiza sistemului de segmente](18-analiza-segmente.md),
+  orchestrat pe 3 fronturi Codex paralele; verificat: 61 teste
+  `test_segment_transforms`, 28 `test_api_segments_sqlite`, 18
+  `test_assembly_scoring`, tsc frontend fără erori, graf blur-fill validat
+  cu un render FFmpeg de probă.
+- **Contract nou transforms** (per segment, DB `editai_segments.transforms`):
+  `rotation, scale, pan_x, pan_y, flip_h, flip_v, speed (0.25–4.0),
+  blur_fill (bool), brightness (-1..1), contrast (0..3), saturation (0..3)`.
+  `opacity` ELIMINAT peste tot (era `colorchannelmixer` spre negru, nu
+  transparență); valorile vechi din DB sunt ignorate silențios la parse.
+- Backend (`segment_transforms.py` + `assembly_service.py`): `speed` cu
+  fereastră de extracție conștientă de viteză (`setpts` + trim exact,
+  fallback-ul loop-fill existent păstrat; fără `atempo` — extracțiile sunt
+  video-only `-an`); `blur_fill` înlocuiește barele negre la zoom-out cu
+  fundal blurat din același cadru (split→boxblur→overlay); culoare per
+  segment prin `eq` condiționat. Preview și render final împart același
+  drum de extracție (paritate păstrată).
+- Frontend (`segment-transform-panel` + `global-transform-panel` +
+  `video-processing.ts`): slider Speed cu butoane 0.5×/1×/2×, toggle Blur
+  fill (activ doar la scale<1), secțiune Color, Pan dezactivat la scale≤1,
+  Opacity scos; bulk apply global suportă toate câmpurile (add-mode:
+  delta-față-de-identitate pentru scale/speed/contrast/saturation).
+- Curățenie API: șters endpoint-ul orfan
+  `PUT /projects/{id}/segments/{id}/transforms` + `update_project_segment`
+  din toate repo-urile (zero apelanți); `GET /projects/{id}/segments`
+  returnează transforms-ul segmentului direct; sanitizer cu allowlist de
+  chei + clamping pe range-uri la `PUT /{id}/transforms` și
+  `/bulk-transforms` (cheile necunoscute, inclusiv `opacity`, sunt
+  eliminate silențios, nu respinse).
+- Necesită restart de backend. Amânat (faza 2): crop box desenat pe preview,
+  merge/split manual de grupuri pe timeline-ul Step 3.
+- Gotcha operațional Codex: sandbox-ul workspace-write acoperă doar cwd-ul
+  invocării — lansat din `electron\`, orice scriere în `app/`/`frontend/` e
+  respinsă ca read-only; helperul trebuie invocat din rădăcina repo-ului.
+
 ## 2026-07-14 — Web-first Creative Studio (analiză, neimplementat)
 
 - Evaluat mutarea editorului desktop într-o secțiune "Creative Studio" pe

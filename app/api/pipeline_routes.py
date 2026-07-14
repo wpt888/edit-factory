@@ -34,6 +34,7 @@ from app.core.rate_limit import limiter
 from app.services.script_generator import get_script_generator_for_profile
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
+from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.config import get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -112,14 +113,20 @@ def _build_effective_pipeline_context(
         if isinstance(product, dict):
             title = (product.get("title") or "").strip()
             description = (product.get("description") or "").strip()
+            extra_fields = product.get("extra_fields") or {}
         else:
             title = (getattr(product, "title", "") or "").strip()
             description = (getattr(product, "description", "") or "").strip()
+            extra_fields = getattr(product, "extra_fields", {}) or {}
 
-        if title and description:
-            product_blocks.append(f"[Product: {title}]\n{description}")
-        elif title:
-            product_blocks.append(f"[Product: {title}]")
+        details = [description] if description else []
+        if isinstance(extra_fields, dict):
+            for key, value in extra_fields.items():
+                if value not in (None, "", [], {}) and key.casefold() not in {"title", "name", "description"}:
+                    details.append(f"{key}: {value}")
+        if title:
+            details_text = "\n".join(details)
+            product_blocks.append(f"[Product: {title}]" + (f"\n{details_text}" if details_text else ""))
 
     return "\n\n".join(part for part in [manual_context, *product_blocks] if part).strip()
 
@@ -529,6 +536,13 @@ def _compute_render_fingerprint(
     if render_request.interstitial_slides:
         # Interstitials are still keyed by base variant index (no per-version split)
         interstitial = render_request.interstitial_slides.get(str(variant_index), [])
+    attention_timeline = {}
+    if render_request.attention_timelines:
+        attention_timeline = (
+            render_request.attention_timelines.get(lookup_key)
+            or render_request.attention_timelines.get(str(variant_index))
+            or {}
+        )
 
     # Resolve per-key subtitle override if any. This makes A vs B have distinct
     # fingerprints when only their subtitle styles differ. The render path uses
@@ -549,6 +563,8 @@ def _compute_render_fingerprint(
         "glowBlur": render_request.glow_blur,
         "adaptiveSizing": render_request.adaptive_sizing,
         "opacity": render_request.opacity,
+        "horizontalAlignment": render_request.horizontal_alignment,
+        "letterSpacing": render_request.letter_spacing,
     }
     effective_subtitle, _ = _get_subtitle_settings_for_key(
         render_request, lookup_key, _default_subtitle
@@ -584,6 +600,7 @@ def _compute_render_fingerprint(
         "match_override_segments": mo_segment_ids,
         "match_override_transforms": mo_transforms,
         "interstitial_slides": interstitial,
+        "attention_timeline": attention_timeline,
         "pip_overlays": render_request.pip_overlays or {},
         "source_video_ids": sorted(render_request.source_video_ids or []),
     }
@@ -836,6 +853,10 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 if subtitle_overrides_raw
                 else None
             )
+            attention_timeline_json = {
+                str(k): v
+                for k, v in dict(pipeline_dict.get("attention_timeline", {})).items()
+            }
 
             row = {
                 "id": pipeline_id,
@@ -848,6 +869,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "variant_count": pipeline_dict.get("variant_count", 0),
                 "keyword_count": pipeline_dict.get("keyword_count", 0),
                 "scripts": pipeline_dict.get("scripts", []),
+                "script_names": pipeline_dict.get("script_names", []),
                 "previews": previews_json,
                 "render_jobs": render_jobs_json,
                 "tts_previews": tts_previews_json,
@@ -862,13 +884,18 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 ),
                 "meta_multiplication": pipeline_dict.get("meta_multiplication", True),
                 "subtitle_settings_by_key": subtitle_overrides_json,
+                "attention_timeline": attention_timeline_json,
             }
             try:
                 repo.upsert_pipeline(row)
             except Exception as upsert_err:
                 err_str = str(upsert_err)
                 # Graceful degradation for pre-migration databases
-                if "subtitle_settings_by_key" in err_str:
+                if "attention_timeline" in err_str:
+                    logger.warning("attention_timeline column missing; retrying without it")
+                    row.pop("attention_timeline", None)
+                    repo.upsert_pipeline(row)
+                elif "subtitle_settings_by_key" in err_str:
                     logger.warning(
                         "subtitle_settings_by_key column missing — run migration 042. "
                         "Retrying without it."
@@ -881,6 +908,10 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                     row.pop("selected_captions", None)
                     row.pop("target_script_duration", None)
                     row.pop("min_segment_duration", None)
+                    repo.upsert_pipeline(row)
+                elif "script_names" in err_str:
+                    logger.warning("script_names column missing; retrying without it")
+                    row.pop("script_names", None)
                     repo.upsert_pipeline(row)
                 else:
                     raise
@@ -964,7 +995,9 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         "enableGlow": render_request.enable_glow,
         "glowBlur": render_request.glow_blur,
         "adaptiveSizing": render_request.adaptive_sizing,
-        "opacity": render_request.opacity
+        "opacity": render_request.opacity,
+        "horizontalAlignment": render_request.horizontal_alignment,
+        "letterSpacing": render_request.letter_spacing,
     }
 
     return preset_data, default_subtitle_settings
@@ -1546,6 +1579,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "created_at": row.get("created_at", ""),
             "meta_multiplication": row.get("meta_multiplication", True),
             "subtitle_settings_by_key": subtitle_settings_by_key,
+            "attention_timeline": row.get("attention_timeline") or {},
         }
 
         _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
@@ -1619,6 +1653,15 @@ class ContextProductItem(BaseModel):
     """A product selected from the catalog during pipeline creation."""
     title: str
     description: str = ""
+    product_id: Optional[str] = None
+    images: List[str] = Field(default_factory=list)
+    brand: str = ""
+    category: str = ""
+    sku: str = ""
+    price: str = ""
+    sale_price: str = ""
+    product_url: str = ""
+    extra_fields: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineGenerateRequest(BaseModel):
@@ -1711,6 +1754,8 @@ class PipelineRenderRequest(BaseModel):
     glow_blur: int = 0
     adaptive_sizing: bool = False
     opacity: int = 100
+    horizontal_alignment: str = "center"
+    letter_spacing: float = 0
     # Video filters
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -1746,6 +1791,7 @@ class PipelineRenderRequest(BaseModel):
     # Interstitial product image slides: variant_index -> list of slide configs
     # Phase 46 will implement FFmpeg rendering — this phase just stores the data
     interstitial_slides: Optional[Dict[str, List[dict]]] = None
+    attention_timelines: Optional[Dict[str, dict]] = None
     # PiP overlay configs: segment_id -> { image_url, position, size, animation }
     pip_overlays: Optional[Dict[str, dict]] = None
 
@@ -2196,6 +2242,22 @@ async def update_source_selection(
 class PipelineUpdateScriptsRequest(BaseModel):
     """Request model for updating scripts in an existing pipeline."""
     scripts: List[str]
+    script_names: Optional[List[str]] = None
+
+
+class PipelineUpdateScriptNamesRequest(BaseModel):
+    """User-facing labels for the script variants in a pipeline."""
+    script_names: List[str] = Field(..., max_length=10)
+
+    @field_validator("script_names")
+    @classmethod
+    def validate_script_names(cls, names: List[str]) -> List[str]:
+        cleaned = [name.strip() for name in names]
+        if any(not name for name in cleaned):
+            raise ValueError("Script names cannot be empty")
+        if any(len(name) > 80 for name in cleaned):
+            raise ValueError("Script names must be at most 80 characters")
+        return cleaned
 
 
 class MetaMultiplicationRequest(BaseModel):
@@ -2211,6 +2273,104 @@ class SubtitleOverridesRequest(BaseModel):
     all overrides for this pipeline.
     """
     overrides: Dict[str, Dict[str, Any]]
+
+
+class AttentionAnimation(BaseModel):
+    preset: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "static"
+    enterMs: int = Field(default=250, ge=0, le=10000)
+    exitMs: int = Field(default=200, ge=0, le=10000)
+    delayMs: int = Field(default=0, ge=0, le=60000)
+    intensity: float = Field(default=1.0, ge=0.0, le=10.0)
+
+
+class AttentionLayer(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    assetId: str = Field(min_length=1, max_length=500)
+    assetUrl: Optional[str] = Field(default=None, max_length=4096)
+    x: float = Field(default=0.1, ge=0.0, le=1.0)
+    y: float = Field(default=0.1, ge=0.0, le=1.0)
+    width: float = Field(default=0.8, gt=0.0, le=1.0)
+    height: float = Field(default=0.8, gt=0.0, le=1.0)
+    zIndex: int = Field(default=1, ge=0, le=1000)
+    fit: Literal["contain", "cover"] = "contain"
+    animation: AttentionAnimation = Field(default_factory=AttentionAnimation)
+
+
+class AttentionCue(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    startMs: int = Field(ge=0)
+    durationMs: int = Field(gt=0, le=600000)
+    layers: List[AttentionLayer] = Field(default_factory=list, max_length=20)
+    sfxAssetId: Optional[str] = Field(default=None, max_length=500)
+    sfxUrl: Optional[str] = Field(default=None, max_length=4096)
+    sfxVolumeDb: float = Field(default=0.0, ge=-60.0, le=12.0)
+    templateId: Optional[str] = Field(default=None, max_length=100)
+
+
+class AttentionTimelineRequest(BaseModel):
+    revision: int = Field(ge=0)
+    cues: List[AttentionCue] = Field(default_factory=list, max_length=500)
+
+
+def _validate_preview_key(preview_key: str) -> None:
+    if not _re.fullmatch(r"\d+(?:_[A-J])?", preview_key):
+        raise HTTPException(status_code=400, detail="Invalid preview key")
+
+
+@router.get("/{pipeline_id}/attention-timeline/{preview_key}")
+async def get_attention_timeline(
+    pipeline_id: str,
+    preview_key: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Load one versioned, non-destructive overlay timeline."""
+    _validate_preview_key(preview_key)
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    document = (pipeline.get("attention_timeline") or {}).get(preview_key)
+    return document or {"revision": 0, "cues": []}
+
+
+@router.put("/{pipeline_id}/attention-timeline/{preview_key}")
+async def update_attention_timeline(
+    pipeline_id: str,
+    preview_key: str,
+    request: AttentionTimelineRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Atomically replace one timeline, rejecting stale browser revisions."""
+    _validate_preview_key(preview_key)
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    with _get_pipeline_state_lock(pipeline_id):
+        timelines = dict(pipeline.get("attention_timeline") or {})
+        current = timelines.get(preview_key) or {"revision": 0, "cues": []}
+        current_revision = int(current.get("revision", 0))
+        if request.revision != current_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Attention timeline revision conflict", "current": current},
+            )
+        document = {
+            "revision": current_revision + 1,
+            "cues": [cue.model_dump(exclude_none=True) for cue in request.cues],
+        }
+        timelines[preview_key] = document
+        pipeline["attention_timeline"] = timelines
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+        try:
+            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
+        except Exception:
+            _db_save_pipeline(pipeline_id, pipeline)
+    return document
 
 
 @router.get("/{pipeline_id}/meta-multiplication")
@@ -2326,6 +2486,11 @@ async def update_pipeline_scripts(
     for i, script in enumerate(request.scripts):
         if len(script) > 5000:
             raise HTTPException(status_code=400, detail=f"Script {i+1} exceeds 5000 character limit ({len(script)} chars)")
+    if request.script_names is not None:
+        if len(request.script_names) != len(request.scripts):
+            raise HTTPException(status_code=400, detail="script_names must contain one name for each script")
+        if any(not name.strip() or len(name.strip()) > 80 for name in request.script_names):
+            raise HTTPException(status_code=400, detail="Script names must contain 1 to 80 characters")
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -2354,6 +2519,8 @@ async def update_pipeline_scripts(
         # Update scripts in memory
         pipeline["scripts"] = request.scripts
         pipeline["variant_count"] = len(request.scripts)
+        if request.script_names is not None:
+            pipeline["script_names"] = [name.strip() for name in request.script_names]
 
         # Clean up orphan TTS entries for removed script indices
         new_count = len(request.scripts)
@@ -2386,13 +2553,16 @@ async def update_pipeline_scripts(
             tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
             previews_json = {str(k): v for k, v in pipeline.get("previews", {}).items()}
             segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
-            repo.update_pipeline(pipeline_id, {
+            pipeline_update = {
                 "scripts": request.scripts,
                 "variant_count": len(request.scripts),
                 "tts_previews": tts_previews_json,
                 "previews": previews_json,
                 "segment_usage": segment_usage_json,
-            })
+            }
+            if request.script_names is not None:
+                pipeline_update["script_names"] = pipeline["script_names"]
+            repo.update_pipeline(pipeline_id, pipeline_update)
     except Exception as e:
         logger.warning(f"Failed to update scripts for pipeline {pipeline_id} in DB: {e}")
 
@@ -2402,6 +2572,41 @@ async def update_pipeline_scripts(
     )
 
     return {"status": "updated", "pipeline_id": pipeline_id, "script_count": len(request.scripts)}
+
+
+@router.patch("/{pipeline_id}/script-names")
+async def update_pipeline_script_names(
+    pipeline_id: str,
+    request: PipelineUpdateScriptNamesRequest,
+):
+    """Rename script variants without invalidating their audio or previews."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    scripts = pipeline.get("scripts", [])
+    if len(request.script_names) != len(scripts):
+        raise HTTPException(
+            status_code=400,
+            detail="script_names must contain one name for each script",
+        )
+
+    pipeline["script_names"] = request.script_names
+    with _pipelines_lock:
+        _pipelines[pipeline_id] = pipeline
+
+    try:
+        repo = get_repository()
+        if repo:
+            repo.update_pipeline(pipeline_id, {"script_names": request.script_names})
+    except Exception as e:
+        logger.warning(f"Failed to update script names for pipeline {pipeline_id} in DB: {e}")
+
+    return {
+        "status": "updated",
+        "pipeline_id": pipeline_id,
+        "script_names": request.script_names,
+    }
 
 
 class PipelineRegenerateScriptRequest(BaseModel):
@@ -3201,6 +3406,11 @@ async def generate_variant_tts(
             srt_word_count=srt_word_count
         )
 
+    except ElevenLabsGovernanceError as e:
+        logger.warning(
+            f"[Profile {profile.profile_id}] ElevenLabs policy blocked TTS: {e}"
+        )
+        raise HTTPException(status_code=e.status_code, detail=e.as_detail())
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] TTS generation failed for variant {variant_index}: {e}")
         raise HTTPException(status_code=500, detail="TTS generation failed")
@@ -4134,6 +4344,14 @@ async def render_variants(
                     variant_interstitial_slides = variant_slides
                     logger.info(f"[Pipeline {pipeline_id}] Variant {_slides_key}: {len(variant_slides)} interstitial slides")
 
+            variant_attention_timeline = None
+            if render_request.attention_timelines:
+                _attention_key = str(job_key) if job_key is not None else str(vid)
+                variant_attention_timeline = (
+                    render_request.attention_timelines.get(_attention_key)
+                    or render_request.attention_timelines.get(str(vid))
+                )
+
             variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
             if variant_pip_overlays:
                 logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_pip_overlays)} PiP overlays")
@@ -4259,6 +4477,7 @@ async def render_variants(
                         preset=render_request.preset or "balanced",
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
+                        attention_timeline=variant_attention_timeline,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
                         subtitle_style_override=_subtitle_override,
@@ -4745,6 +4964,13 @@ async def remake_variant(
                 if variant_slides:
                     variant_interstitial_slides = variant_slides
 
+            variant_attention_timeline = None
+            if render_request.attention_timelines:
+                variant_attention_timeline = (
+                    render_request.attention_timelines.get(str(job_key))
+                    or render_request.attention_timelines.get(str(vid))
+                )
+
             variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
 
             # Render with NO match_overrides → auto-matching with strong avoid set
@@ -4786,6 +5012,7 @@ async def remake_variant(
                         pinned_assignments=remake_pinned_assignments or None,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
+                        attention_timeline=variant_attention_timeline,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=remake_avoid_ids if remake_avoid_ids else None,
                         output_project_label=(pipeline.get("name") or pipeline.get("idea") or "").strip(),
@@ -5218,6 +5445,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     return {
         "pipeline_id": pipeline_id,
         "scripts": pipeline.get("scripts", []),
+        "script_names": pipeline.get("script_names", []),
         "context_products": pipeline.get("context_products", []),
         "preview_info": preview_info,
         "tts_info": tts_info,
@@ -5857,6 +6085,7 @@ class PreviewRenderRequest(BaseModel):
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
     ultra_rapid_intro: bool = True  # Match PipelineRenderRequest default
     interstitial_slides: Optional[List[dict]] = None
+    attention_timeline: Optional[AttentionTimelineRequest] = None
     pip_overlays: Optional[Dict[str, dict]] = None
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -6024,6 +6253,7 @@ async def render_preview(
         "words_per_subtitle": render_request.words_per_subtitle,
         "ultra_rapid_intro": render_request.ultra_rapid_intro,
         "interstitial_slides": render_request.interstitial_slides or [],
+        "attention_timeline": render_request.attention_timeline.model_dump(exclude_none=True) if render_request.attention_timeline else {},
         "pip_overlays": render_request.pip_overlays or {},
         "subtitle_settings": render_request.subtitle_settings or {},
         "subtitle_style_override": subtitle_style_override or {},
@@ -6152,6 +6382,7 @@ async def render_preview(
                         max_words_per_phrase=render_request.words_per_subtitle,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=render_request.interstitial_slides,
+                        attention_timeline=render_request.attention_timeline.model_dump(exclude_none=True) if render_request.attention_timeline else None,
                         pip_overlays=render_request.pip_overlays,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
@@ -6431,7 +6662,13 @@ async def generate_video_captions(
             for p in context_products:
                 title = p.get("title", "")
                 desc = p.get("description", "")
-                product_lines.append(f"- {title}: {desc}" if desc else f"- {title}")
+                extras = p.get("extra_fields") or {}
+                extra_text = "; ".join(
+                    f"{key}: {value}" for key, value in extras.items()
+                    if value not in (None, "", [], {}) and key.casefold() not in {"title", "name", "description"}
+                ) if isinstance(extras, dict) else ""
+                details = "; ".join(part for part in (desc, extra_text) if part)
+                product_lines.append(f"- {title}: {details}" if details else f"- {title}")
             prompt_parts.append(f"Products featured in this video:\n" + "\n".join(product_lines))
         # Context from pipeline (includes product descriptions)
         elif pipeline_context:
@@ -6776,6 +7013,7 @@ async def subtitle_frame_preview(
     Invalid `visual_version` values raise 400 (matches /render-preview).
     """
     from app.services.video_effects.subtitle_styler import build_subtitle_filter
+    from app.services.segment_transforms import SegmentTransform
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -6802,9 +7040,26 @@ async def subtitle_frame_preview(
         if meta_profile is not None:
             effective_subtitle_settings.update(meta_profile.subtitle_style)
 
-    # --- Find source video file path ---
+    # --- Resolve the source segment active at this timeline timestamp ---
     source_video_path: Optional[Path] = None
-    source_video_ids = pipeline.get("source_video_ids", [])
+    source_timestamp = max(float(request.timestamp or 0), 0.0)
+    selected_match: Optional[dict] = None
+    preview_key = f"{variant_index}_{normalized_version}" if normalized_version else str(variant_index)
+    preview = (pipeline.get("previews") or {}).get(preview_key)
+    if not preview and normalized_version:
+        preview = (pipeline.get("previews") or {}).get(str(variant_index))
+    preview_data = preview.get("preview_data", {}) if isinstance(preview, dict) else {}
+    for match in preview_data.get("matches", []) if isinstance(preview_data, dict) else []:
+        if match.get("srt_start", 0) <= source_timestamp < match.get("srt_end", 0):
+            selected_match = match
+            segment_start = float(match.get("segment_start_time") or 0)
+            segment_end = match.get("segment_end_time")
+            source_timestamp = segment_start + (source_timestamp - float(match.get("srt_start") or 0))
+            if segment_end is not None:
+                source_timestamp = min(source_timestamp, float(segment_end))
+            break
+
+    source_video_ids = [selected_match.get("source_video_id")] if selected_match and selected_match.get("source_video_id") else pipeline.get("source_video_ids", [])
     if source_video_ids:
         repo = get_repository()
         if repo:
@@ -6829,7 +7084,6 @@ async def subtitle_frame_preview(
     preview_dir.mkdir(parents=True, exist_ok=True)
 
     sample_text = (request.sample_text or "").strip() or "Sample subtitle text"
-    ts = max(float(request.timestamp or 0), 0.0)
     include_subtitles = bool(request.include_subtitles)
 
     # --- Build SRT content directly from the editor sample text ---
@@ -6844,7 +7098,7 @@ async def subtitle_frame_preview(
     # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
     settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)
     fingerprint_input = (
-        f"{settings_json}|{source_video_path}|{ts:.3f}|{visual_version or ''}|{sample_text}|subs={include_subtitles}"
+        f"{settings_json}|{source_video_path}|{source_timestamp:.3f}|{selected_match or {}}|{visual_version or ''}|{sample_text}|subs={include_subtitles}"
     )
     fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
     output_path = preview_dir / f"{fingerprint}.jpg"
@@ -6859,7 +7113,15 @@ async def subtitle_frame_preview(
         srt_tmp.write_text(srt_content, encoding="utf-8")
 
         # --- Build FFmpeg command ---
-        vf = "scale=540:960:force_original_aspect_ratio=increase,crop=540:960"
+        transform_filters = SegmentTransform.from_dict(
+            selected_match.get("transforms") if selected_match else None
+        ).to_ffmpeg_filters(width=540, height=960)
+        if not transform_filters:
+            transform_filters = [
+                "scale=540:960:force_original_aspect_ratio=increase",
+                "crop=540:960",
+            ]
+        vf = ",".join(transform_filters)
         if include_subtitles:
             # Use PlayRes 1080x1920 so subtitles match final render proportionally
             subtitle_filter = build_subtitle_filter(
@@ -6872,7 +7134,7 @@ async def subtitle_frame_preview(
 
         cmd = [
             "ffmpeg", "-y",
-            "-ss", str(request.timestamp),
+            "-ss", str(source_timestamp),
             "-i", str(source_video_path),
             "-vframes", "1",
             "-vf", vf,

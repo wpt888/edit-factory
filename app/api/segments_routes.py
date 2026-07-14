@@ -99,7 +99,11 @@ class SegmentTransformInput(BaseModel):
     pan_y: float = 0.0
     flip_h: bool = False
     flip_v: bool = False
-    opacity: float = 1.0
+    speed: float = 1.0
+    blur_fill: bool = False
+    brightness: float = 0.0
+    contrast: float = 1.0
+    saturation: float = 1.0
 
 class BulkTransformRequest(BaseModel):
     segment_ids: List[str]
@@ -168,6 +172,31 @@ class SegmentMatch(BaseModel):
 
 
 # ============== HELPER FUNCTIONS ==============
+
+_ALLOWED_TRANSFORM_KEYS = {
+    "rotation", "scale", "pan_x", "pan_y", "flip_h", "flip_v",
+    "speed", "blur_fill", "brightness", "contrast", "saturation",
+}
+
+_TRANSFORM_CLAMPS = {
+    "speed": (0.25, 4.0),
+    "brightness": (-1.0, 1.0),
+    "contrast": (0.0, 3.0),
+    "saturation": (0.0, 3.0),
+}
+
+
+def _sanitize_segment_transforms(transforms: dict) -> dict:
+    """Strip legacy/unknown transform keys and clamp bounded values."""
+    sanitized = {
+        key: value for key, value in transforms.items()
+        if key in _ALLOWED_TRANSFORM_KEYS
+    }
+    for key, (minimum, maximum) in _TRANSFORM_CLAMPS.items():
+        if key in sanitized:
+            sanitized[key] = max(minimum, min(maximum, sanitized[key]))
+    return sanitized
+
 
 def _get_video_info(video_path: Path) -> dict:
     """Get video metadata using ffprobe."""
@@ -327,6 +356,10 @@ def _generate_preview_proxy_background(video_id: str, source_path: Path, profile
 
     try:
         repo.update_source_video(video_id, {
+            # Reserving the output path distinguishes an active proxy job from
+            # a legacy/new row that is merely pending.  preview-stream uses
+            # this marker to avoid starting a second FFmpeg process.
+            "preview_proxy_path": str(_preview_proxy_output_path(video_id)),
             "preview_proxy_status": "pending",
             "preview_proxy_error": None,
         })
@@ -868,8 +901,10 @@ def _process_local_video_background(
         thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
         _generate_thumbnail(video_path, thumbnail_path, timestamp=1)
 
-        proxy_update = _generate_preview_proxy(video_id, video_path)
-
+        # The original local file is usable as soon as its lightweight metadata
+        # and thumbnail are available.  A preview proxy is an optimization and
+        # must not keep the source video (or the UI) in `processing` while the
+        # entire clip is transcoded.
         repo.update_source_video(video_id, {
             "file_path": str(video_path),
             "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
@@ -879,10 +914,13 @@ def _process_local_video_background(
             "fps": video_info.get("fps"),
             "file_size_bytes": video_info.get("file_size_bytes"),
             "status": "ready",
-            **proxy_update,
         })
 
         logger.info(f"[BG-Local] Source video {video_id} ready")
+
+        # Continue building the seek-friendly proxy after the source is ready.
+        # preview-stream falls back to the original file until this completes.
+        _generate_preview_proxy_background(video_id, video_path, profile_id)
 
     except Exception as e:
         logger.error(f"[BG-Local] Failed to process source video {video_id}: {e}")
@@ -1905,9 +1943,10 @@ async def update_segment_transforms(
     if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    repo.update_segment(segment_id, {"transforms": transforms.model_dump()})
+    sanitized_transforms = _sanitize_segment_transforms(transforms.model_dump())
+    repo.update_segment(segment_id, {"transforms": sanitized_transforms})
 
-    return {"id": segment_id, "transforms": transforms.model_dump()}
+    return {"id": segment_id, "transforms": sanitized_transforms}
 
 
 @router.put("/bulk-transforms")
@@ -1927,7 +1966,7 @@ async def bulk_update_transforms(
     if not request.segment_ids:
         return {"updated": 0, "segments": []}
 
-    new_transforms = request.transforms.model_dump()
+    new_transforms = _sanitize_segment_transforms(request.transforms.model_dump())
 
     if request.mode == "add":
         # Fetch owned segments via in_ + profile-scoped list_segments
@@ -1941,16 +1980,20 @@ async def bulk_update_transforms(
 
         results = []
         for seg in existing_result.data:
-            current = seg.get("transforms") or {}
-            merged = {
+            current = _sanitize_segment_transforms(seg.get("transforms") or {})
+            merged = _sanitize_segment_transforms({
                 "rotation": (current.get("rotation", 0) + new_transforms["rotation"]) % 360,
                 "scale": max(0.1, min(5.0, current.get("scale", 1.0) + (new_transforms["scale"] - 1.0))),
                 "pan_x": current.get("pan_x", 0) + new_transforms["pan_x"],
                 "pan_y": current.get("pan_y", 0) + new_transforms["pan_y"],
                 "flip_h": current.get("flip_h", False) ^ new_transforms["flip_h"],
                 "flip_v": current.get("flip_v", False) ^ new_transforms["flip_v"],
-                "opacity": max(0.0, min(1.0, current.get("opacity", 1.0) + (new_transforms["opacity"] - 1.0))),
-            }
+                "speed": current.get("speed", 1.0) + (new_transforms["speed"] - 1.0),
+                "blur_fill": current.get("blur_fill", False) ^ new_transforms["blur_fill"],
+                "brightness": current.get("brightness", 0.0) + new_transforms["brightness"],
+                "contrast": current.get("contrast", 1.0) + (new_transforms["contrast"] - 1.0),
+                "saturation": current.get("saturation", 1.0) + (new_transforms["saturation"] - 1.0),
+            })
             repo.update_segment(seg["id"], {"transforms": merged})
             results.append({"id": seg["id"], "transforms": merged})
 
@@ -1967,35 +2010,6 @@ async def bulk_update_transforms(
             updated_segments.append({"id": sid, "transforms": new_transforms})
 
         return {"updated": len(updated_segments), "segments": updated_segments}
-
-
-@router.put("/projects/{project_id}/segments/{segment_id}/transforms")
-async def update_project_segment_transforms(
-    project_id: str,
-    segment_id: str,
-    transforms: SegmentTransformInput,
-    profile: ProfileContext = Depends(get_profile_context)
-):
-    """Update per-project transform overrides for a segment."""
-    repo = get_repository()
-
-    # Verify project belongs to profile (T-82-01-01 IDOR pattern)
-    project = repo.get_project(project_id)
-    if not project or project.get("profile_id") != profile.profile_id:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Find the matching project-segment assignment via list + filter
-    assignments = repo.list_project_segments(
-        project_id,
-        QueryFilters(eq={"segment_id": segment_id}, select="id"),
-    )
-    if not assignments.data:
-        raise HTTPException(status_code=404, detail="Project-segment assignment not found")
-
-    ps_id = assignments.data[0]["id"]
-    repo.update_project_segment(ps_id, {"transforms": transforms.model_dump()})
-
-    return {"project_id": project_id, "segment_id": segment_id, "transforms": transforms.model_dump()}
 
 
 @router.post("/{segment_id}/extract")
@@ -2535,8 +2549,6 @@ async def get_project_segments(
         s = segments_cache.get(seg_id) or {}
         if s:
             src = sources_cache.get(s.get("source_video_id")) or {}
-            # Use project-level transform override if present, else segment default
-            effective_transforms = ps.get("transforms") or s.get("transforms")
             segments.append(SegmentResponse(
                 id=s["id"],
                 source_video_id=s["source_video_id"],
@@ -2549,7 +2561,7 @@ async def get_project_segments(
                 usage_count=s.get("usage_count", 0),
                 is_favorite=s.get("is_favorite", False),
                 notes=s.get("notes"),
-                transforms=effective_transforms,
+                transforms=s.get("transforms"),
                 product_group=s.get("product_group"),
                 created_at=s["created_at"],
                 source_video_name=src.get("name")

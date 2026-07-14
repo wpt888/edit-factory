@@ -195,6 +195,46 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+
+/* Attention overlays use the voiceover clock for visibility. CSS provides the
+   lightweight Instant approximation; FFmpeg remains the final-look renderer. */
+@keyframes attention-pop { 0% { opacity: 0; transform: scale(.25); } 16% { opacity: 1; transform: scale(calc(1 + .08 * var(--attention-intensity, 1))); } 28%, 100% { opacity: 1; transform: scale(1); } }
+@keyframes attention-zoom { 0% { opacity: 0; transform: scale(calc(1 - .18 * var(--attention-intensity, 1))); } 20%, 100% { opacity: 1; transform: scale(1); } }
+@keyframes attention-slide { 0% { opacity: 0; transform: translateX(calc(-40% * var(--attention-intensity, 1))); } 22%, 100% { opacity: 1; transform: translateX(0); } }
+@keyframes attention-spin { 0% { opacity: 0; transform: scale(.4) rotate(-180deg); } 24%, 100% { opacity: 1; transform: scale(1) rotate(0); } }
+@keyframes attention-tornado { 0% { opacity: 0; transform: scale(.15) rotate(-540deg) translateY(-35%); } 28%, 100% { opacity: 1; transform: scale(1) rotate(0) translateY(0); } }
+.attention-static { animation: none; }
+.attention-pop { animation-name: attention-pop; animation-timing-function: ease-out; animation-fill-mode: both; }
+.attention-zoom { animation-name: attention-zoom; animation-timing-function: ease-out; animation-fill-mode: both; }
+.attention-slide { animation-name: attention-slide; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-spin { animation-name: attention-spin; animation-timing-function: ease-out; animation-fill-mode: both; }
+.attention-tornado { animation-name: attention-tornado; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+
+/* Toasts stay on the app's neutral surface. Status colours are reserved for
+   the icon and message, so a success state does not turn the whole panel green. */
+[data-sonner-toast][data-styled="true"] {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--foreground);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+}
+
+[data-sonner-toast][data-styled="true"][data-type="success"] [data-icon],
+[data-sonner-toast][data-styled="true"][data-type="success"] [data-title] {
+  color: var(--primary);
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--muted-foreground);
+}
+
+[data-sonner-toast][data-styled="true"]:hover [data-close-button]:hover {
+  background: var(--secondary);
+  border-color: var(--border);
+  color: var(--foreground);
+}
 .app-scroll {
   flex: 1;
   min-height: 0;

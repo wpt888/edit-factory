@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 const step1Screenshot = 'screenshots/pipeline-step1-source-videos.png';
 const emptyStateScreenshot = 'screenshots/pipeline-step1-source-videos-empty.png';
 
-test('Step 1 shows Source Videos below the idea card', async ({ page }) => {
+test('Step 1 aligns the source inspector beside the idea canvas', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.goto('/pipeline');
 
@@ -16,7 +16,8 @@ test('Step 1 shows Source Videos below the idea card', async ({ page }) => {
   const sourceVideosBox = await sourceVideosCard.boundingBox();
   expect(ideaBox).not.toBeNull();
   expect(sourceVideosBox).not.toBeNull();
-  expect(sourceVideosBox!.y).toBeGreaterThan(ideaBox!.y + ideaBox!.height);
+  expect(sourceVideosBox!.x).toBeLessThan(ideaBox!.x);
+  expect(Math.abs(sourceVideosBox!.y - ideaBox!.y)).toBeLessThanOrEqual(2);
 
   await page.screenshot({ path: step1Screenshot, fullPage: true });
 });

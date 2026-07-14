@@ -34,6 +34,7 @@ type PipelineHistorySidebarCtx = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
   const {
+    step,
     historyLoading,
     historyPipelines,
     selectedHistoryId,
@@ -77,16 +78,32 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     playingAudio,
     handlePlayAudio,
   }: PipelineHistorySidebarCtx = ctx;
+  const isEditingWorkspace = step >= 1 && step <= 3;
+
   return (
-          <div className="w-full min-w-0">
-            <Card className="min-[1280px]:sticky min-[1280px]:top-16">
-              <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
+          <div
+            className={`w-full min-w-0 bg-background ${isEditingWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0" : ""}`}
+            data-testid="pipeline-history-sidebar"
+          >
+            <Card className={isEditingWorkspace
+              ? "min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 min-[1280px]:shadow-none"
+              : "min-[1280px]:sticky min-[1280px]:top-16"
+            }>
+              <CardHeader
+                className={isEditingWorkspace
+                  ? "min-[1280px]:h-10 min-[1280px]:shrink-0 min-[1280px]:content-center min-[1280px]:border-b min-[1280px]:px-4 min-[1280px]:py-0"
+                  : "pb-3"
+                }
+                data-testid="pipeline-history-header"
+              >
+                  <CardTitle className="flex items-center gap-2 text-sm">
                     <Clock className="h-4 w-4" />
                     Script History
                   </CardTitle>
               </CardHeader>
-              <CardContent className="max-h-[28rem] space-y-2 overflow-y-auto min-[1280px]:max-h-[calc(100vh-5rem)]">
+              <CardContent className={`max-h-[28rem] space-y-2 overflow-y-auto min-[1280px]:max-h-[calc(100vh-5rem)] ${
+                isEditingWorkspace ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:max-h-none min-[1280px]:px-3 min-[1280px]:py-3" : ""
+              }`}>
                 {historyLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />

@@ -40,6 +40,7 @@ class SubtitleStyleConfig:
     bold: int = 1
     alignment: int = 2  # Bottom-center
     margin_v: int = 50
+    letter_spacing: float = 0
 
     # Shadow effects (SUB-01)
     shadow_depth: int = 0  # 0-4 pixels
@@ -96,6 +97,7 @@ class SubtitleStyleConfig:
             f"Bold={self.bold}",
             f"Alignment={self.alignment}",
             f"MarginV={self.margin_v}",
+            f"Spacing={self.letter_spacing}",
             "MarginL=60",
             "MarginR=60",
             # WrapStyle=2: no automatic line wrapping — break only on \N.
@@ -167,13 +169,16 @@ class SubtitleStyleConfig:
 
         font_family = settings.get('fontFamily', 'Montserrat')
 
-        # Position to alignment and margin
+        # Position to ASS alignment and margin. Keep vertical placement driven
+        # by positionY while allowing the editor to choose left/center/right.
         position_y = settings.get('positionY', 85)
+        horizontal = settings.get('horizontalAlignment', 'center')
+        horizontal_offset = {'left': 1, 'center': 2, 'right': 3}.get(horizontal, 2)
         if position_y <= 20:
-            alignment = 8
+            alignment = 6 + horizontal_offset  # 7/8/9: top left/center/right
             margin_v = int(position_y / 100 * video_height)
         else:
-            alignment = 2
+            alignment = horizontal_offset  # 1/2/3: bottom left/center/right
             margin_v = int((100 - position_y) / 100 * video_height)
 
         # Add extra margin for shadow clearance
@@ -191,6 +196,7 @@ class SubtitleStyleConfig:
             outline_width=int(settings.get('outlineWidth', 3)),
             alignment=alignment,
             margin_v=margin_v,
+            letter_spacing=max(-2, min(10, float(settings.get('letterSpacing', 0)))),
             shadow_depth=shadow_depth,
             shadow_color=hex_to_ass(settings.get('shadowColor', '#000000')),
             enable_glow=settings.get('enableGlow', False),

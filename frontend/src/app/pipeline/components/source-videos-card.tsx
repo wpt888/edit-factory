@@ -29,7 +29,7 @@ import {
 import { formatDuration } from "../pipeline-utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function SourceVideosCard({ ctx }: { ctx: any }) {
+export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspace?: boolean }) {
   const {
     sourceVideos,
     sourceVideosLoading,
@@ -44,8 +44,14 @@ export function SourceVideosCard({ ctx }: { ctx: any }) {
   } = ctx;
 
   return (
-    <Card className="order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
-      <CardHeader>
+    <Card
+      className={workspace
+        ? "min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none"
+        : "order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2"
+      }
+      data-testid="source-videos-panel"
+    >
+      <CardHeader className={workspace ? "min-[1280px]:px-4" : undefined}>
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -80,7 +86,7 @@ export function SourceVideosCard({ ctx }: { ctx: any }) {
           )}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className={workspace ? "min-[1280px]:px-4 min-[1280px]:pb-4" : undefined}>
         {sourceVideosLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -230,7 +236,7 @@ export function SourceVideosCard({ ctx }: { ctx: any }) {
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-2">
                   {sourceVideos
                     .filter((video: { name: string }) => !sourceVideoSearch.trim() || video.name.toLowerCase().includes(sourceVideoSearch.toLowerCase()))
                     .map((video: { id: string; name: string; thumbnail_path: string | null; duration: number | null; segments_count: number }) => (

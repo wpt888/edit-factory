@@ -12,9 +12,8 @@ import type { StyleKey, PreviewCard } from "../pipeline-types";
  * deciding whether to pass `visualVersion`, labelling the panel) so the
  * parent JSX stays readable.
  *
- * Meta ON renders two of these side-by-side (A and B). Meta OFF renders
- * one (styleKey="default"). In both cases the preview always reflects the
- * *effective* style (default + override + optional Meta overlay).
+ * Step 3 renders one panel at a time. When Meta multiplication is enabled,
+ * the A/B switch replaces this panel so the preview can keep a useful size.
  */
 export function SubtitleStylePreviewPanel({
   styleKey,
@@ -22,20 +21,14 @@ export function SubtitleStylePreviewPanel({
   hasOverride,
   pipelineId,
   previewCards,
-  isActive,
-  onSelect,
   previewText,
-  onSettingsChange,
 }: {
   styleKey: StyleKey;
   settings: SubtitleSettings;
   hasOverride: boolean;
   pipelineId: string | undefined;
   previewCards: PreviewCard[];
-  isActive: boolean;
-  onSelect: () => void;
   previewText?: string;
-  onSettingsChange: (settings: SubtitleSettings) => void;
 }) {
   // Pick an arbitrary script variant that has the matching visualVersion so
   // the FFmpeg frame preview has a background frame to sample. Since the
@@ -60,26 +53,12 @@ export function SubtitleStylePreviewPanel({
       : `Live Preview — ${styleKey} (${styleKey === "A" ? "Instagram" : "Facebook"})`;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-      className={`flex flex-col gap-2 flex-shrink-0 rounded-lg border p-2 cursor-pointer transition-all ${
-        isActive
-          ? "border-primary ring-2 ring-primary/40 bg-primary/5 shadow-sm"
-          : "border-border hover:border-primary/50 hover:bg-muted/30"
-      }`}
-    >
-      <span className={`text-xs font-medium ${isActive ? "text-foreground" : "text-muted-foreground"}`}>
+    <div className="flex flex-col gap-2 rounded-lg border bg-muted/10 p-3">
+      <span className="text-xs font-medium text-foreground">
         {label}
       </span>
       <SubtitleEditor
+        className="[&>div>div:first-child]:hidden"
         renderMode="preview-only"
         settings={settings}
         onSettingsChange={() => {
@@ -87,6 +66,7 @@ export function SubtitleStylePreviewPanel({
         }}
         showPreview={true}
         previewHeight={440}
+        previewMaxViewportHeight={42}
         compact={false}
         pipelineId={pipelineId}
         variantIndex={variantIndex}

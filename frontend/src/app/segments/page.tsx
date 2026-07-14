@@ -27,7 +27,6 @@ import {
   Tag,
   Scissors,
   RefreshCw,
-  ChevronLeft,
   Search,
   Edit,
   X,
@@ -38,7 +37,6 @@ import {
   Layers,
   Repeat1,
 } from "lucide-react";
-import Link from "next/link";
 import { toast } from "sonner";
 
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
@@ -111,7 +109,20 @@ interface ProductGroup {
 function normalizeSegmentTransforms(
   transforms?: SegmentTransform | null,
 ): SegmentTransform {
-  return { ...DEFAULT_SEGMENT_TRANSFORM, ...transforms };
+  const normalized = { ...DEFAULT_SEGMENT_TRANSFORM, ...transforms };
+  return {
+    rotation: normalized.rotation,
+    scale: normalized.scale,
+    pan_x: normalized.pan_x,
+    pan_y: normalized.pan_y,
+    flip_h: normalized.flip_h,
+    flip_v: normalized.flip_v,
+    speed: normalized.speed,
+    blur_fill: normalized.blur_fill,
+    brightness: normalized.brightness,
+    contrast: normalized.contrast,
+    saturation: normalized.saturation,
+  };
 }
 
 function transformsEqual(a: SegmentTransform, b: SegmentTransform): boolean {
@@ -122,7 +133,11 @@ function transformsEqual(a: SegmentTransform, b: SegmentTransform): boolean {
     && a.pan_y === b.pan_y
     && a.flip_h === b.flip_h
     && a.flip_v === b.flip_v
-    && a.opacity === b.opacity
+    && a.speed === b.speed
+    && a.blur_fill === b.blur_fill
+    && a.brightness === b.brightness
+    && a.contrast === b.contrast
+    && a.saturation === b.saturation
   );
 }
 
@@ -503,9 +518,10 @@ export default function SegmentsPage() {
     // Creation intentionally resets these optional attributes, so recreate the
     // complete editor state before putting the segment back in local lists.
     if (snapshot.transforms) {
+      const transforms = normalizeSegmentTransforms(snapshot.transforms);
       try {
-        await apiPut(`/segments/${restored.id}/transforms`, snapshot.transforms);
-        restored.transforms = { ...snapshot.transforms };
+        await apiPut(`/segments/${restored.id}/transforms`, transforms);
+        restored.transforms = transforms;
       } catch (error) {
         // The segment itself already exists. Treat optional-state restoration
         // as best effort so retrying Undo cannot create a duplicate segment.
@@ -2051,8 +2067,10 @@ export default function SegmentsPage() {
                     targetSegments.filter((s) => {
                       const t = s.transforms;
                       if (!t) return false;
-                      return t.rotation !== 0 || t.scale !== 1.0 || t.pan_x !== 0 ||
-                        t.pan_y !== 0 || t.flip_h || t.flip_v || t.opacity !== 1.0;
+                      return !transformsEqual(
+                        normalizeSegmentTransforms(t),
+                        DEFAULT_SEGMENT_TRANSFORM,
+                      );
                     }).length
                   }
                   onApply={handleBulkTransforms}
@@ -2405,20 +2423,8 @@ export default function SegmentsPage() {
     </div>
   );
 
-  // Center content - Video Player
-  const centerContent = (
-    <div className="h-full flex flex-col">
-      {/* Video header - compact single line */}
-      <div className="flex items-center gap-2 mb-1 h-9">
-        <Link href="/librarie">
-          <Button variant="ghost" size="icon" className="h-7 w-7">
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <h1 className="text-base font-semibold flex items-center gap-1.5 whitespace-nowrap">
-          <Scissors className="h-4 w-4 flex-shrink-0" />
-          Source Video
-        </h1>
+  const centerPanelHeader = (
+    <>
         {selectedVideo && (
           <>
             <span className="max-w-[240px] truncate text-xs font-medium text-muted-foreground" title={selectedVideo.name}>
@@ -2437,8 +2443,12 @@ export default function SegmentsPage() {
           <RefreshCw className="h-3.5 w-3.5 mr-1" />
           Refresh
         </Button>
-      </div>
+    </>
+  );
 
+  // Center content - Video Player
+  const centerContent = (
+    <div className="h-full flex flex-col">
       {/* Video player */}
       <div className="flex-1 min-h-0">
         {selectedVideo ? (
@@ -2478,7 +2488,15 @@ export default function SegmentsPage() {
         leftPanel={leftPanelContent}
         rightPanel={rightPanelContent}
         leftPanelTitle="Source Videos"
+        centerPanelTitle={(
+          <span className="flex items-center gap-1.5 whitespace-nowrap">
+            <Scissors className="h-4 w-4 shrink-0" />
+            Source Video
+          </span>
+        )}
+        centerPanelHeader={centerPanelHeader}
         rightPanelTitle="Segments Library"
+        workspaceId={currentProfile?.id}
       >
         {centerContent}
       </EditorLayout>

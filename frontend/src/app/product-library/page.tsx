@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -34,8 +35,15 @@ import {
   Upload,
   Film,
   X,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  FileSpreadsheet,
+  RefreshCw,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { ImportProductsDialog } from "@/components/dialogs/import-products-dialog";
+import { BatchSettingsDialog, type BatchSettings } from "@/components/dialogs/batch-settings-dialog";
 
 interface LocalProduct {
   id: string;
@@ -43,12 +51,26 @@ interface LocalProduct {
   description: string;
   image_paths: string[];
   image_urls: string[];
+  source_type?: string;
+  extra_fields?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
 
-const imageUrl = (product: LocalProduct, idx = 0) =>
-  product.image_urls[idx] ? `${API_URL}${product.image_urls[idx]}` : "/placeholder-product.svg";
+interface ProductSource {
+  id: string;
+  name: string;
+  source_type: string;
+  source_url?: string;
+  last_synced_at?: string;
+  sync_status: string;
+}
+
+const imageUrl = (product: LocalProduct, idx = 0) => {
+  const value = product.image_urls[idx];
+  if (!value) return "/placeholder-product.svg";
+  return value.startsWith("http://") || value.startsWith("https://") ? value : `${API_URL}${value}`;
+};
 
 export default function ProductLibraryPage() {
   const { currentProfile } = useProfile();
@@ -56,6 +78,12 @@ export default function ProductLibraryPage() {
 
   const [products, setProducts] = useState<LocalProduct[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sources, setSources] = useState<ProductSource[]>([]);
+  const [syncingSourceId, setSyncingSourceId] = useState<string | null>(null);
 
   // Dialog state — null = closed, "new" = add, otherwise product being edited
   const [editing, setEditing] = useState<LocalProduct | "new" | null>(null);
@@ -66,18 +94,35 @@ export default function ProductLibraryPage() {
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiGetWithRetry("/product-library");
+      const params = new URLSearchParams({ page: String(page), page_size: "50", ...(search.trim() && { search: search.trim() }) });
+      const res = await apiGetWithRetry(`/product-library?${params}`);
       const data = await res.json();
       setProducts(data.products || []);
+      setTotal(data.pagination?.total || 0);
+      setTotalPages(data.pagination?.total_pages || 1);
     } catch {
       toast.error("Failed to load product library");
     } finally {
       setLoading(false);
+    }
+  }, [page, search]);
+
+  const fetchSources = useCallback(async () => {
+    try {
+      const response = await apiGetWithRetry("/product-library/sources");
+      const data = await response.json();
+      setSources(data.sources || []);
+    } catch {
+      // Products remain usable even when source metadata cannot be loaded.
     }
   }, []);
 
@@ -85,6 +130,30 @@ export default function ProductLibraryPage() {
     if (!currentProfile) return;
     fetchProducts();
   }, [currentProfile, fetchProducts]);
+
+  useEffect(() => {
+    if (!currentProfile) return;
+    fetchSources();
+  }, [currentProfile, fetchSources]);
+
+  const refreshImportedData = () => {
+    void fetchProducts();
+    void fetchSources();
+  };
+
+  const syncSource = async (source: ProductSource) => {
+    setSyncingSourceId(source.id);
+    try {
+      const response = await apiPost(`/product-library/sources/${source.id}/sync`);
+      const data = await response.json();
+      toast.success(`Synced ${data.imported} products${data.skipped ? `; skipped ${data.skipped}` : ""}`);
+      refreshImportedData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Source sync failed");
+    } finally {
+      setSyncingSourceId(null);
+    }
+  };
 
   // ---- dialog helpers ----
 
@@ -201,6 +270,24 @@ export default function ProductLibraryPage() {
     router.push(`/product-video?${params.toString()}`);
   };
 
+  const handleBatchGenerate = async (settings: BatchSettings) => {
+    setBatchLoading(true);
+    try {
+      const response = await apiPost("/products/batch-generate", {
+        product_ids: Array.from(selectedIds),
+        source: "local",
+        ...settings,
+      });
+      const data = await response.json();
+      const params = new URLSearchParams({ batch_id: data.batch_id, src: "local" });
+      router.push(`/batch-generate?${params.toString()}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Batch generation failed");
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-full bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -215,11 +302,47 @@ export default function ProductLibraryPage() {
               Your local product library — used as context for video generation
             </p>
           </div>
-          <Button onClick={openAdd} data-testid="add-product">
-            <PlusCircle className="h-4 w-4 mr-2" />
-            Add Product
-          </Button>
+          <div className="flex gap-2">
+            {selectedIds.size >= 2 && (
+              <Button onClick={() => setBatchOpen(true)}>
+                <Film className="h-4 w-4 mr-2" /> Generate {selectedIds.size}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="h-4 w-4 mr-2" /> Import
+            </Button>
+            <Button onClick={openAdd} data-testid="add-product">
+              <PlusCircle className="h-4 w-4 mr-2" /> Add Product
+            </Button>
+          </div>
         </div>
+
+        <div className="relative mb-5 max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+            placeholder="Search names, descriptions or any custom column..."
+            className="pl-9"
+          />
+        </div>
+
+        {sources.length > 0 && (
+          <div className="mb-5 flex flex-wrap gap-2">
+            {sources.map((source) => (
+              <div key={source.id} className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+                <FileSpreadsheet className="size-4 text-muted-foreground" />
+                <span className="font-medium">{source.name}</span>
+                <span className="text-xs text-muted-foreground">{source.source_type.replaceAll("_", " ")}</span>
+                {source.source_url && (
+                  <Button variant="ghost" size="sm" className="h-7" disabled={syncingSourceId === source.id} onClick={() => void syncSource(source)}>
+                    <RefreshCw className={`size-3.5 ${syncingSourceId === source.id ? "animate-spin" : ""}`} /> Sync
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Grid */}
         {loading ? (
@@ -236,7 +359,20 @@ export default function ProductLibraryPage() {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {products.map((product) => (
-              <Card key={product.id} className="overflow-hidden hover:shadow-md transition-shadow" data-testid="product-card">
+              <Card key={product.id} className="relative overflow-hidden hover:shadow-md transition-shadow" data-testid="product-card">
+                <div className="absolute left-2 top-2 z-10 rounded bg-background/90 p-1 shadow">
+                  <Checkbox
+                    checked={selectedIds.has(product.id)}
+                    aria-label={`Select ${product.title}`}
+                    onCheckedChange={() => setSelectedIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(product.id)) next.delete(product.id);
+                      else if (next.size < 50) next.add(product.id);
+                      else toast.error("A batch can contain at most 50 products");
+                      return next;
+                    })}
+                  />
+                </div>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={imageUrl(product)}
@@ -289,7 +425,27 @@ export default function ProductLibraryPage() {
             ))}
           </div>
         )}
+
+        {!loading && total > 0 && (
+          <div className="mt-6 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>{total.toLocaleString()} products</span>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronLeft className="size-4" /></Button>
+              <span>Page {page} of {totalPages}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}><ChevronRight className="size-4" /></Button>
+            </div>
+          </div>
+        )}
       </div>
+
+      <ImportProductsDialog open={importOpen} onOpenChange={setImportOpen} onImported={refreshImportedData} />
+      <BatchSettingsDialog
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        onConfirm={handleBatchGenerate}
+        productCount={selectedIds.size}
+        loading={batchLoading}
+      />
 
       {/* Add / Edit dialog */}
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>

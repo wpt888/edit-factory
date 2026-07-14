@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -20,7 +19,6 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -30,12 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { apiGet, apiPost, apiDelete, API_URL } from "@/lib/api";
 import {
   Loader2,
@@ -46,16 +38,17 @@ import {
   ArrowLeft,
   ArrowRight,
   Type,
-  Trash2,
   Volume2,
   Pause,
   Eye,
   RefreshCw,
   Film,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
+import type { AttentionTimeline } from "@/types/attention-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
@@ -70,7 +63,8 @@ import {
 } from "../pipeline-types";
 import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
-import { useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
+import { WorkspaceSplit } from "./workspace-split";
+import { useEffect, useMemo, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 /**
  * Timeline state contract consumed by the future CompositePreviewPlayer (F5).
@@ -93,6 +87,8 @@ type Step3Ctx = {
   selectedSourceIdsArray: string[];
   getMatchesChangeHandler: (previewKey: string) => (matches: MatchPreview[]) => void;
   getInterstitialSlidesChangeHandler: (previewKey: string) => (slides: InterstitialSlide[]) => void;
+  attentionTimelines: Record<PreviewKey, AttentionTimeline>;
+  getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
   getPreviewSubtitleSettingsFor: (card: Pick<PreviewCard, "visualVersion">) => SubtitleSettings;
   getSubtitleSettingsFor: (styleKey: StyleKey) => SubtitleSettings;
   subtitleSettings: SubtitleSettings;
@@ -121,7 +117,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     activeStyleKey,
     setActiveStyleKey,
     handleCopyVariantSubtitle,
-    activeStyleHasOverride,
     handleResetVariantSubtitle,
     savePresetDialogOpen,
     setSavePresetDialogOpen,
@@ -152,8 +147,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     currentProfile,
     getPreviewSubtitleSettingsFor,
     interstitialSlides,
+    attentionTimelines,
     EMPTY_SLIDES,
     getInterstitialSlidesChangeHandler,
+    getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
@@ -218,9 +215,24 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     return () => controller.abort();
   }, [currentProfile?.id, previewProxySourceIdsKey]);
 
+  const activeSubtitleStyleKey: StyleKey = metaMultiplication
+    ? activeStyleKey === "B" ? "B" : "A"
+    : "default";
+  const activeSubtitleStyleHasOverride = Boolean(
+    subtitleOverrides[activeSubtitleStyleKey]
+      && Object.keys(subtitleOverrides[activeSubtitleStyleKey] ?? {}).length > 0
+  );
+  const assemblyPresetHelp = ({
+    keyword_strict: "Only uses clips whose keywords match the phrase, leaving uncertain phrases unmatched.",
+    balanced: "Prefers keyword matches and safely rotates through the remaining footage.",
+    max_variety: "Spreads usage across the full clip pool, including keyword matches.",
+    shuffle: "Randomizes clip assignment per variant for stronger A/B variation.",
+    ai_smart: "Uses Gemini to choose the best-fitting clip and falls back to keyword matching.",
+  } as Record<string, string>)[String(assemblyPreset)] ?? "Controls how clips are assigned to phrases.";
+
   return (
-          <div className="space-y-5">
-            <div className="flex items-center justify-between">
+          <div className="space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0">
+            <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
               <h2 className="text-2xl font-semibold">
                 Preview & Select Variants ({previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown)
               </h2>
@@ -235,35 +247,34 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               Keep the controls in a persistent left inspector and leave the
               right-hand canvas for the variant timelines and previews.
             */}
-            <div className="grid items-start gap-5 min-[1180px]:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.6fr)]">
-              <aside className="min-w-0 space-y-5 min-[1180px]:sticky min-[1180px]:top-4">
-            {/* Preset selector */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Render Settings</CardTitle>
+            <WorkspaceSplit
+              splitId="step3"
+              fallbackClassName="grid items-start gap-3 min-[1180px]:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.6fr)] min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:items-stretch min-[1280px]:gap-px min-[1280px]:bg-border"
+              groupClassName="h-auto min-h-0 flex-1"
+              leftSizing={{ defaultSize: "34%", minSize: "18rem" }}
+              rightSizing={{ minSize: "30%" }}
+            >
+              <aside
+                className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:bg-border"
+                data-testid="step3-inspector"
+              >
+            {/* Assembly controls affect clip selection, not final-file rendering. */}
+            <Card
+              className="order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none"
+              data-testid="step3-assembly-settings"
+            >
+              <CardHeader className="min-[1280px]:px-4">
+                <CardTitle className="text-lg">Assembly Settings</CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-5 min-[1100px]:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="preset">Export Preset</Label>
-                  <Select value={presetName} onValueChange={setPresetName}>
-                    <SelectTrigger id="preset">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="TikTok">TikTok (1080x1920)</SelectItem>
-                      <SelectItem value="Instagram Reels">
-                        Instagram Reels (1080x1920)
-                      </SelectItem>
-                      <SelectItem value="YouTube Shorts">
-                        YouTube Shorts (1080x1920)
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
+              <CardContent className="space-y-4 min-[1280px]:px-4">
                 {/* Assembly controls — how library segments get auto-assigned to phrases */}
-                <div className="space-y-2 pt-1 border-t">
-                  <Label htmlFor="assembly-preset" className="pt-3 inline-block">Assembly Preset</Label>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1">
+                    <Label htmlFor="assembly-preset">Assembly Preset</Label>
+                    <InlineInfo label="About assembly presets">
+                      {assemblyPresetHelp}
+                    </InlineInfo>
+                  </div>
                   <Select
                     value={assemblyPreset}
                     onValueChange={(v) => {
@@ -292,21 +303,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">
-                    {assemblyPreset === "keyword_strict" && "Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing."}
-                    {assemblyPreset === "balanced" && "Match by keyword when possible, fall back to rotation for the rest — the default."}
-                    {assemblyPreset === "max_variety" && "Favor spreading usage across the whole segment pool, even for keyword matches."}
-                    {assemblyPreset === "shuffle" && "Randomize segment assignment per variant, for maximum A/B difference."}
-                    {assemblyPreset === "ai_smart" && "Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable."}
-                  </p>
                 </div>
 
+                <div className="space-y-3 border-t pt-4">
                 <div className="flex items-center justify-between gap-4">
-                  <div className="space-y-1">
+                  <div className="flex items-center gap-1">
                     <Label htmlFor="pacing">Pacing</Label>
-                    <p className="text-xs text-muted-foreground">
+                    <InlineInfo label="About pacing">
                       Choose how quickly the visual cuts change.
-                    </p>
+                    </InlineInfo>
                   </div>
                   <Select
                     value={String(minSegmentDuration)}
@@ -327,11 +332,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </div>
 
                 <div className="flex items-center justify-between gap-4">
-                  <div className="space-y-1">
+                  <div className="flex items-center gap-1">
                     <Label htmlFor="rapid-intro">Rapid intro (2s)</Label>
-                    <p className="text-xs text-muted-foreground">
+                    <InlineInfo label="About rapid intro">
                       Force the first shot to a snappy 2-second cut regardless of min shot length.
-                    </p>
+                    </InlineInfo>
                   </div>
                   <Switch
                     id="rapid-intro"
@@ -342,152 +347,82 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     }}
                   />
                 </div>
-
-                {/* Picture & Audio adjustments — applied by the render engine
-                    (server preview + final render), no re-matching needed. */}
-                <div className="space-y-4 border-t pt-3 min-[1100px]:col-span-2">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <Label htmlFor="color-correction">Color correction</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Brightness, contrast and saturation burned into the video.
-                      </p>
-                    </div>
-                    <Switch
-                      id="color-correction"
-                      checked={renderAdjust.enableColor}
-                      onCheckedChange={(checked) =>
-                        setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, enableColor: checked }))
-                      }
-                    />
-                  </div>
-                  {renderAdjust.enableColor && (
-                    <div className="space-y-3 pl-1">
-                      {([
-                        { key: "brightness", label: "Brightness", min: -0.3, max: 0.3, step: 0.01, fmt: (v: number) => v.toFixed(2) },
-                        { key: "contrast", label: "Contrast", min: 0.5, max: 1.5, step: 0.01, fmt: (v: number) => v.toFixed(2) },
-                        { key: "saturation", label: "Saturation", min: 0.0, max: 2.0, step: 0.05, fmt: (v: number) => v.toFixed(2) },
-                      ] as const).map(({ key, label, min, max, step, fmt }) => (
-                        <div key={key} className="flex items-center justify-between gap-4">
-                          <Label className="text-xs w-20">{label}</Label>
-                          <div className="flex items-center gap-2 w-48">
-                            <Slider
-                              min={min}
-                              max={max}
-                              step={step}
-                              value={[renderAdjust[key]]}
-                              onValueChange={([v]) =>
-                                setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, [key]: v }))
-                              }
-                            />
-                            <span className="text-xs font-mono tabular-nums w-10 text-right">
-                              {fmt(renderAdjust[key])}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <Label htmlFor="voice-volume">Voice volume</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Voiceover loudness in the final video (1.00 = unchanged).
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 w-48">
-                      <Slider
-                        id="voice-volume"
-                        min={0.5}
-                        max={2.0}
-                        step={0.05}
-                        value={[renderAdjust.voiceVolume]}
-                        onValueChange={([v]) =>
-                          setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, voiceVolume: v }))
-                        }
-                      />
-                      <span className="text-xs font-mono tabular-nums w-10 text-right">
-                        {renderAdjust.voiceVolume.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <Label>Audio fade in / out</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Seconds of fade at the start / end of the voiceover.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {([
-                        { key: "audioFadeIn", label: "In" },
-                        { key: "audioFadeOut", label: "Out" },
-                      ] as const).map(({ key, label }) => (
-                        <div key={key} className="flex items-center gap-1">
-                          <span className="text-xs text-muted-foreground">{label}</span>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={5}
-                            step={0.5}
-                            className="h-7 w-16 text-xs"
-                            value={renderAdjust[key]}
-                            onChange={(e) => {
-                              const v = Math.max(0, Math.min(5, parseFloat(e.target.value) || 0));
-                              setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, [key]: v }));
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">s</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                 </div>
+
               </CardContent>
             </Card>
 
-            {/* Subtitle Style — per-Meta-version editor.
-                Meta OFF: one panel, one preview, no tabs.
-                Meta ON:  two tabs (A/B), two always-on previews, one active settings panel. */}
-            <Card className={!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""}>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Type className="h-4 w-4" />
-                  Subtitle Style
-                  {!subtitleSettingsLoaded && <Loader2 className="h-3 w-3 animate-spin" />}
-                </CardTitle>
-                <CardDescription>
-                  {metaMultiplication
-                    ? "Pick A or B — each Meta version has its own style, shared across all scripts. Both live previews stay visible so you can compare A and B as you edit."
-                    : "Customize subtitles once — the style applies to every variant in this pipeline."}
-                </CardDescription>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {/* Subtitle Style — one useful preview, switched between Meta versions. */}
+            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none`}>
+              <CardHeader className="pb-4 min-[1280px]:px-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-1">
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <Type className="h-4 w-4" />
+                      Subtitle Style
+                      {!subtitleSettingsLoaded && <Loader2 className="h-3 w-3 animate-spin" />}
+                    </CardTitle>
+                    <InlineInfo label="About subtitle styles">
+                      {metaMultiplication
+                        ? "Switch between A and B to preview and edit each platform style. Changes are saved automatically and shared across all scripts."
+                        : "This style applies to every variant in the pipeline and is saved automatically."}
+                    </InlineInfo>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
                   {subtitleSaveState === "saving" && (
                     <>
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      <span>Saving automatically…</span>
+                      <span>Saving…</span>
                     </>
                   )}
                   {subtitleSaveState === "saved" && (
                     <>
                       <CheckCircle className="h-3 w-3 text-success" />
-                      <span>Saved automatically. This style will remain available for the next pipeline too.</span>
+                      <span>Saved</span>
                     </>
                   )}
                   {subtitleSaveState === "error" && (
                     <>
                       <AlertCircle className="h-3 w-3 text-red-600" />
-                      <span>Save failed. The changes are still visible here, but they were not confirmed on the server yet.</span>
+                      <span className="text-red-600">Save failed</span>
                     </>
                   )}
-                  {subtitleSaveState === "idle" && (
-                    <span>Every subtitle edit is saved automatically. No manual save is required.</span>
-                  )}
+                  </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-3 min-[1280px]:px-4">
+                {metaMultiplication && (
+                  <div
+                    role="tablist"
+                    aria-label="Subtitle version"
+                    className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/30 p-1"
+                    data-testid="subtitle-version-switch"
+                  >
+                    {(["A", "B"] as const).map((styleKey) => {
+                      const isSelected = activeSubtitleStyleKey === styleKey;
+                      const platform = styleKey === "A" ? "Instagram" : "Facebook";
+                      return (
+                        <Button
+                          key={styleKey}
+                          type="button"
+                          role="tab"
+                          aria-selected={isSelected}
+                          aria-controls="subtitle-style-preview"
+                          variant={isSelected ? "default" : "ghost"}
+                          size="sm"
+                          className="h-9 gap-2"
+                          onClick={() => setActiveStyleKey(styleKey)}
+                        >
+                          <span className="font-semibold">{styleKey}</span>
+                          <span className={isSelected ? "opacity-80" : "text-muted-foreground"}>
+                            {platform}
+                          </span>
+                        </Button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Auxiliary controls for the active tab */}
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Copy from the other Meta version (only when Meta ON) */}
@@ -497,11 +432,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       size="sm"
                       className="h-8 text-xs"
                       onClick={() => {
-                        const source: StyleKey = activeStyleKey === "A" ? "B" : "A";
-                        handleCopyVariantSubtitle(source, activeStyleKey);
+                        const source: StyleKey = activeSubtitleStyleKey === "A" ? "B" : "A";
+                        handleCopyVariantSubtitle(source, activeSubtitleStyleKey);
                       }}
                     >
-                      Copy from {activeStyleKey === "A" ? "B" : "A"}
+                      Copy from {activeSubtitleStyleKey === "A" ? "B" : "A"}
                     </Button>
                   )}
 
@@ -510,8 +445,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     variant="outline"
                     size="sm"
                     className="h-8 text-xs"
-                    disabled={!activeStyleHasOverride}
-                    onClick={() => handleResetVariantSubtitle(activeStyleKey)}
+                    disabled={!activeSubtitleStyleHasOverride}
+                    onClick={() => handleResetVariantSubtitle(activeSubtitleStyleKey)}
                   >
                     Reset to default
                   </Button>
@@ -525,93 +460,50 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   >
                     Save as preset
                   </Button>
-
-                  {/* Status hint */}
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    Editing:{" "}
-                    <span className="font-medium text-foreground">
-                      {activeStyleKey === "default"
-                        ? "all variants"
-                        : `${activeStyleKey} (${activeStyleKey === "A" ? "Instagram" : "Facebook"})`}
-                    </span>
-                  </span>
                 </div>
 
-                {/* Preview + settings layout.
-                    Meta OFF: single "default" preview + settings panel.
-                    Meta ON:  two always-on previews (A and B) + settings panel for the active tab. */}
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)] items-start">
-                  <div className="grid gap-4 sm:grid-cols-2 xl:sticky xl:top-4">
-                  {metaMultiplication ? (
-                    <>
-                      <SubtitleStylePreviewPanel
-                        styleKey="A"
-                        settings={getSubtitleSettingsFor("A")}
-                        hasOverride={
-                          !!subtitleOverrides.A && Object.keys(subtitleOverrides.A).length > 0
-                        }
-                        pipelineId={pipelineId ?? undefined}
-                        previewCards={previewCards}
-                        isActive={activeStyleKey === "A"}
-                        onSelect={() => setActiveStyleKey("A")}
-                        previewText={getStylePreviewText("A")}
-                        onSettingsChange={(newSettings) => handleVariantSubtitleChange("A", newSettings)}
-                      />
-                      <SubtitleStylePreviewPanel
-                        styleKey="B"
-                        settings={getSubtitleSettingsFor("B")}
-                        hasOverride={
-                          !!subtitleOverrides.B && Object.keys(subtitleOverrides.B).length > 0
-                        }
-                        pipelineId={pipelineId ?? undefined}
-                        previewCards={previewCards}
-                        isActive={activeStyleKey === "B"}
-                        onSelect={() => setActiveStyleKey("B")}
-                        previewText={getStylePreviewText("B")}
-                        onSettingsChange={(newSettings) => handleVariantSubtitleChange("B", newSettings)}
-                      />
-                    </>
-                  ) : (
+                <div className="space-y-4">
+                  <div
+                    id="subtitle-style-preview"
+                    role="tabpanel"
+                    className="sticky top-0 z-10 bg-card pb-1"
+                    data-testid="subtitle-sticky-preview"
+                  >
                     <SubtitleStylePreviewPanel
-                      styleKey="default"
-                      settings={getSubtitleSettingsFor("default")}
-                      hasOverride={activeStyleHasOverride}
+                      key={activeSubtitleStyleKey}
+                      styleKey={activeSubtitleStyleKey}
+                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
+                      hasOverride={activeSubtitleStyleHasOverride}
                       pipelineId={pipelineId ?? undefined}
                       previewCards={previewCards}
-                      isActive={true}
-                      onSelect={() => setActiveStyleKey("default")}
-                      previewText={getStylePreviewText("default")}
-                      onSettingsChange={(newSettings) => handleVariantSubtitleChange("default", newSettings)}
+                      previewText={getStylePreviewText(activeSubtitleStyleKey)}
                     />
-                  )}
                   </div>
 
-                  {/* Active-tab settings panel (no preview — previews are rendered above) */}
                   <div
-                    className="flex-1 min-w-[320px] xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto xl:pr-3"
                     data-testid="subtitle-style-variant-editor"
                   >
                     <SubtitleEditor
                       renderMode="settings-only"
-                      settings={getSubtitleSettingsFor(activeStyleKey)}
+                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
                       onSettingsChange={(newSettings) =>
-                        handleVariantSubtitleChange(activeStyleKey, newSettings)
+                        handleVariantSubtitleChange(activeSubtitleStyleKey, newSettings)
                       }
                       showPreview={false}
-                      compact={false}
+                      compact={true}
                       userPresets={userSubtitlePresets}
                       onApplyUserPreset={(preset) => {
                         const presetSettings =
-                          activeStyleKey === "A"
+                          activeSubtitleStyleKey === "A"
                             ? preset.settingsA ?? preset.settings
-                            : activeStyleKey === "B"
+                            : activeSubtitleStyleKey === "B"
                               ? preset.settingsB ?? preset.settings
                               : preset.settings;
                         const merged = mergeSubtitleStylePreservingPlacement(
-                          getSubtitleSettingsFor(activeStyleKey),
+                          getSubtitleSettingsFor(activeSubtitleStyleKey),
                           presetSettings,
                         );
-                        handleVariantSubtitleChange(activeStyleKey, merged);
+                        handleVariantSubtitleChange(activeSubtitleStyleKey, merged);
                       }}
                       onDeleteUserPreset={async (preset) => {
                         const profileId = currentProfileIdRef.current;
@@ -626,17 +518,30 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
               </aside>
 
-              <section className="min-w-0 space-y-5" aria-label="Variant previews">
+              <section
+                className="min-w-0 space-y-3 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:space-y-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:[&>[data-slot=card]]:gap-3 min-[1280px]:[&>[data-slot=card]]:rounded-none min-[1280px]:[&>[data-slot=card]]:border-0 min-[1280px]:[&>[data-slot=card]]:py-3 min-[1280px]:[&>[data-slot=card]]:shadow-none min-[1280px]:[&>[data-slot=card]>[data-slot=card-header]]:px-4 min-[1280px]:[&>[data-slot=card]>[data-slot=card-content]]:px-4"
+                aria-label="Variant previews"
+                data-testid="step3-variant-canvas"
+              >
+                <header
+                  className="sticky top-0 z-10 hidden h-10 items-center border-b bg-background px-4 min-[1280px]:flex"
+                  data-testid="step3-variant-header"
+                >
+                  <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
+                    <Film className="h-4 w-4" />
+                    Variant Previews
+                  </h2>
+                </header>
 
             {/* Variant preview grid */}
-            <div className="grid grid-cols-1 gap-4 min-[1480px]:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border min-[1480px]:grid-cols-2">
               {previewCards.map((card) => {
                 const preview = previews[card.key];
                 if (!preview) return null;
 
                 return (
-                  <Card key={card.key} className="overflow-hidden">
-                    <CardHeader>
+                  <Card key={card.key} className="overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none">
+                    <CardHeader className="min-[1280px]:px-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Checkbox
@@ -703,7 +608,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         </div>
                       </div>
                     </CardHeader>
-                    <CardContent className="space-y-3">
+                    <CardContent className="space-y-3 min-[1280px]:px-4">
                       {preview.variety_warning && (
                         <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
                           <AlertCircle className="h-4 w-4 text-amber-600" />
@@ -785,6 +690,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
+                        attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
+                        onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                       />
                     </CardContent>
@@ -844,6 +751,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   wordsPerSubtitle={wordsPerSubtitle}
                   ultraRapidIntro={ultraRapidIntro}
                   interstitialSlides={interstitialSlides[previewVariant]}
+                  attentionTimeline={attentionTimelines[previewVariant]}
                   pipOverlays={Object.keys(_previewPipOverlays).length > 0 ? _previewPipOverlays : undefined}
                   enableColor={renderAdjust.enableColor}
                   brightness={renderAdjust.brightness}
@@ -930,6 +838,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             <RenderSettingsPanel
               settings={renderSettings}
               onChange={setRenderSettings}
+              presetName={presetName}
+              onPresetNameChange={setPresetName}
+              adjustments={renderAdjust}
+              onAdjustmentsChange={setRenderAdjust}
             />
 
             {/* Continue to existing renders (same pattern as Step 2's "already generated") */}
@@ -1010,12 +922,32 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 open={showSkipDialog}
                 onClose={() => { setShowSkipDialog(false); setSkipCheckResults(null); }}
                 checkResults={skipCheckResults}
-                onConfirm={(skipVars, _renderVars) => handleRender(skipVars)}
+                onConfirm={(skipVars) => handleRender(skipVars)}
               />
             )}
               </section>
-            </div>
+            </WorkspaceSplit>
           </div>
+  );
+}
+
+function InlineInfo({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span className="group/info relative inline-flex items-center">
+      <button
+        type="button"
+        aria-label={label}
+        className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Info className="size-3.5" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-64 rounded-md border bg-popover px-3 py-2 text-xs font-normal leading-relaxed text-popover-foreground opacity-0 shadow-md transition-opacity group-hover/info:opacity-100 group-focus-within/info:opacity-100"
+      >
+        {children}
+      </span>
+    </span>
   );
 }
 

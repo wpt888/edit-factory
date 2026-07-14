@@ -1,5 +1,14 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Instrument_Sans, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
+import {
+  Bricolage_Grotesque,
+  Instrument_Sans,
+  Geist_Mono,
+  Montserrat,
+  Roboto,
+  Open_Sans,
+  Oswald,
+  Bebas_Neue,
+} from "next/font/google";
 import "./globals.css";
 import { NavBarWrapper } from "@/components/navbar-wrapper";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -57,7 +66,7 @@ const bebasNeue = Bebas_Neue({
 });
 
 // Desktop build tightens corners (see html.desktop in globals.css).
-const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
+const DESKTOP_BUILD = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
 export const metadata: Metadata = {
   title: "Blipost - Smart Video Editing",
@@ -72,7 +81,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${DESKTOP_MODE ? "desktop" : ""} ${heading.variable} ${sans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
+      className={`dark ${heading.variable} ${sans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
       suppressHydrationWarning
     >
       <body>
@@ -81,23 +90,21 @@ export default function RootLayout({
             preference is light. Key must match theme-provider.tsx. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{if(localStorage.getItem("blipost-theme")==="light")document.documentElement.classList.remove("dark")}catch(e){}`,
+            __html: `try{if(localStorage.getItem("blipost-theme")==="light")document.documentElement.classList.remove("dark");if(${DESKTOP_BUILD}&&window.editFactory?.isDesktop)document.documentElement.classList.add("desktop")}catch(e){}`,
           }}
         />
         <ThemeProvider>
           <UndoProvider>
-            <DesktopTitleBar />
-            <div className="app-scroll">
+            <AuthProvider>
               <ProfileProvider>
-                <AuthProvider>
-                  <NavBarWrapper>
-                    <DesktopAuthGuard>
-                      {children}
-                    </DesktopAuthGuard>
-                  </NavBarWrapper>
-                </AuthProvider>
+                <DesktopTitleBar />
+                <div className="app-scroll">
+                  <DesktopAuthGuard>
+                    <NavBarWrapper>{children}</NavBarWrapper>
+                  </DesktopAuthGuard>
+                </div>
               </ProfileProvider>
-            </div>
+            </AuthProvider>
             <ThemedToaster />
           </UndoProvider>
         </ThemeProvider>

@@ -253,13 +253,6 @@ class DataRepository(ABC):
         ...
 
     @abstractmethod
-    def update_project_segment(
-        self, segment_id: str, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Update a project segment by ID. Returns the updated row."""
-        ...
-
-    @abstractmethod
     def delete_project_segments(self, project_id: str) -> None:
         """Delete all project-segment associations for a project."""
         ...
@@ -571,6 +564,56 @@ class DataRepository(ABC):
     @abstractmethod
     def delete_elevenlabs_account(self, account_id: str) -> None:
         """Delete an ElevenLabs account by ID."""
+        ...
+
+    @abstractmethod
+    def list_attention_templates(self, profile_id: str) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def get_attention_template(self, template_id: str) -> Optional[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def create_attention_template(self, data: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    @abstractmethod
+    def update_attention_template(self, template_id: str, data: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    @abstractmethod
+    def delete_attention_template(self, template_id: str) -> None: ...
+
+    @abstractmethod
+    def get_elevenlabs_credit_balance(
+        self, profile_id: str, default_limit: int
+    ) -> Dict[str, Any]:
+        """Get/reset the current per-profile ElevenLabs credit balance."""
+        ...
+
+    @abstractmethod
+    def reserve_elevenlabs_credits(
+        self, profile_id: str, reservation_id: str, credits: int,
+        text_characters: int, model_id: str, voice_id: str, default_limit: int,
+    ) -> Dict[str, Any]:
+        """Atomically reserve credits for a pending ElevenLabs generation."""
+        ...
+
+    @abstractmethod
+    def settle_elevenlabs_credits(
+        self, reservation_id: str, actual_credits: int,
+        provider_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Replace a credit reservation with the provider's actual cost."""
+        ...
+
+    @abstractmethod
+    def release_elevenlabs_credits(self, reservation_id: str) -> Dict[str, Any]:
+        """Release credits after a provider request fails before charging."""
+        ...
+
+    @abstractmethod
+    def set_elevenlabs_credit_limit(
+        self, profile_id: str, credit_limit: int, default_limit: int
+    ) -> Dict[str, Any]:
+        """Set an operator-managed monthly allowance for a profile."""
         ...
 
     # ──────────────────────────────────────────────

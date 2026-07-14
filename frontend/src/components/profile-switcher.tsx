@@ -12,8 +12,14 @@
 "use client";
 
 import { useState } from "react";
-import { useProfile } from "@/contexts/profile-context";
+import { usePathname, useRouter } from "next/navigation";
+import { useProfile, type Profile } from "@/contexts/profile-context";
 import { CreateProfileDialog } from "@/components/dialogs/create-profile-dialog";
+import {
+  beginWorkspaceNavigation,
+  getLastWorkspaceRoute,
+  saveLastWorkspaceRoute,
+} from "@/lib/workspace-session";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -30,6 +36,8 @@ import { ChevronDown, Plus, User } from "lucide-react";
 export function ProfileSwitcher() {
   const { currentProfile, profiles, setCurrentProfile, isLoading } = useProfile();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const pathname = usePathname();
+  const router = useRouter();
 
   // Show skeleton during initial load
   if (isLoading) {
@@ -39,11 +47,18 @@ export function ProfileSwitcher() {
   }
 
   // Handle profile selection
+  const selectWorkspace = (profile: Profile) => {
+    if (profile.id === currentProfile?.id) return;
+    if (currentProfile?.id) saveLastWorkspaceRoute(currentProfile.id, pathname);
+    const targetRoute = getLastWorkspaceRoute(profile.id);
+    beginWorkspaceNavigation(profile.id, targetRoute);
+    setCurrentProfile(profile);
+    router.push(targetRoute);
+  };
+
   const handleProfileChange = (profileId: string) => {
     const selectedProfile = profiles.find((p) => p.id === profileId);
-    if (selectedProfile) {
-      setCurrentProfile(selectedProfile);
-    }
+    if (selectedProfile) selectWorkspace(selectedProfile);
   };
 
   return (
@@ -52,18 +67,18 @@ export function ProfileSwitcher() {
         <DropdownMenuTrigger asChild>
           <Button variant="outline" className="w-full justify-start gap-2">
             <User className="h-4 w-4" />
-            <span className="truncate">{currentProfile?.name || "Select Profile"}</span>
+            <span className="truncate">{currentProfile?.name || "Select Workspace"}</span>
             <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
 
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>Switch Profile</DropdownMenuLabel>
+          <DropdownMenuLabel>Switch Workspace</DropdownMenuLabel>
           <DropdownMenuSeparator />
 
           {profiles.length === 0 ? (
             <div className="px-2 py-1.5 text-sm text-muted-foreground">
-              No profiles available
+              No workspaces available
             </div>
           ) : (
             <DropdownMenuRadioGroup
@@ -87,7 +102,7 @@ export function ProfileSwitcher() {
 
           <DropdownMenuItem onClick={() => setCreateDialogOpen(true)}>
             <Plus className="h-4 w-4" />
-            Create New Profile
+            Create New Workspace
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -95,6 +110,7 @@ export function ProfileSwitcher() {
       <CreateProfileDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
+        onCreated={selectWorkspace}
       />
     </>
   );

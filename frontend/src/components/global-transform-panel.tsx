@@ -20,7 +20,8 @@ import {
   Move,
   FlipHorizontal,
   FlipVertical,
-  Eye,
+  Gauge,
+  Palette,
   RotateCcw,
   Layers,
   Replace,
@@ -37,6 +38,7 @@ function EditableValue({
   min,
   max,
   step = 1,
+  disabled = false,
   onChange,
 }: {
   value: number;
@@ -44,6 +46,7 @@ function EditableValue({
   min: number;
   max: number;
   step?: number;
+  disabled?: boolean;
   onChange: (v: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -72,6 +75,7 @@ function EditableValue({
         ref={inputRef}
         type="text"
         inputMode="decimal"
+        disabled={disabled}
         className="w-14 h-5 text-xs text-right font-mono bg-muted border border-border rounded px-1 outline-none focus:ring-1 focus:ring-ring"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -86,9 +90,15 @@ function EditableValue({
 
   return (
     <span
-      className="text-xs text-muted-foreground font-mono cursor-text hover:text-foreground hover:bg-muted rounded px-1 -mr-1 transition-colors"
-      title="Click to edit"
+      className={`text-xs text-muted-foreground font-mono rounded px-1 -mr-1 transition-colors ${
+        disabled
+          ? "cursor-not-allowed"
+          : "cursor-text hover:text-foreground hover:bg-muted"
+      }`}
+      title={disabled ? undefined : "Click to edit"}
+      aria-disabled={disabled}
       onClick={() => {
+        if (disabled) return;
         setDraft(String(value));
         setEditing(true);
       }}
@@ -134,7 +144,14 @@ export function GlobalTransformPanel({
     transforms.pan_y === 0 &&
     !transforms.flip_h &&
     !transforms.flip_v &&
-    transforms.opacity === 1.0;
+    transforms.speed === 1.0 &&
+    !transforms.blur_fill &&
+    transforms.brightness === 0 &&
+    transforms.contrast === 1.0 &&
+    transforms.saturation === 1.0;
+
+  const panDisabled = transforms.scale <= 1;
+  const blurFillDisabled = transforms.scale >= 1;
 
   const handleReset = () => {
     setTransforms({ ...DEFAULT_SEGMENT_TRANSFORM });
@@ -258,8 +275,71 @@ export function GlobalTransformPanel({
             />
           </div>
 
-          {/* Pan X */}
+          {/* Speed */}
           <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs flex items-center gap-1">
+                <Gauge className="h-3 w-3" />
+                Speed
+              </Label>
+              <EditableValue
+                value={transforms.speed}
+                suffix="x"
+                min={0.25}
+                max={4.0}
+                step={0.05}
+                onChange={(v) => update({ speed: v })}
+              />
+            </div>
+            <Slider
+              value={[transforms.speed]}
+              min={0.25}
+              max={4.0}
+              step={0.05}
+              onValueChange={([v]) => update({ speed: v })}
+            />
+            <div className="flex gap-1">
+              {[
+                { value: 0.5, label: "0.5x" },
+                { value: 1, label: "1x" },
+                { value: 2, label: "2x" },
+              ].map(({ value, label }) => (
+                <Button
+                  key={value}
+                  variant={transforms.speed === value ? "default" : "outline"}
+                  size="sm"
+                  className="h-5 text-[10px] px-2 flex-1"
+                  onClick={() => update({ speed: value })}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* Blur fill */}
+          <div
+            className={`space-y-1 transition-opacity ${blurFillDisabled ? "opacity-50" : ""}`}
+            title={blurFillDisabled ? "Blur fill is available when scale is below 1x." : undefined}
+          >
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={transforms.blur_fill}
+                disabled={blurFillDisabled}
+                onCheckedChange={(v) => update({ blur_fill: v })}
+              />
+              <Label className="text-xs">Blur fill</Label>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Replaces black bars with a blurred background when zoomed out.
+            </p>
+          </div>
+
+          {/* Pan X */}
+          <div
+            className={`space-y-1 transition-opacity ${panDisabled ? "opacity-50" : ""}`}
+            title={panDisabled ? "Panning requires zoom (scale > 1)." : undefined}
+          >
             <div className="flex items-center justify-between">
               <Label className="text-xs">Pan X</Label>
               <EditableValue
@@ -268,6 +348,7 @@ export function GlobalTransformPanel({
                 min={-500}
                 max={500}
                 step={1}
+                disabled={panDisabled}
                 onChange={(v) => update({ pan_x: v })}
               />
             </div>
@@ -276,12 +357,16 @@ export function GlobalTransformPanel({
               min={-500}
               max={500}
               step={1}
+              disabled={panDisabled}
               onValueChange={([v]) => update({ pan_x: v })}
             />
           </div>
 
           {/* Pan Y */}
-          <div className="space-y-1">
+          <div
+            className={`space-y-1 transition-opacity ${panDisabled ? "opacity-50" : ""}`}
+            title={panDisabled ? "Panning requires zoom (scale > 1)." : undefined}
+          >
             <div className="flex items-center justify-between">
               <Label className="text-xs">Pan Y</Label>
               <EditableValue
@@ -290,6 +375,7 @@ export function GlobalTransformPanel({
                 min={-500}
                 max={500}
                 step={1}
+                disabled={panDisabled}
                 onChange={(v) => update({ pan_y: v })}
               />
             </div>
@@ -298,6 +384,7 @@ export function GlobalTransformPanel({
               min={-500}
               max={500}
               step={1}
+              disabled={panDisabled}
               onValueChange={([v]) => update({ pan_y: v })}
             />
           </div>
@@ -326,29 +413,75 @@ export function GlobalTransformPanel({
             </div>
           </div>
 
-          {/* Opacity */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs flex items-center gap-1">
-                <Eye className="h-3 w-3" />
-                Opacity
-              </Label>
-              <EditableValue
-                value={transforms.opacity * 100}
-                suffix="%"
-                min={0}
-                max={100}
-                step={1}
-                onChange={(v) => update({ opacity: v / 100 })}
+          {/* Color */}
+          <div className="space-y-3 border-t border-border pt-3">
+            <div className="flex items-center gap-1">
+              <Palette className="h-3 w-3" />
+              <span className="text-xs font-medium">Color</span>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Brightness</Label>
+                <EditableValue
+                  value={transforms.brightness}
+                  suffix=""
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  onChange={(v) => update({ brightness: v })}
+                />
+              </div>
+              <Slider
+                value={[transforms.brightness]}
+                min={-1}
+                max={1}
+                step={0.05}
+                onValueChange={([v]) => update({ brightness: v })}
               />
             </div>
-            <Slider
-              value={[transforms.opacity * 100]}
-              min={0}
-              max={100}
-              step={1}
-              onValueChange={([v]) => update({ opacity: v / 100 })}
-            />
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Contrast</Label>
+                <EditableValue
+                  value={transforms.contrast}
+                  suffix="x"
+                  min={0}
+                  max={3}
+                  step={0.05}
+                  onChange={(v) => update({ contrast: v })}
+                />
+              </div>
+              <Slider
+                value={[transforms.contrast]}
+                min={0}
+                max={3}
+                step={0.05}
+                onValueChange={([v]) => update({ contrast: v })}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Saturation</Label>
+                <EditableValue
+                  value={transforms.saturation}
+                  suffix="x"
+                  min={0}
+                  max={3}
+                  step={0.05}
+                  onChange={(v) => update({ saturation: v })}
+                />
+              </div>
+              <Slider
+                value={[transforms.saturation]}
+                min={0}
+                max={3}
+                step={0.05}
+                onValueChange={([v]) => update({ saturation: v })}
+              />
+            </div>
           </div>
 
           {/* Custom transforms warning */}
@@ -405,7 +538,8 @@ export function GlobalTransformPanel({
                 <span className="font-medium">Add (offset)</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">
-                Values are added on top of each segment&apos;s existing transforms
+                Numeric values use offsets (1x is neutral for scale, speed,
+                contrast, and saturation); toggles use OR
               </span>
             </Button>
           </div>

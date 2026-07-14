@@ -18,3 +18,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [AI auto-segmentation (idee, neimplementat)](17-ai-auto-segmentation.md)
 - [Analiză sistem segmente: grupuri, transformări, multi-track](18-analiza-segmente.md)
 - [Web-first Creative Studio: mutarea editorului în blipost.com](19-web-first-creative-studio.md)
+- [Poziționare ecosistem: fabrică, nu studio](20-pozitionare-ecosistem.md)

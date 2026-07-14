@@ -5,11 +5,14 @@ Handles JWT verification and user extraction from Supabase tokens.
 import asyncio
 import logging
 import time as _time
+import uuid
 from typing import Optional, Dict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
+import httpx
 from jwt.exceptions import PyJWTError
 
 from app.config import get_settings
@@ -69,7 +72,11 @@ def verify_jwt_token(token: str) -> dict:
             token,
             settings.supabase_jwt_secret,
             algorithms=["HS256"],
-            audience="authenticated"
+            audience="authenticated",
+            # Supabase and the desktop machine can differ by a few seconds.
+            # Without leeway, a freshly-issued token may be rejected as
+            # immature before the first authenticated API request.
+            leeway=30,
         )
         return payload
     except jwt.ExpiredSignatureError:
@@ -91,6 +98,55 @@ def verify_jwt_token(token: str) -> dict:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"}
         )
+
+
+async def verify_access_token(token: str) -> dict:
+    """Verify a Supabase access token locally or through the Auth API.
+
+    Packaged desktop builds intentionally do not ship the JWT signing secret.
+    Supabase's authenticated ``/auth/v1/user`` endpoint provides authoritative
+    verification using only the public project URL and anon key.
+    """
+    settings = get_settings()
+    if settings.supabase_jwt_secret:
+        return verify_jwt_token(token)
+
+    if not settings.supabase_url or not settings.supabase_key:
+        logger.error("Supabase auth verification is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                f"{settings.supabase_url.rstrip('/')}/auth/v1/user",
+                headers={
+                    "apikey": settings.supabase_key,
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("Supabase token verification unavailable: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable",
+        ) from exc
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = response.json()
+    return {
+        "sub": user.get("id"),
+        "email": user.get("email"),
+        "role": user.get("role", "authenticated"),
+    }
 
 
 async def get_current_user(
@@ -115,14 +171,11 @@ async def get_current_user(
     settings = get_settings()
 
     # Development mode bypass - WARNING: Only use for local development!
-    if settings.auth_disabled or settings.desktop_mode:
-        if settings.auth_disabled and settings.desktop_mode:
-            logger.warning("Auth bypassed — BOTH auth_disabled AND desktop_mode are true (dual bypass)")
-        else:
-            logger.warning("Auth bypassed — %s", "desktop mode" if settings.desktop_mode else "AUTH_DISABLED=true")
+    if settings.auth_disabled:
+        logger.warning("Auth bypassed — AUTH_DISABLED=true")
         return AuthUser(
             user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            email="desktop@local" if settings.desktop_mode else "dev@localhost",
+            email="dev@localhost",
             role="authenticated"
         )
 
@@ -145,7 +198,7 @@ async def get_current_user(
         )
 
     # Verify token and extract user info
-    payload = verify_jwt_token(token)
+    payload = await verify_access_token(token)
 
     user_id = payload.get("sub")
     if not user_id:
@@ -200,6 +253,34 @@ def require_role(required_role: str):
 
 
 from app.repositories.factory import get_repository as _get_repo
+
+
+def ensure_default_profile(repo, user: AuthUser) -> dict:
+    """Return the user's default profile, creating it on first authenticated use."""
+    existing = repo.list_profiles(user.id).data or []
+    if existing:
+        return next((row for row in existing if row.get("is_default")), existing[0])
+
+    now = datetime.now(timezone.utc).isoformat()
+    profile_data = {
+        "id": str(uuid.uuid4()),
+        "user_id": user.id,
+        "name": "My Workspace",
+        "description": "Default Blipost workspace",
+        "is_default": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        created = repo.create_profile(profile_data)
+        logger.info("[User %s] Created initial profile %s", user.id, created["id"])
+        return created
+    except Exception:
+        # The database trigger or another concurrent first request may have won.
+        existing = repo.list_profiles(user.id).data or []
+        if existing:
+            return next((row for row in existing if row.get("is_default")), existing[0])
+        raise
 
 
 async def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileContext]":
@@ -327,14 +408,15 @@ async def get_profile_context(
             result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id, "is_default": True}, limit=1))
             if not result.data:
                 result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id}, limit=1))
-            if not result.data:
-                logger.warning("Desktop mode: no profile owned by the desktop user — falling back to a global default profile")
-                result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"is_default": True}, limit=1))
             if result.data:
                 profile_id = result.data[0]["id"]
                 ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
                 await _cache_set_profile(current_user.id, "default", ctx)
                 return ctx
+            created = ensure_default_profile(repo, current_user)
+            ctx = ProfileContext(profile_id=created["id"], user_id=current_user.id)
+            await _cache_set_profile(current_user.id, "default", ctx)
+            return ctx
         except Exception as e:
             logger.warning(f"Desktop mode: could not query profiles table: {e}")
 
@@ -361,10 +443,8 @@ async def get_profile_context(
         result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id, "is_default": True}, limit=1))
 
         if not result.data:
-            raise HTTPException(
-                status_code=422,
-                detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
-            )
+            created = ensure_default_profile(repo, current_user)
+            result.data = [{"id": created["id"]}]
 
         profile_id = result.data[0]["id"]
         logger.info(f"[Profile {profile_id}] Auto-selected default for user {current_user.id}")

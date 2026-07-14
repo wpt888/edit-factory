@@ -85,6 +85,7 @@ fonttools==4.61.1
 
 # XML Feed Parsing (Google Shopping feeds)
 lxml==6.0.2
+openpyxl==3.1.5
 
 # Testing
 pytest==9.0.2

@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { CheckCircle, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle, Film, Sparkles } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 
 // Mirrors the inline confirmDialog state shape in PipelinePage (page.tsx).
@@ -24,6 +24,24 @@ type PipelineStepperCtx = {
   [key: string]: any;
 };
 
+const PIPELINE_STEPS = [
+  { num: 1, label: "Idea" },
+  { num: 2, label: "Scripts" },
+  { num: 3, label: "Preview" },
+  { num: 4, label: "Render" },
+] as const;
+
+const STEP_CONTEXT_LABELS: Record<number, string> = {
+  1: "Idea Input",
+  2: "Review Scripts",
+  3: "Preview & Select",
+  4: "Render Videos",
+};
+
+function formatCount(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function PipelineStepper({ ctx }: { ctx: any }) {
   const {
@@ -40,7 +58,11 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     setConfirmDialog,
     handleCancelRender,
     resetPipeline,
+    previewCards,
+    selectedVariants,
+    variantCount,
   }: PipelineStepperCtx = ctx;
+
   // Step 2 -> 3 is unlocked by ready voice-overs, not previews: matching can
   // run on demand (handlePreviewAll reuses the audio and auto-advances).
   const ttsMap = ttsResults as Record<number, { generating: boolean; stale: boolean }>;
@@ -49,119 +71,158 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     // Count over live script indices, not map entries: the backend can retain
     // tts_info for deleted variants, leaving orphan keys that would push the
     // count past scripts.length and wrongly lock this step (never "N === M").
-    scripts.filter((_: string, i: number) => { const r = ttsMap[i]; return !!r && !r.generating && !r.stale; }).length === scripts.length;
-  return (
-        <div className="sticky top-0 z-20 mb-5 border-b bg-background/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="flex items-center justify-between">
-            {[
-              { num: 1, label: "Idea Input" },
-              { num: 2, label: "Review Scripts" },
-              { num: 3, label: "Preview Matches" },
-              { num: 4, label: "Render Videos" },
-            ].map((s, index) => {
-              /*
-                Allow re-entering previously populated steps even when the current step is earlier.
-                This fixes the 1 -> 2 dead-end after returning from Step 2 back to Step 1.
-              */
-              const canJumpToStep2 = s.num === 2 && step === 1 && !!pipelineId && scripts.length > 0;
-              const canJumpToStep3 = s.num === 3 && step === 2 && (Object.keys(previews).length > 0 || allTtsReady);
-              const canJumpToStep4 = s.num === 4 && step === 3 && variantStatuses.length > 0;
-              const isClickableForward = canJumpToStep2 || canJumpToStep3 || canJumpToStep4;
+    scripts.filter((_: string, i: number) => {
+      const result = ttsMap[i];
+      return !!result && !result.generating && !result.stale;
+    }).length === scripts.length;
 
-              return (
-                <div key={s.num} className="flex items-center flex-1">
-                  <div className="flex flex-col items-center">
-                    <div
-                      className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-semibold ${
-                        step === s.num
-                          ? "border-2 border-lime bg-background text-lime ring-2 ring-lime/10"
-                          : step > s.num
-                          ? "border-2 border-lime bg-background text-lime cursor-pointer hover:bg-lime/10 transition-colors"
-                          : isClickableForward
-                          ? "border-2 border-lime/70 bg-background text-lime cursor-pointer hover:border-lime hover:bg-lime/10 transition-colors"
-                          : "border-2 border-border bg-background text-muted-foreground"
-                      }`}
-                      onClick={() => {
-                        // BUG-FE-31: Step navigation rules:
-                        // 1. Backward navigation: always allowed (click any completed step)
-                        if (step > s.num) {
-                          setStep(s.num);
-                          setPreviewError(null);
-                        }
-                        // 2. Forward to Step 2: allowed from Step 1 when scripts already exist
-                        if (canJumpToStep2) {
-                          setStep(2);
-                          setPreviewError(null);
-                        }
-                        // 3. Forward to Step 3: from Step 2 when previews exist, or when
-                        // voice-overs are ready (matching runs on demand and auto-advances)
-                        if (canJumpToStep3) {
-                          setPreviewError(null);
-                          if (Object.keys(previews).length > 0) {
-                            setStep(3);
-                          } else {
-                            void handlePreviewAll?.();
-                          }
-                        }
-                        // 4. Forward to Step 4: only from Step 3 when rendering has been initiated
-                        if (canJumpToStep4) {
-                          setStep(4);
-                          setPreviewError(null);
-                        }
-                      }}
-                    >
-                      {step > s.num ? <CheckCircle className="h-4 w-4" /> : s.num}
-                    </div>
-                    <p
-                      className={`mt-1 text-xs ${
-                        step === s.num ? "font-semibold" : "text-muted-foreground"
-                      }`}
-                    >
-                      {s.label}
-                    </p>
-                  </div>
-                  {index < 3 && (
-                    <div
-                      className={`flex-1 h-px mx-2 ${
-                        step > s.num ? "bg-foreground/25" : "bg-secondary"
-                      }`}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {/* New Pipeline button — visible on steps 2-4 */}
-          {step > 1 && (
-            <div className="mt-1 flex justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  if (isRendering) {
-                    setConfirmDialog({
-                      open: true,
-                      title: "Render in progress",
-                      description: "A render is in progress. Are you sure you want to start a new pipeline?",
-                      confirmLabel: "Start new pipeline",
-                      variant: "destructive",
-                      onConfirm: () => {
-                        setConfirmDialog((prev) => ({ ...prev, open: false }));
-                        handleCancelRender();
-                        resetPipeline();
-                      },
-                    });
-                  } else {
-                    resetPipeline();
-                  }
-                }}
+  const selectedPreviewCount = Array.isArray(previewCards)
+    ? previewCards.filter((card) => selectedVariants?.has(card.baseIndex)).length
+    : Object.keys(previews).length;
+
+  const contextCount = (() => {
+    if (step === 1) return formatCount(Number(variantCount) || 0, "variant");
+    if (step === 2) return formatCount(scripts.length, "script");
+    if (step === 3) return formatCount(selectedPreviewCount, "preview");
+    return formatCount(variantStatuses.length, "render");
+  })();
+
+  const startNewPipeline = () => {
+    if (isRendering) {
+      setConfirmDialog({
+        open: true,
+        title: "Render in progress",
+        description: "A render is in progress. Are you sure you want to start a new pipeline?",
+        confirmLabel: "Start new pipeline",
+        variant: "destructive",
+        onConfirm: () => {
+          setConfirmDialog((prev) => ({ ...prev, open: false }));
+          handleCancelRender();
+          resetPipeline();
+        },
+      });
+    } else {
+      resetPipeline();
+    }
+  };
+
+  const canOpenStep = (targetStep: number) => {
+    if (targetStep <= step) return true;
+    if (targetStep === 2 && step === 1) {
+      return !!pipelineId && scripts.length > 0;
+    }
+    if (targetStep === 3 && step === 2) {
+      return Object.keys(previews).length > 0 || allTtsReady;
+    }
+    return targetStep === 4 && step === 3 && variantStatuses.length > 0;
+  };
+
+  const openStep = (targetStep: number) => {
+    if (!canOpenStep(targetStep) || targetStep === step) return;
+
+    setPreviewError(null);
+    if (targetStep === 3 && step === 2 && Object.keys(previews).length === 0) {
+      void handlePreviewAll?.();
+      return;
+    }
+    setStep(targetStep);
+  };
+
+  return (
+    <div
+      className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/85"
+      data-testid="pipeline-toolbar"
+    >
+      <div className="z-10 flex min-w-0 items-center gap-2.5" data-testid="pipeline-toolbar-context">
+        <Film className="size-5 shrink-0 text-primary" />
+        <span className="truncate text-sm font-semibold min-[1500px]:text-base">
+          Multi-Variant Pipeline
+        </span>
+        <span className="hidden truncate text-sm text-muted-foreground min-[1600px]:inline">
+          / {STEP_CONTEXT_LABELS[step]}
+        </span>
+        <span className="hidden shrink-0 rounded border px-2 py-0.5 text-xs tabular-nums text-muted-foreground min-[1800px]:inline">
+          {contextCount}
+        </span>
+      </div>
+
+      <div
+        className="absolute left-1/2 hidden -translate-x-1/2 items-center min-[1100px]:flex min-[1100px]:w-[28rem] min-[1200px]:w-[30rem] min-[1400px]:w-[34rem] min-[1600px]:w-[38rem] min-[1800px]:w-[42rem]"
+        aria-label="Pipeline progress"
+        data-testid="pipeline-progress"
+      >
+        {PIPELINE_STEPS.map((item, index) => {
+          const isComplete = item.num < step;
+          const isActive = item.num === step;
+          const canOpen = canOpenStep(item.num);
+
+          return (
+            <div key={item.num} className="flex min-w-0 flex-1 items-center last:flex-none">
+              <button
+                type="button"
+                disabled={!canOpen}
+                aria-current={isActive ? "step" : undefined}
+                onClick={() => openStep(item.num)}
+                className={`group flex h-10 items-center gap-2.5 px-1 text-sm transition-colors disabled:opacity-100 ${
+                  isActive
+                    ? "font-semibold text-primary"
+                    : canOpen
+                      ? "text-muted-foreground hover:text-foreground"
+                      : "cursor-default text-muted-foreground/45"
+                }`}
+                data-testid={`pipeline-step-${item.num}`}
               >
-                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                Start New Pipeline
-              </Button>
+                <span
+                  className={`flex size-8 items-center justify-center rounded-full border-2 bg-background text-sm font-semibold transition-[border-color,box-shadow,color] ${
+                    isActive
+                      ? "border-primary text-primary ring-2 ring-primary/15"
+                      : isComplete
+                        ? "border-primary text-primary group-hover:ring-2 group-hover:ring-primary/10"
+                        : canOpen
+                          ? "border-primary/65 text-primary group-hover:border-primary group-hover:ring-2 group-hover:ring-primary/10"
+                          : "border-border text-muted-foreground/55"
+                  }`}
+                >
+                  {isComplete ? <CheckCircle className="size-4" /> : item.num}
+                </span>
+                <span>{item.label}</span>
+              </button>
+              {index < PIPELINE_STEPS.length - 1 && (
+                <div
+                  className={`mx-3 h-px min-w-4 flex-1 ${
+                    step > item.num ? "bg-primary/45" : "bg-border"
+                  }`}
+                />
+              )}
             </div>
-          )}
-        </div>
+          );
+        })}
+      </div>
+
+      <div className="z-10 ml-auto flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
+        {step === 3 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 px-2.5 text-sm"
+            onClick={() => openStep(2)}
+          >
+            <ArrowLeft className="mr-1.5 size-4" />
+            Back to Scripts
+          </Button>
+        )}
+        {step > 1 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 px-2.5 text-sm text-muted-foreground hover:text-foreground"
+            onClick={startNewPipeline}
+          >
+            <Sparkles className="mr-1.5 size-4" />
+            New Pipeline
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }

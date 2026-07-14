@@ -23,6 +23,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Loader2,
   Sparkles,
   AlertCircle,
@@ -30,7 +39,6 @@ import {
   XCircle,
   ArrowLeft,
   ArrowRight,
-  ChevronRight,
   BookOpen,
   Search,
   ChevronDown,
@@ -43,6 +51,7 @@ import { DebouncedInput, DebouncedTextarea } from "../pipeline-utils";
 import type { Dispatch, SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
+import { WorkspaceSplit } from "./workspace-split";
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
 // inline callbacks below are typed precisely; everything else stays `any`.
@@ -105,74 +114,137 @@ export function Step1Script({ ctx }: { ctx: any }) {
     handleCancelGenerate,
     handleGenerate,
     handleCreateManual,
+    pipelineLayout,
   }: Step1Ctx = ctx;
+  const workspaceLayout = pipelineLayout !== "guided";
   return (
-          <div className="w-full space-y-6">
-            <Card>
-              <CardHeader>
+          <WorkspaceSplit
+            splitId="step1"
+            enabled={workspaceLayout}
+            fallbackClassName={workspaceLayout
+              ? "w-full space-y-3 min-[1280px]:grid min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:grid-cols-[minmax(22rem,0.72fr)_minmax(0,1.6fr)] min-[1280px]:items-stretch min-[1280px]:gap-px min-[1280px]:space-y-0 min-[1280px]:bg-border"
+              : "w-full space-y-4"
+            }
+            leftSizing={{ defaultSize: "31%", minSize: "18rem" }}
+            rightSizing={{ minSize: "30%" }}
+            data-testid="step1-workspace"
+            data-layout={pipelineLayout}
+          >
+            <aside
+              className={workspaceLayout
+                ? "min-w-0 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
+                : "min-w-0"
+              }
+              data-testid="step1-inspector"
+            >
+              <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
+            </aside>
+
+            <section
+              className={workspaceLayout
+                ? "min-w-0 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
+                : "min-w-0"
+              }
+              aria-label="Video idea editor"
+              data-testid="step1-idea-canvas"
+            >
+            <Card className={workspaceLayout ? "min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none" : undefined}>
+              <CardHeader className={workspaceLayout ? "min-[1280px]:border-b min-[1280px]:px-5 min-[1280px]:pb-4" : undefined}>
                 <CardTitle>Video Idea</CardTitle>
                 <CardDescription>
                   Describe your video idea and configure generation options
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                {/* AI Rules (collapsible) */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Button
+              <CardContent className={`space-y-4 ${workspaceLayout ? "min-[1280px]:px-5 min-[1280px]:pb-5" : ""}`}>
+                {/* Persistent script-generation rules */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 gap-2"
+                    onClick={() => setAiRulesExpanded(true)}
+                  >
+                    <BookOpen className="size-4 text-primary" />
+                    Rules
+                  </Button>
+
+                  <div className="group/info relative flex items-center">
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 -ml-2"
-                      onClick={() => setAiRulesExpanded(!aiRulesExpanded)}
+                      aria-label="About rules"
+                      aria-describedby="rules-help"
+                      className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {aiRulesExpanded ? (
-                        <ChevronDown className="h-3.5 w-3.5 mr-1" />
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      <BookOpen className="h-3.5 w-3.5 mr-1" />
-                      AI Rules
-                    </Button>
-                    {aiInstructions.trim() && !aiRulesExpanded && (
-                      <Badge variant="secondary" className="text-xs">
-                        {aiInstructions.trim().length} chars
-                      </Badge>
-                    )}
-                    {aiRulesSaved && (
-                      <span className="text-xs text-success flex items-center gap-1">
-                        <CheckCircle className="h-3 w-3" /> Saved
-                      </span>
-                    )}
+                      <Info className="size-3.5" />
+                    </button>
+                    <div
+                      id="rules-help"
+                      role="tooltip"
+                      className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-72 rounded-md border bg-popover px-3 py-2 text-xs leading-relaxed text-popover-foreground opacity-0 shadow-md transition-opacity group-hover/info:opacity-100 group-focus-within/info:opacity-100"
+                    >
+                      These instructions are applied to every generated script. Use them to define tone, writing style, required phrases, and formatting.
+                    </div>
                   </div>
-                  {aiRulesExpanded && (
-                    <div className="space-y-2">
+
+                  {aiInstructions.trim() && (
+                    <Badge variant="secondary" className="text-[11px] font-normal">
+                      Configured
+                    </Badge>
+                  )}
+                  {aiRulesSaved && (
+                    <span className="flex items-center gap-1 text-xs text-success">
+                      <CheckCircle className="size-3" /> Saved
+                    </span>
+                  )}
+                </div>
+
+                <Dialog open={aiRulesExpanded} onOpenChange={setAiRulesExpanded}>
+                  <DialogContent className="max-h-[calc(100vh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <BookOpen className="size-5 text-primary" />
+                        Rules
+                      </DialogTitle>
+                      <DialogDescription>
+                        Define the persistent instructions used for every AI-generated script.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="min-h-0 space-y-2">
+                      <Label htmlFor="ai-instructions">Generation instructions</Label>
                       <Textarea
                         id="ai-instructions"
-                        placeholder="Persistent rules for AI script generation (tone, style, phrases, formatting)..."
-                        rows={4}
+                        placeholder="For example: Use a conversational tone, avoid abbreviations, and start directly with the script..."
                         value={aiInstructions}
                         onChange={(e) => {
                           setAiInstructions(e.target.value);
                           setAiRulesDirty(true);
                         }}
-                        className="resize-y text-sm [field-sizing:fixed]"
+                        className="h-[min(55vh,32rem)] min-h-64 resize-none overflow-y-auto text-sm [field-sizing:fixed]"
                       />
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={aiRulesDirty ? "default" : "outline"}
-                          className="h-7 text-xs"
-                          onClick={() => saveAiInstructions(aiInstructions, true)}
-                        >
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Save & Close
-                        </Button>
-                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {aiInstructions.trim().length} characters · Saved rules are reused for future script sets.
+                      </p>
                     </div>
-                  )}
-                </div>
+
+                    <DialogFooter>
+                      <DialogClose asChild>
+                        <Button type="button" variant="outline">
+                          Close
+                        </Button>
+                      </DialogClose>
+                      <Button
+                        type="button"
+                        variant={aiRulesDirty ? "default" : "outline"}
+                        onClick={() => saveAiInstructions(aiInstructions, true)}
+                      >
+                        <CheckCircle className="mr-1 size-4" />
+                        Save & Close
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
 
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
                   <div className="space-y-4">
@@ -489,18 +561,16 @@ export function Step1Script({ ctx }: { ctx: any }) {
 
                 {/* Generate button */}
                 {isGenerating ? (
-                  <div className="flex gap-2 w-full">
+                  <div className="flex flex-wrap justify-end gap-2">
                     <Button
                       disabled
-                      className="flex-1"
-                      size="lg"
+                      className="w-full sm:w-auto sm:min-w-48"
                     >
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       Generating...
                     </Button>
                     <Button
                       variant="destructive"
-                      size="lg"
                       onClick={handleCancelGenerate}
                     >
                       <X className="h-4 w-4 mr-1" />
@@ -508,34 +578,30 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     </Button>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <Button
-                      variant="cta"
-                      onClick={handleGenerate}
-                      disabled={!idea.trim()}
-                      className="w-full"
-                      size="lg"
-                    >
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      Generate Scripts
-                    </Button>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                     <Button
                       onClick={handleCreateManual}
                       variant="outline"
-                      className="w-full"
-                      size="lg"
+                      className="w-full sm:w-auto sm:min-w-48"
                       title="Skip AI generation — create blank script slots to fill in yourself"
                     >
                       <Pencil className="h-4 w-4 mr-2" />
                       Create Script Manually
                     </Button>
+                    <Button
+                      variant="cta"
+                      onClick={handleGenerate}
+                      disabled={!idea.trim()}
+                      className="w-full sm:w-auto sm:min-w-48"
+                    >
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Generate Scripts
+                    </Button>
                   </div>
                 )}
               </CardContent>
             </Card>
-
-            <SourceVideosCard ctx={ctx} />
-
-          </div>
+            </section>
+          </WorkspaceSplit>
   );
 }

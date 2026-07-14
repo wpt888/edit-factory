@@ -8,15 +8,14 @@ import { Loader2, RefreshCw } from "lucide-react";
 export type ElevenCreditsProps = {
   credits: {
     label: string;
-    api_key_hint: string;
-    is_env_default: boolean;
     tier: string;
-    characters_used: number;
-    character_limit: number;
-    characters_remaining: number;
+    credits_used: number;
+    credits_reserved: number;
+    credit_limit: number;
+    credits_remaining: number;
     usage_percent: number;
     last_error: string | null;
-    last_checked_at: string | null;
+    period_end?: string | null;
   } | null;
   loading: boolean;
   error: string | null;
@@ -36,7 +35,7 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
     return (
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">
-          {error || "No ElevenLabs account"}
+          {error || "No ElevenLabs allowance"}
         </span>
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onRefresh} title="Retry">
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -46,7 +45,8 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
   }
 
   const pct = credits.usage_percent;
-  const remainingPct = credits.character_limit > 0 ? 100 - pct : 0;
+  const unlimited = credits.credit_limit < 0;
+  const remainingPct = unlimited ? 100 : credits.credit_limit > 0 ? 100 - pct : 0;
   // green >25% remaining, amber 10-25%, red <10%
   const color = remainingPct > 25 ? "text-success" : remainingPct > 10 ? "text-amber-500" : "text-red-500";
 
@@ -58,14 +58,21 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
             {credits.tier}
           </Badge>
           <span className={`text-xs font-medium ${color}`}>
-            {credits.characters_remaining.toLocaleString()} chars left
+            {unlimited
+              ? "Unlimited credits"
+              : `${credits.credits_remaining.toLocaleString()} credits left`}
           </span>
         </div>
         <div className="w-40">
-          <Progress value={pct} className="h-1.5" />
+          <Progress value={unlimited ? 0 : pct} className="h-1.5" />
           <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-            <span>{credits.characters_used.toLocaleString()}</span>
-            <span>{credits.character_limit.toLocaleString()}</span>
+            <span>
+              {credits.credits_used.toLocaleString()}
+              {credits.credits_reserved > 0
+                ? ` + ${credits.credits_reserved.toLocaleString()} reserved`
+                : ""}
+            </span>
+            <span>{unlimited ? "∞" : credits.credit_limit.toLocaleString()}</span>
           </div>
         </div>
       </div>
@@ -74,7 +81,7 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
         size="icon"
         className="h-6 w-6"
         onClick={onRefresh}
-        title={`Refresh credits${credits.api_key_hint ? ` (${credits.api_key_hint})` : ""}`}
+        title="Refresh your monthly credit allowance"
       >
         <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
       </Button>

@@ -8,6 +8,7 @@ paths only. ``synced_at`` is reserved for a future cloud-sync phase.
 """
 
 import json
+import hashlib
 import logging
 import shutil
 import sqlite3
@@ -31,7 +32,37 @@ CREATE TABLE IF NOT EXISTS local_products (
     synced_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_local_products_profile ON local_products(profile_id);
+
+CREATE TABLE IF NOT EXISTS product_sources (
+    id              TEXT PRIMARY KEY,
+    profile_id      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    source_type     TEXT NOT NULL,
+    source_url      TEXT,
+    mapping_json    TEXT DEFAULT '{}',
+    headers_json    TEXT DEFAULT '[]',
+    last_synced_at  TEXT,
+    sync_status     TEXT DEFAULT 'idle',
+    sync_error      TEXT,
+    created_at      TEXT,
+    updated_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_product_sources_profile ON product_sources(profile_id);
 """
+
+_PRODUCT_COLUMNS = {
+    "source_id": "TEXT",
+    "source_type": "TEXT DEFAULT 'manual'",
+    "external_id": "TEXT",
+    "image_links": "TEXT DEFAULT '[]'",
+    "brand": "TEXT DEFAULT ''",
+    "category": "TEXT DEFAULT ''",
+    "sku": "TEXT DEFAULT ''",
+    "price": "TEXT DEFAULT ''",
+    "sale_price": "TEXT DEFAULT ''",
+    "product_url": "TEXT DEFAULT ''",
+    "extra_fields": "TEXT DEFAULT '{}'",
+}
 
 
 def _now() -> str:
@@ -57,16 +88,29 @@ class ProductLibraryStore:
         self._conn.execute("PRAGMA journal_mode = WAL")
         with self._write_lock:
             self._conn.executescript(_SCHEMA)
+            existing = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(local_products)").fetchall()
+            }
+            for column, definition in _PRODUCT_COLUMNS.items():
+                if column not in existing:
+                    self._conn.execute(f"ALTER TABLE local_products ADD COLUMN {column} {definition}")
+            self._conn.execute("DROP INDEX IF EXISTS idx_local_products_source_external")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX idx_local_products_source_external "
+                "ON local_products(source_id, external_id)"
+            )
+            self._conn.commit()
         logger.info("ProductLibraryStore initialized at %s", self.base_dir)
 
     # ---- helpers ----
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         d = dict(row)
-        try:
-            d["image_paths"] = json.loads(d.get("image_paths") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            d["image_paths"] = []
+        for field, fallback in (("image_paths", []), ("image_links", []), ("extra_fields", {})):
+            try:
+                d[field] = json.loads(d.get(field) or json.dumps(fallback))
+            except (json.JSONDecodeError, TypeError):
+                d[field] = fallback
         return d
 
     def image_dir(self, product_id: str) -> Path:
@@ -94,6 +138,17 @@ class ProductLibraryStore:
             "created_at": now,
             "updated_at": now,
             "synced_at": None,
+            "source_id": None,
+            "source_type": "manual",
+            "external_id": None,
+            "image_links": [],
+            "brand": "",
+            "category": "",
+            "sku": "",
+            "price": "",
+            "sale_price": "",
+            "product_url": "",
+            "extra_fields": {},
         }
         with self._write_lock:
             self._conn.execute(
@@ -104,12 +159,143 @@ class ProductLibraryStore:
             self._conn.commit()
         return row
 
-    def list(self, profile_id: str) -> List[Dict[str, Any]]:
-        cur = self._conn.execute(
-            "SELECT * FROM local_products WHERE profile_id = ? ORDER BY created_at DESC",
-            (profile_id,),
-        )
+    def create_source(
+        self,
+        profile_id: str,
+        name: str,
+        source_type: str,
+        source_url: str = "",
+        mapping: Optional[Dict[str, Any]] = None,
+        headers: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        now = _now()
+        source = {
+            "id": str(uuid.uuid4()),
+            "profile_id": profile_id,
+            "name": name,
+            "source_type": source_type,
+            "source_url": source_url,
+            "mapping": mapping or {},
+            "headers": headers or [],
+            "last_synced_at": None,
+            "sync_status": "idle",
+            "sync_error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT INTO product_sources (id, profile_id, name, source_type, source_url, mapping_json, headers_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (source["id"], profile_id, name, source_type, source_url,
+                 json.dumps(source["mapping"]), json.dumps(source["headers"]), now, now),
+            )
+            self._conn.commit()
+        return source
+
+    @staticmethod
+    def _source_row(row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        data["mapping"] = json.loads(data.pop("mapping_json", "{}") or "{}")
+        data["headers"] = json.loads(data.pop("headers_json", "[]") or "[]")
+        return data
+
+    def list_sources(self, profile_id: str) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM product_sources WHERE profile_id = ? ORDER BY created_at DESC", (profile_id,)
+        ).fetchall()
+        return [self._source_row(row) for row in rows]
+
+    def get_source(self, source_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM product_sources WHERE id = ? AND profile_id = ?", (source_id, profile_id)
+        ).fetchone()
+        return self._source_row(row) if row else None
+
+    def set_source_status(self, source_id: str, profile_id: str, status: str, error: Optional[str] = None) -> None:
+        now = _now()
+        with self._write_lock:
+            self._conn.execute(
+                "UPDATE product_sources SET sync_status = ?, sync_error = ?, last_synced_at = ?, updated_at = ? "
+                "WHERE id = ? AND profile_id = ?",
+                (status, error, now if status == "idle" else None, now, source_id, profile_id),
+            )
+            self._conn.commit()
+
+    def import_products(
+        self,
+        profile_id: str,
+        source: Dict[str, Any],
+        products: List[Dict[str, Any]],
+    ) -> Dict[str, int]:
+        """Replace one source snapshot using stable upserts, preserving all columns."""
+        now = _now()
+        source_id = source["id"]
+        imported_ids: List[str] = []
+        with self._write_lock:
+            for product in products:
+                external_id = product.get("external_id") or hashlib.sha256(
+                    json.dumps(product.get("extra_fields", {}), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+                ).hexdigest()[:24]
+                product_id = str(uuid.uuid4())
+                imported_ids.append(external_id)
+                self._conn.execute(
+                    "INSERT INTO local_products (id, profile_id, title, description, image_paths, created_at, updated_at, "
+                    "source_id, source_type, external_id, image_links, brand, category, sku, price, sale_price, product_url, extra_fields) "
+                    "VALUES (?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(source_id, external_id) DO UPDATE SET title=excluded.title, description=excluded.description, "
+                    "updated_at=excluded.updated_at, image_links=excluded.image_links, brand=excluded.brand, category=excluded.category, "
+                    "sku=excluded.sku, price=excluded.price, sale_price=excluded.sale_price, product_url=excluded.product_url, "
+                    "extra_fields=excluded.extra_fields",
+                    (product_id, profile_id, product["title"], product.get("description", ""), now, now,
+                     source_id, source["source_type"], external_id, json.dumps(product.get("image_links", [])),
+                     product.get("brand", ""), product.get("category", ""), product.get("sku", ""),
+                     product.get("price", ""), product.get("sale_price", ""), product.get("product_url", ""),
+                     json.dumps(product.get("extra_fields", {}), ensure_ascii=False, default=str)),
+                )
+            if imported_ids:
+                placeholders = ",".join("?" for _ in imported_ids)
+                self._conn.execute(
+                    f"DELETE FROM local_products WHERE source_id = ? AND external_id NOT IN ({placeholders})",
+                    [source_id, *imported_ids],
+                )
+            else:
+                self._conn.execute("DELETE FROM local_products WHERE source_id = ?", (source_id,))
+            self._conn.commit()
+        return {"imported": len(products)}
+
+    def list(
+        self,
+        profile_id: str,
+        *,
+        search: str = "",
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        where = "profile_id = ?"
+        params: List[Any] = [profile_id]
+        if search:
+            where += " AND (title LIKE ? OR description LIKE ? OR extra_fields LIKE ?)"
+            term = f"%{search}%"
+            params.extend([term, term, term])
+        sql = f"SELECT * FROM local_products WHERE {where} ORDER BY created_at DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        cur = self._conn.execute(sql, params)
         return [self._row_to_dict(r) for r in cur.fetchall()]
+
+    def count(self, profile_id: str, search: str = "") -> int:
+        where = "profile_id = ?"
+        params: List[Any] = [profile_id]
+        if search:
+            where += " AND (title LIKE ? OR description LIKE ? OR extra_fields LIKE ?)"
+            term = f"%{search}%"
+            params.extend([term, term, term])
+        row = self._conn.execute(
+            f"SELECT COUNT(*) FROM local_products WHERE {where}", params
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     def get(self, product_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
         cur = self._conn.execute(

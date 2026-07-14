@@ -22,6 +22,12 @@ import { ConfirmDialog } from "@/components/dialogs/confirm-dialog"
 import { ApiKeyManager } from "@/components/api-key-manager"
 import { friendlyPlatformName } from "@/lib/platforms"
 import { MLBundleInstaller } from "@/components/ml-bundle-installer"
+import { useLocalStorageConfig } from "@/hooks/use-local-storage-config"
+import {
+  DEFAULT_PIPELINE_LAYOUT,
+  PIPELINE_LAYOUT_STORAGE_KEY,
+  type PipelineLayoutMode,
+} from "@/lib/pipeline-layout"
 
 // Postiz/Buffer are legacy publishing backends, superseded by the Blipost platform
 // connection above. Schedule/Calendar still call the Postiz-backed endpoints under
@@ -90,6 +96,10 @@ export default function SettingsPage() {
   const { currentProfile, isLoading: profileLoading } = useProfile()
 
   const { theme, setTheme } = useTheme()
+  const [pipelineLayout, setPipelineLayout] = useLocalStorageConfig<PipelineLayoutMode>(
+    PIPELINE_LAYOUT_STORAGE_KEY,
+    DEFAULT_PIPELINE_LAYOUT,
+  )
   const [provider, setProvider] = useState("elevenlabs")
   const [voiceId, setVoiceId] = useState("")
   const voiceIdRef = useRef(voiceId); // Bug #60: stable ref for async callbacks
@@ -897,7 +907,7 @@ export default function SettingsPage() {
           </CardTitle>
           <CardDescription>Theme for the app interface</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
           <div className="flex gap-2">
             <Button
               variant={theme === "dark" ? "default" : "outline"}
@@ -913,6 +923,24 @@ export default function SettingsPage() {
               <Sun className="h-4 w-4" />
               Light
             </Button>
+          </div>
+
+          <div className="flex items-start justify-between gap-6 border-t pt-6">
+            <div className="space-y-1">
+              <label htmlFor="guided-pipeline-layout" className="text-base font-medium">
+                Guided cascade layout
+              </label>
+              <p className="max-w-2xl text-sm text-muted-foreground">
+                Stack pipeline panels vertically in Idea, Scripts, and Render so each action follows the previous one. Preview keeps its wide layout for real-time editing.
+              </p>
+            </div>
+            <Switch
+              id="guided-pipeline-layout"
+              checked={pipelineLayout === "guided"}
+              onCheckedChange={(checked) => setPipelineLayout(checked ? "guided" : "workspace")}
+              aria-label="Use guided cascade pipeline layout"
+              className="mt-1 shrink-0"
+            />
           </div>
         </CardContent>
       </Card>

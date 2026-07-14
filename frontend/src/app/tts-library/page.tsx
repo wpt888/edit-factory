@@ -476,7 +476,7 @@ export default function TTSLibraryPage() {
 
                 {/* Assets grid */}
                 {!isCollapsed && (
-                  <div className={`grid gap-4 ${isBatch ? "md:grid-cols-2 lg:grid-cols-3 pl-6 border-l-2 border-border" : "md:grid-cols-2 lg:grid-cols-3"}`}>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {batch.assets.map((asset) => {
                       const isExpanded = expandedIds.has(asset.id);
                       const isLong = asset.tts_text.length > 150;

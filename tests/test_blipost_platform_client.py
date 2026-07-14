@@ -14,6 +14,7 @@ import httpx
 from app.services.blipost_platform_client import (
     BlipostAuthError,
     BlipostCreditsError,
+    BlipostNotFoundError,
     BlipostPlatformClient,
     BlipostRateLimitError,
 )
@@ -37,6 +38,13 @@ def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"accounts": [
             {"id": "acc-1", "platform": "tiktok", "handle": "@x",
              "displayName": "X", "status": "active"}]})
+    if path.endswith("/automations"):
+        return httpx.Response(200, json={"automations": [{
+            "id": "wf-1", "name": "Daily reel", "enabled": True,
+            "triggerType": "schedule", "triggerConfig": {"mode": "daily", "hourUtc": 9},
+            "definition": {"nodes": [{"id": "n1", "type": "ai_text", "config": {}}],
+                           "edges": [{"from": "__trigger", "to": "n1"}]},
+        }]})
     if path.endswith("/media"):
         return httpx.Response(201, json={"mediaId": "media-1",
                                          "uploadUrl": "https://r2.example/put/media-1"})
@@ -64,6 +72,9 @@ def test_full_flow():
 
         accounts = await c.get_accounts()
         assert accounts[0]["id"] == "acc-1"
+
+        automations = await c.get_automations()
+        assert automations[0]["definition"]["nodes"][0]["type"] == "ai_text"
 
         slot = await c.request_media_upload("reel.mp4", "video/mp4", 1000)
         assert slot["mediaId"] == "media-1"
@@ -93,6 +104,9 @@ def test_error_mapping():
         def credits_fail(_req):
             return httpx.Response(402, json={"error": "Insufficient credits", "balance": 3})
 
+        def not_found(_req):
+            return httpx.Response(404, json={"error": "Not found"})
+
         try:
             await _client(auth_fail).get_me()
             assert False, "expected BlipostAuthError"
@@ -104,6 +118,46 @@ def test_error_mapping():
             assert False, "expected BlipostCreditsError"
         except BlipostCreditsError as e:
             assert e.balance == 3
+
+        try:
+            await _client(not_found).get_automations()
+            assert False, "expected BlipostNotFoundError"
+        except BlipostNotFoundError:
+            pass
+
+    asyncio.run(run())
+
+
+def test_automation_mutations_share_the_canonical_endpoint():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        base = {
+            "id": "wf-1", "name": "Desktop workflow", "enabled": False,
+            "triggerType": "manual", "triggerConfig": {},
+            "definition": {"nodes": [], "edges": []},
+            "lastRunAt": None, "createdAt": "2026-07-13T00:00:00Z",
+            "updatedAt": "2026-07-13T00:00:00Z",
+        }
+        if request.method == "POST":
+            return httpx.Response(201, json=base)
+        if request.method == "PATCH":
+            return httpx.Response(200, json={**base, "enabled": True})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404, json={"error": "not found"})
+
+    async def run():
+        client = _client(handler)
+        assert (await client.create_automation({"name": "Desktop workflow"}))["id"] == "wf-1"
+        assert (await client.update_automation("wf-1", {"enabled": True}))["enabled"] is True
+        await client.delete_automation("wf-1")
+        assert seen == [
+            ("POST", "/api/platform/v1/automations"),
+            ("PATCH", "/api/platform/v1/automations/wf-1"),
+            ("DELETE", "/api/platform/v1/automations/wf-1"),
+        ]
 
     asyncio.run(run())
 

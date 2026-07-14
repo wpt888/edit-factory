@@ -26,10 +26,11 @@ import {
   useRef,
   ReactNode,
 } from "react";
-import { apiGetWithRetry, handleApiError } from "@/lib/api";
+import { apiGetWithRetry } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 
 // Profile interface matching backend schema
-interface Profile {
+export interface Profile {
   id: string;
   name: string;
   description?: string;
@@ -54,13 +55,16 @@ const STORAGE_KEYS = {
 } as const;
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
+  const { user, loading: authLoading } = useAuth();
   const [currentProfile, setCurrentProfileState] = useState<Profile | null>(null);
   const [profiles, setProfilesState] = useState<Profile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Ref to track currentProfile without causing callback recreation
   const currentProfileRef = useRef<Profile | null>(null);
-  currentProfileRef.current = currentProfile;
+  useEffect(() => {
+    currentProfileRef.current = currentProfile;
+  }, [currentProfile]);
 
   /**
    * Fetch profiles from API and auto-select appropriate profile
@@ -123,6 +127,16 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    * Strategy: Hydrate from localStorage first (instant UI), then fetch from API (fresh data)
    */
   useEffect(() => {
+    if (authLoading) return;
+    if (!user?.id) {
+      const clearState = window.setTimeout(() => {
+        setCurrentProfileState(null);
+        setProfilesState([]);
+        setIsLoading(false);
+      }, 0);
+      return () => window.clearTimeout(clearState);
+    }
+
     const isMountedRef = { current: true };
     async function initialize() {
       let hasCachedData = false;
@@ -180,8 +194,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
     initialize();
     return () => { isMountedRef.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run once on mount
+  }, [authLoading, refreshProfiles, user?.id]);
 
   /**
    * Set current profile and persist to localStorage

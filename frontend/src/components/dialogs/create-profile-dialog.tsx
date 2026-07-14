@@ -12,7 +12,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useProfile } from "@/contexts/profile-context";
+import { useProfile, type Profile } from "@/contexts/profile-context";
 import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -29,11 +29,12 @@ import { Label } from "@/components/ui/label";
 interface CreateProfileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCreated?: (profile: Profile) => void;
 }
-
 export function CreateProfileDialog({
   open,
   onOpenChange,
+  onCreated,
 }: CreateProfileDialogProps) {
   const { refreshProfiles } = useProfile();
   const [name, setName] = useState("");
@@ -56,12 +57,12 @@ export function CreateProfileDialog({
     const trimmedName = name.trim();
 
     if (trimmedName.length < 2) {
-      toast.error("Profile name must be at least 2 characters");
+      toast.error("Workspace name must be at least 2 characters");
       return;
     }
 
     if (trimmedName.length > 50) {
-      toast.error("Profile name must be 50 characters or less");
+      toast.error("Workspace name must be 50 characters or less");
       return;
     }
 
@@ -73,18 +74,21 @@ export function CreateProfileDialog({
         description: description.trim() || undefined,
       });
 
+      const createdProfile = await response.json() as Profile;
+
       if (!isMountedRef.current) return;
-      toast.success("Profile created successfully");
+      toast.success("Workspace created successfully");
 
       await refreshProfiles();
 
       if (!isMountedRef.current) return;
+      onCreated?.(createdProfile);
       onOpenChange(false);
       setName("");
       setDescription("");
     } catch (error) {
       if (!isMountedRef.current) return;
-      handleApiError(error, "Error creating profile");
+      handleApiError(error, "Error creating workspace");
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
@@ -94,19 +98,19 @@ export function CreateProfileDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create New Profile</DialogTitle>
+          <DialogTitle>Create New Workspace</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           <div className="space-y-2">
             <Label htmlFor="profile-name">
-              Profile Name <span className="text-destructive">*</span>
+              Workspace Name <span className="text-destructive">*</span>
             </Label>
             <Input
               id="profile-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Personal, Work, Client X"
+              placeholder="e.g., Client X, Fashion Store"
               maxLength={50}
               disabled={loading}
             />
@@ -121,7 +125,7 @@ export function CreateProfileDialog({
               id="profile-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description"
+              placeholder="Client, store, or project description"
               disabled={loading}
             />
           </div>
@@ -136,7 +140,7 @@ export function CreateProfileDialog({
             Cancel
           </Button>
           <Button onClick={handleCreate} disabled={loading}>
-            {loading ? "Creating..." : "Create"}
+            {loading ? "Creating..." : "Create Workspace"}
           </Button>
         </DialogFooter>
       </DialogContent>

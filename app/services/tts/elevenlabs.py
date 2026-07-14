@@ -4,7 +4,9 @@ ElevenLabs TTS Service - TTSService interface implementation.
 Wraps existing ElevenLabsTTS functionality with unified interface.
 """
 import base64
+import hashlib
 import logging
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 import httpx
@@ -13,10 +15,44 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from .base import TTSService, TTSVoice, TTSResult
 from app.config import get_settings
+from app.services.elevenlabs_governance import (
+    ElevenLabsVoiceAccessDenied,
+    assigned_voice_ids,
+    filter_voices,
+    release_credits,
+    reserve_credits,
+    settle_credits,
+)
 
 logger = logging.getLogger(__name__)
 
 ELEVENLABS_MAX_CHARS = 5000
+_VOICE_METADATA_TTL_SECONDS = 300
+_voice_metadata_cache: dict[tuple[str, str], tuple[dict, float]] = {}
+
+
+def _api_key_fingerprint(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _cache_voice_metadata(api_key: str, voice: dict) -> None:
+    voice_id = voice.get("voice_id")
+    if voice_id:
+        _voice_metadata_cache[(_api_key_fingerprint(api_key), voice_id)] = (
+            voice,
+            time.monotonic(),
+        )
+
+
+def _actual_credit_cost(response: httpx.Response, fallback: int) -> int:
+    raw = response.headers.get("character-cost")
+    if raw is None:
+        return fallback
+    try:
+        return max(0, int(float(raw)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid ElevenLabs character-cost header: %r", raw)
+        return fallback
 
 
 @retry(
@@ -79,17 +115,31 @@ class ElevenLabsTTSService(TTSService):
 
         settings = get_settings()
         self._profile_id = profile_id
+        explicit_api_key = bool(api_key)
+        resolved_account_id: Optional[str] = None
 
         # If no explicit api_key and we have a profile_id, try account manager
         if not api_key and profile_id:
             try:
                 from app.services.elevenlabs_account_manager import get_account_manager
                 manager = get_account_manager()
-                api_key = manager.get_api_key(profile_id)
+                ordered_keys = manager.get_ordered_keys(profile_id)
+                if ordered_keys:
+                    api_key = ordered_keys[0]["api_key"]
+                    resolved_account_id = ordered_keys[0].get("account_id")
             except (ValueError, Exception) as e:
                 logger.debug(f"Account manager key lookup failed, falling back to env: {e}")
 
         self.api_key = api_key or settings.elevenlabs_api_key
+        # DB-backed profile keys are BYOK and consume that user's provider
+        # subscription. Only the shared env key consumes the platform allowance.
+        self._uses_shared_subscription = bool(profile_id) and (
+            (resolved_account_id is None and self.api_key == settings.elevenlabs_api_key)
+            or (explicit_api_key and (
+                not settings.elevenlabs_api_key
+                or self.api_key == settings.elevenlabs_api_key
+            ))
+        )
 
         # Resolve voice_id per-profile: explicit param > profile's
         # tts_settings.elevenlabs.voice_id (Supabase) > global env fallback.
@@ -127,6 +177,32 @@ class ElevenLabsTTSService(TTSService):
 
         logger.info(f"ElevenLabsTTSService initialized with voice: {self._voice_id}, model: {self.model_id}")
 
+    async def _get_voice_metadata(self, voice_id: str) -> dict:
+        cache_key = (_api_key_fingerprint(self.api_key), voice_id)
+        cached = _voice_metadata_cache.get(cache_key)
+        if cached and time.monotonic() - cached[1] <= _VOICE_METADATA_TTL_SECONDS:
+            return cached[0]
+
+        url = f"{self.BASE_URL}/voices/{voice_id}"
+        headers = {"xi-api-key": self.api_key}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            raise ElevenLabsVoiceAccessDenied(voice_id)
+        metadata = response.json()
+        _cache_voice_metadata(self.api_key, metadata)
+        return metadata
+
+    async def _assert_voice_authorized(self, voice_id: str) -> None:
+        if not self._uses_shared_subscription:
+            return
+        if self._profile_id and voice_id in assigned_voice_ids(self._profile_id):
+            return
+        metadata = await self._get_voice_metadata(voice_id)
+        category = str(metadata.get("category") or "unknown").lower()
+        if category not in {"premade", "default"}:
+            raise ElevenLabsVoiceAccessDenied(voice_id)
+
     @property
     def provider_name(self) -> str:
         """Return provider identifier."""
@@ -163,6 +239,7 @@ class ElevenLabsTTSService(TTSService):
                 voices = []
 
                 for v in data.get("voices", []):
+                    _cache_voice_metadata(self.api_key, v)
                     # Extract language from labels if available
                     labels = v.get("labels", {})
                     voice_language = labels.get("language", "en")
@@ -179,13 +256,15 @@ class ElevenLabsTTSService(TTSService):
                         provider="elevenlabs",
                         requires_cloning=False,
                         cost_per_1k_chars=self.cost_per_1k_chars,
-                        category=v.get("category", "premade"),
+                        category=v.get("category", "unknown"),
                         preview_url=v.get("preview_url"),
                     ))
 
                 # Sort: user voices (cloned/generated) first, then premade
                 priority = {"cloned": 0, "generated": 1, "professional": 2, "premade": 3}
-                voices.sort(key=lambda v: (priority.get(v.category or "premade", 99), v.name.lower()))
+                if self._uses_shared_subscription:
+                    voices = filter_voices(self._profile_id, voices)
+                voices.sort(key=lambda v: (priority.get(v.category or "unknown", 99), v.name.lower()))
 
                 logger.info(f"Fetched {len(voices)} ElevenLabs voices")
                 return voices
@@ -221,6 +300,8 @@ class ElevenLabsTTSService(TTSService):
                 "ELEVENLABS_VOICE_ID is required — select an ElevenLabs voice "
                 "in Settings for this profile before generating audio."
             )
+
+        await self._assert_voice_authorized(voice_id)
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +350,13 @@ class ElevenLabsTTSService(TTSService):
 
         logger.info(f"Generating TTS for {len(text)} characters with voice {voice_id}...")
 
+        reservation = reserve_credits(
+            self._profile_id if self._uses_shared_subscription else None,
+            text,
+            self.model_id,
+            voice_id,
+        )
+        provider_charged = False
         try:
             response = await _call_elevenlabs_api_new(url, headers, data)
 
@@ -280,6 +368,22 @@ class ElevenLabsTTSService(TTSService):
                 error_detail = response.content.decode("utf-8", errors="replace")
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
                 raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+
+            provider_charged = True
+            actual_credits = _actual_credit_cost(
+                response, reservation.estimated_credits if reservation else len(text)
+            )
+            try:
+                settle_credits(
+                    reservation,
+                    actual_credits,
+                    response.headers.get("request-id"),
+                )
+            except Exception:
+                # Keep the reservation held if settlement storage is temporarily
+                # unavailable; never release credits after the provider charged.
+                logger.exception("Failed to settle ElevenLabs credit reservation")
+            reservation = None
 
             # Save audio file
             with open(output_path, "wb") as f:
@@ -337,8 +441,12 @@ class ElevenLabsTTSService(TTSService):
             )
 
         except httpx.TimeoutException:
+            if not provider_charged:
+                release_credits(reservation)
             raise Exception("ElevenLabs API timeout - text may be too long")
         except Exception as e:
+            if not provider_charged:
+                release_credits(reservation)
             logger.error(f"TTS generation failed: {e}")
             raise
 
@@ -433,6 +541,8 @@ class ElevenLabsTTSService(TTSService):
                 "in Settings for this profile before generating audio."
             )
 
+        await self._assert_voice_authorized(voice_id)
+
         if len(text) > ELEVENLABS_MAX_CHARS:
             raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
 
@@ -483,6 +593,13 @@ class ElevenLabsTTSService(TTSService):
 
         logger.info(f"Generating TTS with timestamps for {len(text)} characters with voice {voice_id}...")
 
+        reservation = reserve_credits(
+            self._profile_id if self._uses_shared_subscription else None,
+            text,
+            effective_model,
+            voice_id,
+        )
+        provider_charged = False
         try:
             response = await _call_elevenlabs_api_new(url, headers, data)
 
@@ -494,6 +611,20 @@ class ElevenLabsTTSService(TTSService):
                 error_detail = response.content.decode("utf-8", errors="replace")
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
                 raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+
+            provider_charged = True
+            actual_credits = _actual_credit_cost(
+                response, reservation.estimated_credits if reservation else len(text)
+            )
+            try:
+                settle_credits(
+                    reservation,
+                    actual_credits,
+                    response.headers.get("request-id"),
+                )
+            except Exception:
+                logger.exception("Failed to settle ElevenLabs credit reservation")
+            reservation = None
 
             # Parse JSON response
             response_data = response.json()
@@ -568,8 +699,12 @@ class ElevenLabsTTSService(TTSService):
             return (tts_result, alignment)
 
         except httpx.TimeoutException:
+            if not provider_charged:
+                release_credits(reservation)
             raise Exception("ElevenLabs API timeout - text may be too long")
         except Exception as e:
+            if not provider_charged:
+                release_credits(reservation)
             logger.error(f"TTS generation with timestamps failed: {e}")
             raise
 

@@ -7,6 +7,8 @@ export interface SubtitleSettings {
   outlineColor: string;
   outlineWidth: number;
   positionY: number;
+  horizontalAlignment?: "left" | "center" | "right";
+  letterSpacing?: number;      // -2 to 10 reference pixels, default 0
   position?: "top" | "center" | "bottom";
   marginV?: number;
 
@@ -156,6 +158,8 @@ export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   outlineColor: "#000000",
   outlineWidth: 3,
   positionY: 85,
+  horizontalAlignment: "center",
+  letterSpacing: 0,
   position: "bottom",
   marginV: 30,
 
@@ -215,13 +219,17 @@ export interface ElevenLabsModelOption {
 
 /** Per-segment visual transform properties */
 export interface SegmentTransform {
-  rotation: number;   // 0-360 degrees
-  scale: number;      // 0.1-5.0
-  pan_x: number;      // pixels, horizontal offset
-  pan_y: number;      // pixels, vertical offset
-  flip_h: boolean;    // horizontal flip
-  flip_v: boolean;    // vertical flip
-  opacity: number;    // 0.0-1.0
+  rotation: number;    // 0-360 degrees
+  scale: number;       // 0.1-5.0
+  pan_x: number;       // pixels, horizontal offset
+  pan_y: number;       // pixels, vertical offset
+  flip_h: boolean;     // horizontal flip
+  flip_v: boolean;     // vertical flip
+  speed: number;       // 0.25-4.0 playback multiplier
+  blur_fill: boolean;  // blurred background instead of black bars when zoomed out
+  brightness: number;  // -1.0-1.0
+  contrast: number;    // 0.0-3.0
+  saturation: number;  // 0.0-3.0
 }
 
 export const DEFAULT_SEGMENT_TRANSFORM: SegmentTransform = {
@@ -231,7 +239,11 @@ export const DEFAULT_SEGMENT_TRANSFORM: SegmentTransform = {
   pan_y: 0,
   flip_h: false,
   flip_v: false,
-  opacity: 1.0,
+  speed: 1.0,
+  blur_fill: false,
+  brightness: 0,
+  contrast: 1.0,
+  saturation: 1.0,
 };
 
 // Caption preset types and configurations (Phase 71 - UX-04)

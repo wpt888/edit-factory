@@ -5,9 +5,9 @@ import { test, expect } from '@playwright/test';
  *
  * Verifies the Subtitle Style card in Step 3 of the pipeline (Advanced mode):
  *   1. Meta OFF → zero tabs, one "Live Preview" panel, one settings panel.
- *   2. Meta ON  → exactly two tabs ("A" / "B" with Instagram/Facebook badges),
- *                 two always-on live previews labelled "Live Preview — A"
- *                 and "Live Preview — B", and one shared settings panel.
+ *   2. Meta ON  → exactly two tabs ("A" / "B" with Instagram/Facebook labels),
+ *                 one useful-size preview switched by the active tab, and one
+ *                 shared settings panel.
  *
  * NOTE: These tests assume specific fixture pipelines exist in the DB,
  * each pre-configured with a different `meta_multiplication` value. The
@@ -50,6 +50,41 @@ function styleCardLocator(page: import('@playwright/test').Page) {
     .locator('xpath=ancestor::div[@data-slot="card"][1]');
 }
 
+test('subtitle preview remains visible while its inspector scrolls', async ({ page }) => {
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(1500);
+  await enterAdvancedMode(page);
+  await page.waitForTimeout(1500);
+
+  const inspector = page.getByTestId('step3-inspector');
+  const variantCanvas = page.getByTestId('step3-variant-canvas');
+  const preview = page.getByTestId('subtitle-sticky-preview');
+
+  await expect(preview).toBeVisible({ timeout: 10000 });
+  const initialCanvasScrollTop = await variantCanvas.evaluate((element) => element.scrollTop);
+  await inspector.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  await expect(preview).toBeInViewport();
+  await expect.poll(() => variantCanvas.evaluate((element) => element.scrollTop)).toBe(initialCanvasScrollTop);
+
+  const [inspectorBox, previewBox] = await Promise.all([
+    inspector.boundingBox(),
+    preview.boundingBox(),
+  ]);
+  expect(inspectorBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  // The sticky surface intentionally bleeds a few pixels over the inspector's
+  // top padding so settings cannot show through behind it while scrolling.
+  expect(previewBox!.y).toBeGreaterThanOrEqual(inspectorBox!.y - 16);
+  expect(previewBox!.y).toBeLessThan(inspectorBox!.y + inspectorBox!.height);
+  expect(previewBox!.y + previewBox!.height).toBeLessThanOrEqual(
+    inspectorBox!.y + inspectorBox!.height + 1,
+  );
+});
+
 test.describe('Subtitle style — per-Meta-version model', () => {
   test('Meta OFF → single preview, zero tabs', async ({ page }) => {
     const consoleErrors: string[] = [];
@@ -67,7 +102,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     // Target the Subtitle Style CardTitle specifically (avoids collision with
     // the inner <h3> "Subtitle Style" rendered by SubtitleEditor's settings panel).
     await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^Subtitle Style$/ })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/Customize subtitles once/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /about subtitle styles/i })).toBeVisible();
 
     const styleCard = styleCardLocator(page);
 
@@ -79,6 +114,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     // the definitive signal that only the "default" preview panel is rendering.
     await expect(styleCard.getByText(/Live Preview — A/i)).toHaveCount(0);
     await expect(styleCard.getByText(/Live Preview — B/i)).toHaveCount(0);
+    await expect(styleCard.locator('#subtitle-style-preview').getByText(/^Live Preview$/).first()).toBeVisible();
 
     // "Save as preset" button must still be present (global action)
     await expect(page.getByRole('button', { name: /save as preset/i })).toBeVisible();
@@ -91,7 +127,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     expect(consoleErrors, `Console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('Meta ON → two tabs + two live previews, independent A/B state', async ({ page }) => {
+  test('Meta ON → two tabs + one active live preview', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
@@ -106,7 +142,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     // Target the Subtitle Style CardTitle specifically (avoids collision with
     // the inner <h3> "Subtitle Style" rendered by SubtitleEditor's settings panel).
     await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^Subtitle Style$/ })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/Pick A or B/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /about subtitle styles/i })).toBeVisible();
 
     const styleCard = styleCardLocator(page);
 
@@ -118,9 +154,9 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await expect(styleCard.getByRole('tab', { name: /Instagram/i })).toBeVisible();
     await expect(styleCard.getByRole('tab', { name: /Facebook/i })).toBeVisible();
 
-    // Two "Live Preview" labels — one for A, one for B
+    // Only the selected version gets a preview panel.
     await expect(styleCard.getByText(/Live Preview — A/i)).toBeVisible();
-    await expect(styleCard.getByText(/Live Preview — B/i)).toBeVisible();
+    await expect(styleCard.getByText(/Live Preview — B/i)).toHaveCount(0);
 
     await page.screenshot({
       path: 'screenshots/subtitle-meta-on.png',
@@ -130,7 +166,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     expect(consoleErrors, `Console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('Meta ON → switching tabs keeps both previews visible', async ({ page }) => {
+  test('Meta ON → switching tabs replaces the active preview', async ({ page }) => {
     await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
@@ -139,15 +175,15 @@ test.describe('Subtitle style — per-Meta-version model', () => {
 
     const styleCard = styleCardLocator(page);
 
-    // Click tab A, then B — both previews should remain visible throughout
+    // Click A, then B — the single preview follows the selected version.
     const tabA = styleCard.getByRole('tab', { name: /Instagram/i });
     const tabB = styleCard.getByRole('tab', { name: /Facebook/i });
 
     await tabA.click();
     await page.waitForTimeout(300);
-    await expect(tabA).toHaveAttribute('data-state', 'active');
+    await expect(tabA).toHaveAttribute('aria-selected', 'true');
     await expect(styleCard.getByText(/Live Preview — A/i)).toBeVisible();
-    await expect(styleCard.getByText(/Live Preview — B/i)).toBeVisible();
+    await expect(styleCard.getByText(/Live Preview — B/i)).toHaveCount(0);
 
     await page.screenshot({
       path: 'screenshots/subtitle-editing-a-vs-b.png',
@@ -156,9 +192,8 @@ test.describe('Subtitle style — per-Meta-version model', () => {
 
     await tabB.click();
     await page.waitForTimeout(300);
-    await expect(tabB).toHaveAttribute('data-state', 'active');
-    // Both previews still visible after switching to B
-    await expect(styleCard.getByText(/Live Preview — A/i)).toBeVisible();
+    await expect(tabB).toHaveAttribute('aria-selected', 'true');
+    await expect(styleCard.getByText(/Live Preview — A/i)).toHaveCount(0);
     await expect(styleCard.getByText(/Live Preview — B/i)).toBeVisible();
   });
 });

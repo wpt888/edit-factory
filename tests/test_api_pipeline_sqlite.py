@@ -119,6 +119,25 @@ def test_pipeline_update_scripts_returns_non_503(sqlite_backend):
     assert r.status_code in (200, 404)
 
 
+def test_pipeline_script_names_are_saved_and_restored(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    p = _seed_pipeline(repo, profile_id, scripts=["first script", "second script"])
+
+    update = client.patch(
+        f"/api/v1/pipeline/{p['id']}/script-names",
+        json={"script_names": ["Rain hook", "Product details"]},
+        headers=HEADERS,
+    )
+    assert update.status_code == 200
+
+    restored = client.get(
+        f"/api/v1/pipeline/scripts/{p['id']}",
+        headers=HEADERS,
+    )
+    assert restored.status_code == 200
+    assert restored.json()["script_names"] == ["Rain hook", "Product details"]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # TTS lifecycle: approve / adopt-library
 # ──────────────────────────────────────────────────────────────────────────────

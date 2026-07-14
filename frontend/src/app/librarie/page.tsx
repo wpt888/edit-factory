@@ -1284,9 +1284,9 @@ function LibrarieContent() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold">Local Projects</h1>
+            <h1 className="text-2xl font-bold">Local Exports</h1>
             <p className="text-muted-foreground">
-              All exported clips from projects
+              Rendered videos and generated images stored on this computer
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1324,7 +1324,7 @@ function LibrarieContent() {
             size="sm"
             onClick={() => handleTabChange("videos")}
           >
-            <Film className="size-4 mr-2" /> Video Clips
+            <Film className="size-4 mr-2" /> Videos
           </Button>
           <Button
             variant={activeTab === "images" ? "default" : "ghost"}

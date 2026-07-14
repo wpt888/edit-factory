@@ -72,6 +72,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
     generatedCaptions,
     generatedYoutubeTitles,
     libraryProjectId,
+    pipelineLayout,
   }: Step4Ctx = ctx;
   return (
           <div className="space-y-5">
@@ -116,7 +117,11 @@ export function Step4Render({ ctx }: { ctx: any }) {
                 description="Configure a pipeline to generate videos."
               />
             ) : null}
-            <div className="grid grid-cols-1 gap-4 min-[1100px]:grid-cols-2">
+            <div
+              className={`grid grid-cols-1 gap-4 ${pipelineLayout === "guided" ? "" : "min-[1100px]:grid-cols-2"}`}
+              data-testid="step4-variant-grid"
+              data-layout={pipelineLayout}
+            >
               {variantStatuses.map((status, statusIdx) => (
                 <Card key={status.visual_version ? `${status.variant_index}_${status.visual_version}` : `${status.variant_index}_${statusIdx}`}>
                   <CardHeader>

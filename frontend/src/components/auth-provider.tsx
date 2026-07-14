@@ -12,12 +12,20 @@ import {
 } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import type { User, Session } from "@supabase/supabase-js";
+import { apiPost, invalidateApiMemoryCache } from "@/lib/api";
+import type { AuthError, User, Session } from "@supabase/supabase-js";
+import {
+  clearCreativeSsoSession,
+  creativeLoginUrl,
+  isCreativeBoundSession,
+  isCreativeSessionActive,
+} from "@/lib/creative-sso-session";
 
 export interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  signIn: (email: string, password: string) => Promise<AuthError | null>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
 }
@@ -42,14 +50,10 @@ interface AuthProviderProps {
 // HMR/Fast Refresh remounts or when the stored refresh_token is stale.
 // Matches the gate already present in middleware.ts:15 and the backend
 // auth_disabled branch in app/api/auth.py.
-// Also bypass in desktop builds: the desktop renderer never has a Supabase SSR
-// session (auth is the local /desktop/auth gate + 1234), and a clean/CI build
-// without baked Supabase env vars would otherwise crash createClient() at render.
-// Mirrors the desktop no-op in middleware.ts, so a fresh build behaves exactly
-// like the current one instead of white-screening.
-const AUTH_DISABLED =
-  process.env.NEXT_PUBLIC_AUTH_DISABLED === "true" ||
-  process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
+// Desktop mode is intentionally not part of this condition: desktop and web
+// clients use the same Supabase identity contract.
+const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
+const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
 // TODO(you): fill in the dev user contract below.
 //
@@ -65,12 +69,23 @@ const AUTH_DISABLED =
 //   - any other User fields your pages actually read (check navbar + pipeline)
 //
 // Return `null` instead of an object if you want to test the real guest UX.
-const DEV_USER: User | null = null;  // <-- replace with { id, email, ... } or keep null
+const DEV_USER: User | null = {
+  // Mirrors _DEV_PROFILE_ID in app/api/auth.py so profile-scoped data lines up.
+  id: "00000000-0000-0000-0000-000000000000",
+  aud: "authenticated",
+  role: "authenticated",
+  email: "dev@blipost.local",
+  app_metadata: { provider: "email", providers: ["email"] },
+  user_metadata: {},
+  created_at: "2026-01-01T00:00:00.000Z",
+} as User;
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<User | null>(AUTH_DISABLED ? DEV_USER : null);
+  const [user, setUser] = useState<User | null>(
+    AUTH_DISABLED ? DEV_USER : null,
+  );
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(!AUTH_DISABLED);
 
@@ -83,7 +98,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   pathnameRef.current = pathname;
 
   const refreshSession = useCallback(async () => {
-    if (!supabase) return;  // AUTH_DISABLED — nothing to refresh
+    if (!supabase) return; // AUTH_DISABLED — nothing to refresh
     try {
       const { data, error } = await supabase.auth.refreshSession();
       if (error) {
@@ -99,6 +114,57 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, [supabase]);
 
+  const signIn = useCallback(
+    async (email: string, password: string) => {
+      if (!supabase) {
+        return new Error("Authentication is disabled") as AuthError;
+      }
+
+      const { data, error } = DESKTOP_MODE
+        ? await (async () => {
+            try {
+              const response = await apiPost(
+                "/platform/session",
+                { email, password },
+                { skipAuth: true, timeout: 20_000 },
+              );
+              const bridge = (await response.json()) as {
+                access_token: string;
+                refresh_token: string;
+              };
+              return await supabase.auth.setSession({
+                access_token: bridge.access_token,
+                refresh_token: bridge.refresh_token,
+              });
+            } catch (bridgeError) {
+              const message =
+                bridgeError instanceof Error
+                  ? bridgeError.message
+                  : "Could not sign in to Blipost";
+              return {
+                data: { session: null, user: null },
+                error: new Error(message) as AuthError,
+              };
+            }
+          })()
+        : await supabase.auth.signInWithPassword({ email, password });
+
+      if (!error) {
+        // A direct Studio login starts an independent session. It must not
+        // inherit a stale Creative SSO binding from a previous account.
+        clearCreativeSsoSession();
+        // Commit the authenticated identity before the login page navigates.
+        // Relying only on the async auth event creates a race with the route
+        // guard, which can otherwise bounce a valid login back to /login.
+        setSession(data.session);
+        setUser(data.user);
+      }
+
+      return error;
+    },
+    [supabase],
+  );
+
   const signOut = useCallback(async () => {
     if (!supabase) {
       // AUTH_DISABLED — no real session to terminate, just bounce to login
@@ -113,10 +179,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } catch (error) {
       console.error("Error signing out:", error);
     } finally {
+      clearCreativeSsoSession();
+      localStorage.removeItem("editai_current_profile_id");
+      localStorage.removeItem("editai_profiles");
+      invalidateApiMemoryCache();
       // Always clear local state and redirect, even if signOut API fails (Bug #43)
       setUser(null);
       setSession(null);
-      router.push("/login");
+      router.replace("/login");
     }
   }, [supabase, router]);
 
@@ -128,7 +198,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // interrupts video playback and resets all page state.
   const initCompleteRef = useRef(false);
   useEffect(() => {
-    return () => { isMountedRef.current = false; };
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -144,22 +217,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Initial session check
     const initAuth = async () => {
       try {
-        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        const {
+          data: { session: currentSession },
+        } = await supabase.auth.getSession();
         if (!isMountedRef.current) return;
 
         if (currentSession) {
-          // Session exists — try to refresh the token
-          const { data, error } = await supabase.auth.refreshSession();
-          if (!isMountedRef.current) return;
-          if (error) {
-            console.error("Error refreshing session:", error);
-            // Stale session — clear it
+          const creativeSessionValid =
+            !isCreativeBoundSession(currentSession) ||
+            (await isCreativeSessionActive(currentSession.user));
+          if (!creativeSessionValid) {
+            clearCreativeSsoSession();
+            await supabase.auth.signOut({ scope: "local" });
             setUser(null);
             setSession(null);
-          } else {
-            setSession(data.session);
-            setUser(data.session?.user ?? null);
+            window.location.replace(creativeLoginUrl());
+            return;
           }
+          // Restore the durable local session immediately. The Supabase client
+          // refreshes it automatically; forcing a network refresh on every app
+          // launch can discard an otherwise valid login during a brief outage
+          // or when two startup consumers race on the same refresh token.
+          setSession(currentSession);
+          setUser(currentSession.user);
         } else {
           // No session — nothing to refresh
           setUser(null);
@@ -190,22 +270,61 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       if (event === "SIGNED_OUT") {
         // Redirect to login on sign out
-        if (pathnameRef.current !== "/login" && pathnameRef.current !== "/signup") {
+        if (
+          pathnameRef.current !== "/login" &&
+          pathnameRef.current !== "/signup"
+        ) {
           router.push("/login");
         }
-      } else if (event === "SIGNED_IN" && initCompleteRef.current) {
-        // Only refresh for genuine post-init sign-ins (e.g., login page redirect).
-        // Supabase may fire SIGNED_IN during token refresh / session restore;
-        // calling router.refresh() in those cases remounts the entire page tree.
-        router.refresh();
       }
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router]);
+
+  // SSO sessions are subordinate to Creative. Re-check on focus/visibility so
+  // logout in another tab takes effect immediately, plus periodically for a
+  // Studio tab that remains open in the foreground.
+  useEffect(() => {
+    if (!supabase || !session || !isCreativeBoundSession(session)) return;
+
+    let checking = false;
+    let disposed = false;
+    const verifyCreativeSession = async () => {
+      if (checking || disposed) return;
+      checking = true;
+      const active = await isCreativeSessionActive(session.user);
+      checking = false;
+      if (active || disposed) return;
+
+      clearCreativeSsoSession();
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } finally {
+        if (!disposed) {
+          setUser(null);
+          setSession(null);
+          window.location.replace(creativeLoginUrl());
+        }
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void verifyCreativeSession();
+    };
+    window.addEventListener("focus", verifyCreativeSession);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const interval = window.setInterval(verifyCreativeSession, 30_000);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", verifyCreativeSession);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.clearInterval(interval);
+    };
+  }, [router, session, supabase]);
 
   return (
     <AuthContext.Provider
@@ -213,6 +332,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         user,
         session,
         loading,
+        signIn,
         signOut,
         refreshSession,
       }}

@@ -4450,10 +4450,6 @@ async def _render_with_preset(
     # Render quality/speed mode (Wave 2.1): "speed" | "balanced" | "max".
     # None = use the configured default (env RENDER_QUALITY_MODE, else balanced).
     quality_mode: Optional[str] = None,
-    # F1: seconds the video body is offset by the ultra-rapid intro. The audio
-    # (and unshifted SRT) start at t=0, so the audio input is delayed by this
-    # amount and the -t clamp is extended by it. 0 = no intro.
-    intro_offset_sec: float = 0.0,
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
@@ -4468,14 +4464,9 @@ async def _render_with_preset(
     # Build FFmpeg command
     cmd = ["ffmpeg", "-y", "-i", str(video_path)]
 
-    # F1: delay the audio start by the intro offset so voiceover lines up with
-    # the body (which the ultra-rapid intro pushed forward). -itsoffset must come
-    # before the -i it applies to.
-    _audio_delay = ["-itsoffset", str(intro_offset_sec)] if intro_offset_sec > 0 else []
-
     # Add audio input (real or silent)
     if audio_path and audio_path.exists():
-        cmd.extend([*_audio_delay, "-i", str(audio_path)])
+        cmd.extend(["-i", str(audio_path)])
         has_audio = True
     else:
         # Add silent audio source BEFORE video settings
@@ -4607,17 +4598,16 @@ async def _render_with_preset(
                 logger.warning("Audio normalization measurement failed, rendering without normalization")
 
     # User audio adjustments — appended AFTER loudnorm so normalization doesn't
-    # cancel the requested volume; fade times account for the -itsoffset intro
-    # delay (filters see the shifted timestamps).
+    # cancel the requested volume. Audio always starts at output t=0, including
+    # underneath the ultra-rapid visual montage.
     if has_audio:
-        _fade_base = intro_offset_sec if intro_offset_sec > 0 else 0.0
         if abs(voice_volume - 1.0) > 0.001:
             audio_filters.append(f"volume={voice_volume:.2f}")
             logger.info(f"Applying voice volume: {voice_volume:.2f}")
         if audio_fade_in > 0:
-            audio_filters.append(f"afade=t=in:st={_fade_base:.2f}:d={audio_fade_in:.2f}")
+            audio_filters.append(f"afade=t=in:st=0.00:d={audio_fade_in:.2f}")
         if audio_fade_out > 0 and _audio_dur > audio_fade_out:
-            _fade_out_st = _fade_base + _audio_dur - audio_fade_out
+            _fade_out_st = _audio_dur - audio_fade_out
             audio_filters.append(f"afade=t=out:st={_fade_out_st:.2f}:d={audio_fade_out:.2f}")
 
     # Apply audio filters if any
@@ -4752,9 +4742,9 @@ async def _render_with_preset(
             logger.info(f"VBR 2-pass: Starting pass 2 (encoding)")
             pass2_cmd = ["ffmpeg", "-y", "-i", str(video_path)]
 
-            # Add audio input (F1: delayed by intro offset — see single-pass note)
+            # Audio begins together with the ultra-rapid visual montage.
             if audio_path and audio_path.exists():
-                pass2_cmd.extend([*_audio_delay, "-i", str(audio_path)])
+                pass2_cmd.extend(["-i", str(audio_path)])
                 has_audio_pass2 = True
             else:
                 pass2_cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
@@ -4777,8 +4767,7 @@ async def _render_with_preset(
             if audio_path and audio_path.exists():
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
                 if _audio_dur > 0:
-                    # F1: total length = intro + audio (audio is itsoffset-delayed)
-                    pass2_cmd.extend(["-t", str(_audio_dur + intro_offset_sec)])
+                    pass2_cmd.extend(["-t", str(_audio_dur)])
                 else:
                     pass2_cmd.extend(["-shortest"])
             else:
@@ -4828,8 +4817,7 @@ async def _render_with_preset(
         if audio_path and audio_path.exists():
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
             if _audio_dur > 0:
-                # F1: total length = intro + audio (audio is itsoffset-delayed)
-                cmd.extend(["-t", str(_audio_dur + intro_offset_sec)])
+                cmd.extend(["-t", str(_audio_dur)])
             else:
                 cmd.extend(["-shortest"])
         else:

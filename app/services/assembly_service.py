@@ -34,6 +34,7 @@ from typing import List, Optional, Tuple, Dict
 from app.config import get_settings
 from app.utils import normalize_path
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
+from app.services.segment_transforms import SegmentTransform
 
 TARGET_FPS = 30  # All segments normalized to this frame rate before concat
 from app.services.srt_validator import sanitize_srt_full
@@ -114,6 +115,57 @@ class TimelineEntry:
     pinned: bool = False  # F6: originates from a pinned match — never absorbed/swapped
 
 
+@dataclass(frozen=True)
+class _SegmentExtractionTiming:
+    """Speed-aware source window and loop plan for one timeline slot."""
+    required_source_duration: float
+    source_window_duration: float
+    use_loop: bool
+    loop_count: int
+
+
+def _segment_extraction_timing(
+    segment_duration: float,
+    needed_duration: float,
+    speed: float,
+) -> _SegmentExtractionTiming:
+    """Map an output slot to a source window while preserving output duration."""
+    bounded_speed = max(0.25, min(4.0, float(speed)))
+    available_source_duration = max(0.0, float(segment_duration))
+    required_source_duration = max(0.0, float(needed_duration)) * bounded_speed
+    source_window_duration = min(required_source_duration, available_source_duration)
+    use_loop = available_source_duration + 1e-6 < required_source_duration
+    loop_count = (
+        max(1, math.ceil(required_source_duration / available_source_duration))
+        if use_loop and available_source_duration > 0
+        else 1
+    )
+    return _SegmentExtractionTiming(
+        required_source_duration=required_source_duration,
+        source_window_duration=source_window_duration,
+        use_loop=use_loop,
+        loop_count=loop_count,
+    )
+
+
+def _source_duration_for_timeline(timeline_duration: float, transforms: Optional[dict]) -> float:
+    """Return how much source media a transformed timeline slot consumes."""
+    return max(0.0, timeline_duration) * SegmentTransform.from_dict(transforms).speed
+
+
+def _segment_filter_chain(transform: SegmentTransform, width: int, height: int) -> List[str]:
+    """Build extraction filters, including plain normalization and speed."""
+    visual_filters = transform.to_ffmpeg_filters(width=width, height=height)
+    if not visual_filters:
+        visual_filters = [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+        ]
+    if abs(transform.speed - 1.0) >= 0.001:
+        return [f"setpts=PTS/{transform.speed:g}", *visual_filters]
+    return visual_filters
+
+
 def _serialize_preview_timeline(
     timeline: List[TimelineEntry],
     segments_data: List[dict],
@@ -178,28 +230,6 @@ def _segment_visual_clusters(segments_data: List[dict]) -> Dict[str, str]:
 def strip_product_group_tags(text: str) -> str:
     """Remove [ProductGroup] tags from script text, leaving only speakable content."""
     return re.sub(r'\[([^\[\]]+)\]', '', text).strip()
-
-
-_SRT_TS_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})")
-
-
-def shift_srt(content: str, offset_sec: float) -> str:
-    """Shift every SRT timestamp by offset_sec (F1: intro delay).
-
-    Keeps the HH:MM:SS,mmm format. offset_sec of 0 returns content unchanged.
-    """
-    if not content or offset_sec <= 0:
-        return content
-
-    def _shift(m: "re.Match") -> str:
-        total_ms = (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))) * 1000 + int(m.group(4))
-        total_ms += int(round(offset_sec * 1000))
-        h, rem = divmod(total_ms, 3600_000)
-        mnt, rem = divmod(rem, 60_000)
-        s, ms = divmod(rem, 1000)
-        return f"{h:02d}:{mnt:02d}:{s:02d},{ms:03d}"
-
-    return _SRT_TS_RE.sub(_shift, content)
 
 
 def _slugify_output_component(value: Optional[str], *, fallback: str, max_words: int = 8, max_length: int = 48) -> str:
@@ -505,6 +535,12 @@ class AssemblyService:
                 **safe_settings
             )
         except Exception as el_err:
+            from app.services.elevenlabs_governance import ElevenLabsGovernanceError
+            if isinstance(el_err, ElevenLabsGovernanceError):
+                # Access and allowance failures are policy decisions, not
+                # provider outages. Surface them instead of silently swapping
+                # the user's selected voice for Edge TTS.
+                raise
             # F7 offline path: ElevenLabs unavailable (no key, quota, network)
             # must not kill the pipeline — Edge TTS is free and local-friendly.
             # Character timings are estimated uniformly over the audio duration;
@@ -1164,10 +1200,10 @@ class AssemblyService:
                                  duration for that entry.
 
         Returns:
-            (timeline, intro_offset_sec) — intro_offset_sec is the total duration
-            of the ultra-rapid intro prepended before the body (0.0 when disabled).
-            The body starts at t=intro_offset_sec, so callers must shift the SRT
-            and delay the audio by this amount to keep A/V/subtitles in sync (F1).
+            (timeline, intro_duration_sec) — intro_duration_sec is the duration
+            of the ultra-rapid visual montage at the beginning (0.0 when disabled).
+            The montage replaces the first seconds of the normal body timeline;
+            audio and subtitles always remain anchored at t=0.
         """
         timeline = []
 
@@ -1273,6 +1309,11 @@ class AssemblyService:
             intro_entry_count = len(intro_segments)
             logger.info(f"Ultra-rapid intro: added {intro_entry_count} micro-segments ({current_timeline_pos:.2f}s)")
 
+        # The rapid montage is an overlay on the beginning of the narration, not
+        # extra lead-in time. Keep its duration so the equivalent amount of body
+        # footage can be removed after grouping/deduplication below.
+        intro_duration_sec = current_timeline_pos
+
         for idx, match in enumerate(match_results):
             # Determine which segment to use
             if match.segment_id and match.segment_id in segment_lookup:
@@ -1350,18 +1391,22 @@ class AssemblyService:
             segment_start = segment.get("start_time", 0.0)
             segment_end = segment.get("end_time", segment_start + needed_duration)
             segment_duration = segment_end - segment_start
+            source_needed_duration = _source_duration_for_timeline(
+                needed_duration, segment.get("transforms")
+            )
 
             # F2: the timeline entry ALWAYS occupies exactly needed_duration so
             # video time never falls behind audio/SRT. If the source span is
             # shorter, keep end_time at the real segment end (clamped to EOF) and
             # let the extraction layer loop/hold to fill the slot.
-            if segment_duration >= needed_duration:
-                use_end = segment_start + needed_duration
+            if segment_duration >= source_needed_duration:
+                use_end = segment_start + source_needed_duration
             else:
                 use_end = _clamp_end(source_video_path, segment_start, segment_end)
                 logger.info(
-                    f"  timeline[{idx}]: segment short ({segment_duration:.2f}s < "
-                    f"{needed_duration:.2f}s) — slot held at {needed_duration:.2f}s (loop-fill)"
+                    f"  timeline[{idx}]: source short ({segment_duration:.2f}s < "
+                    f"{source_needed_duration:.2f}s needed at {SegmentTransform.from_dict(segment.get('transforms')).speed:g}x) "
+                    f"— slot held at {needed_duration:.2f}s (loop-fill)"
                 )
             use_duration = needed_duration
 
@@ -1394,7 +1439,10 @@ class AssemblyService:
         # Handle gap between last SRT entry and audio end
         # Add 0.5s safety margin so video track fully covers audio (prevents subtitle cutoff
         # from floating-point accumulation in segment durations during concat)
-        target_video_duration = audio_duration + 0.5
+        # Build enough body footage that, after the rapid montage replaces its
+        # first intro_duration_sec seconds, the result still covers the complete
+        # audio plus the normal safety margin.
+        target_video_duration = audio_duration + intro_duration_sec + 0.5
         if current_timeline_pos < target_video_duration:
             gap = target_video_duration - current_timeline_pos
             logger.info(f"Extending timeline by {gap:.2f}s to cover audio duration + safety margin")
@@ -1424,8 +1472,13 @@ class AssemblyService:
                         timeline[-1] = TimelineEntry(
                             source_video_path=last_entry.source_video_path,
                             start_time=last_entry.start_time,
-                            end_time=_clamp_end(last_entry.source_video_path, last_entry.start_time,
-                                                last_entry.start_time + last_entry.timeline_duration + gap),
+                            end_time=_clamp_end(
+                                last_entry.source_video_path,
+                                last_entry.start_time,
+                                last_entry.start_time + _source_duration_for_timeline(
+                                    last_entry.timeline_duration + gap, last_entry.transforms
+                                ),
+                            ),
                             timeline_start=last_entry.timeline_start,
                             timeline_duration=last_entry.timeline_duration + gap,
                             transforms=last_entry.transforms,
@@ -1436,8 +1489,13 @@ class AssemblyService:
                     timeline[-1] = TimelineEntry(
                         source_video_path=last_entry.source_video_path,
                         start_time=last_entry.start_time,
-                        end_time=_clamp_end(last_entry.source_video_path, last_entry.start_time,
-                                            last_entry.start_time + last_entry.timeline_duration + gap),
+                        end_time=_clamp_end(
+                            last_entry.source_video_path,
+                            last_entry.start_time,
+                            last_entry.start_time + _source_duration_for_timeline(
+                                last_entry.timeline_duration + gap, last_entry.transforms
+                            ),
+                        ),
                         timeline_start=last_entry.timeline_start,
                         timeline_duration=last_entry.timeline_duration + gap,
                         transforms=last_entry.transforms,
@@ -1452,9 +1510,19 @@ class AssemblyService:
                 gap_entry = TimelineEntry(
                     source_video_path=source_video_path,
                     start_time=segment_start,
-                    end_time=_clamp_end(source_video_path, segment_start, min(segment_end, segment_start + gap)),
+                    end_time=_clamp_end(
+                        source_video_path,
+                        segment_start,
+                        min(
+                            segment_end,
+                            segment_start + _source_duration_for_timeline(
+                                gap, fallback.get("transforms")
+                            ),
+                        ),
+                    ),
                     timeline_start=current_timeline_pos,
                     timeline_duration=gap,
+                    transforms=fallback.get("transforms"),
                 )
                 timeline.append(gap_entry)
 
@@ -1559,7 +1627,12 @@ class AssemblyService:
                 extended_end = _clamp_end(
                     representative.source_video_path,
                     representative.start_time,
-                    max(representative.end_time, representative.start_time + accumulated_duration),
+                    max(
+                        representative.end_time,
+                        representative.start_time + _source_duration_for_timeline(
+                            accumulated_duration, representative.transforms
+                        ),
+                    ),
                 )
                 merged.append(TimelineEntry(
                     source_video_path=representative.source_video_path,
@@ -1586,7 +1659,12 @@ class AssemblyService:
                     source_video_path=prev.source_video_path,
                     start_time=prev.start_time,
                     end_time=_clamp_end(prev.source_video_path, prev.start_time,
-                                        max(prev.end_time, prev.start_time + combined_duration)),
+                                        max(
+                                            prev.end_time,
+                                            prev.start_time + _source_duration_for_timeline(
+                                                combined_duration, prev.transforms
+                                            ),
+                                        )),
                     timeline_start=prev.timeline_start,
                     timeline_duration=combined_duration,
                     transforms=prev.transforms,
@@ -1682,7 +1760,9 @@ class AssemblyService:
                         best_replacement.source_video_path,
                         best_replacement.start_time,
                         max(best_replacement.end_time,
-                            best_replacement.start_time + merged[idx].timeline_duration),
+                            best_replacement.start_time + _source_duration_for_timeline(
+                                merged[idx].timeline_duration, best_replacement.transforms
+                            )),
                     )
                     merged[idx] = TimelineEntry(
                         source_video_path=best_replacement.source_video_path,
@@ -1714,25 +1794,79 @@ class AssemblyService:
 
             timeline = merged
 
-        # F1: intro_offset_sec = total duration of the prepended intro (the body
-        # begins at this timeline position). Callers shift SRT + delay audio by it.
-        intro_offset_sec = sum(
+        intro_duration_sec = sum(
             e.timeline_duration for e in timeline[:intro_entry_count]
         ) if intro_entry_count else 0.0
+
+        # The intro montage occupies audio time [0, intro_duration_sec). Remove
+        # that same interval from the start of the regular body so the first body
+        # shot shown after the montage corresponds to the narration at that time.
+        # A partially-covered entry keeps its chosen source but only its remaining
+        # slot duration; extraction starts that shot cleanly at the montage seam.
+        if intro_duration_sec > 0:
+            intro_entries = timeline[:intro_entry_count]
+            body_entries = timeline[intro_entry_count:]
+            body_time_to_skip = intro_duration_sec
+            aligned_body: List[TimelineEntry] = []
+
+            for entry in body_entries:
+                if body_time_to_skip >= entry.timeline_duration - 0.001:
+                    body_time_to_skip = max(0.0, body_time_to_skip - entry.timeline_duration)
+                    continue
+
+                if body_time_to_skip > 0.001:
+                    entry = TimelineEntry(
+                        source_video_path=entry.source_video_path,
+                        start_time=entry.start_time,
+                        end_time=entry.end_time,
+                        timeline_start=entry.timeline_start,
+                        timeline_duration=entry.timeline_duration - body_time_to_skip,
+                        transforms=entry.transforms,
+                        pinned=entry.pinned,
+                    )
+                    body_time_to_skip = 0.0
+
+                aligned_body.append(entry)
+
+            if body_time_to_skip > 0.001:
+                logger.warning(
+                    "Ultra-rapid intro covers the complete body timeline; "
+                    f"uncovered intro duration={body_time_to_skip:.2f}s"
+                )
+
+            timeline = [*intro_entries, *aligned_body]
+            cumulative = 0.0
+            for idx, entry in enumerate(timeline):
+                timeline[idx] = TimelineEntry(
+                    source_video_path=entry.source_video_path,
+                    start_time=entry.start_time,
+                    end_time=entry.end_time,
+                    timeline_start=cumulative,
+                    timeline_duration=entry.timeline_duration,
+                    transforms=entry.transforms,
+                    pinned=entry.pinned,
+                )
+                cumulative += entry.timeline_duration
+
+            logger.info(
+                f"Ultra-rapid intro overlays narration from 0.00-{intro_duration_sec:.2f}s; "
+                "removed the same duration from the body timeline"
+            )
 
         total_duration = sum(e.timeline_duration for e in timeline)
         logger.info(
             f"Built timeline with {len(timeline)} entries, total duration: {total_duration:.2f}s, "
-            f"intro_offset={intro_offset_sec:.2f}s"
+            f"intro_duration={intro_duration_sec:.2f}s"
         )
 
-        return timeline, intro_offset_sec
+        return timeline, intro_duration_sec
 
     async def assemble_video(
         self,
         timeline: List[TimelineEntry],
         temp_dir: Path,
         interstitial_slides: Optional[List[dict]] = None,
+        attention_timeline: Optional[dict] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         match_results: Optional[List] = None,
         _preview_mode: bool = False,
@@ -1761,7 +1895,6 @@ class AssemblyService:
 
         # Extract each segment clip in parallel, throttled by semaphore.
         # Preview mode uses a dedicated semaphore so it never queues behind production.
-        from app.services.segment_transforms import SegmentTransform
         from app.services.ffmpeg_semaphore import acquire_prep_slot, acquire_preview_prep_slot, is_nvenc_available
         from app.services import segment_cache
         # Pre-allocate ordered results list (None = failed)
@@ -1789,18 +1922,16 @@ class AssemblyService:
 
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
-            transform_filters = transform.to_ffmpeg_filters(width=target_w, height=target_h)
+            transform_filters = _segment_filter_chain(transform, target_w, target_h)
+            extraction_timing = _segment_extraction_timing(
+                segment_duration=segment_duration,
+                needed_duration=needed_duration,
+                speed=transform.speed,
+            )
 
-            # Always force consistent portrait dimensions, even without transforms
-            # Use increase+crop to fill frame (no black bars) instead of decrease+pad
-            if not transform_filters:
-                transform_filters = [
-                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase",
-                    f"crop={target_w}:{target_h}",
-                ]
-
-            # When segment is shorter than needed, loop it to fill the duration
-            use_loop = segment_duration < needed_duration - 0.05
+            # When the speed-adjusted source window is short, preserve the
+            # existing loop-fill fallback so the output still fills its slot.
+            use_loop = extraction_timing.use_loop
 
             if not entry.source_video_path:
                 logger.error(f"Timeline entry {i} has no source_video_path, skipping")
@@ -1879,26 +2010,25 @@ class AssemblyService:
                             return
 
                         # Loop the extracted segment (contains only segment content)
-                        loop_count = math.ceil(needed_duration / segment_duration)
                         cmd.extend([
-                            "-stream_loop", str(loop_count - 1),
+                            "-stream_loop", str(extraction_timing.loop_count - 1),
                             "-i", str(segment_raw),
-                            "-t", str(needed_duration),
                             "-vf", ",".join(transform_filters),
                         ])
                     else:
                         # Without loop, -ss before -i enables fast seeking
-                        # CRITICAL: clamp to segment_duration so FFmpeg never reads past
-                        # the user-defined segment end_time boundary
-                        clamped_duration = min(needed_duration, segment_duration)
+                        # Input -t is speed-adjusted and clamped to entry.end_time.
                         cmd.extend([
                             "-ss", str(entry.start_time),
+                            "-t", str(extraction_timing.source_window_duration),
                             "-i", entry.source_video_path,
-                            "-t", str(clamped_duration),
                             "-vf", ",".join(transform_filters),
                         ])
 
                     cmd.extend([
+                        # Output duration is always the exact timeline slot after
+                        # setpts remaps the selected source window.
+                        "-t", str(needed_duration),
                         *_codec_params,
                         "-r", str(TARGET_FPS),
                         "-fps_mode", "cfr",
@@ -1989,7 +2119,9 @@ class AssemblyService:
             )
 
         # Generate and insert interstitial slide clips into segment list
-        if interstitial_slides:
+        # Disabled compatibility implementation: inserting image clips changed
+        # the edit duration and desynchronised narration/subtitles.
+        if False and interstitial_slides:
             from app.services.video_effects.overlay_renderer import generate_interstitial_clip
             # Sort slides by afterMatchIndex
             sorted_slides = sorted(interstitial_slides, key=lambda s: s.get("afterMatchIndex", -1))
@@ -2032,6 +2164,30 @@ class AssemblyService:
                 segment_files = new_files
                 logger.info(f"Interstitial slides inserted: {len(segment_files)} total clips in concat list")
 
+        if interstitial_slides and not attention_timeline:
+            boundaries = [0.0]
+            for entry in timeline:
+                boundaries.append(boundaries[-1] + entry.timeline_duration)
+            cues = []
+            for slide in interstitial_slides:
+                url = slide.get("imageUrl")
+                if not url:
+                    continue
+                after = int(slide.get("afterMatchIndex", -1))
+                start_s = boundaries[min(max(after + 1, 0), len(boundaries) - 1)]
+                slide_id = str(slide.get("id", uuid.uuid4()))
+                cues.append({
+                    "id": slide_id, "startMs": round(start_s * 1000),
+                    "durationMs": round(float(slide.get("duration", 2.0)) * 1000),
+                    "layers": [{
+                        "id": f"legacy-{slide_id}", "assetId": url, "assetUrl": url,
+                        "x": 0, "y": 0, "width": 1, "height": 1,
+                        "zIndex": 1, "fit": "cover",
+                        "animation": {"preset": "zoom" if slide.get("animation") == "kenburns" else "static", "enterMs": 200, "exitMs": 200, "delayMs": 0, "intensity": 1},
+                    }], "sfxVolumeDb": 0,
+                })
+            attention_timeline = {"revision": 0, "cues": cues}
+
         # Create concat list file
         concat_file = temp_dir / "concat_list.txt"
         with open(concat_file, 'w', encoding='utf-8') as f:
@@ -2061,6 +2217,17 @@ class AssemblyService:
         result = await asyncio.to_thread(safe_ffmpeg_run, cmd, _concat_timeout, "assembly concat")
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
+
+        if attention_timeline and attention_timeline.get("cues"):
+            from app.services.video_effects.overlay_renderer import apply_attention_timeline
+            assembled_path = await apply_attention_timeline(
+                assembled_path,
+                attention_timeline,
+                temp_dir / "assembled_attention.mp4",
+                target_w,
+                target_h,
+                sum(entry.timeline_duration for entry in timeline),
+            )
 
         logger.info(f"Video assembly complete: {assembled_path}")
 
@@ -2101,6 +2268,7 @@ class AssemblyService:
         min_segment_duration: float = 3.0,
         ultra_rapid_intro: bool = True,
         interstitial_slides: Optional[List[dict]] = None,
+        attention_timeline: Optional[dict] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         avoid_segment_ids: Optional[set] = None,
         _preview_mode: bool = False,
@@ -2531,7 +2699,7 @@ class AssemblyService:
             # so the merge pass in build_timeline won't change them further.
             # Ultra-rapid intro is passed through so it appears in the render
             # just as it did in the preview.
-            timeline, intro_offset_sec = self.build_timeline(
+            timeline, _intro_duration_sec = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
                 audio_duration=audio_duration,
@@ -2553,15 +2721,6 @@ class AssemblyService:
                     f"{'LOOP' if will_loop else 'ok'}"
                 )
 
-            # F1: the ultra-rapid intro pushes the body forward by intro_offset_sec,
-            # but the SRT/audio start at t=0. Shift the burned-in SRT and (below)
-            # delay the audio track by the same offset so captions/voiceover stay
-            # aligned with the body. The library-saved SRT content stays unshifted.
-            if intro_offset_sec > 0:
-                with open(srt_path, 'w', encoding='utf-8') as f:
-                    f.write(shift_srt(sanitize_srt_full(srt_content), intro_offset_sec))
-                logger.info(f"Shifted burned-in SRT by intro offset {intro_offset_sec:.2f}s")
-
             # Step 7: Assemble video
             logger.info("Step 7/7: Assembling and rendering final video")
             _report("Assembling video segments", 70)
@@ -2569,6 +2728,7 @@ class AssemblyService:
                 timeline=timeline,
                 temp_dir=temp_dir,
                 interstitial_slides=interstitial_slides,
+                attention_timeline=attention_timeline,
                 pip_overlays=pip_overlays,
                 match_results=match_results,
                 _preview_mode=_preview_mode,
@@ -2629,7 +2789,6 @@ class AssemblyService:
                 audio_fade_out=audio_fade_out,
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
-                intro_offset_sec=intro_offset_sec,  # F1: delay audio by intro length
                 # Real encode progress fills the 85%->99% band (replaces the
                 # fake freeze at 85%). _report no-ops when no on_progress consumer.
                 on_encode_progress=(
@@ -2637,6 +2796,16 @@ class AssemblyService:
                     if on_progress else None
                 ),
             )
+
+            if attention_timeline and any(
+                cue.get("sfxUrl") or cue.get("sfxAssetId")
+                for cue in attention_timeline.get("cues", [])
+            ):
+                from app.services.video_effects.overlay_renderer import mix_attention_sfx
+                sfx_output = temp_dir / "final_with_attention_sfx.mp4"
+                mixed = await mix_attention_sfx(final_output_path, attention_timeline, sfx_output)
+                if mixed != final_output_path and mixed.exists():
+                    _shutil.move(str(mixed), str(final_output_path))
 
             logger.info(f"Assembly complete: {final_output_path}")
 
@@ -2702,6 +2871,7 @@ class AssemblyService:
         voice_id: Optional[str] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
         interstitial_slides: Optional[List[dict]] = None,
+        attention_timeline: Optional[dict] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         enable_denoise: bool = False,
         denoise_strength: float = 2.0,
@@ -2782,6 +2952,7 @@ class AssemblyService:
             adaptive_sizing=_ss.get("adaptiveSizing", False),
             ultra_rapid_intro=ultra_rapid_intro,
             interstitial_slides=interstitial_slides,
+            attention_timeline=attention_timeline,
             pip_overlays=pip_overlays,
             variant_index=variant_index,
             _preview_mode=True,
@@ -2954,7 +3125,7 @@ class AssemblyService:
             ai_assignments=_ai_assignments,
         )
 
-        timeline, intro_offset_sec = self.build_timeline(
+        timeline, intro_duration_sec = self.build_timeline(
             match_results=match_results,
             segments_data=segments_data,
             audio_duration=audio_duration,
@@ -3016,7 +3187,7 @@ class AssemblyService:
 
         intro_segments = [
             entry for entry in timeline_data
-            if entry["timeline_start"] < intro_offset_sec
+            if entry["timeline_start"] < intro_duration_sec
         ]
 
         # Build available segments summary for the timeline editor picker
@@ -3137,7 +3308,9 @@ class AssemblyService:
             "srt_content": srt_content,
             "matches": matches_data,
             "timeline": timeline_data,
-            "intro_offset_sec": float(intro_offset_sec),
+            # API key kept for saved-preview compatibility; the value now means
+            # visual intro duration, never an audio/SRT offset.
+            "intro_offset_sec": float(intro_duration_sec),
             "intro_segments": intro_segments,
             "total_phrases": len(match_results),
             "matched_count": matched_count,

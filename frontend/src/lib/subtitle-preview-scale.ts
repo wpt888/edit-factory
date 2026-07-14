@@ -3,12 +3,26 @@ import { useCallback, useRef, useState } from "react";
 // Keep this aligned with the backend subtitle PlayResY/original_size reference.
 export const SUBTITLE_REFERENCE_HEIGHT = 1920;
 
+// CSS `font-size: Npx` renders glyphs ~1.44x larger than libass `FontSize=N`
+// (different em mapping). Measured empirically: libass cap-height 26px at
+// FontSize=107 in a 960px frame vs ~37.5px for the equivalent CSS overlay.
+// Applies to font size only — outline/shadow px are plain proportional.
+export const CSS_TO_LIBASS_FONT_RATIO = 0.695;
+
 export function scaleSubtitlePx(
   px: number,
   containerHeightPx: number,
   min = 8
 ): number {
   return Math.max(min, px * (containerHeightPx / SUBTITLE_REFERENCE_HEIGHT));
+}
+
+export function scaleSubtitleFontPx(
+  px: number,
+  containerHeightPx: number,
+  min = 8
+): number {
+  return scaleSubtitlePx(px * CSS_TO_LIBASS_FONT_RATIO, containerHeightPx, min);
 }
 
 export function observeSubtitlePreviewHeight(

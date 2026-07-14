@@ -46,6 +46,12 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete } from "@/lib/api";
+import { useProfile } from "@/contexts/profile-context";
+import {
+  readWorkspaceStorage,
+  removeWorkspaceStorage,
+  writeWorkspaceStorage,
+} from "@/lib/workspace-session";
 import { toast } from "sonner";
 
 /* ---------- Types ---------- */
@@ -65,8 +71,17 @@ interface CaptionTemplate {
 }
 
 interface ContextProduct {
+  product_id?: string;
   title: string;
   description: string;
+  images?: string[];
+  brand?: string;
+  category?: string;
+  sku?: string;
+  price?: string;
+  sale_price?: string;
+  product_url?: string;
+  extra_fields?: Record<string, unknown>;
 }
 
 interface CatalogProduct {
@@ -80,6 +95,9 @@ interface CatalogProduct {
   price: number;
   sale_price: number;
   is_on_sale: boolean;
+  image_urls?: string[];
+  product_url?: string;
+  extra_fields?: Record<string, unknown>;
 }
 
 interface CatalogPagination {
@@ -114,9 +132,12 @@ const LANGUAGES = [
   { value: "en", label: "English" },
 ];
 
-const LS_TEMPLATE_KEY = "ef_video_caption_template_id";
-const LS_TONE_KEY = "ef_video_caption_tone";
-const LS_LANGUAGE_KEY = "ef_video_caption_language";
+const TEMPLATE_KEY = "pipeline.caption.template-id";
+const TONE_KEY = "pipeline.caption.tone";
+const LANGUAGE_KEY = "pipeline.caption.language";
+const LEGACY_TEMPLATE_KEY = "ef_video_caption_template_id";
+const LEGACY_TONE_KEY = "ef_video_caption_tone";
+const LEGACY_LANGUAGE_KEY = "ef_video_caption_language";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -133,6 +154,8 @@ export function PipelineCaptionGenerator({
   initialCaptions,
   initialYoutubeTitles,
 }: PipelineCaptionGeneratorProps) {
+  const { currentProfile } = useProfile();
+  const profileId = currentProfile?.id;
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
@@ -170,10 +193,10 @@ export function PipelineCaptionGenerator({
 
   // AI settings state (persisted in localStorage)
   const [tone, setTone] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_TONE_KEY) || "professional" : "professional"
+    profileId ? readWorkspaceStorage(profileId, TONE_KEY, LEGACY_TONE_KEY) || "professional" : "professional"
   );
   const [language, setLanguage] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_LANGUAGE_KEY) || "ro" : "ro"
+    profileId ? readWorkspaceStorage(profileId, LANGUAGE_KEY, LEGACY_LANGUAGE_KEY) || "ro" : "ro"
   );
   const [includeHashtags, setIncludeHashtags] = useState(true);
   const [includeCta, setIncludeCta] = useState(true);
@@ -186,7 +209,7 @@ export function PipelineCaptionGenerator({
   // Template state
   const [templates, setTemplates] = useState<CaptionTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_TEMPLATE_KEY) || "" : ""
+    profileId ? readWorkspaceStorage(profileId, TEMPLATE_KEY, LEGACY_TEMPLATE_KEY) || "" : ""
   );
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState(false);
@@ -219,15 +242,11 @@ export function PipelineCaptionGenerator({
 
   // Persist tone/language to localStorage
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(LS_TONE_KEY, tone);
-    }
-  }, [tone]);
+    if (profileId) writeWorkspaceStorage(profileId, TONE_KEY, tone);
+  }, [tone, profileId]);
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(LS_LANGUAGE_KEY, language);
-    }
-  }, [language]);
+    if (profileId) writeWorkspaceStorage(profileId, LANGUAGE_KEY, language);
+  }, [language, profileId]);
 
   /* ---------- Propagate captions to parent ---------- */
 
@@ -361,7 +380,9 @@ export function PipelineCaptionGenerator({
       const tpls = data.templates || [];
       setTemplates(tpls);
 
-      const savedId = typeof window !== "undefined" ? localStorage.getItem(LS_TEMPLATE_KEY) : null;
+      const savedId = profileId
+        ? readWorkspaceStorage(profileId, TEMPLATE_KEY, LEGACY_TEMPLATE_KEY)
+        : null;
       const savedExists = tpls.some((t: CaptionTemplate) => t.id === savedId);
       if (savedExists) {
         setSelectedTemplateId(savedId!);
@@ -369,7 +390,7 @@ export function PipelineCaptionGenerator({
         const defaultTpl = tpls.find((t: CaptionTemplate) => t.is_default);
         if (defaultTpl) {
           setSelectedTemplateId(defaultTpl.id);
-          localStorage.setItem(LS_TEMPLATE_KEY, defaultTpl.id);
+          if (profileId) writeWorkspaceStorage(profileId, TEMPLATE_KEY, defaultTpl.id);
         }
       }
     } catch (err) {
@@ -378,7 +399,7 @@ export function PipelineCaptionGenerator({
     } finally {
       setTemplatesLoading(false);
     }
-  }, []);
+  }, [profileId]);
 
   useEffect(() => { fetchTemplates(); }, [fetchTemplates]);
 
@@ -397,25 +418,29 @@ export function PipelineCaptionGenerator({
     setCatalogLoading(true);
     try {
       const q = search.trim().toLowerCase();
-      const res = await apiGet("/product-library");
+      const params = new URLSearchParams({ search, page: String(page), page_size: "50" });
+      const res = await apiGet(`/product-library?${params}`);
       const data = await res.json();
-      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[] }
+      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[]; brand?: string; category?: string; sku?: string; price?: string; sale_price?: string; product_url?: string; extra_fields?: Record<string, unknown> }
       const all = ((data.products || []) as LibraryProduct[])
         .filter((p) => !q || p.title.toLowerCase().includes(q))
         .map((p) => ({
           id: p.id,
           title: p.title,
           description: p.description || "",
-          brand: "",
-          sku: "",
-          image_link: p.image_urls?.[0] ? `${API_URL}${p.image_urls[0]}` : "",
-          category: "",
-          price: 0,
-          sale_price: 0,
+          brand: p.brand || "",
+          sku: p.sku || "",
+          image_link: p.image_urls?.[0] ? (p.image_urls[0].startsWith("http") ? p.image_urls[0] : `${API_URL}${p.image_urls[0]}`) : "",
+          image_urls: p.image_urls || [],
+          category: p.category || "",
+          price: Number(p.price) || 0,
+          sale_price: Number(p.sale_price) || 0,
+          product_url: p.product_url || "",
+          extra_fields: p.extra_fields || {},
           is_on_sale: false,
         }));
       setCatalogProducts(all);
-      setCatalogPagination({ page: 1, page_size: all.length || 20, total: all.length, total_pages: 1 });
+      setCatalogPagination(data.pagination || { page, page_size: all.length || 20, total: all.length, total_pages: 1 });
     } catch {
       toast.error("Failed to load products");
     } finally {
@@ -456,8 +481,17 @@ export function PipelineCaptionGenerator({
     const selected = catalogProducts.filter(p => selectedCatalogIds.has(p.id));
     if (selected.length === 0) return;
     const newProducts = selected.map(p => ({
+      product_id: p.id,
       title: stripHtml(p.title),
       description: stripHtml(p.description) || "No description available.",
+      images: p.image_urls || (p.image_link ? [p.image_link] : []),
+      brand: p.brand,
+      category: p.category,
+      sku: p.sku,
+      price: String(p.price || ""),
+      sale_price: String(p.sale_price || ""),
+      product_url: p.product_url || "",
+      extra_fields: p.extra_fields || {},
     }));
     const updated = [...contextProducts, ...newProducts];
     onProductsChange?.(updated);
@@ -475,11 +509,11 @@ export function PipelineCaptionGenerator({
   const handleSelectTemplate = (id: string) => {
     const effectiveId = id === "none" ? "" : id;
     setSelectedTemplateId(effectiveId);
-    if (typeof window !== "undefined") {
+    if (profileId) {
       if (effectiveId) {
-        localStorage.setItem(LS_TEMPLATE_KEY, effectiveId);
+        writeWorkspaceStorage(profileId, TEMPLATE_KEY, effectiveId);
       } else {
-        localStorage.removeItem(LS_TEMPLATE_KEY);
+        removeWorkspaceStorage(profileId, TEMPLATE_KEY);
       }
     }
   };
@@ -528,7 +562,7 @@ export function PipelineCaptionGenerator({
       toast.success("Template deleted");
       if (selectedTemplateId === id) {
         setSelectedTemplateId("");
-        localStorage.removeItem(LS_TEMPLATE_KEY);
+        if (profileId) removeWorkspaceStorage(profileId, TEMPLATE_KEY);
       }
       fetchTemplates();
     } catch (err) {

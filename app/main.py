@@ -61,12 +61,14 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings, APP_VERSION
 from app.core.rate_limit import limiter
+from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
 from app.api.segments_routes import router as segments_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.pipeline_routes import router as pipeline_router
+from app.api.attention_routes import router as attention_router
 from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_router
 from app.api.api_key_vault_routes import router as api_key_vault_router
 from app.api.product_routes import router as product_router
@@ -265,23 +267,21 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug:
         raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode. Set DEBUG=true for development or disable AUTH_DISABLED.")
-    if not settings.auth_disabled and not settings.desktop_mode and not settings.supabase_jwt_secret:
-        # Desktop mode bypasses auth entirely (see auth.py: auth_disabled OR
-        # desktop_mode), so a JWT secret is not required there — the packaged
-        # app has no .env to supply one.
-        raise RuntimeError("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
+    if (
+        not settings.auth_disabled
+        and not settings.supabase_jwt_secret
+        and (not settings.supabase_url or not settings.supabase_key)
+    ):
+        raise RuntimeError(
+            "Authentication requires SUPABASE_JWT_SECRET or SUPABASE_URL + SUPABASE_KEY."
+        )
     if settings.desktop_mode and not settings.debug and settings.host not in ("127.0.0.1", "localhost"):
         raise RuntimeError(
             "desktop_mode=True requires host=127.0.0.1 or localhost in non-debug mode. "
-            "Refusing to expose an unauthenticated desktop API to the network."
+            "Refusing to expose the local desktop API to the network."
         )
     if settings.desktop_mode:
-        logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
-        # Safety: desktop mode with auth bypass should only bind to localhost
-        if not settings.debug and settings.host not in ("127.0.0.1", "localhost", "0.0.0.0"):
-            logger.warning("desktop_mode=True in non-debug mode on non-localhost — auth is bypassed!")
-        if settings.host == "0.0.0.0" and not settings.debug:
-            logger.warning("SECURITY: desktop_mode=True with host=0.0.0.0 exposes unauthenticated API to network!")
+        logger.info("Desktop mode active — Supabase auth required, config from %s", settings.base_dir)
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
@@ -348,6 +348,16 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+@app.exception_handler(ElevenLabsGovernanceError)
+async def elevenlabs_governance_exception_handler(
+    request: Request, exc: ElevenLabsGovernanceError
+):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.as_detail()},
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     from fastapi.responses import JSONResponse
@@ -361,7 +371,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # CORS - configured from environment variables
-# In production: ALLOWED_ORIGINS=https://editai.obsid.ro
+# In production: ALLOWED_ORIGINS=https://blipstudio.blipost.com
 # NOTE: Starlette processes middleware in reverse registration order (last-added runs first).
 # SlowAPI must be registered BEFORE CORS so that CORS wraps SlowAPI as the outermost layer,
 # ensuring CORS headers are present even on 429 rate-limit responses.
@@ -379,8 +389,8 @@ _cors_kwargs = dict(
 if settings.desktop_mode:
     # The desktop frontend is a local Next server on an arbitrary localhost
     # port (configurable in the Electron shell). The API is already
-    # localhost-only + auth-bypassed in desktop mode, so CORS is not a security
-    # boundary here — allow any localhost origin so the shell's port choice
+    # localhost-only and JWT-protected in desktop mode. Allow any localhost
+    # origin so the shell's port choice
     # never breaks frontend→backend calls.
     app.add_middleware(
         CORSMiddleware,
@@ -417,6 +427,7 @@ app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual S
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])
+app.include_router(attention_router, prefix="/api/v1")
 app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLabs Accounts"])
 app.include_router(api_key_vault_router, prefix="/api/v1", tags=["API Key Vault"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
@@ -461,7 +472,7 @@ app.include_router(video_generate_router, prefix="/api/v1", tags=["AI Video Gene
 app.include_router(blipost_platform_router, prefix="/api/v1", tags=["Blipost Platform"])
 app.include_router(blipost_render_router, prefix="/api/v1", tags=["Blipost Render"])
 
-# Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
+# Desktop-only routes (version, setup, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:
     from app.platforms.desktop.routes import router as desktop_router
     app.include_router(desktop_router, prefix="/api/v1", tags=["Desktop"])

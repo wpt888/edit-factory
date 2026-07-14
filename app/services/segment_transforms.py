@@ -1,6 +1,6 @@
 """
 Segment Transform Service.
-Per-segment visual transforms: rotation, scale, pan, flip, opacity.
+Per-segment video transforms: geometry, speed, blur fill, and color.
 
 Generates FFmpeg filter chains for each transform property.
 Follows the same dataclass + to_filter pattern as video_filters.py.
@@ -15,18 +15,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SegmentTransform:
-    """Visual transform properties for a video segment."""
+    """Transform properties for a video segment."""
     rotation: float = 0.0       # 0-360 degrees
     scale: float = 1.0          # 0.1-5.0
     pan_x: int = 0              # pixels, horizontal offset
     pan_y: int = 0              # pixels, vertical offset
     flip_h: bool = False        # horizontal flip
     flip_v: bool = False        # vertical flip
-    opacity: float = 1.0        # 0.0-1.0
+    speed: float = 1.0          # 0.25-4.0
+    blur_fill: bool = False
+    brightness: float = 0.0     # -1.0-1.0
+    contrast: float = 1.0       # 0.0-3.0
+    saturation: float = 1.0     # 0.0-3.0
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "SegmentTransform":
-        """Parse JSONB dict into SegmentTransform. Returns identity if None."""
+        """Parse a JSONB dict, silently ignoring legacy or unknown keys."""
         if not data:
             return cls()
         return cls(
@@ -36,20 +40,35 @@ class SegmentTransform:
             pan_y=int(data.get("pan_y", 0)),
             flip_h=bool(data.get("flip_h", False)),
             flip_v=bool(data.get("flip_v", False)),
-            opacity=max(0.0, min(1.0, float(data.get("opacity", 1.0)))),
+            speed=max(0.25, min(4.0, float(data.get("speed", 1.0)))),
+            blur_fill=bool(data.get("blur_fill", False)),
+            brightness=max(-1.0, min(1.0, float(data.get("brightness", 0.0)))),
+            contrast=max(0.0, min(3.0, float(data.get("contrast", 1.0)))),
+            saturation=max(0.0, min(3.0, float(data.get("saturation", 1.0)))),
         )
+
+    def has_visual_transforms(self) -> bool:
+        """Return whether a custom visual filter chain is required."""
+        return (
+            abs(self.rotation) >= 0.1
+            or abs(self.scale - 1.0) >= 0.01
+            or self.pan_x != 0
+            or self.pan_y != 0
+            or self.flip_h
+            or self.flip_v
+            or self.blur_fill
+            or abs(self.brightness) >= 0.001
+            or abs(self.contrast - 1.0) >= 0.001
+            or abs(self.saturation - 1.0) >= 0.001
+        )
+
+    def has_transforms(self) -> bool:
+        """Return whether any visual or timing transform is non-default."""
+        return self.has_visual_transforms() or abs(self.speed - 1.0) >= 0.001
 
     def is_identity(self) -> bool:
         """Check if all values are defaults (no transform needed)."""
-        return (
-            abs(self.rotation) < 0.1
-            and abs(self.scale - 1.0) < 0.01
-            and self.pan_x == 0
-            and self.pan_y == 0
-            and not self.flip_h
-            and not self.flip_v
-            and abs(self.opacity - 1.0) < 0.01
-        )
+        return not self.has_transforms()
 
     def to_ffmpeg_filters(self, width: int, height: int) -> List[str]:
         """
@@ -62,7 +81,7 @@ class SegmentTransform:
         Returns:
             List of filter strings to join with comma for -vf
         """
-        if self.is_identity():
+        if not self.has_visual_transforms():
             return []
 
         # Normalize to the target frame FIRST. The transform chain replaces the
@@ -106,10 +125,19 @@ class SegmentTransform:
                 # Zoom-in: crop the enlarged frame back to target
                 filters.append(f"crop={width}:{height}")
             else:
-                # Zoom-out: frame is now SMALLER than target — cropping would be
-                # a fatal FFmpeg error ("Invalid too big or non positive size").
-                # Pad back to target with black borders instead.
-                filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black")
+                # Zoom-out: frame is now smaller than target, so composite it
+                # over a blurred cover or pad it instead of attempting a fatal
+                # oversized crop.
+                if self.blur_fill:
+                    filters.append(
+                        "split=2[blur_bg][blur_fg];"
+                        f"[blur_bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height},boxblur=20:2[blurred_bg];"
+                        f"[blur_fg]scale={scaled_w}:{scaled_h}[scaled_fg];"
+                        "[blurred_bg][scaled_fg]overlay=(W-w)/2:(H-h)/2"
+                    )
+                else:
+                    filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black")
 
         # 4. Pan (offset via pad + crop)
         if self.pan_x != 0 or self.pan_y != 0:
@@ -121,10 +149,16 @@ class SegmentTransform:
             filters.append(f"pad={pad_w}:{pad_h}:{pad_x}:{pad_y}:black")
             filters.append(f"crop={width}:{height}")
 
-        # 5. Opacity via RGB channel dimming (compatible with yuv420p)
-        if abs(self.opacity - 1.0) >= 0.01:
-            a = max(0.0, min(1.0, self.opacity))
-            filters.append(f"colorchannelmixer=rr={a:.2f}:gg={a:.2f}:bb={a:.2f}")
+        # 5. Per-segment color correction
+        color_params = []
+        if abs(self.brightness) >= 0.001:
+            color_params.append(f"brightness={max(-1.0, min(1.0, self.brightness)):.2f}")
+        if abs(self.contrast - 1.0) >= 0.001:
+            color_params.append(f"contrast={max(0.0, min(3.0, self.contrast)):.2f}")
+        if abs(self.saturation - 1.0) >= 0.001:
+            color_params.append(f"saturation={max(0.0, min(3.0, self.saturation)):.2f}")
+        if color_params:
+            filters.append(f"eq={':'.join(color_params)}")
 
         # 6. Safety net: ensure output matches target dimensions (crop, not letterbox)
         filters.append(f"scale={width}:{height}:force_original_aspect_ratio=increase")
@@ -132,16 +166,3 @@ class SegmentTransform:
 
         logger.debug(f"Transform filters: {','.join(filters)}")
         return filters
-
-
-def merge_transforms(
-    segment_transforms: Optional[dict],
-    project_transforms: Optional[dict]
-) -> SegmentTransform:
-    """
-    Merge segment default transforms with project overrides.
-    Project overrides take full precedence if present.
-    """
-    if project_transforms:
-        return SegmentTransform.from_dict(project_transforms)
-    return SegmentTransform.from_dict(segment_transforms)

@@ -112,6 +112,7 @@ export interface VariantPreviewInfo {
 export interface PipelineScriptsResponse {
   pipeline_id: string;
   scripts: string[];
+  script_names?: string[];
   context_products?: ContextProduct[];
   preview_info?: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>;
   tts_info?: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>;
@@ -137,6 +138,9 @@ export interface CatalogProduct {
   price: number;
   sale_price: number;
   is_on_sale: boolean;
+  image_urls?: string[];
+  product_url?: string;
+  extra_fields?: Record<string, unknown>;
 }
 
 export interface CatalogPagination {
@@ -155,8 +159,17 @@ export interface Voice {
 }
 
 export interface ContextProduct {
+  product_id?: string;
   title: string;
   description: string;
+  images?: string[];
+  brand?: string;
+  category?: string;
+  sku?: string;
+  price?: string;
+  sale_price?: string;
+  product_url?: string;
+  extra_fields?: Record<string, unknown>;
 }
 
 export const META_SUBTITLE_STYLE_BY_VERSION: Record<string, Partial<SubtitleSettings>> = {

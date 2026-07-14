@@ -15,6 +15,7 @@ Endpoints:
     GET  /products/batch/{batch_id}/status      Poll per-product batch status
 """
 import asyncio
+import httpx
 import logging
 import traceback
 import uuid
@@ -665,11 +666,15 @@ async def _generate_product_video_task(
             # the 6-stage pipeline runs unchanged (local_image_path drives Stage 1).
             product = {
                 "id": local["id"],
+                "external_id": local.get("external_id") or local["id"],
                 "title": local["title"],
                 "description": local.get("description") or "",
-                "brand": "",
+                "brand": local.get("brand") or "",
+                "price": local.get("price") or "",
+                "sale_price": local.get("sale_price") or "",
                 "local_image_path": first_image,
-                "image_link": None,
+                "image_link": next(iter(local.get("image_links") or []), None),
+                "feed_id": local.get("source_id") or "local",
             }
         else:
             product_table = "v_catalog_products" if request.source == "catalog" else "products"
@@ -707,17 +712,19 @@ async def _generate_product_video_task(
             # Attempt re-download from image_link
             image_link = product.get("image_link")
             if image_link:
-                from app.services.image_fetcher import _download_one, CONCURRENT_DOWNLOADS, _get_download_semaphore
+                from app.services.image_fetcher import _download_one, _get_download_semaphore
 
                 feed_id = product.get("feed_id", "unknown")
                 cache_dir = settings.base_dir / "images" / feed_id
                 cache_dir.mkdir(parents=True, exist_ok=True)
 
                 semaphore = _get_download_semaphore()
-                _, local_path_str = await _download_one(product, cache_dir, semaphore)
-                candidate = Path(local_path_str)
-                if candidate.exists():
-                    image_path = candidate
+                async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                    _, local_path_str = await _download_one(product, cache_dir, semaphore, client)
+                if local_path_str:
+                    candidate = Path(local_path_str)
+                    if candidate.exists():
+                        image_path = candidate
 
         if image_path is None:
             raise FileNotFoundError("Product image not available — cannot compose video")

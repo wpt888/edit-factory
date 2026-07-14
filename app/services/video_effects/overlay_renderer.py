@@ -225,7 +225,6 @@ async def generate_interstitial_clip(
 
         # Ensure output directory exists
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
         try:
             result = await asyncio.to_thread(
                 _run_interstitial_ffmpeg,
@@ -243,12 +242,123 @@ async def generate_interstitial_clip(
                 output_path, duration, animation,
             )
             return output_path
-
         except Exception as exc:
-            logger.error(
-                "[overlay_renderer] generate_interstitial_clip exception: %s", exc
-            )
+            logger.error("[overlay_renderer] generate_interstitial_clip exception: %s", exc)
             return None
+
+
+async def apply_attention_timeline(
+    video_path: Path,
+    timeline: dict,
+    output_path: Path,
+    width: int,
+    height: int,
+    duration: float,
+) -> Path:
+    """Overlay timeline images without changing the base video's timestamps.
+
+    Layers are enabled only inside their cue window. The resulting stream is
+    explicitly trimmed to the narration/video duration, so looped still-image
+    inputs can never extend or truncate the edit.
+    """
+    layers = []
+    for cue in timeline.get("cues", []):
+        for layer in cue.get("layers", []):
+            source = layer.get("assetUrl") or layer.get("assetId")
+            if source and not str(source).startswith("pending:"):
+                layers.append((cue, layer, str(source)))
+    if not layers:
+        return video_path
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        local_layers = []
+        for cue, layer, source in layers:
+            local = await _download_image(source, tmp_dir)
+            if local:
+                local_layers.append((cue, layer, local))
+        if not local_layers:
+            return video_path
+
+        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+        for _cue, _layer, local in local_layers:
+            cmd.extend(["-loop", "1", "-i", local])
+
+        filters = []
+        previous = "0:v"
+        for index, (cue, layer, _local) in enumerate(local_layers, start=1):
+            start = (float(cue.get("startMs", 0)) + float(layer.get("animation", {}).get("delayMs", 0))) / 1000
+            end = min(duration, (float(cue.get("startMs", 0)) + float(cue.get("durationMs", 0))) / 1000)
+            if end <= start:
+                continue
+            w = max(1, round(float(layer.get("width", .8)) * width))
+            h = max(1, round(float(layer.get("height", .8)) * height))
+            x = max(0, round(float(layer.get("x", .1)) * width))
+            y = max(0, round(float(layer.get("y", .1)) * height))
+            fit = layer.get("fit", "contain")
+            if fit == "cover":
+                sizing = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+            else:
+                sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+            enter = min((float(layer.get("animation", {}).get("enterMs", 0)) / 1000), end - start)
+            fade = f",fade=t=in:st=0:d={enter}:alpha=1" if enter > .001 else ""
+            filters.append(f"[{index}:v]{sizing},format=rgba,setpts=PTS-STARTPTS+{start}/TB{fade}[att{index}]")
+            output = f"vatt{index}"
+            filters.append(
+                f"[{previous}][att{index}]overlay={x}:{y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"
+            )
+            previous = output
+        filters.append(f"[{previous}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")
+        cmd.extend([
+            "-filter_complex", ";".join(filters), "-map", "[vout]", "-an",
+            "-t", str(duration), *get_prep_codec_params(include_audio=False),
+            "-pix_fmt", "yuv420p", str(output_path),
+        ])
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "attention overlay")
+        if result.returncode != 0:
+            logger.warning("Attention overlay failed: %s", result.stderr[-2000:])
+            return video_path
+        return output_path
+
+
+async def mix_attention_sfx(video_path: Path, timeline: dict, output_path: Path) -> Path:
+    """Schedule cue SFX, preserve voiceover duration, and limit the final mix."""
+    cues = [cue for cue in timeline.get("cues", []) if cue.get("sfxUrl") or cue.get("sfxAssetId")]
+    if not cues:
+        return video_path
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        local_cues = []
+        for cue in cues:
+            source = str(cue.get("sfxUrl") or cue.get("sfxAssetId"))
+            if source.startswith("pending:"):
+                continue
+            local = await _download_image(source, tmp_dir)
+            if local:
+                local_cues.append((cue, local))
+        if not local_cues:
+            return video_path
+        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+        for _cue, local in local_cues:
+            cmd.extend(["-i", local])
+        filters = []
+        mix_inputs = ["[0:a]"]
+        for index, (cue, _local) in enumerate(local_cues, start=1):
+            delay = max(0, int(cue.get("startMs", 0)))
+            volume = 10 ** (float(cue.get("sfxVolumeDb", 0)) / 20)
+            filters.append(f"[{index}:a]adelay={delay}|{delay},volume={volume}[sfx{index}]")
+            mix_inputs.append(f"[sfx{index}]")
+        filters.append(
+            "".join(mix_inputs)
+            + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]"
+        )
+        cmd.extend([
+            "-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[aout]",
+            "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path),
+        ])
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "attention sfx mix")
+        if result.returncode != 0:
+            logger.warning("Attention SFX mix failed: %s", result.stderr[-2000:])
+            return video_path
+        return output_path
 
 
 def _run_interstitial_ffmpeg(

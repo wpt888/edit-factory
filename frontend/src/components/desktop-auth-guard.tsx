@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { apiGet } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
 
-const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 const PUBLIC_ROUTES = ["/login", "/signup", "/setup", "/auth/callback"];
 
 interface DesktopAuthGuardProps {
@@ -13,76 +12,44 @@ interface DesktopAuthGuardProps {
 }
 
 /**
- * Desktop test-auth gate. Replaces the old license gate.
+ * Client-side Supabase session gate.
  *
- * In desktop mode, protected routes require the simple username/password login
- * (backend /desktop/auth/status). Unauthenticated users are redirected to
- * /login. On the web build (DESKTOP_MODE !== "true") this is a no-op — Supabase
- * auth + middleware handle gating there.
+ * The web build also has middleware. Electron still needs this guard because
+ * its local Next server must start independently of server-readable auth state.
  */
 export function DesktopAuthGuard({ children }: DesktopAuthGuardProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const [authed, setAuthed] = useState(false);
-  const startupAuthConfirmed = useRef(
-    typeof window !== "undefined" &&
-      new URL(window.location.href).searchParams.get("desktopAuth") === "confirmed"
-  );
-
+  const { user, loading } = useAuth();
   const isPublicRoute = PUBLIC_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(route + "/")
+    (route) => pathname === route || pathname.startsWith(route + "/"),
   );
-
-  // Electron's launcher checks the same backend auth endpoint before loading
-  // the app. Consume that one-shot confirmation before the browser paints, then
-  // remove it from the visible URL. Direct web loads still use checkAuth below.
-  useLayoutEffect(() => {
-    if (!DESKTOP_MODE || isPublicRoute) return;
-    if (!startupAuthConfirmed.current) return;
-
-    // Intentional pre-paint hydration from the launcher's one-shot signal.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAuthed(true);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("desktopAuth");
-    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [isPublicRoute]);
-
-  const checkAuth = useCallback(async () => {
-    try {
-      const resp = await apiGet("/desktop/auth/status", { skipAuth: true });
-      const data = await resp.json();
-      if (data.logged_in) {
-        setAuthed(true);
-        return;
-      }
-      // Not logged in — redirect; keep showing the spinner (never render children).
-      router.push("/login");
-    } catch {
-      // Backend unreachable or error — fail closed: send to login.
-      router.push("/login");
-    }
-  }, [router]);
 
   useEffect(() => {
-    if (!DESKTOP_MODE || isPublicRoute) return;
-    if (startupAuthConfirmed.current) return;
-    // The async callback updates state only after the auth request completes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    checkAuth();
-  }, [isPublicRoute, checkAuth]);
+    if (loading) return;
 
-  // Web build or public routes bypass the desktop gate.
-  if (!DESKTOP_MODE || isPublicRoute) {
-    return <>{children}</>;
-  }
+    // A restored or newly-created session must never remain stranded on the
+    // login form. This also provides a safe fallback if navigation from the
+    // submit handler is interrupted by a React remount.
+    if (user && (pathname === "/login" || pathname === "/signup")) {
+      const requested = new URLSearchParams(window.location.search).get("next");
+      const destination = requested?.startsWith("/") && !requested.startsWith("//")
+        ? requested
+        : "/librarie";
+      router.replace(destination);
+      return;
+    }
 
-  // Until auth is confirmed, show only a spinner. Crucially we never render the
-  // protected children for an unauthenticated user — not even for one frame
-  // while redirecting — which previously crashed the root/pipeline page.
-  if (!authed) {
+    if (isPublicRoute || user) return;
+    const next = pathname && pathname.startsWith("/") ? pathname : "/librarie";
+    router.replace(`/login?next=${encodeURIComponent(next)}`);
+  }, [isPublicRoute, loading, pathname, router, user]);
+
+  if (isPublicRoute) return <>{children}</>;
+
+  if (loading || !user) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
+      <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );

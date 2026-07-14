@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -39,6 +40,7 @@ import {
   ChevronRight,
   Search,
   Info,
+  PencilLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -53,6 +55,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useRef, useState } from "react";
 import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
+import { WorkspaceSplit } from "./workspace-split";
 
 // Mirrors the inline ttsResults state shape in PipelinePage (page.tsx).
 type TtsResult = {
@@ -100,6 +103,10 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     step2HeaderRef,
     scripts,
     setScripts,
+    scriptNames,
+    setScriptNames,
+    handleScriptNameChange,
+    handleScriptNameCommit,
     regeneratingAllScripts,
     regeneratingAllScriptsIndex,
     handleRegenerateAllScripts,
@@ -182,7 +189,9 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     isResettingUsage,
     setIsResettingUsage,
     handlePreviewAll,
+    pipelineLayout,
   }: Step2Ctx = ctx;
+  const workspaceLayout = pipelineLayout !== "guided";
 
   // Voice audition: play the selected voice's ElevenLabs preview sample inline,
   // so users can hear a voice BEFORE generating TTS (was: no preview at all).
@@ -220,59 +229,105 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     audio.play().catch(() => stopAudition());
   };
 
+  const renderStepActions = () => (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {regeneratingAllScripts ? (
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={handleCancelRegenerateAllScripts}
+          aria-label={`Stop script regeneration (${(regeneratingAllScriptsIndex ?? 0) + 1} of ${scripts.length})`}
+        >
+          <X className="h-3.5 w-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
+          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>
+            Stop Scripts ({(regeneratingAllScriptsIndex ?? 0) + 1}/{scripts.length})
+          </span>
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRegenerateAllScripts}
+          disabled={scripts.length === 0 || regeneratingAll || Object.values(regeneratingScript).some(Boolean)}
+          aria-label="Regenerate all scripts"
+        >
+          <Sparkles className="h-3.5 w-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
+          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Regenerate Scripts</span>
+        </Button>
+      )}
+      {regeneratingAll ? (
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={handleCancelRegenerateAll}
+          aria-label={`Stop voice-over regeneration (${(regeneratingAllIndex ?? 0) + 1} of ${scripts.length})`}
+        >
+          <X className="h-3.5 w-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
+          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>
+            Stop Voice-overs ({(regeneratingAllIndex ?? 0) + 1}/{scripts.length})
+          </span>
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRegenerateAllTts}
+          disabled={scripts.length === 0 || Object.values(ttsResults).some((result) => result.generating)}
+          aria-label="Regenerate all voice-overs"
+        >
+          <RefreshCw className="h-3.5 w-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
+          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Regenerate Voice-overs</span>
+        </Button>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => { setStep(1); setPreviewError(null); }}
+        aria-label="Back to Idea"
+      >
+        <ArrowLeft className="h-4 w-4 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
+        <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Back to Idea</span>
+      </Button>
+    </div>
+  );
+
   return (
-          <div className="grid grid-cols-1 gap-5 min-[1100px]:grid-cols-2">
-            <div className="order-[-2] flex flex-wrap items-center justify-between gap-3 min-[1100px]:col-span-2">
-              <h2 ref={step2HeaderRef} className="text-2xl font-semibold scroll-mt-20">Review Scripts ({scripts.length})</h2>
-              <div className="flex items-center gap-2">
-                {regeneratingAllScripts ? (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleCancelRegenerateAllScripts}
-                  >
-                    <X className="h-3.5 w-3.5 mr-1.5" />
-                    Stop Scripts ({(regeneratingAllScriptsIndex ?? 0) + 1}/{scripts.length})
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRegenerateAllScripts}
-                    disabled={scripts.length === 0 || regeneratingAll || Object.values(regeneratingScript).some(Boolean)}
-                  >
-                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />Regenerate All Scripts
-                  </Button>
-                )}
-                {regeneratingAll ? (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleCancelRegenerateAll}
-                  >
-                    <X className="h-3.5 w-3.5 mr-1.5" />
-                    Stop ({(regeneratingAllIndex ?? 0) + 1}/{scripts.length})
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRegenerateAllTts}
-                    disabled={scripts.length === 0 || Object.values(ttsResults).some(r => r.generating)}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />Regenerate All Voice-overs
-                  </Button>
-                )}
-                <Button variant="outline" onClick={() => { setStep(1); setPreviewError(null); }}>
-                  <ArrowLeft className="h-4 w-4 mr-2" />
-                  Back to Input
-                </Button>
-              </div>
+          <div
+            className={workspaceLayout
+              ? "w-full space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0"
+              : "w-full space-y-4"
+            }
+            data-testid="step2-workspace"
+            data-layout={pipelineLayout}
+          >
+            <div className={`flex flex-wrap items-center justify-between gap-3 ${workspaceLayout ? "min-[1280px]:hidden" : ""}`}>
+              <h2 ref={step2HeaderRef} className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
+              {renderStepActions()}
             </div>
 
+            <WorkspaceSplit
+              splitId="step2"
+              enabled={workspaceLayout}
+              fallbackClassName={workspaceLayout
+                ? "grid items-start gap-3 min-[1180px]:grid-cols-[minmax(25rem,0.88fr)_minmax(0,1.6fr)] min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:items-stretch min-[1280px]:gap-px min-[1280px]:bg-border"
+                : "grid grid-cols-1 gap-4"
+              }
+              groupClassName="h-auto min-h-0 flex-1"
+              leftSizing={{ defaultSize: "35%", minSize: "20rem" }}
+              rightSizing={{ minSize: "30%" }}
+            >
+              <aside
+                className={workspaceLayout
+                  ? "flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:bg-border"
+                  : "flex min-w-0 flex-col gap-4"
+                }
+                data-testid="step2-inspector"
+              >
+                <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
+
             {/* ElevenLabs model selector */}
-            <Card className="overflow-hidden min-[1100px]:col-start-2 min-[1100px]:row-start-2">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b pb-3">
+            <Card className={`overflow-hidden ${workspaceLayout ? "min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 min-[1280px]:shadow-none" : ""}`}>
+              <CardHeader className={`flex flex-row items-center justify-between space-y-0 border-b pb-3 ${workspaceLayout ? "min-[1280px]:px-4" : ""}`}>
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
                 <ElevenCreditsBadge
                   credits={elevenCredits}
@@ -281,7 +336,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                   onRefresh={fetchElevenCredits}
                 />
               </CardHeader>
-              <CardContent className="space-y-5 pt-5">
+              <CardContent className={`space-y-5 pt-5 ${workspaceLayout ? "min-[1280px]:px-4 min-[1280px]:pb-4" : ""}`}>
                 {elevenCredits?.last_error && (
                   <Alert variant="destructive">
                     <AlertDescription className="text-xs">
@@ -525,20 +580,54 @@ export function Step2TTS({ ctx }: { ctx: any }) {
               </CardContent>
             </Card>
 
+              </aside>
+
+              <section
+                className={workspaceLayout
+                  ? "min-w-0 bg-background min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:overflow-hidden"
+                  : "min-w-0"
+                }
+                aria-label="Script and voice-over editor"
+                data-testid="step2-script-canvas"
+              >
+                <div className={workspaceLayout ? "hidden min-[1280px]:flex min-[1280px]:h-14 min-[1280px]:shrink-0 min-[1280px]:items-center min-[1280px]:justify-between min-[1280px]:gap-3 min-[1280px]:border-b min-[1280px]:bg-card min-[1280px]:px-4" : "hidden"}>
+                  <div className="min-w-0">
+                    <h2 className="truncate text-base font-semibold">
+                      Review Scripts
+                    </h2>
+                    <p className="text-xs text-muted-foreground">
+                      {scripts.length} {scripts.length === 1 ? "script" : "scripts"} ready for review
+                    </p>
+                  </div>
+                  {renderStepActions()}
+                </div>
+
+                <div className={`space-y-3 ${workspaceLayout ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:p-3" : ""}`}>
+
             {/* Scripts list — single column so each sentence has room */}
-            <div className="grid grid-cols-1 gap-4 min-[1100px]:col-span-2">
+            <div className="grid grid-cols-1">
               {scripts.map((script, index) => {
                 const wordCount = countWords(script);
                 const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
 
                 return (
-                  <Card key={index} className={`transition-colors ${approvedScripts.has(index) ? "border-success/40 bg-success/5" : ""}`}>
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <CardTitle className="text-lg">
-                            Script {index + 1}
-                          </CardTitle>
+                  <Card key={index} className={`rounded-none border-x-0 border-t-0 bg-transparent py-0 shadow-none transition-colors first:border-t ${approvedScripts.has(index) ? "border-b-success/40 bg-success/[0.035]" : ""}`}>
+                    <CardHeader className="px-4 pb-2 pt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="group/name flex min-w-0 items-center gap-1.5">
+                          <PencilLine className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60 transition-colors group-focus-within/name:text-primary group-hover/name:text-muted-foreground" />
+                          <Input
+                            value={scriptNames[index] ?? `Script ${index + 1}`}
+                            onChange={(event) => handleScriptNameChange(index, event.target.value)}
+                            onBlur={() => handleScriptNameCommit(index)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") event.currentTarget.blur();
+                            }}
+                            maxLength={80}
+                            aria-label={`Name for script ${index + 1}`}
+                            title="Rename script"
+                            className="h-8 min-w-[8rem] max-w-[22rem] border-transparent bg-transparent px-1.5 text-lg font-semibold shadow-none hover:border-border/70 focus-visible:border-border focus-visible:ring-2"
+                          />
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">
@@ -570,8 +659,10 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                               title="Delete script"
                               onClick={() => {
                                 const newScripts = scripts.filter((_, i) => i !== index);
+                                const newScriptNames = scriptNames.filter((_: string, i: number) => i !== index);
                                 setScripts(newScripts);
-                                if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+                                setScriptNames(newScriptNames);
+                                if (pipelineId) saveScriptsToBackend(pipelineId, newScripts, newScriptNames);
                                 // Remap ttsResults: remove deleted index, shift higher indices down
                                 setTtsResults(prev => {
                                   const next: typeof prev = {};
@@ -640,7 +731,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       </div>
                     </CardHeader>
                     {totalSegmentDuration > 0 && estimatedDuration > totalSegmentDuration && (
-                      <div className="px-6 pb-2">
+                      <div className="px-4 pb-2">
                         <Alert className="border-muted-foreground/50 bg-muted/50">
                           <Info className="h-4 w-4 text-muted-foreground" />
                           <AlertDescription className="text-muted-foreground text-sm">
@@ -649,13 +740,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         </Alert>
                       </div>
                     )}
-                    <CardContent className="space-y-3">
+                    <CardContent className="space-y-3 px-4 pb-4">
                       <DebouncedTextarea
                         id={`script-textarea-${index}`}
                         value={script}
                         onCommit={(nextValue) => handleScriptCommit(index, nextValue)}
                         rows={10}
-                        className="resize-y font-mono text-sm [field-sizing:fixed]"
+                        className="resize-y border-0 bg-muted/45 font-mono text-sm shadow-none [field-sizing:fixed] focus-visible:bg-muted/55 focus-visible:ring-1"
                       />
 
                       {/* Insert Group Tag — searchable button grid */}
@@ -877,9 +968,6 @@ export function Step2TTS({ ctx }: { ctx: any }) {
               })}
             </div>
 
-            {/* Source Video Selection */}
-            <SourceVideosCard ctx={ctx} />
-
             {/* Error display */}
             {previewError && (
               <Alert variant="destructive">
@@ -888,164 +976,151 @@ export function Step2TTS({ ctx }: { ctx: any }) {
               </Alert>
             )}
 
-            {/* Existing TTS banner */}
+            {/* Compact status and action dock */}
             {(() => {
               const ttsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
-              if (ttsCount === 0) return null;
-              return (
-                <Alert className="border-success/20 bg-success/10">
-                  <CheckCircle className="h-4 w-4 text-success" />
-                  <AlertDescription className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-success">
-                      {ttsCount === scripts.length
-                        ? "All scripts have voice-over generated"
-                        : `${ttsCount} of ${scripts.length} scripts have voice-over. The remaining ${scripts.length - ttsCount} will be generated automatically.`}
-                    </span>
-                    {selectedSourceIds.size === 0 && (
-                      <span className="text-xs text-amber-600 dark:text-amber-400">
-                        Select a video clip with segments above ↑
-                      </span>
-                    )}
-                  </AlertDescription>
-                </Alert>
-              );
-            })()}
-
-            {/* Reset segment diversity + Preview All button */}
-            {(() => {
-              const readyTtsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
-              const allTtsReady = readyTtsCount === scripts.length && scripts.length > 0;
+              const allTtsReady = ttsCount === scripts.length && scripts.length > 0;
               const previewTargetCount = allTtsReady ? previewCards.length : scripts.length;
-              return (
-                <div className="space-y-2">
-                  <div className="border rounded-lg p-3 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="meta-multiplication-step2"
-                        checked={metaMultiplication}
-                        onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
-                      />
-                      <Label htmlFor="meta-multiplication-step2" className="text-sm cursor-pointer font-medium">
-                        Meta Multiplication before preview
-                      </Label>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      {metaMultiplication
-                        ? `The preview will generate ${previewCards.length} variants (${scripts.length} scripts × 2 Meta versions).`
-                        : "Enable this to preview Instagram and Facebook separately before rendering."}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full text-muted-foreground hover:text-foreground"
-                    disabled={isGenerating || previewingIndex !== null || isRendering || isResettingUsage}
-                    onClick={async () => {
-                      if (!confirm("Reset segment diversity? Upcoming previews will be able to reuse all segments.")) return;
-                      setIsResettingUsage(true);
-                      try {
-                        const filterIds = selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined;
-                        if (filterIds && filterIds.length > 0) {
-                          for (const svId of filterIds) {
-                            await apiPost("/segments/reset-usage", { source_video_id: svId });
-                          }
-                        } else {
-                          await apiPost("/segments/reset-usage", {});
-                        }
-                        toast.success("Segment diversity has been reset");
-                      } catch (err) {
-                        handleApiError(err, "Failed to reset segment diversity");
-                      } finally {
-                        setIsResettingUsage(false);
-                      }
-                    }}
-                  >
-                    {isResettingUsage ? (
-                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                    )}
-                    {isResettingUsage ? "Resetting..." : "Reset segment diversity"}
-                  </Button>
-                  <Button
-                    onClick={handlePreviewAll}
-                    disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
-                    className="w-full"
-                    size="lg"
-                  >
-                    {/* BUG-FE-35: Counter is safe — previewingIndex is only non-null during batched generation when scripts.length > 0 */}
-                    {previewingIndex !== null ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {allTtsReady
-                          ? `Generating preview ${previewingIndex + 1} of ${previewTargetCount}...`
-                          : `Generating voice-over ${(previewCards[previewingIndex]?.baseIndex ?? previewingIndex) + 1} of ${previewTargetCount}...`}
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        {allTtsReady ? "Generate Previews" : "Generate Voice-Overs"}
-                      </>
-                    )}
-                  </Button>
-                </div>
-              );
-            })()}
-            {/* Approval status */}
-            {scripts.length > 0 && (
-              <div className="flex items-center justify-between text-sm">
-                <span className={`font-medium ${approvedScripts.size === scripts.length ? "text-success" : "text-muted-foreground"}`}>
-                  {approvedScripts.size === 0
-                    ? "No scripts approved yet — listen and check the ones you like"
-                    : approvedScripts.size === scripts.length
-                    ? `All ${scripts.length} scripts approved`
-                    : `${approvedScripts.size} of ${scripts.length} scripts approved`}
-                </span>
-                {approvedScripts.size > 0 && approvedScripts.size < scripts.length && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => setApprovedScripts(new Set(scripts.map((_, i) => i)))}
-                  >
-                    Approve all
-                  </Button>
-                )}
-              </div>
-            )}
-            {(() => {
-              const readyCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
-              const ttsReady = readyCount === scripts.length && scripts.length > 0;
               const hasPreviews = Object.keys(previews).length > 0;
-              if (!hasPreviews && !ttsReady) return null;
+              const approvalText = approvedScripts.size === 0
+                ? "No scripts approved yet"
+                : approvedScripts.size === scripts.length
+                  ? `All ${scripts.length} scripts approved`
+                  : `${approvedScripts.size} of ${scripts.length} scripts approved`;
+
               return (
-                <Button
-                  variant="default"
-                  onClick={() => {
-                    setPreviewError(null);
-                    if (hasPreviews) {
-                      setStep(3);
-                    } else {
-                      // TTS is ready but segment matching hasn't run yet —
-                      // handlePreviewAll reuses the audio, runs matching only,
-                      // and auto-advances to Step 3 (skipReview path).
-                      void handlePreviewAll();
-                    }
-                  }}
-                  disabled={previewingIndex !== null || isGenerating || isRendering}
-                  className="w-full"
-                  size="lg"
-                >
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                  {hasPreviews
-                    ? "Voice-overs ready — Continue to Preview"
-                    : "Voice-overs ready — Match segments & Preview"}
-                </Button>
+                <Card className="gap-0 overflow-hidden py-0" data-testid="step2-action-panel">
+                  <CardContent className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                    <div className="rounded-md border bg-background/60 px-3 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="meta-multiplication-step2"
+                          checked={metaMultiplication}
+                          onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
+                        />
+                        <Label htmlFor="meta-multiplication-step2" className="cursor-pointer text-sm font-medium">
+                          Meta Multiplication before preview
+                        </Label>
+                      </div>
+                      <p className="ml-6 mt-1 text-xs text-muted-foreground">
+                        {metaMultiplication
+                          ? `The preview will generate ${previewCards.length} variants (${scripts.length} scripts × 2 Meta versions).`
+                          : "Enable this to preview Instagram and Facebook separately before rendering."}
+                      </p>
+                    </div>
+                    <div className="flex min-w-0 flex-col justify-center gap-1.5 rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
+                      <div className={`flex items-center gap-2 font-medium ${allTtsReady ? "text-success" : "text-muted-foreground"}`}>
+                        {allTtsReady ? <CheckCircle className="h-4 w-4 shrink-0" /> : <Volume2 className="h-4 w-4 shrink-0" />}
+                        <span>
+                          {ttsCount === 0
+                            ? "Voice-overs not generated yet"
+                            : allTtsReady
+                              ? "All voice-overs are ready"
+                              : `${ttsCount} of ${scripts.length} voice-overs ready`}
+                        </span>
+                      </div>
+                      {selectedSourceIds.size === 0 && (
+                        <span className="pl-6 text-xs text-amber-600 dark:text-amber-400">
+                          Select at least one source video above
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+
+                  <CardFooter className="flex-col gap-3 border-t bg-muted/30 p-3 [.border-t]:pt-3 sm:flex-row sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-2 text-sm">
+                      <CheckCircle className={`h-4 w-4 shrink-0 ${approvedScripts.size === scripts.length ? "text-success" : "text-muted-foreground"}`} />
+                      <span className={`truncate font-medium ${approvedScripts.size === scripts.length ? "text-success" : "text-muted-foreground"}`}>
+                        {approvalText}
+                      </span>
+                      {approvedScripts.size > 0 && approvedScripts.size < scripts.length && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-xs"
+                          onClick={() => setApprovedScripts(new Set(scripts.map((_, i) => i)))}
+                        >
+                          Approve all
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-foreground"
+                        disabled={isGenerating || previewingIndex !== null || isRendering || isResettingUsage}
+                        onClick={async () => {
+                          if (!confirm("Reset segment diversity? Upcoming previews will be able to reuse all segments.")) return;
+                          setIsResettingUsage(true);
+                          try {
+                            const filterIds = selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined;
+                            if (filterIds && filterIds.length > 0) {
+                              for (const svId of filterIds) {
+                                await apiPost("/segments/reset-usage", { source_video_id: svId });
+                              }
+                            } else {
+                              await apiPost("/segments/reset-usage", {});
+                            }
+                            toast.success("Segment diversity has been reset");
+                          } catch (err) {
+                            handleApiError(err, "Failed to reset segment diversity");
+                          } finally {
+                            setIsResettingUsage(false);
+                          }
+                        }}
+                      >
+                        {isResettingUsage ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        {isResettingUsage ? "Resetting..." : "Reset diversity"}
+                      </Button>
+                      <Button
+                        onClick={handlePreviewAll}
+                        disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                        variant={hasPreviews ? "outline" : "default"}
+                        size="sm"
+                      >
+                        {/* BUG-FE-35: Counter is safe — previewingIndex is only non-null during batched generation when scripts.length > 0 */}
+                        {previewingIndex !== null ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            {allTtsReady
+                              ? `Generating preview ${previewingIndex + 1} of ${previewTargetCount}...`
+                              : `Generating voice-over ${(previewCards[previewingIndex]?.baseIndex ?? previewingIndex) + 1} of ${previewTargetCount}...`}
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="mr-2 h-4 w-4" />
+                            {allTtsReady ? "Generate Previews" : "Generate Voice-Overs"}
+                          </>
+                        )}
+                      </Button>
+                      {hasPreviews && (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => {
+                            setPreviewError(null);
+                            setStep(3);
+                          }}
+                          disabled={previewingIndex !== null || isGenerating || isRendering}
+                        >
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                          Continue to Preview
+                        </Button>
+                      )}
+                    </div>
+                  </CardFooter>
+                </Card>
               );
             })()}
-            {sourceVideos.length > 0 && selectedSourceIds.size === 0 && (
-              <p className="text-xs text-destructive text-center">Select at least one source video above</p>
-            )}
+                </div>
+              </section>
+            </WorkspaceSplit>
           </div>
   );
 }

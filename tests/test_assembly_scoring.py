@@ -194,14 +194,14 @@ def no_ffprobe():
         yield m
 
 
-def test_build_timeline_body_duration_equals_srt_sum(service, no_ffprobe):
-    # Long segments so trimming (not looping) — body slot == SRT duration exactly.
+def test_rapid_intro_replaces_first_body_seconds(service, no_ffprobe):
+    # Long segments so trimming (not looping) — body slots map cleanly to SRT time.
     segs = [_seg(f"s{i}", f"v{i}", start=0.0, end=60.0) for i in range(5)]
     srt = _srt(12)
     match_results = service.match_srt_to_segments(srt, segs, preset="balanced")
 
     # min_segment_duration=0 disables merging so body durations map 1:1 to SRT.
-    timeline, intro_offset = service.build_timeline(
+    timeline, intro_duration = service.build_timeline(
         match_results=match_results,
         segments_data=segs,
         audio_duration=24.0,
@@ -210,16 +210,46 @@ def test_build_timeline_body_duration_equals_srt_sum(service, no_ffprobe):
     )
     # 4 intro micro-segments at 0.5s each = 2.0s.
     intro_count = 4
-    assert intro_offset == pytest.approx(2.0, abs=0.01)
+    assert intro_duration == pytest.approx(2.0, abs=0.01)
     body = timeline[intro_count:]
-    srt_sum = sum(m.srt_end - m.srt_start for m in match_results)
-    body_sum = sum(e.timeline_duration for e in body)
-    # Body must cover at least the SRT sum (gap-fill may add tail to reach audio+0.5).
-    assert body_sum >= srt_sum - 0.01
-    # And each SRT entry's slot equals its SRT duration (no per-entry drift),
-    # except the last body entry which may be extended to cover audio+margin.
-    for e, m in zip(body[:len(match_results) - 1], match_results[:-1]):
+
+    # The montage overlays audio 0-2s instead of adding two silent seconds. The
+    # assembled video still covers only audio duration + its 0.5s safety margin.
+    assert sum(e.timeline_duration for e in timeline) == pytest.approx(24.5, abs=0.01)
+    assert body[0].timeline_start == pytest.approx(intro_duration, abs=0.01)
+
+    # The SRT slot covered by the montage is removed. At t=2 the body therefore
+    # starts with the segment matched to narration time 2-4s, not the 0-2s slot.
+    segment_by_id = {seg["id"]: seg for seg in segs}
+    assert body[0].source_video_path == segment_by_id[match_results[1].segment_id]["source_video_path"]
+
+    # Remaining normal slots retain their SRT durations; only the final one may
+    # include the 0.5s video safety margin.
+    for e, m in zip(body[:-1], match_results[1:-1]):
         assert e.timeline_duration == pytest.approx(m.srt_end - m.srt_start, abs=0.01)
+
+
+def test_rapid_intro_trims_partially_covered_body_slot(service, no_ffprobe):
+    segs = [_seg(f"s{i}", f"v{i}", start=0.0, end=60.0) for i in range(4)]
+    srt = [
+        {"text": "first phrase", "start_time": 0.0, "end_time": 3.0},
+        {"text": "second phrase", "start_time": 3.0, "end_time": 6.0},
+    ]
+    match_results = service.match_srt_to_segments(srt, segs, preset="balanced")
+
+    timeline, intro_duration = service.build_timeline(
+        match_results=match_results,
+        segments_data=segs,
+        audio_duration=6.0,
+        min_segment_duration=0.0,
+        ultra_rapid_intro=True,
+    )
+
+    body = timeline[4:]
+    assert intro_duration == pytest.approx(2.0, abs=0.01)
+    assert body[0].timeline_start == pytest.approx(2.0, abs=0.01)
+    assert body[0].timeline_duration == pytest.approx(1.0, abs=0.01)
+    assert sum(e.timeline_duration for e in timeline) == pytest.approx(6.5, abs=0.01)
 
 
 def test_build_timeline_short_segment_holds_full_slot(service, no_ffprobe):
