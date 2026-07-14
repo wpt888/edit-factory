@@ -1,30 +1,120 @@
-# Edit Factory - Production Docker Compose Override
-# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-version: '3.8'
+# BlipStudio production stack for Coolify (build_pack=dockercompose).
+# This file is intentionally self-contained; do not merge it with the local
+# docker-compose.yml because production must not publish host ports or load a
+# developer .env file.
+name: blipstudio
 
 services:
   backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    expose:
+      - "8000"
     environment:
-      - DEBUG=false
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "false"
+      AUTH_DISABLED: "false"
+      DESKTOP_MODE: "false"
+      DATA_BACKEND: supabase
+      FILE_STORAGE_BACKEND: supabase
+      BASE_DIR: /data
+      INPUT_DIR: /data/input
+      OUTPUT_DIR: /data/output
+      LOGS_DIR: /data/logs
+      MEDIA_DIR: /data/media
+      ALLOWED_ORIGINS: https://blipstudio.blipost.com
+      BLIPOST_PLATFORM_BASE_URL: https://blipost.com
+      MAX_CONCURRENT_RENDERS: "1"
+      MAX_CONCURRENT_PREP: "2"
+      OUTPUT_TTL_HOURS: "72"
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
+      ELEVENLABS_DEFAULT_USER_CREDIT_LIMIT: "10000"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FAL_API_KEY: ${FAL_API_KEY:-}
+      FAL_SEEDANCE_MODEL_ID: bytedance/seedance-2.0/text-to-video
+      POSTIZ_API_URL: ${POSTIZ_API_URL:-}
+      POSTIZ_API_KEY: ${POSTIZ_API_KEY:-}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - studio-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - http://127.0.0.1:8000/api/v1/health/live
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
     deploy:
       resources:
         limits:
-          cpus: '2'
+          cpus: "2"
           memory: 4G
         reservations:
-          cpus: '1'
-          memory: 2G
+          cpus: "0.5"
+          memory: 1G
 
   frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://studio-api.blipost.com/api/v1
+        NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_KEY}
+        NEXT_PUBLIC_DESKTOP_MODE: "false"
+        NEXT_PUBLIC_AUTH_DISABLED: "false"
+    restart: unless-stopped
+    init: true
+    expose:
+      - "3000"
     environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=https://api.editai.obsid.ro/api/v1
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: https://studio-api.blipost.com/api/v1
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_KEY}
+      NEXT_PUBLIC_DESKTOP_MODE: "false"
+      NEXT_PUBLIC_AUTH_DISABLED: "false"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://127.0.0.1:3000/login
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 20s
     deploy:
       resources:
         limits:
-          cpus: '1'
+          cpus: "1"
           memory: 1G
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: "0.25"
+          memory: 256M
+
+volumes:
+  studio-data:

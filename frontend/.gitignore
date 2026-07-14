@@ -33,6 +33,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Keep the placeholder-only web configuration contract in version control.
+!.env.example
 # .env.production contains only NEXT_PUBLIC_* vars (no secrets) — tracked for desktop builds
 !.env.production
 

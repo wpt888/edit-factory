@@ -19,3 +19,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Analiză sistem segmente: grupuri, transformări, multi-track](18-analiza-segmente.md)
 - [Web-first Creative Studio: mutarea editorului în blipost.com](19-web-first-creative-studio.md)
 - [Poziționare ecosistem: fabrică, nu studio](20-pozitionare-ecosistem.md)
+- [BlipStudio production deployment](21-blipstudio-production-deployment.md)

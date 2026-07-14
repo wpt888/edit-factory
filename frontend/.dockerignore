@@ -1,0 +1,18 @@
+# Keep local Supabase credentials and desktop-only build policy out of the web
+# image.  frontend/Dockerfile also uses explicit COPY statements as a second
+# boundary.
+**
+!package.json
+!package-lock.json
+!next.config.ts
+!tsconfig.json
+!postcss.config.mjs
+!components.json
+!public/
+!public/**
+!scripts/
+!scripts/**
+!src/
+!src/**
+!Dockerfile
+!.dockerignore

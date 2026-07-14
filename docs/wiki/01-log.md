@@ -1,5 +1,26 @@
 # Engineering Change Log
 
+## 2026-07-15 — BlipStudio production stack prepared (deployment pending approval)
+
+- Replaced the obsolete production override with a standalone Coolify Compose
+  stack for the Next.js frontend, FastAPI backend, external Supabase, durable
+  media workspace, and explicit liveness checks.
+- Made the web build fail closed unless desktop/auth bypass flags are false and
+  all compiled public settings are present.
+- Removed host-port and developer `.env` coupling from production, isolated
+  Docker build contexts from local credentials/media, and moved backend writes
+  to a named volume while running the API unprivileged.
+- Kept Kokoro support while pinning the official CPU-only PyTorch wheel, so a
+  CPU production host does not receive unused multi-gigabyte CUDA libraries.
+- Updated the production web dependency chain to patched Next.js, Supabase JS,
+  WebSocket, and PostCSS releases; moved the image to Node.js 22 as required by
+  current Supabase JS; `npm audit --omit=dev` reports zero findings.
+- Selected `blipstudio.blipost.com` for the frontend and DNS-only
+  `studio-api.blipost.com` for large API uploads. Coolify/DNS creation and
+  deployment remain unexecuted pending the required explicit approval.
+
+See [BlipStudio production deployment](21-blipstudio-production-deployment.md).
+
 ## 2026-07-14 — Remediere sistem segmente (transforms v2 + curățenie API)
 
 - Executat planul din [analiza sistemului de segmente](18-analiza-segmente.md),

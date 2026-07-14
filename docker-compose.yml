@@ -1,7 +1,7 @@
 # Edit Factory - Docker Compose Configuration
 # Usage:
 #   Development: docker-compose up
-#   Production:  docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+#   Production:  docker compose -f docker-compose.prod.yml up
 
 version: '3.8'
 

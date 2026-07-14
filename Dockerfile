@@ -13,7 +13,10 @@ WORKDIR /app
 
 # Install system dependencies (FFmpeg, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    espeak-ng \
     ffmpeg \
+    libmagic1 \
     libsm6 \
     libxext6 \
     libgl1 \
@@ -28,7 +31,13 @@ COPY requirements.txt .
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Kokoro depends on PyTorch.  PyPI's generic amd64 wheel pulls several
+# gigabytes of CUDA libraries even though this service renders on CPU.  Pin the
+# official CPU wheel explicitly; the same index publishes cp311/aarch64 for the
+# prod-nortia build.
+ARG TORCH_VERSION=2.13.0+cpu
 RUN pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}" && \
     pip install -r requirements.txt
 
 # Final stage
@@ -42,15 +51,22 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY app/ ./app/
 COPY run.py .
 
-# Create directories for data
-RUN mkdir -p /app/input /app/output /app/logs
+# Run the API as an unprivileged user.  The production Compose file mounts its
+# persistent working set at /data and points every writable application path
+# there; keeping /app read-only prevents uploaded media from mixing with code.
+RUN addgroup --system --gid 1001 blipost && \
+    adduser --system --uid 1001 --ingroup blipost --home /home/blipost blipost && \
+    mkdir -p /data /home/blipost && \
+    chown -R blipost:blipost /data /home/blipost
+
+USER blipost
 
 # Expose port
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/live || exit 1
 
 # Run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

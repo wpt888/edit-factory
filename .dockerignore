@@ -1,0 +1,10 @@
+# The backend image needs only these sources.  An allow-list keeps local
+# credentials, media, databases, virtualenvs, Electron artifacts, and the
+# frontend workspace out of the Docker build context entirely.
+**
+!app/
+!app/**
+!requirements.txt
+!run.py
+!Dockerfile
+!.dockerignore
