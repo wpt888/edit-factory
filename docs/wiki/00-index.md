@@ -13,3 +13,8 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Preview/render segment parity](12-preview-render-parity.md)
 - [AI Video with Seedance 2.0](13-ai-video-seedance.md)
 - [Pre-launch cosmetic pass](14-pre-launch-cosmetics.md)
+- [ElevenLabs: voci izolate și credite per profil](15-elevenlabs-tenant-governance.md)
+- [Desktop authentication and startup recovery](16-desktop-auth-startup-recovery.md)
+- [AI auto-segmentation (idee, neimplementat)](17-ai-auto-segmentation.md)
+- [Analiză sistem segmente: grupuri, transformări, multi-track](18-analiza-segmente.md)
+- [Web-first Creative Studio: mutarea editorului în blipost.com](19-web-first-creative-studio.md)

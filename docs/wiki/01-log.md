@@ -1,5 +1,73 @@
 # Engineering Change Log
 
+## 2026-07-14 — Web-first Creative Studio (analiză, neimplementat)
+
+- Evaluat mutarea editorului desktop într-o secțiune "Creative Studio" pe
+  blipost.com, cu compute pe Oracle Cloud, în locul lansării desktop-first
+  cu code signing pe Windows/macOS/Linux.
+- Verdict: sustenabil — infrastructura server-side de render (coadă
+  `render_jobs`, lease atomic, fleet OCI/Hetzner, autoscaler) există deja în
+  social-scheduler; motorul de render Python (`blipost_runner.py`) e deja
+  byte-echivalent cu runner-ul TS. Efort de portare estimat în săptămâni.
+- Identificat lista de schimbări necesare, în ordinea greutății: storage
+  (surse video local → R2/OCI Object Storage), auth bridge (Supabase JWT ↔
+  Auth.js prin token `blp_`), rutarea render-ului prin coada existentă în
+  loc de semaforul FFmpeg local, și eliminarea shell-ului Electron +
+  licențierii per-mașină pentru varianta web.
+- Verificat costurile Oracle Cloud (API oficial, iulie 2026): fleet ARM A1
+  cu scale-to-zero costă efectiv ~$0 idle; rate-card-ul de credite pentru
+  render cloud rămâne provizoriu, de calibrat prin benchmark.
+- Semnalat singurul blocker juridic nou introdus de varianta web: generarea
+  TTS ElevenLabs backend-side într-un SaaS poate necesita acord OEM/
+  Enterprise (pe desktop era cheia userului).
+- Recomandare: nu rescrie backend-ul în TypeScript — montează FastAPI ca
+  serviciu intern lângă social-scheduler, desktop-ul rămâne opțiune
+  ulterioară ("render gratuit pe mașina ta").
+
+See [Web-first Creative Studio: mutarea editorului în blipost.com](19-web-first-creative-studio.md).
+
+## 2026-07-14 — AI auto-segmentation (design, neimplementat)
+
+- Analizat starea modelelor video (Gemini 2.5/3, Grok, Twelve Labs) pentru
+  alegerea automată a segmentelor; LLM-urile localizează temporal slab
+  (~60%), deci nu cerem timestamps de la AI.
+- Decis arhitectura hibridă: FFmpeg shot detection (granițe) + pHash dedup
+  + Gemini pentru etichetare/selecție diversă → rânduri în
+  `editai_segments`; pipeline-ul din aval rămâne neschimbat.
+- Estimare: câteva zile; partea delicată e calibrarea promptului de
+  selecție. De implementat ulterior.
+
+See [AI auto-segmentation (idee, neimplementat)](17-ai-auto-segmentation.md).
+
+## 2026-07-13 — Desktop authentication and startup recovery
+
+- Unified website and desktop authentication on the same Supabase identity and
+  application-profile ownership contract.
+- Forced real authentication into the compiled desktop bundle and included the
+  build policy in standalone freshness detection.
+- Removed the post-login state/navigation race and allowed a small JWT clock
+  skew during backend verification.
+- Replaced the authenticated `/` server redirect that caused React error #310
+  during session restoration.
+- Added second-instance service recovery and persistent renderer diagnostics.
+- Recorded the required provider order, production regression flow, and
+  incident diagnostic checklist.
+
+See [Desktop authentication and startup recovery](16-desktop-auth-startup-recovery.md).
+
+## 2026-07-13 — ElevenLabs tenant governance
+
+- Izolat vocile private ale subscripției comune prin atribuiri per profil;
+  vocile publice `premade` și `default` rămân disponibile tuturor.
+- Adăugat un ledger lunar per profil, cu rezervări atomice înainte de request
+  și reconciliere după costul exact raportat de ElevenLabs.
+- Separat cheile BYOK de bugetul platformei și ascuns soldul/cheia centrală din
+  endpointul și badge-ul folosite de utilizator.
+- Adăugat administrare pentru atribuiri și limite, erori explicite de policy,
+  migrare Supabase/SQLite și teste de concurență.
+
+See [ElevenLabs: voci izolate și credite per profil](15-elevenlabs-tenant-governance.md).
+
 ## 2026-07-13 — Pipeline source-video prerequisite
 
 - Extracted the Pipeline Source Videos selector into a shared card used by
