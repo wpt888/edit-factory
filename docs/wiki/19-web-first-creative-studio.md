@@ -84,6 +84,9 @@ Lista de lucru, în ordinea greutății:
    (`app/services/credentials/license.py:1-163`) → înlocuită de entitlement
    Stripe existent; `seedDesktopEnv`/APPDATA `.env` (`main.js:216-264`);
    desktop titlebar/window controls.
+   **Notă**: "de șters" descrie strict ce nu se instalează în
+   deployment-ul web — aplicația desktop Electron NU se șterge și NU se
+   abandonează; repo-ul și build-ul desktop rămân intacte.
 
 ## Ar funcționa la fel ca pe desktop?
 
@@ -113,11 +116,48 @@ Verificate în API-ul oficial de prețuri Oracle, iulie 2026:
 
 - VM render 8 OCPU A1 / 48 GB, 24/7 ≈ $111/lună + storage ≈ ~$120/lună; cu
   scale-to-zero (deja implementat) costul idle ≈ $0.
+  **Clarificare**: cifra de ~$111/lună e un PLAFON de referință (dacă ai
+  ține instanța pornită non-stop), NU o predicție de cost real — cu
+  scale-to-zero costul e strict per-utilizare ($0.01/OCPU-oră cât timp
+  rulează un job) și ~$0 în idle.
 - Echivalent x86 E4 ~$198/lună → ARM e alegerea corectă.
 - Costuri per video (~60s): TTS ElevenLabs ~$0.10-0.30 (domină) + compute
   ~$0.01-0.05 + Gemini bănuți.
 - Costuri fixe la lansare: VM-ul Coolify/nortia existent + ~$5-20 storage +
   fleet ~$0 idle.
+
+## Estimare costuri prima lună — 10 utilizatori × $29.99
+
+Ipoteze: $29.99 ≈ ~1.150 credite/user (rata ~38 credite/$ din planul Creator
+$39/1.500cr); un video 60s ≈ 15 credite → max ~75 video/user/lună. Două
+scenarii: REALIST = userii consumă ~50% din credite (~375 video total/lună),
+WORST CASE = consumă tot (~750 video total).
+
+| Cost | Realist (~375 video) | Worst case (~750 video) | Notă |
+|---|---|---|---|
+| ElevenLabs TTS | $22–99 | $99 | Creator ($22/100k credite) insuficient chiar și realist cu voci Multilingual; Pro ($99/500k credite) acoperă tot cu Flash. COSTUL DOMINANT (~75% din variabil). |
+| Compute render OCI (scale-to-zero) | ~$5–10 | ~$10–20 | ~$0.01–0.02/video (minute × 4 OCPU × $0.01/h), inclusiv preview-uri |
+| Gemini (scripturi) | ~$1 | ~$2 | Flash aproape gratuit per script |
+| Storage R2 (surse useri + output) | ~$2–3 | ~$4–5 | ~150–300 GB × $0.015/GB-lună; egress zero |
+| Storage/misc OCI | ~$2 | ~$5 | disc de lucru pe instanțele de render |
+| Stripe fees (2.9% + 30¢) | ~$12 | ~$12 | pe $299.90 încasați |
+| Hosting web (nortia/Coolify) | $0 nou | $0 nou | cost existent |
+| **TOTAL** | **~$45–125** | **~$130–145** | |
+
+Încasări $299.90 → profit brut prima lună ~$155–255 (marjă 50–85%). Model
+sănătos și în worst case.
+
+Note:
+
+- Pipeline-ul generează TTS pentru FIECARE variantă de script (3 variante =
+  3× caractere), nu doar pentru cea randată → cea mai valoroasă optimizare
+  de cost: preview-uri de variante pe Edge-TTS (gratuit) sau Flash,
+  ElevenLabs premium doar la varianta finală. Poate tăia factura EL la
+  jumătate+.
+- Singura sumă "fixă" reală e abonamentul ElevenLabs; restul respiră cu
+  utilizarea (~$0 când nimeni nu randează).
+- Rămâne caveat-ul OEM/Enterprise ElevenLabs (vezi secțiunea de mai jos,
+  punctul (b) din "De făcut înainte de lansare").
 
 ## Prețuri abonament — nu se schimbă, se calibrează rate-card-ul
 
@@ -166,7 +206,9 @@ Python, deploy ca serviciu intern lângă social-scheduler (același Coolify),
 render rutat prin `render_jobs`. Port complet în TypeScript = luni de muncă
 pentru zero valoare user. Desktop-ul devine ulterior opțiunea "render gratuit
 pe mașina ta" (0 credite) — diferențiator de vânzare, nu cost; code signing +
-instalatoare macOS/Linux ies de pe drumul critic.
+instalatoare macOS/Linux ies de pe drumul critic. Desktop-ul (Electron) NU
+se șterge și NU se abandonează — rămâne produs viu, doar iese de pe drumul
+critic al lansării web.
 
 Ordinea de lucru:
 
