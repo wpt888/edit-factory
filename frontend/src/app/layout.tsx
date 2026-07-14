@@ -8,6 +8,7 @@ import { ProfileProvider } from "@/contexts/profile-context";
 import { AuthProvider } from "@/components/auth-provider";
 import { DesktopAuthGuard } from "@/components/desktop-auth-guard";
 import { DesktopTitleBar } from "@/components/desktop-titlebar";
+import { UndoProvider } from "@/contexts/undo-context";
 
 const heading = Bricolage_Grotesque({
   variable: "--font-heading",
@@ -84,19 +85,21 @@ export default function RootLayout({
           }}
         />
         <ThemeProvider>
-          <DesktopTitleBar />
-          <div className="app-scroll">
-            <ProfileProvider>
-              <AuthProvider>
-                <NavBarWrapper>
-                  <DesktopAuthGuard>
-                    {children}
-                  </DesktopAuthGuard>
-                </NavBarWrapper>
-              </AuthProvider>
-            </ProfileProvider>
-          </div>
-          <ThemedToaster />
+          <UndoProvider>
+            <DesktopTitleBar />
+            <div className="app-scroll">
+              <ProfileProvider>
+                <AuthProvider>
+                  <NavBarWrapper>
+                    <DesktopAuthGuard>
+                      {children}
+                    </DesktopAuthGuard>
+                  </NavBarWrapper>
+                </AuthProvider>
+              </ProfileProvider>
+            </div>
+            <ThemedToaster />
+          </UndoProvider>
         </ThemeProvider>
       </body>
     </html>

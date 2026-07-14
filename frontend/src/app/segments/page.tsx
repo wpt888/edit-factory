@@ -61,6 +61,7 @@ import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 import { EmptyState } from "@/components/empty-state";
 import { invalidateCachedSourceVideos } from "@/lib/source-video-cache";
 import { getRouteSessionState, setRouteSessionState } from "@/lib/route-session-state";
+import { isTextEditingTarget, useUndo } from "@/contexts/undo-context";
 
 interface SourceVideo {
   id: string;
@@ -107,9 +108,28 @@ interface ProductGroup {
   created_at: string;
 }
 
+function normalizeSegmentTransforms(
+  transforms?: SegmentTransform | null,
+): SegmentTransform {
+  return { ...DEFAULT_SEGMENT_TRANSFORM, ...transforms };
+}
+
+function transformsEqual(a: SegmentTransform, b: SegmentTransform): boolean {
+  return (
+    a.rotation === b.rotation
+    && a.scale === b.scale
+    && a.pan_x === b.pan_x
+    && a.pan_y === b.pan_y
+    && a.flip_h === b.flip_h
+    && a.flip_v === b.flip_v
+    && a.opacity === b.opacity
+  );
+}
+
 export default function SegmentsPage() {
   const router = useRouter();
   const { currentProfile, isLoading: profileLoading } = useProfile();
+  const { pushAction, undo, clearHistory } = useUndo();
 
   // Source videos state
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
@@ -172,6 +192,7 @@ export default function SegmentsPage() {
   });
   const transformAutoSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipTransformAutoSave = useRef(true); // skip on initial mount & segment selection
+  const transformWriteQueueRef = useRef<Map<string, Promise<void>>>(new Map());
 
   // Overlap detection state
   const [overlapInfo, setOverlapInfo] = useState<{
@@ -188,10 +209,6 @@ export default function SegmentsPage() {
   const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
   const [pipSaving, setPipSaving] = useState(false);
 
-  // Undo history for segment deletes
-  const undoStackRef = useRef<{ segment: Segment; videoId: string }[]>([]);
-  const undoInFlightRef = useRef(false);
-
   // Product group state
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
   const [showGroupDialog, setShowGroupDialog] = useState(false);
@@ -199,6 +216,16 @@ export default function SegmentsPage() {
   const [groupStartTime, setGroupStartTime] = useState(0);
   const [groupEndTime, setGroupEndTime] = useState(0);
   const [editingGroup, setEditingGroup] = useState<ProductGroup | null>(null);
+
+  // Keyboard and undo callbacks must always observe the latest editor state.
+  const selectedSegmentRef = useRef(selectedSegment);
+  selectedSegmentRef.current = selectedSegment;
+  const selectedVideoRef = useRef(selectedVideo);
+  selectedVideoRef.current = selectedVideo;
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
+  const activeTransformsRef = useRef(activeTransforms);
+  activeTransformsRef.current = activeTransforms;
 
   // Format time as mm:ss
   const formatTime = (time: number): string => {
@@ -379,12 +406,11 @@ export default function SegmentsPage() {
     setSegments([]);
     setAllSegments([]);
     setSelectedSegment(null);
-    undoStackRef.current = [];
-    undoInFlightRef.current = false;
+    clearHistory();
 
     fetchSourceVideos();
     fetchAllSegments();
-  }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments]);
+  }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments, clearHistory]);
 
   // Restore the deep-linked video first, then the in-memory selection from the
   // last visit. The sidebar links to /segments without query parameters, so the
@@ -403,7 +429,7 @@ export default function SegmentsPage() {
       }
     }
     restoredFromUrl.current = true;
-  }, [sourceVideos, selectedVideo, selectSourceVideo]);
+  }, [sourceVideos, selectedVideo, selectSourceVideo, profileId]);
 
   // Keep the selection only for the active desktop session. Waiting for the
   // restore pass avoids clearing it while this page is mounting.
@@ -416,159 +442,150 @@ export default function SegmentsPage() {
     setRouteSessionState("segments.selected-video", profileId, selectedVideo?.id);
   }, [profileId, selectedVideo]);
 
-  // Actually delete segment (pushes to undo stack)
+  const removeSegmentLocally = useCallback((segmentId: string, videoId: string) => {
+    setSegments((prev) => prev.filter((segment) => segment.id !== segmentId));
+    setAllSegments((prev) => prev.filter((segment) => segment.id !== segmentId));
+    setSelectedSegment((current) => current?.id === segmentId ? null : current);
+    setAssociations((prev) => {
+      const next = { ...prev };
+      delete next[segmentId];
+      return next;
+    });
+    setSourceVideos((prev) =>
+      prev.map((video) =>
+        video.id === videoId
+          ? { ...video, segments_count: Math.max(0, video.segments_count - 1) }
+          : video
+      )
+    );
+  }, []);
+
+  const insertSegmentLocally = useCallback((segment: Segment, videoId: string) => {
+    const insertSorted = (items: Segment[]) => [
+      ...items.filter((item) => item.id !== segment.id),
+      segment,
+    ].sort((a, b) => a.start_time - b.start_time);
+
+    if (selectedVideoRef.current?.id === videoId) {
+      const transforms = normalizeSegmentTransforms(segment.transforms);
+      setSegments(insertSorted);
+      setSelectedSegment(segment);
+      skipTransformAutoSave.current = true;
+      activeTransformsRef.current = transforms;
+      setActiveTransforms(transforms);
+      setLeftTab("transform");
+    }
+    setAllSegments(insertSorted);
+    setSourceVideos((prev) =>
+      prev.map((video) =>
+        video.id === videoId
+          ? { ...video, segments_count: video.segments_count + 1 }
+          : video
+      )
+    );
+  }, []);
+
+  const restoreSegmentSnapshot = useCallback(async (snapshot: Segment, videoId: string) => {
+    const res = await apiPost(
+      `/segments/source-videos/${videoId}/segments`,
+      {
+        start_time: snapshot.start_time,
+        end_time: snapshot.end_time,
+        keywords: snapshot.keywords,
+        notes: snapshot.notes || "",
+        product_group: snapshot.product_group || null,
+        single_use: snapshot.single_use,
+      }
+    );
+    const restored = await res.json() as Segment;
+    restored.source_video_name = snapshot.source_video_name;
+
+    // Creation intentionally resets these optional attributes, so recreate the
+    // complete editor state before putting the segment back in local lists.
+    if (snapshot.transforms) {
+      try {
+        await apiPut(`/segments/${restored.id}/transforms`, snapshot.transforms);
+        restored.transforms = { ...snapshot.transforms };
+      } catch (error) {
+        // The segment itself already exists. Treat optional-state restoration
+        // as best effort so retrying Undo cannot create a duplicate segment.
+        console.warn("Could not restore segment transformations", error);
+      }
+    }
+    if (snapshot.is_favorite) {
+      try {
+        await apiPost(`/segments/${restored.id}/favorite`);
+        restored.is_favorite = true;
+      } catch (error) {
+        console.warn("Could not restore segment favorite state", error);
+      }
+    }
+    return restored;
+  }, []);
+
+  // Actually delete segment and register a reversible application action.
   const handleDeleteSegment = useCallback(async (segmentId: string) => {
-    // Get the segment before deleting to know its source video
-    const segmentToDelete = segments.find((s) => s.id === segmentId) ||
-                            allSegments.find((s) => s.id === segmentId);
+    const segmentToDelete = segmentsRef.current.find((segment) => segment.id === segmentId)
+      || allSegments.find((segment) => segment.id === segmentId);
 
     try {
       const res = await apiDelete(`/segments/${segmentId}`);
       if (res.ok) {
-        // Push to undo stack
         if (segmentToDelete) {
-          const videoId = segmentToDelete.source_video_id || selectedVideo?.id || "";
-          undoStackRef.current.push({ segment: { ...segmentToDelete }, videoId });
-          undoStackRef.current = undoStackRef.current.slice(-50);
-        }
-        setSegments((prev) => prev.filter((s) => s.id !== segmentId));
-        setAllSegments((prev) => prev.filter((s) => s.id !== segmentId));
-        setSelectedSegment((current) => current?.id === segmentId ? null : current);
-        setAssociations((prev) => {
-          const next = { ...prev };
-          delete next[segmentId];
-          return next;
-        });
-        // Update source video segments count
-        const videoId = segmentToDelete?.source_video_id || selectedVideo?.id;
-        if (videoId) {
-          setSourceVideos((prev) =>
-            prev.map((v) =>
-              v.id === videoId
-                ? { ...v, segments_count: Math.max(0, v.segments_count - 1) }
-                : v
-            )
-          );
+          const videoId = segmentToDelete.source_video_id || selectedVideoRef.current?.id || "";
+          const snapshot: Segment = {
+            ...segmentToDelete,
+            keywords: [...segmentToDelete.keywords],
+            transforms: segmentToDelete.transforms
+              ? { ...segmentToDelete.transforms }
+              : segmentToDelete.transforms,
+          };
+          const restoredState: { segment: Segment | null } = { segment: null };
+
+          removeSegmentLocally(segmentId, videoId);
+          pushAction({
+            label: "segment deletion",
+            undo: async () => {
+              const restored = await restoreSegmentSnapshot(snapshot, videoId);
+              restoredState.segment = restored;
+              insertSegmentLocally(restored, videoId);
+              toast.success("Segment restored");
+            },
+            redo: async () => {
+              if (!restoredState.segment) return;
+              const restoredId = restoredState.segment.id;
+              await apiDelete(`/segments/${restoredId}`);
+              removeSegmentLocally(restoredId, videoId);
+              restoredState.segment = null;
+            },
+          });
+        } else {
+          // The backend accepted the delete even though the item was not in the
+          // current cache. Refreshing is safer than inventing an undo snapshot.
+          const videoId = selectedVideoRef.current?.id;
+          if (videoId) void fetchSegments(videoId);
         }
         toast.success("Segment deleted", {
           description: "Press Ctrl+Z to restore it.",
           action: {
             label: "Undo",
-            onClick: () => handleUndoRef.current(),
+            onClick: () => undo(),
           },
         });
       }
     } catch (error) {
       handleApiError(error, "Error deleting segment");
     }
-  }, [segments, allSegments, selectedVideo?.id]);
-
-  // Undo last deleted segment (Ctrl+Z)
-  const handleUndo = useCallback(async () => {
-    if (undoInFlightRef.current) return;
-    const last = undoStackRef.current.at(-1);
-    if (!last) {
-      toast.info("Nothing to undo");
-      return;
-    }
-
-    const { segment, videoId } = last;
-    undoInFlightRef.current = true;
-    try {
-      const res = await apiPost(
-        `/segments/source-videos/${videoId}/segments`,
-        {
-          start_time: segment.start_time,
-          end_time: segment.end_time,
-          keywords: segment.keywords,
-          notes: segment.notes || "",
-          product_group: segment.product_group || null,
-          single_use: segment.single_use,
-        }
-      );
-      if (res.ok) {
-        const restored = await res.json() as Segment;
-        restored.source_video_name = segment.source_video_name;
-
-        // The create endpoint intentionally resets transforms/favorite. Restore
-        // those optional attributes after the segment itself safely exists.
-        if (segment.transforms) {
-          try {
-            await apiPatch(`/segments/${restored.id}`, { transforms: segment.transforms });
-            restored.transforms = segment.transforms;
-          } catch (error) {
-            console.warn("Could not restore segment transforms", error);
-          }
-        }
-        if (segment.is_favorite) {
-          try {
-            await apiPost(`/segments/${restored.id}/favorite`);
-            restored.is_favorite = true;
-          } catch (error) {
-            console.warn("Could not restore segment favorite state", error);
-          }
-        }
-
-        // Remove history only after the restore request succeeds. This keeps
-        // Ctrl+Z retryable after an offline/server failure.
-        if (undoStackRef.current.at(-1) === last) {
-          undoStackRef.current.pop();
-        }
-
-        if (selectedVideoRef.current?.id === videoId) {
-          setSegments((prev) => [
-            ...prev.filter((item) => item.id !== restored.id),
-            restored,
-          ].sort((a, b) => a.start_time - b.start_time));
-          setSelectedSegment(restored);
-        }
-        setAllSegments((prev) => [
-          ...prev.filter((item) => item.id !== restored.id),
-          restored,
-        ].sort((a, b) => a.start_time - b.start_time));
-        setSourceVideos((prev) =>
-          prev.map((v) =>
-            v.id === videoId
-              ? { ...v, segments_count: v.segments_count + 1 }
-              : v
-          )
-        );
-        toast.success("Segment restored");
-      }
-    } catch (error) {
-      handleApiError(error, "Error restoring segment");
-    } finally {
-      undoInFlightRef.current = false;
-    }
-  }, []);
+  }, [allSegments, fetchSegments, insertSegmentLocally, pushAction, removeSegmentLocally, restoreSegmentSnapshot, undo]);
 
   // Refs for keyboard handler to avoid re-registering listener on every callback change
   const handleDeleteSegmentRef = useRef(handleDeleteSegment);
   handleDeleteSegmentRef.current = handleDeleteSegment;
-  const handleUndoRef = useRef(handleUndo);
-  handleUndoRef.current = handleUndo;
-  const selectedSegmentRef = useRef(selectedSegment);
-  selectedSegmentRef.current = selectedSegment;
-  const selectedVideoRef = useRef(selectedVideo);
-  selectedVideoRef.current = selectedVideo;
 
-  // Keyboard shortcuts: Delete selected segment, Ctrl+Z undo, Escape deselect
+  // Page-specific shortcuts. Undo/redo is coordinated once at the app root.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isEditableTarget =
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement ||
-        (e.target instanceof HTMLElement && e.target.isContentEditable);
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
-        if (isEditableTarget) return;
-        e.preventDefault();
-        handleUndoRef.current();
-        return;
-      }
-
-      if (isEditableTarget) return;
+      if (isTextEditingTarget(e.target)) return;
 
       if ((e.key === "Delete" || e.key === "Backspace") && selectedSegmentRef.current) {
         e.preventDefault();
@@ -854,22 +871,34 @@ export default function SegmentsPage() {
     }
   };
 
-  // Rename source video
+  const persistVideoName = useCallback(async (videoId: string, name: string) => {
+    await apiPatch(`/segments/source-videos/${videoId}`, { name });
+    invalidateCachedSourceVideos(currentProfile?.id);
+    setSourceVideos((prev) => prev.map((video) =>
+      video.id === videoId ? { ...video, name } : video));
+    setSelectedVideo((prev) => prev?.id === videoId ? { ...prev, name } : prev);
+  }, [currentProfile?.id]);
+
+  // Rename source video. Typing uses native undo; a committed rename uses the
+  // application history once focus leaves the field.
   const handleRenameVideo = async (videoId: string, newName: string) => {
     const trimmed = newName.trim();
     if (!trimmed) {
       setRenamingVideoId(null);
       return;
     }
+    const previousName = sourceVideos.find((video) => video.id === videoId)?.name;
+    if (!previousName || previousName === trimmed) {
+      setRenamingVideoId(null);
+      return;
+    }
     try {
-      const res = await apiPatch(`/segments/source-videos/${videoId}`, { name: trimmed });
-      if (res.ok) {
-        invalidateCachedSourceVideos(currentProfile?.id);
-        setSourceVideos((prev) => prev.map((v) => v.id === videoId ? { ...v, name: trimmed } : v));
-        if (selectedVideo?.id === videoId) {
-          setSelectedVideo((prev) => prev ? { ...prev, name: trimmed } : prev);
-        }
-      }
+      await persistVideoName(videoId, trimmed);
+      pushAction({
+        label: "source video rename",
+        undo: () => persistVideoName(videoId, previousName),
+        redo: () => persistVideoName(videoId, trimmed),
+      });
     } catch (error) {
       handleApiError(error, "Error renaming video");
     }
@@ -974,7 +1003,7 @@ export default function SegmentsPage() {
       );
 
       if (res.ok) {
-        const newSegment = await res.json();
+        const newSegment = await res.json() as Segment;
         newSegment.source_video_name = selectedVideo.name;
         setSegments((prev) => [...prev, newSegment].sort((a, b) => a.start_time - b.start_time));
         setAllSegments((prev) => [...prev, newSegment].sort((a, b) => a.start_time - b.start_time));
@@ -985,6 +1014,27 @@ export default function SegmentsPage() {
               : v
           )
         );
+        const snapshot: Segment = {
+          ...newSegment,
+          keywords: [...newSegment.keywords],
+          transforms: newSegment.transforms ? { ...newSegment.transforms } : newSegment.transforms,
+        };
+        const createdState: { segment: Segment | null } = { segment: newSegment };
+        pushAction({
+          label: "segment creation",
+          undo: async () => {
+            if (!createdState.segment) return;
+            const currentId = createdState.segment.id;
+            await apiDelete(`/segments/${currentId}`);
+            removeSegmentLocally(currentId, videoId);
+            createdState.segment = null;
+          },
+          redo: async () => {
+            const restored = await restoreSegmentSnapshot(snapshot, videoId);
+            createdState.segment = restored;
+            insertSegmentLocally(restored, videoId);
+          },
+        });
         // Close popup only after API success
         setPendingSegment(null);
         setShowKeywordPopup(false);
@@ -994,21 +1044,49 @@ export default function SegmentsPage() {
     }
   };
 
-  // Update segment (keywords)
+  const persistSegmentDetails = useCallback(async (
+    segmentId: string,
+    details: Pick<Segment, "keywords" | "notes" | "single_use">,
+  ) => {
+    const res = await apiPatch(`/segments/${segmentId}`, details);
+    const updated = await res.json() as Segment;
+    const apply = (items: Segment[]) =>
+      items.map((segment) => segment.id === segmentId
+        ? { ...segment, ...updated }
+        : segment);
+    setSegments(apply);
+    setAllSegments(apply);
+    setSelectedSegment((current) => current?.id === segmentId
+      ? { ...current, ...updated }
+      : current);
+    return updated;
+  }, []);
+
+  // Update segment metadata and keep the server-backed change reversible.
   const handleUpdateSegment = async (keywords: string[], notes: string, singleUse: boolean) => {
     if (!editingSegment) return;
 
-    try {
-      const res = await apiPatch(`/segments/${editingSegment.id}`, { keywords, notes, single_use: singleUse });
+    const segmentId = editingSegment.id;
+    const before = {
+      keywords: [...editingSegment.keywords],
+      notes: editingSegment.notes || "",
+      single_use: editingSegment.single_use,
+    };
+    const requested = { keywords: [...keywords], notes, single_use: singleUse };
 
-      if (res.ok) {
-        const updated = await res.json();
-        setSegments((prev) =>
-          prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
-        );
-        setAllSegments((prev) =>
-          prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
-        );
+    try {
+      const updated = await persistSegmentDetails(segmentId, requested);
+      const after = {
+        keywords: [...updated.keywords],
+        notes: updated.notes || "",
+        single_use: updated.single_use,
+      };
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        pushAction({
+          label: "segment details",
+          undo: () => persistSegmentDetails(segmentId, before).then(() => undefined),
+          redo: () => persistSegmentDetails(segmentId, after).then(() => undefined),
+        });
       }
     } catch (error) {
       handleApiError(error, "Error updating segment");
@@ -1040,50 +1118,122 @@ export default function SegmentsPage() {
   };
 
   // Save transforms for selected segment (uses existing selectedSegmentRef to avoid stale closure)
-  const saveTransforms = useCallback(async (transforms: SegmentTransform) => {
-    const seg = selectedSegmentRef.current;
-    if (!seg) return;
-    try {
-      const res = await apiPut(`/segments/${seg.id}/transforms`, transforms);
-      if (res.ok) {
-        const segId = seg.id;
-        setSegments((prev) =>
-          prev.map((s) => (s.id === segId ? { ...s, transforms } : s))
-        );
-        setAllSegments((prev) =>
-          prev.map((s) => (s.id === segId ? { ...s, transforms } : s))
-        );
-        setSelectedSegment((prev) => prev && prev.id === segId ? { ...prev, transforms } : prev);
-      }
-    } catch (error) {
-      handleApiError(error, "Error saving transformations");
+  const applyTransformsLocally = useCallback((segmentId: string, transforms: SegmentTransform) => {
+    const nextTransforms = { ...transforms };
+    setSegments((prev) =>
+      prev.map((segment) => segment.id === segmentId
+        ? { ...segment, transforms: nextTransforms }
+        : segment)
+    );
+    setAllSegments((prev) =>
+      prev.map((segment) => segment.id === segmentId
+        ? { ...segment, transforms: nextTransforms }
+        : segment)
+    );
+    setSelectedSegment((prev) => prev?.id === segmentId
+      ? { ...prev, transforms: nextTransforms }
+      : prev);
+
+    if (selectedSegmentRef.current?.id === segmentId) {
+      // Updating activeTransforms would normally schedule autosave again. This
+      // flag makes undo/redo a terminal write, not a new user edit.
+      skipTransformAutoSave.current = true;
+      activeTransformsRef.current = nextTransforms;
+      setActiveTransforms(nextTransforms);
     }
   }, []);
 
+  const persistSegmentTransforms = useCallback((
+    segmentId: string,
+    transforms: SegmentTransform,
+  ): Promise<void> => {
+    if (transformAutoSaveRef.current) {
+      clearTimeout(transformAutoSaveRef.current);
+      transformAutoSaveRef.current = null;
+    }
+
+    const nextTransforms = { ...transforms };
+    const previousWrite = transformWriteQueueRef.current.get(segmentId) ?? Promise.resolve();
+    const write = previousWrite
+      .catch(() => undefined)
+      .then(async () => {
+        await apiPut(`/segments/${segmentId}/transforms`, nextTransforms);
+        applyTransformsLocally(segmentId, nextTransforms);
+      });
+
+    transformWriteQueueRef.current.set(segmentId, write);
+    void write.finally(() => {
+      if (transformWriteQueueRef.current.get(segmentId) === write) {
+        transformWriteQueueRef.current.delete(segmentId);
+      }
+    }).catch(() => undefined);
+    return write;
+  }, [applyTransformsLocally]);
+
   // Single debounced auto-save: onChange from slider → update state → useEffect debounces → save
   const handleTransformChange = useCallback((transforms: SegmentTransform) => {
-    setActiveTransforms(transforms);
+    const segment = selectedSegmentRef.current;
+    const before = normalizeSegmentTransforms(activeTransformsRef.current);
+    const after = normalizeSegmentTransforms(transforms);
+    if (transformsEqual(before, after)) return;
+
+    activeTransformsRef.current = after;
+    setActiveTransforms(after);
     skipTransformAutoSave.current = false;
-  }, []);
+
+    if (segment) {
+      pushAction({
+        label: "segment transformation",
+        mergeKey: `segment-transform:${segment.id}`,
+        undo: () => persistSegmentTransforms(segment.id, before),
+        redo: () => persistSegmentTransforms(segment.id, after),
+      });
+    }
+  }, [persistSegmentTransforms, pushAction]);
 
   useEffect(() => {
     if (skipTransformAutoSave.current) return;
+    const segmentId = selectedSegmentRef.current?.id;
+    if (!segmentId) return;
     if (transformAutoSaveRef.current) clearTimeout(transformAutoSaveRef.current);
     transformAutoSaveRef.current = setTimeout(() => {
-      saveTransforms(activeTransforms);
+      void persistSegmentTransforms(segmentId, activeTransforms).catch((error) => {
+        handleApiError(error, "Error saving transformations");
+      });
     }, 500);
     return () => {
       if (transformAutoSaveRef.current) clearTimeout(transformAutoSaveRef.current);
     };
-  }, [activeTransforms, saveTransforms]);
+  }, [activeTransforms, persistSegmentTransforms]);
 
   // Bulk transforms state
   const [applyingBulkTransforms, setApplyingBulkTransforms] = useState(false);
+
+  const persistTransformSnapshots = useCallback(async (
+    snapshots: Map<string, SegmentTransform>,
+  ) => {
+    const entries = [...snapshots.entries()];
+    // Avoid flooding the local API when an all-library operation contains
+    // hundreds of segments while still keeping the undo reasonably fast.
+    for (let index = 0; index < entries.length; index += 20) {
+      await Promise.all(
+        entries.slice(index, index + 20).map(([segmentId, transforms]) =>
+          persistSegmentTransforms(segmentId, transforms)
+        ),
+      );
+    }
+  }, [persistSegmentTransforms]);
 
   // Apply transforms to segments — selected video's segments, or ALL segments if no video selected
   const handleBulkTransforms = async (transforms: SegmentTransform, mode: "set" | "add") => {
     const targetSegments = selectedVideo ? segments : allSegments;
     if (targetSegments.length === 0) return;
+    const before = new Map(
+      targetSegments.map((segment) => [
+        segment.id,
+        normalizeSegmentTransforms(segment.transforms),
+      ]),
+    );
     setApplyingBulkTransforms(true);
     try {
       const segmentIds = targetSegments.map((s) => s.id);
@@ -1107,8 +1257,15 @@ export default function SegmentsPage() {
         if (selectedSegment && updatedMap.has(selectedSegment.id)) {
           const updated = updatedMap.get(selectedSegment.id)!;
           setSelectedSegment((prev) => prev ? { ...prev, transforms: updated } : prev);
+          skipTransformAutoSave.current = true;
+          activeTransformsRef.current = updated;
           setActiveTransforms(updated);
         }
+        pushAction({
+          label: "bulk segment transformations",
+          undo: () => persistTransformSnapshots(before),
+          redo: () => persistTransformSnapshots(updatedMap),
+        });
       }
     } catch (error) {
       handleApiError(error, "Error applying bulk transforms");
@@ -1117,8 +1274,30 @@ export default function SegmentsPage() {
     }
   };
 
+  const persistSegmentTiming = useCallback(async (
+    segmentId: string,
+    timing: { start_time: number; end_time: number },
+  ) => {
+    const res = await apiPatch(`/segments/${segmentId}`, timing);
+    const updated = await res.json() as Segment;
+    const apply = (items: Segment[]) =>
+      items.map((segment) => segment.id === segmentId
+        ? { ...segment, ...updated }
+        : segment);
+    setSegments(apply);
+    setAllSegments(apply);
+    setSelectedSegment((current) => current?.id === segmentId
+      ? { ...current, ...updated }
+      : current);
+    return updated;
+  }, []);
+
   // Handle segment resize (drag edges on timeline)
   const handleSegmentResize = async (segmentId: string, newStart: number, newEnd: number) => {
+    const original = segmentsRef.current.find((segment) => segment.id === segmentId);
+    const before = original
+      ? { start_time: original.start_time, end_time: original.end_time }
+      : null;
     const roundedStart = Math.round(newStart * 1000) / 1000;
     const roundedEnd = Math.round(newEnd * 1000) / 1000;
     const duration = roundedEnd - roundedStart;
@@ -1134,20 +1313,19 @@ export default function SegmentsPage() {
     setSelectedSegment((prev) => prev?.id === segmentId ? { ...prev, ...optimistic } : prev);
 
     try {
-      const res = await apiPatch(`/segments/${segmentId}`, {
+      const updated = await persistSegmentTiming(segmentId, {
         start_time: roundedStart,
         end_time: roundedEnd,
       });
-      if (!res.ok) throw new Error("Failed to update segment");
-      const updated = await res.json();
-      // Reconcile with server response (may include product_group changes)
-      setSegments((prev) =>
-        prev.map((s) => (s.id === segmentId ? { ...s, ...updated } : s))
-      );
-      setAllSegments((prev) =>
-        prev.map((s) => (s.id === segmentId ? { ...s, ...updated } : s))
-      );
-      setSelectedSegment((prev) => prev?.id === segmentId ? { ...prev, ...updated } : prev);
+      const after = { start_time: updated.start_time, end_time: updated.end_time };
+      if (before && (before.start_time !== after.start_time || before.end_time !== after.end_time)) {
+        pushAction({
+          label: "segment resize",
+          mergeKey: `segment-resize:${segmentId}`,
+          undo: () => persistSegmentTiming(segmentId, before).then(() => undefined),
+          redo: () => persistSegmentTiming(segmentId, after).then(() => undefined),
+        });
+      }
     } catch (error) {
       // Revert optimistic update on failure — use ref for current video (avoids stale closure)
       const video = selectedVideoRef.current;
@@ -1161,8 +1339,10 @@ export default function SegmentsPage() {
   // Sync activeTransforms when selectedSegment changes
   const handleSegmentSelect = (seg: Segment) => {
     skipTransformAutoSave.current = true; // don't auto-save when loading a segment's existing transforms
+    const transforms = normalizeSegmentTransforms(seg.transforms);
     setSelectedSegment(seg);
-    setActiveTransforms(seg.transforms || { ...DEFAULT_SEGMENT_TRANSFORM });
+    activeTransformsRef.current = transforms;
+    setActiveTransforms(transforms);
     setLeftTab("transform");
   };
 
@@ -1246,37 +1426,53 @@ export default function SegmentsPage() {
     }
   };
 
-  // Toggle favorite
+  const persistFavoriteToggle = useCallback(async (segmentId: string) => {
+    const res = await apiPost(`/segments/${segmentId}/favorite`);
+    const { is_favorite } = await res.json() as { is_favorite: boolean };
+    const apply = (items: Segment[]) => items.map((segment) =>
+      segment.id === segmentId ? { ...segment, is_favorite } : segment);
+    setSegments(apply);
+    setAllSegments(apply);
+    setSelectedSegment((current) => current?.id === segmentId
+      ? { ...current, is_favorite }
+      : current);
+  }, []);
+
+  // Toggle endpoints are symmetric, so undo and redo safely call the same
+  // server operation while preserving the backend as the source of truth.
   const handleToggleFavorite = async (segmentId: string) => {
     try {
-      const res = await apiPost(`/segments/${segmentId}/favorite`);
-      if (res.ok) {
-        const { is_favorite } = await res.json();
-        setSegments((prev) =>
-          prev.map((s) => (s.id === segmentId ? { ...s, is_favorite } : s))
-        );
-        setAllSegments((prev) =>
-          prev.map((s) => (s.id === segmentId ? { ...s, is_favorite } : s))
-        );
-      }
+      await persistFavoriteToggle(segmentId);
+      pushAction({
+        label: "segment favorite",
+        undo: () => persistFavoriteToggle(segmentId),
+        redo: () => persistFavoriteToggle(segmentId),
+      });
     } catch (error) {
       handleApiError(error, "Error toggling favorite");
     }
   };
 
-  // Toggle single use
+  const persistSingleUseToggle = useCallback(async (segmentId: string) => {
+    const res = await apiPost(`/segments/${segmentId}/single-use`);
+    const { single_use } = await res.json() as { single_use: boolean };
+    const apply = (items: Segment[]) => items.map((segment) =>
+      segment.id === segmentId ? { ...segment, single_use } : segment);
+    setSegments(apply);
+    setAllSegments(apply);
+    setSelectedSegment((current) => current?.id === segmentId
+      ? { ...current, single_use }
+      : current);
+  }, []);
+
   const handleToggleSingleUse = async (segmentId: string) => {
     try {
-      const res = await apiPost(`/segments/${segmentId}/single-use`);
-      if (res.ok) {
-        const { single_use } = await res.json();
-        setSegments((prev) =>
-          prev.map((s) => (s.id === segmentId ? { ...s, single_use } : s))
-        );
-        setAllSegments((prev) =>
-          prev.map((s) => (s.id === segmentId ? { ...s, single_use } : s))
-        );
-      }
+      await persistSingleUseToggle(segmentId);
+      pushAction({
+        label: "segment single-use setting",
+        undo: () => persistSingleUseToggle(segmentId),
+        redo: () => persistSingleUseToggle(segmentId),
+      });
     } catch (error) {
       handleApiError(error, "Error toggling single use");
     }
@@ -2336,7 +2532,11 @@ export default function SegmentsPage() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && groupLabel.trim() && groupEndTime > groupStartTime) {
                         e.preventDefault();
-                        editingGroup ? handleUpdateGroup() : handleCreateGroup();
+                        if (editingGroup) {
+                          void handleUpdateGroup();
+                        } else {
+                          void handleCreateGroup();
+                        }
                       }
                     }}
                   />
