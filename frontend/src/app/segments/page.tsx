@@ -19,7 +19,6 @@ import {
 import {
   Video,
   Upload,
-  FolderOpen,
   Trash2,
   Star,
   StarOff,
@@ -50,7 +49,6 @@ import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/dialogs/product-picker-dialog";
 import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
-import { pickLocalVideoFiles } from "@/lib/desktop";
 import { ApiError } from "@/lib/api-error";
 import { useRouter } from "next/navigation";
 import { useProfile } from "@/contexts/profile-context";
@@ -184,12 +182,6 @@ export default function SegmentsPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Local file dialog (no copy, uses file path directly)
-  const [showLocalDialog, setShowLocalDialog] = useState(false);
-  const [localPath, setLocalPath] = useState("");
-  const [localName, setLocalName] = useState("");
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [addingLocal, setAddingLocal] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   const uploadPollRef = useRef<ReturnType<typeof setInterval> | null>(null); // Bug #52
@@ -664,7 +656,7 @@ export default function SegmentsPage() {
     };
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
@@ -674,28 +666,8 @@ export default function SegmentsPage() {
     const videoFile = files.find((f) => f.type.startsWith("video/"));
     if (!videoFile) return;
 
-    // Try to find the local path via backend (avoids uploading the file)
-    try {
-      const findRes = await apiPost("/segments/find-local", {
-        filename: videoFile.name,
-        size: videoFile.size,
-      });
-      if (findRes.ok) {
-        const data = await findRes.json();
-        if (data.file_path) {
-          // Found it — pre-fill local dialog
-          setLocalPath(data.file_path);
-          setLocalName(videoFile.name.replace(/\.[^/.]+$/, ""));
-          setLocalError(null);
-          setShowLocalDialog(true);
-          return;
-        }
-      }
-    } catch {
-      // Fall through to upload dialog
-    }
-
-    // Fallback: if file not found locally, use traditional upload
+    // Browser clients cannot expose a reusable local path. Always upload the
+    // selected file so it remains available from cloud-backed sessions.
     setUploadFile(videoFile);
     const nameWithoutExt = videoFile.name.replace(/\.[^/.]+$/, "");
     setUploadName(nameWithoutExt);
@@ -770,98 +742,6 @@ export default function SegmentsPage() {
     }
   };
 
-  // Open native file picker (Electron bridge → web fallback)
-  const [browsing, setBrowsing] = useState(false);
-  const handleBrowseLocal = async () => {
-    setBrowsing(true);
-    try {
-      const paths = await pickLocalVideoFiles();
-      if (paths === null) {
-        // No picker available — the manual path Input is right here
-        setLocalError("File picker unavailable — paste the full path below.");
-        return;
-      }
-      if (paths.length > 0) {
-        // Use first file for the dialog path field
-        setLocalPath(paths[0]);
-        if (!localName.trim()) {
-          const filename = paths[0].split(/[/\\]/).pop() || "";
-          setLocalName(filename.replace(/\.[^/.]+$/, ""));
-        }
-      }
-    } catch {
-      setLocalError("Failed to open file picker.");
-    } finally {
-      setBrowsing(false);
-    }
-  };
-
-  // Add local video by path (no upload/copy)
-  const handleAddLocal = async () => {
-    if (!localPath.trim()) return;
-
-    setAddingLocal(true);
-    setLocalError(null);
-    try {
-      const res = await apiPost("/segments/source-videos/local", {
-        file_path: localPath.trim(),
-        name: localName.trim() || undefined,
-      });
-
-      if (res.ok) {
-        const newVideo = await res.json() as SourceVideo;
-        invalidateCachedSourceVideos(currentProfile?.id);
-        setSourceVideos((prev) => [newVideo, ...prev]);
-        setSelectedVideo(newVideo);
-        setShowLocalDialog(false);
-        setLocalPath("");
-        setLocalName("");
-        setLocalError(null);
-
-        // Poll until background processing finishes
-        if (uploadPollRef.current) {
-          clearInterval(uploadPollRef.current);
-          uploadPollRef.current = null;
-        }
-        if (newVideo.status === "processing") {
-          uploadPollRef.current = setInterval(async () => {
-            try {
-              const pollRes = await apiGetWithRetry(
-                `/segments/source-videos/${newVideo.id}`,
-                { cache: "no-store", memoryCache: false }
-              );
-              if (!pollRes.ok) { if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; } return; }
-              const updated: SourceVideo = await pollRes.json();
-              if (updated.status === "ready" || updated.status === "error") {
-                if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
-                setSourceVideos((prev) =>
-                  prev.map((v) => (v.id === updated.id ? updated : v))
-                );
-                setSelectedVideo((prev) =>
-                  prev?.id === updated.id ? updated : prev
-                );
-                if (updated.status === "error") {
-                  setLocalError("Video processing failed.");
-                }
-              }
-            } catch {
-              if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
-            }
-          }, 2000);
-        }
-      } else {
-        const errorData = await res.json().catch(() => null);
-        const message = errorData?.detail || `Failed to add video (${res.status})`;
-        setLocalError(message);
-      }
-    } catch (error) {
-      handleApiError(error, "Error adding local video");
-      setLocalError("Failed to add video. Check the path and try again.");
-    } finally {
-      setAddingLocal(false);
-    }
-  };
-
   // Request delete video (show confirmation)
   const requestDeleteVideo = (video: SourceVideo) => {
     setDeleteConfirm({
@@ -878,9 +758,13 @@ export default function SegmentsPage() {
       if (res.ok) {
         invalidateCachedSourceVideos(currentProfile?.id);
         setSourceVideos((prev) => prev.filter((v) => v.id !== videoId));
+        setAllSegments((prev) => prev.filter((segment) => segment.source_video_id !== videoId));
+        setSegments((prev) => prev.filter((segment) => segment.source_video_id !== videoId));
+        setSelectedSegment((prev) => prev?.source_video_id === videoId ? null : prev);
         if (selectedVideo?.id === videoId) {
           setSelectedVideo(null);
         }
+        toast.success("Source video deleted");
       }
     } catch (error) {
       handleApiError(error, "Error deleting video");
@@ -1609,181 +1493,13 @@ export default function SegmentsPage() {
 
         {/* Videos tab */}
         <TabsContent value="videos" className="flex-1 flex flex-col min-h-0 mt-0">
-          {/* Upload / Add Local buttons */}
-          <div className="p-2 border-b border-border flex gap-1.5">
-            <Button
-              size="sm"
-              className="flex-1 h-7 text-xs"
-              disabled={browsing || addingLocal}
-              onClick={async () => {
-                // Open native file picker (multi-select) then add video(s)
-                setBrowsing(true);
-                try {
-                  const paths = await pickLocalVideoFiles();
-                  if (paths === null) {
-                    // No picker anywhere — open the dialog for manual path entry
-                    setLocalPath("");
-                    setShowLocalDialog(true);
-                    return;
-                  }
-                  if (paths.length === 0) return;
-                  if (paths.length === 1) {
-                    // Single file — show dialog for name editing
-                    setLocalPath(paths[0]);
-                    const filename = paths[0].split(/[/\\]/).pop() || "";
-                    setLocalName(filename.replace(/\.[^/.]+$/, ""));
-                    setShowLocalDialog(true);
-                  } else {
-                    // Multiple files — add all directly using filenames
-                    setAddingLocal(true);
-                    const addedVideos: SourceVideo[] = [];
-                    for (const fp of paths) {
-                      const filename = fp.split(/[/\\]/).pop() || "";
-                      const name = filename.replace(/\.[^/.]+$/, "");
-                      try {
-                        const addRes = await apiPost("/segments/source-videos/local", {
-                          file_path: fp,
-                          name: name || undefined,
-                        });
-                        if (addRes.ok) {
-                          const newVideo = await addRes.json() as SourceVideo;
-                          invalidateCachedSourceVideos(currentProfile?.id);
-                          addedVideos.push(newVideo);
-                          setSourceVideos((prev) => [newVideo, ...prev]);
-                          setSelectedVideo(newVideo);
-                        }
-                      } catch {
-                        // skip failed files, continue with rest
-                      }
-                    }
-                    setAddingLocal(false);
-                    // Poll all processing videos until ready
-                    const processingIds = new Set(
-                      addedVideos.filter((v) => v.status === "processing").map((v) => v.id)
-                    );
-                    if (processingIds.size > 0) {
-                      if (uploadPollRef.current) {
-                        clearInterval(uploadPollRef.current);
-                        uploadPollRef.current = null;
-                      }
-                      uploadPollRef.current = setInterval(async () => {
-                        for (const vid of [...processingIds]) {
-                          try {
-                            const pollRes = await apiGetWithRetry(
-                              `/segments/source-videos/${vid}`,
-                              { cache: "no-store", memoryCache: false }
-                            );
-                            if (!pollRes.ok) { processingIds.delete(vid); continue; }
-                            const updated: SourceVideo = await pollRes.json();
-                            if (updated.status === "ready" || updated.status === "error") {
-                              processingIds.delete(vid);
-                              setSourceVideos((prev) =>
-                                prev.map((v) => (v.id === updated.id ? updated : v))
-                              );
-                              setSelectedVideo((prev) =>
-                                prev?.id === updated.id ? updated : prev
-                              );
-                            }
-                          } catch {
-                            processingIds.delete(vid);
-                          }
-                        }
-                        if (processingIds.size === 0 && uploadPollRef.current) {
-                          clearInterval(uploadPollRef.current);
-                          uploadPollRef.current = null;
-                        }
-                      }, 2000);
-                    }
-                  }
-                } catch {
-                  setLocalError("Failed to open file picker.");
-                  setShowLocalDialog(true);
-                } finally {
-                  setBrowsing(false);
-                }
-              }}
-            >
-              <FolderOpen className="h-3.5 w-3.5 mr-1" />
-              {browsing ? "Selecting..." : addingLocal ? "Adding..." : "Add Local"}
-            </Button>
-            <Dialog open={showLocalDialog} onOpenChange={setShowLocalDialog}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add Local Video</DialogTitle>
-                  <DialogDescription>
-                    Use a video directly from your computer — no copy, instant
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="local-path">File Path</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="local-path"
-                        placeholder="D:\Videos\my-video.mp4"
-                        value={localPath}
-                        className="flex-1"
-                        onChange={(e) => {
-                          setLocalPath(e.target.value);
-                          if (!localName.trim() && e.target.value) {
-                            const filename = e.target.value.split(/[/\\]/).pop() || "";
-                            setLocalName(filename.replace(/\.[^/.]+$/, ""));
-                          }
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBrowseLocal}
-                        disabled={browsing}
-                        className="shrink-0"
-                      >
-                        {browsing ? "..." : "Browse"}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Click Browse to select, or paste the full path
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="local-name">Name (optional)</Label>
-                    <Input
-                      id="local-name"
-                      placeholder="Auto-filled from filename"
-                      value={localName}
-                      onChange={(e) => setLocalName(e.target.value)}
-                    />
-                  </div>
-                </div>
-                {localError && (
-                  <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-                    <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                    <span>{localError}</span>
-                  </div>
-                )}
-                <DialogFooter>
-                  <Button
-                    variant="outline"
-                    onClick={() => { setShowLocalDialog(false); setLocalError(null); }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleAddLocal}
-                    disabled={!localPath.trim() || addingLocal}
-                    className="min-w-[100px]"
-                  >
-                    {addingLocal ? "Adding..." : "Add Video"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-
+          {/* Cloud upload */}
+          <div className="p-2 border-b border-border">
             <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" variant="outline" className="h-7 text-xs px-2" title="Upload video (copies file)">
-                  <Upload className="h-3.5 w-3.5" />
+                <Button size="sm" className="h-8 w-full text-xs" title="Upload a source video">
+                  <Upload className="h-3.5 w-3.5 mr-1" />
+                  Upload Video
                 </Button>
               </DialogTrigger>
               <DialogContent>
@@ -2008,7 +1724,9 @@ export default function SegmentsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="opacity-0 group-hover:opacity-100 h-6 w-6"
+                      className="h-7 w-7 flex-shrink-0 text-destructive opacity-80 hover:opacity-100 hover:text-destructive"
+                      title={`Delete ${video.name}`}
+                      aria-label={`Delete ${video.name}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         requestDeleteVideo(video);
