@@ -400,17 +400,18 @@ _pipeline_state_locks: Dict[str, threading.Lock] = {}
 _pipeline_state_locks_meta: threading.Lock = threading.Lock()
 
 
-def _get_pipeline_state_lock(pipeline_id: str, profile_id: str = "") -> threading.Lock:
-    """Get or create a lock for pipeline state mutations.
+def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
+    """Get or create the single lock for a pipeline's state mutations.
 
-    Keys are scoped by profile_id when available (defense-in-depth for multi-tenancy).
-    Pipeline UUIDs are globally unique, so the profile prefix is a secondary safeguard.
+    Keyed by pipeline_id alone. Pipeline UUIDs are globally unique, and every
+    caller — the async-job mutators, save_matches, and _evict_stale_pipelines —
+    must resolve the *same* lock. A profile-scoped key would silently hand two
+    callers different locks for one pipeline and defeat mutual exclusion.
     """
-    scoped_key = f"{profile_id}:{pipeline_id}" if profile_id else pipeline_id
     with _pipeline_state_locks_meta:
-        if scoped_key not in _pipeline_state_locks:
-            _pipeline_state_locks[scoped_key] = threading.Lock()
-        return _pipeline_state_locks[scoped_key]
+        if pipeline_id not in _pipeline_state_locks:
+            _pipeline_state_locks[pipeline_id] = threading.Lock()
+        return _pipeline_state_locks[pipeline_id]
 
 
 
@@ -6423,7 +6424,7 @@ async def save_matches(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     preview_key = _build_preview_key(variant_index, body.visual_version)
-    state_lock = _get_pipeline_state_lock(pipeline_id, profile.profile_id)
+    state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
         previews = pipeline.setdefault("previews", {})
         # DB-loaded plain-variant keys are ints, freshly computed ones are strings
