@@ -775,6 +775,39 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
     if job.get("profile_id") and job["profile_id"] != profile.profile_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if job.get("job_type") == "product_video" and isinstance(job.get("metering"), dict):
+        from app.api.product_generate_routes import _settle_product_metering
+
+        bundle = job["metering"]
+        first_record = next(
+            (record for record in bundle.values() if isinstance(record, dict)),
+            {},
+        )
+        metering_user_id = first_record.get("supabase_user_id") or job.get("user_id")
+        output_persisted = any(
+            isinstance(record, dict) and record.get("output_persisted")
+            for record in bundle.values()
+        )
+        if metering_user_id and (job.get("status") == "completed" or output_persisted):
+            result = job.get("result") or {}
+            await _settle_product_metering(
+                job_id,
+                metering_user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": job_id,
+                    "output_id": result.get("clip_id") or result.get("project_id"),
+                },
+            )
+            job = get_job_storage().get_job(job_id) or job
+        elif metering_user_id and job.get("status") in {"failed", "cancelled"}:
+            await _settle_product_metering(
+                job_id,
+                metering_user_id,
+                delivered=False,
+            )
+            job = get_job_storage().get_job(job_id) or job
+
     response = JobResponse(
         job_id=job["job_id"],
         status=job["status"],
@@ -1395,7 +1428,67 @@ async def cancel_job(job_id: str, profile: ProfileContext = Depends(get_profile_
     if job.get("status") in ("completed", "failed", "cancelled"):
         return {"status": "already_finished", "job_id": job_id}
 
-    get_job_storage().cancel_job(job_id)
+    storage = get_job_storage()
+    storage.cancel_job(job_id)
+
+    if job.get("job_type") == "product_video":
+        from app.api.product_generate_routes import (
+            _product_render_queue_job_id,
+            _settle_product_metering,
+        )
+        from app.services.render_queue import get_render_queue
+
+        await get_render_queue().cancel(_product_render_queue_job_id(job_id))
+        bundle = job.get("metering") or {}
+        first_record = next(
+            (record for record in bundle.values() if isinstance(record, dict)),
+            {},
+        )
+        metering_user_id = first_record.get("supabase_user_id") or job.get("user_id") or profile.user_id
+        await _settle_product_metering(
+            job_id,
+            metering_user_id,
+            delivered=False,
+        )
+    elif job.get("job_type") == "batch_product_video":
+        from app.api.product_generate_routes import (
+            _product_render_queue_job_id,
+            _settle_product_metering,
+        )
+        from app.services.render_queue import get_render_queue
+
+        for product_job in job.get("product_jobs", []):
+            child_job_id = product_job.get("job_id")
+            child = storage.get_job(child_job_id) if child_job_id else None
+            if not child or child.get("status") in {"completed", "failed", "cancelled"}:
+                continue
+            storage.cancel_job(child_job_id)
+            await get_render_queue().cancel(_product_render_queue_job_id(child_job_id))
+            bundle = child.get("metering") or {}
+            first_record = next(
+                (record for record in bundle.values() if isinstance(record, dict)),
+                {},
+            )
+            metering_user_id = (
+                first_record.get("supabase_user_id")
+                or child.get("user_id")
+                or profile.user_id
+            )
+            await _settle_product_metering(
+                child_job_id,
+                metering_user_id,
+                delivered=False,
+            )
+    elif job.get("job_type") == "seedance_video":
+        from app.api.video_generate_routes import _settle_video_metering
+
+        metering = job.get("metering") or {}
+        metering_user_id = metering.get("supabase_user_id") or job.get("user_id") or profile.user_id
+        await _settle_video_metering(
+            job_id,
+            metering_user_id,
+            delivered=False,
+        )
     return {"status": "cancelled", "job_id": job_id}
 
 

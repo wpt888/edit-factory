@@ -17,6 +17,7 @@ Endpoints:
 import asyncio
 import httpx
 import logging
+import math
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -26,12 +27,20 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
-from app.api.auth import ProfileContext, get_profile_context
+from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
 from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.job_storage import get_job_storage
+from app.services.render_queue import RenderQueueCancelled, get_render_queue
 from app.services.srt_validator import sanitize_srt_full
+from app.services.studio_metering import (
+    MeteringIdentity,
+    StudioMeteringBlocked,
+    new_metering_record,
+    reserve_metering_record,
+    settle_metering_record,
+)
 from app.utils import normalize_path
 
 logger = logging.getLogger(__name__)
@@ -88,9 +97,174 @@ class BatchGenerateRequest(BaseModel):
         return v
 
 
+def _product_request_from_batch(request: BatchGenerateRequest) -> ProductGenerateRequest:
+    return ProductGenerateRequest(
+        **request.model_dump(exclude={"product_ids"}),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _product_render_queue_job_id(job_id: str) -> str:
+    return f"product:{job_id}"
+
+
+def _new_product_metering_bundle(
+    job_id: str,
+    request: ProductGenerateRequest,
+    user_id: str,
+) -> dict[str, dict]:
+    records: dict[str, dict] = {}
+    if request.voiceover_mode == "elaborate":
+        records["script"] = new_metering_record(
+            "studio.script_pipeline",
+            1,
+            f"product:{job_id}:script",
+        )
+    records["tts"] = new_metering_record(
+        "studio.tts_variant",
+        1,
+        f"product:{job_id}:tts",
+    )
+    records["render"] = new_metering_record(
+        "studio.render_output_minute",
+        max(1, math.ceil(max(1, request.duration_s) / 60)),
+        f"product:{job_id}:render",
+    )
+    for record in records.values():
+        record["supabase_user_id"] = user_id
+    return records
+
+
+def _replace_product_metering(job_id: str, bundle: dict[str, dict]) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    return storage.update_job(
+        job_id,
+        {"metering": {key: dict(value) for key, value in bundle.items()}},
+        profile_id=job.get("profile_id"),
+    ) or {**job, "metering": bundle}
+
+
+async def _settle_product_metering(
+    job_id: str,
+    user_id: str,
+    *,
+    delivered: bool,
+    result_metadata: Optional[dict] = None,
+) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        return job
+    updated: dict[str, dict] = {}
+    for component, raw_record in bundle.items():
+        if not isinstance(raw_record, dict):
+            continue
+        component_metadata = dict(result_metadata or {})
+        component_metadata["component"] = component
+        updated[component] = await settle_metering_record(
+            MeteringIdentity(user_id),
+            raw_record,
+            delivered=delivered,
+            result_metadata=component_metadata if delivered else None,
+        )
+    return _replace_product_metering(job_id, updated)
+
+
+async def _reserve_product_metering(
+    job_id: str,
+    identity: MeteringIdentity,
+) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        raise RuntimeError("Product job has no durable metering bundle")
+
+    reserved: dict[str, dict] = {}
+    try:
+        for component, record in bundle.items():
+            reserved[component] = await reserve_metering_record(identity, record)
+            _replace_product_metering(job_id, {**bundle, **reserved})
+    except StudioMeteringBlocked as error:
+        await _settle_product_metering(
+            job_id,
+            identity.supabase_user_id,
+            delivered=False,
+        )
+        failed_job = storage.get_job(job_id) or {}
+        failed_bundle = dict(failed_job.get("metering") or bundle)
+        for component, record in failed_bundle.items():
+            if isinstance(record, dict) and not record.get("reservation_id"):
+                failed_bundle[component] = {
+                    **record,
+                    "state": "denied",
+                    "last_error": error.as_http_detail(),
+                }
+        storage.update_job(
+            job_id,
+            {
+                "status": "failed",
+                "progress": "Blipost credits required",
+                "status_code": 402,
+                "error": error.as_http_detail()["message"],
+                "error_detail": error.as_http_detail(),
+                "metering": failed_bundle,
+            },
+            profile_id=failed_job.get("profile_id"),
+        )
+        raise
+
+    return _replace_product_metering(job_id, {**bundle, **reserved})
+
+
+def _mark_product_operation_started(job_id: str, component: str) -> None:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = dict(job.get("metering") or {})
+    record = bundle.get(component)
+    if not isinstance(record, dict):
+        return
+    bundle[component] = {
+        **record,
+        "provider_started": True,
+        "state": "provider_started",
+    }
+    _replace_product_metering(job_id, bundle)
+
+
+def _mark_product_output_persisted(job_id: str) -> dict[str, dict]:
+    job = get_job_storage().get_job(job_id) or {}
+    bundle = dict(job.get("metering") or {})
+    for component, record in list(bundle.items()):
+        if isinstance(record, dict):
+            bundle[component] = {
+                **record,
+                "output_persisted": True,
+                "state": "output_persisted",
+            }
+    _replace_product_metering(job_id, bundle)
+    return bundle
+
+
+class _ProductGenerationCancelled(Exception):
+    pass
+
+
+def _raise_if_product_cancelled(
+    job_storage,
+    job_id: str,
+    parent_batch_id: Optional[str],
+) -> None:
+    if job_storage.is_job_cancelled(job_id) or (
+        parent_batch_id and job_storage.is_job_cancelled(parent_batch_id)
+    ):
+        raise _ProductGenerationCancelled("Product video generation cancelled")
 
 def _build_preset_dict(preset_name: str) -> dict:
     """Convert EncodingPreset to the dict format expected by _render_with_preset.
@@ -238,6 +412,7 @@ async def generate_product_video(
     request: ProductGenerateRequest,
     background_tasks: BackgroundTasks,
     profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """Kick off background product video generation.
 
@@ -273,6 +448,7 @@ async def generate_product_video(
 
     job_id = str(uuid.uuid4())
     job_storage = get_job_storage()
+    metering = _new_product_metering_bundle(job_id, request, profile.user_id)
 
     job_storage.create_job(
         job_data={
@@ -282,15 +458,26 @@ async def generate_product_video(
             "progress": "0",
             "product_id": product_id,
             "profile_id": profile.profile_id,
+            "user_id": profile.user_id,
+            "metering": metering,
         },
         profile_id=profile.profile_id,
     )
+
+    try:
+        await _reserve_product_metering(
+            job_id,
+            MeteringIdentity(profile.user_id, current_user.email),
+        )
+    except StudioMeteringBlocked as error:
+        raise HTTPException(status_code=402, detail=error.as_http_detail())
 
     background_tasks.add_task(
         _generate_product_video_task,
         job_id=job_id,
         product_id=product_id,
         profile_id=profile.profile_id,
+        user_id=profile.user_id,
         request=request,
     )
 
@@ -306,6 +493,7 @@ async def batch_generate_products(
     request: BatchGenerateRequest,
     background_tasks: BackgroundTasks,
     profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """Kick off batch product video generation.
 
@@ -356,19 +544,107 @@ async def batch_generate_products(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[batch %s] Failed to fetch product titles: %s", batch_id, exc)
 
-    # Persist batch record to Supabase via JobStorage
+    # Persist the batch and every child attempt before reserving any credits.
     job_storage.create_job(
         job_data={
             "job_id": batch_id,
             "job_type": "batch_product_video",
-            "status": "processing",
+            "status": "pending",
             "progress": "0",
             "profile_id": profile.profile_id,
+            "user_id": profile.user_id,
             "product_jobs": product_jobs,
             "total": len(product_jobs),
             "completed": 0,
             "failed": 0,
         },
+        profile_id=profile.profile_id,
+    )
+
+    single_request = _product_request_from_batch(request)
+    for product_job in product_jobs:
+        child_job_id = product_job["job_id"]
+        job_storage.create_job(
+            job_data={
+                "job_id": child_job_id,
+                "job_type": "product_video",
+                "status": "pending",
+                "progress": "Awaiting credit reservation",
+                "product_id": product_job["product_id"],
+                "profile_id": profile.profile_id,
+                "user_id": profile.user_id,
+                "parent_batch_id": batch_id,
+                "metering": _new_product_metering_bundle(
+                    child_job_id,
+                    single_request,
+                    profile.user_id,
+                ),
+            },
+            profile_id=profile.profile_id,
+        )
+
+    identity = MeteringIdentity(profile.user_id, current_user.email)
+    reserved_children: list[str] = []
+    try:
+        for product_job in product_jobs:
+            child_job_id = product_job["job_id"]
+            await _reserve_product_metering(child_job_id, identity)
+            job_storage.update_job(
+                child_job_id,
+                {"status": "queued", "progress": "Queued"},
+                profile_id=profile.profile_id,
+            )
+            reserved_children.append(child_job_id)
+    except StudioMeteringBlocked as error:
+        for child_job_id in reserved_children:
+            await _settle_product_metering(
+                child_job_id,
+                profile.user_id,
+                delivered=False,
+            )
+        for product_job in product_jobs:
+            child_job_id = product_job["job_id"]
+            child = job_storage.get_job(child_job_id) or {}
+            bundle = dict(child.get("metering") or {})
+            for component, record in list(bundle.items()):
+                if isinstance(record, dict) and not record.get("reservation_id"):
+                    bundle[component] = {
+                        **record,
+                        "state": "denied",
+                        "last_error": error.as_http_detail(),
+                    }
+            job_storage.update_job(
+                child_job_id,
+                {
+                    "status": "failed",
+                    "progress": "Blipost credits required",
+                    "status_code": 402,
+                    "error": error.as_http_detail()["message"],
+                    "error_detail": error.as_http_detail(),
+                    "metering": bundle,
+                },
+                profile_id=profile.profile_id,
+            )
+            product_job["status"] = "failed"
+            product_job["error"] = error.as_http_detail()["message"]
+        job_storage.update_job(
+            batch_id,
+            {
+                "status": "failed",
+                "progress": "Blipost credits required",
+                "status_code": 402,
+                "error": error.as_http_detail()["message"],
+                "error_detail": error.as_http_detail(),
+                "product_jobs": product_jobs,
+                "failed": len(product_jobs),
+            },
+            profile_id=profile.profile_id,
+        )
+        raise HTTPException(status_code=402, detail=error.as_http_detail())
+
+    job_storage.update_job(
+        batch_id,
+        {"status": "processing", "progress": "0"},
         profile_id=profile.profile_id,
     )
 
@@ -378,6 +654,7 @@ async def batch_generate_products(
         batch_id=batch_id,
         product_jobs=product_jobs,
         profile_id=profile.profile_id,
+        user_id=profile.user_id,
         request=request,
     )
 
@@ -416,6 +693,52 @@ async def get_batch_status(
     product_statuses = []
     for pj in batch.get("product_jobs", []):
         child = job_storage.get_job(pj["job_id"]) or {}
+        if (
+            batch.get("status") in {"failed", "cancelled"}
+            and child.get("status") not in {"completed", "failed", "cancelled"}
+        ):
+            child_status = "cancelled" if batch.get("status") == "cancelled" else "failed"
+            child = job_storage.update_job(
+                pj["job_id"],
+                {
+                    "status": child_status,
+                    "progress": "Batch interrupted",
+                    "error": batch.get("error") or "Batch did not complete",
+                },
+                profile_id=profile.profile_id,
+            ) or child
+        bundle = child.get("metering")
+        if isinstance(bundle, dict):
+            first_record = next(
+                (record for record in bundle.values() if isinstance(record, dict)),
+                {},
+            )
+            metering_user_id = first_record.get("supabase_user_id") or batch.get("user_id")
+            output_persisted = any(
+                isinstance(record, dict) and record.get("output_persisted")
+                for record in bundle.values()
+            )
+            if metering_user_id and (
+                child.get("status") == "completed" or output_persisted
+            ):
+                result = child.get("result") or {}
+                await _settle_product_metering(
+                    pj["job_id"],
+                    metering_user_id,
+                    delivered=True,
+                    result_metadata={
+                        "studio_job_id": pj["job_id"],
+                        "output_id": result.get("clip_id") or result.get("project_id"),
+                    },
+                )
+                child = job_storage.get_job(pj["job_id"]) or child
+            elif metering_user_id and child.get("status") in {"failed", "cancelled"}:
+                await _settle_product_metering(
+                    pj["job_id"],
+                    metering_user_id,
+                    delivered=False,
+                )
+                child = job_storage.get_job(pj["job_id"]) or child
         product_statuses.append({
             "product_id": pj["product_id"],
             "job_id": pj["job_id"],
@@ -429,9 +752,18 @@ async def get_batch_status(
     total = len(product_statuses)
     completed = sum(1 for p in product_statuses if p["status"] == "completed")
     failed = sum(1 for p in product_statuses if p["status"] == "failed")
+    cancelled = sum(1 for p in product_statuses if p["status"] == "cancelled")
 
-    # Batch is done when every product has reached a terminal state (completed or failed)
-    overall_status = "completed" if (completed + failed) == total else "processing"
+    if batch.get("status") == "failed":
+        overall_status = "failed"
+    elif batch.get("status") == "cancelled":
+        overall_status = "cancelled"
+    else:
+        overall_status = (
+            "completed"
+            if (completed + failed + cancelled) == total
+            else "processing"
+        )
 
     return {
         "batch_id": batch_id,
@@ -439,6 +771,7 @@ async def get_batch_status(
         "total": total,
         "completed": completed,
         "failed": failed,
+        "cancelled": cancelled,
         "product_jobs": product_statuses,
     }
 
@@ -451,6 +784,7 @@ async def _batch_generate_task(
     batch_id: str,
     product_jobs: list[dict],
     profile_id: str,
+    user_id: str,
     request: BatchGenerateRequest,
 ) -> None:
     """Sequential batch processing with per-product error isolation.
@@ -460,11 +794,27 @@ async def _batch_generate_task(
     """
     job_storage = get_job_storage()
 
-    for product_job in product_jobs:
+    for product_index, product_job in enumerate(product_jobs):
         # Check if batch was cancelled
         if job_storage.is_job_cancelled(batch_id):
             logger.info("[batch %s] Batch cancelled by user, stopping", batch_id)
-            job_storage.clear_job_cancelled(batch_id)
+            for remaining in product_jobs[product_index:]:
+                child_job_id = remaining["job_id"]
+                child = job_storage.get_job(child_job_id) or {}
+                if child.get("status") not in {"completed", "failed", "cancelled"}:
+                    job_storage.cancel_job(child_job_id)
+                    await _settle_product_metering(
+                        child_job_id,
+                        user_id,
+                        delivered=False,
+                    )
+                    _update_batch_product_status(
+                        batch_id,
+                        remaining["product_id"],
+                        "cancelled",
+                        job_storage,
+                        profile_id,
+                    )
             break
 
         pid = product_job["product_id"]
@@ -474,47 +824,29 @@ async def _batch_generate_task(
         _update_batch_product_status(batch_id, pid, "processing", job_storage, profile_id)
 
         try:
-            # Create child job record in JobStorage so it's pollable independently
-            job_storage.create_job(
-                job_data={
-                    "job_id": child_job_id,
-                    "job_type": "product_video",
-                    "status": "pending",
-                    "progress": "0",
-                    "product_id": pid,
-                    "profile_id": profile_id,
-                },
+            job_storage.update_job(
+                child_job_id,
+                {"status": "processing", "progress": "0"},
                 profile_id=profile_id,
             )
-
-            # Build a single-product request from shared batch settings
-            single_request = ProductGenerateRequest(
-                source=request.source,
-                voiceover_mode=request.voiceover_mode,
-                tts_provider=request.tts_provider,
-                voice_id=request.voice_id,
-                ai_provider=request.ai_provider,
-                duration_s=request.duration_s,
-                encoding_preset=request.encoding_preset,
-                voiceover_template=request.voiceover_template,
-                cta_text=request.cta_text,
-                enable_denoise=request.enable_denoise,
-                enable_sharpen=request.enable_sharpen,
-                enable_color_correction=request.enable_color_correction,
-            )
+            single_request = _product_request_from_batch(request)
 
             # Reuse the proven single-product 6-stage pipeline
             await _generate_product_video_task(
                 job_id=child_job_id,
                 product_id=pid,
                 profile_id=profile_id,
+                user_id=user_id,
                 request=single_request,
+                parent_batch_id=batch_id,
             )
 
             # Check child job final state
             child = job_storage.get_job(child_job_id)
             if child and child.get("status") == "completed":
                 _update_batch_product_status(batch_id, pid, "completed", job_storage, profile_id)
+            elif child and child.get("status") == "cancelled":
+                _update_batch_product_status(batch_id, pid, "cancelled", job_storage, profile_id)
             else:
                 err = (child.get("error", "Unknown error") if child else "Child job not found after pipeline")
                 _update_batch_product_status(batch_id, pid, "failed", job_storage, profile_id, err)
@@ -579,10 +911,18 @@ def _finalize_batch(batch_id: str, job_storage, profile_id: str) -> None:
     product_jobs = batch.get("product_jobs", [])
     completed = sum(1 for pj in product_jobs if pj.get("status") == "completed")
     failed = sum(1 for pj in product_jobs if pj.get("status") == "failed")
+    cancelled = sum(1 for pj in product_jobs if pj.get("status") == "cancelled")
     total = len(product_jobs)
 
     # "completed" even if some failed — batch ran to completion
-    final_status = "completed" if (completed + failed) == total else "completed_with_errors"
+    if job_storage.is_job_cancelled(batch_id) or cancelled:
+        final_status = "cancelled"
+    else:
+        final_status = (
+            "completed"
+            if (completed + failed) == total
+            else "completed_with_errors"
+        )
 
     job_storage.update_job(
         batch_id,
@@ -591,6 +931,7 @@ def _finalize_batch(batch_id: str, job_storage, profile_id: str) -> None:
             "progress": "100",
             "completed": completed,
             "failed": failed,
+            "cancelled": cancelled,
         },
         profile_id=profile_id,
     )
@@ -614,6 +955,8 @@ async def _generate_product_video_task(
     product_id: str,
     profile_id: str,
     request: ProductGenerateRequest,
+    user_id: Optional[str] = None,
+    parent_batch_id: Optional[str] = None,
 ) -> None:
     """Full product video generation pipeline.
 
@@ -627,10 +970,13 @@ async def _generate_product_video_task(
     """
     job_storage = get_job_storage()
     settings = get_settings()
+    user_id = user_id or profile_id
+    render_ticket = None
+    render_ticket_entered = False
 
     # Import everything we need up front so any import error surfaces quickly
     from app.api.library_routes import _render_with_preset
-    from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space
+    from app.services.ffmpeg_semaphore import check_disk_space
     from app.services.product_video_compositor import (
         compose_product_video,
         compose_product_video_from_footage,
@@ -639,6 +985,7 @@ async def _generate_product_video_task(
     from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
     try:
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
         # ---------------------------------------------------------------
         # Stage 1: Setup (0 -> 10%)
         # ---------------------------------------------------------------
@@ -736,10 +1083,7 @@ async def _generate_product_video_task(
         job_storage.update_job(job_id, {"progress": "10"}, profile_id=profile_id)
 
         # Cancel checkpoint
-        if job_storage.is_job_cancelled(job_id):
-            logger.info("[%s] Product video cancelled at stage 1", job_id)
-            job_storage.clear_job_cancelled(job_id)
-            return
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
 
         # ---------------------------------------------------------------
         # Stage 2: TTS Voiceover (10 -> 40%)
@@ -776,6 +1120,8 @@ async def _generate_product_video_task(
             # Use ScriptGenerator for AI-generated script
             from app.services.script_generator import ScriptGenerator
 
+            _mark_product_operation_started(job_id, "script")
+
             from app.services.credentials.vault import get_vault_manager
             _vault = get_vault_manager()
             generator = ScriptGenerator(
@@ -808,6 +1154,7 @@ async def _generate_product_video_task(
         # TTS synthesis
         tts_audio_path = temp_dir / f"tts_{job_id}.mp3"
         tts_timestamps: Optional[dict] = None
+        _mark_product_operation_started(job_id, "tts")
 
         if request.tts_provider == "elevenlabs":
             from app.services.tts.elevenlabs import ElevenLabsTTSService
@@ -855,10 +1202,7 @@ async def _generate_product_video_task(
         job_storage.update_job(job_id, {"progress": "40"}, profile_id=profile_id)
 
         # Cancel checkpoint
-        if job_storage.is_job_cancelled(job_id):
-            logger.info("[%s] Product video cancelled at stage 2", job_id)
-            job_storage.clear_job_cancelled(job_id)
-            return
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
 
         # ---------------------------------------------------------------
         # Stage 3: Subtitle generation (40 -> 50%)
@@ -879,10 +1223,7 @@ async def _generate_product_video_task(
         job_storage.update_job(job_id, {"progress": "50"}, profile_id=profile_id)
 
         # Cancel checkpoint
-        if job_storage.is_job_cancelled(job_id):
-            logger.info("[%s] Product video cancelled at stage 3", job_id)
-            job_storage.clear_job_cancelled(job_id)
-            return
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
 
         # ---------------------------------------------------------------
         # Stage 4: Silent video composition (50 -> 70%)
@@ -915,41 +1256,62 @@ async def _generate_product_video_task(
             _resolve_product_footage, repo, product_id, profile_id
         )
 
-        # compose_* are synchronous (FFmpeg subprocess) — throttled by global semaphore
+        # Reserve was obtained at request entry; join the fair queue only when
+        # TTS is ready so an unready product job cannot occupy render capacity.
         check_disk_space(settings.output_dir)
-        async with await acquire_render_slot():
-            if footage_plan:
-                logger.info(
-                    "[%s] Stage 4: FOOTAGE mode — %d clip(s), pip=%s",
-                    job_id, len(footage_plan["clips"]), footage_plan["pip_config"],
-                )
-                await asyncio.to_thread(
-                    compose_product_video_from_footage,
-                    footage_clips=footage_plan["clips"],
-                    pip_image_path=image_path,
-                    output_path=composed_path,
-                    product=product,
-                    config=compositor_config,
-                    pip_config=footage_plan["pip_config"],
-                )
-            else:
-                logger.info("[%s] Stage 4: SLIDESHOW mode (no footage associations)", job_id)
-                await asyncio.to_thread(
-                    compose_product_video,
-                    image_path=image_path,
-                    output_path=composed_path,
-                    product=product,
-                    config=compositor_config,
-                )
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
+        job_storage.update_job(
+            job_id,
+            {"status": "processing", "progress": "Queued for render"},
+            profile_id=profile_id,
+        )
+        render_ticket = await get_render_queue().enqueue(
+            user_id=user_id,
+            job_id=_product_render_queue_job_id(job_id),
+        )
+        try:
+            await render_ticket.__aenter__()
+        except RenderQueueCancelled as exc:
+            raise _ProductGenerationCancelled(
+                "Product render cancelled while queued"
+            ) from exc
+        render_ticket_entered = True
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
+        _mark_product_operation_started(job_id, "render")
+        job_storage.update_job(
+            job_id,
+            {"status": "processing", "progress": "Composing video"},
+            profile_id=profile_id,
+        )
+
+        if footage_plan:
+            logger.info(
+                "[%s] Stage 4: FOOTAGE mode — %d clip(s), pip=%s",
+                job_id, len(footage_plan["clips"]), footage_plan["pip_config"],
+            )
+            await asyncio.to_thread(
+                compose_product_video_from_footage,
+                footage_clips=footage_plan["clips"],
+                pip_image_path=image_path,
+                output_path=composed_path,
+                product=product,
+                config=compositor_config,
+                pip_config=footage_plan["pip_config"],
+            )
+        else:
+            logger.info("[%s] Stage 4: SLIDESHOW mode (no footage associations)", job_id)
+            await asyncio.to_thread(
+                compose_product_video,
+                image_path=image_path,
+                output_path=composed_path,
+                product=product,
+                config=compositor_config,
+            )
 
         logger.info("[%s] Composition complete: %s", job_id, composed_path)
         job_storage.update_job(job_id, {"progress": "70"}, profile_id=profile_id)
 
-        # Cancel checkpoint
-        if job_storage.is_job_cancelled(job_id):
-            logger.info("[%s] Product video cancelled at stage 4", job_id)
-            job_storage.clear_job_cancelled(job_id)
-            return
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
 
         # ---------------------------------------------------------------
         # Stage 5: Final render with preset (70 -> 90%)
@@ -977,22 +1339,23 @@ async def _generate_product_video_task(
                 "adaptiveSizing": False,
             }
 
-        # _render_with_preset is async (FFmpeg runs in thread pool) — WITH SEMAPHORE
-        async with await acquire_render_slot():
-            await _render_with_preset(
-                video_path=composed_path,
-                audio_path=tts_audio_path,
-                srt_path=srt_path,
-                subtitle_settings=subtitle_settings,
-                preset=preset_dict,
-                output_path=final_path,
-                enable_denoise=request.enable_denoise,
-                enable_sharpen=request.enable_sharpen,
-                enable_color=request.enable_color_correction,
-            )
+        await _render_with_preset(
+            video_path=composed_path,
+            audio_path=tts_audio_path,
+            srt_path=srt_path,
+            subtitle_settings=subtitle_settings,
+            preset=preset_dict,
+            output_path=final_path,
+            enable_denoise=request.enable_denoise,
+            enable_sharpen=request.enable_sharpen,
+            enable_color=request.enable_color_correction,
+        )
 
         logger.info("[%s] Final render complete: %s", job_id, final_path)
         job_storage.update_job(job_id, {"progress": "90"}, profile_id=profile_id)
+        render_ticket_entered = False
+        await render_ticket.__aexit__(None, None, None)
+        _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
 
         # ---------------------------------------------------------------
         # Stage 6: Library insert (90 -> 100%)
@@ -1044,6 +1407,16 @@ async def _generate_product_video_task(
             },
             profile_id=profile_id,
         )
+        _mark_product_output_persisted(job_id)
+        await _settle_product_metering(
+            job_id,
+            user_id,
+            delivered=True,
+            result_metadata={
+                "studio_job_id": job_id,
+                "output_id": clip_id or project_id,
+            },
+        )
 
         logger.info(
             "[%s] Product video generation complete: project_id=%s clip_id=%s path=%s",
@@ -1053,7 +1426,22 @@ async def _generate_product_video_task(
             final_path,
         )
 
+    except _ProductGenerationCancelled as exc:
+        if render_ticket_entered and render_ticket is not None:
+            render_ticket_entered = False
+            await render_ticket.__aexit__(None, None, None)
+        logger.info("[%s] Product video generation cancelled", job_id)
+        job_storage.update_job(
+            job_id,
+            {"status": "cancelled", "error": str(exc), "progress": "0"},
+            profile_id=profile_id,
+        )
+        await _settle_product_metering(job_id, user_id, delivered=False)
+        job_storage.clear_job_cancelled(job_id)
     except Exception as exc:  # noqa: BLE001
+        if render_ticket_entered and render_ticket is not None:
+            render_ticket_entered = False
+            await render_ticket.__aexit__(None, None, None)
         logger.error(
             "[%s] Product video generation failed: %s\n%s",
             job_id,
@@ -1068,7 +1456,11 @@ async def _generate_product_video_task(
             )
         except Exception as update_exc:
             logger.error("[%s] Failed to update job to failed state: %s", job_id, update_exc)
+        await _settle_product_metering(job_id, user_id, delivered=False)
     finally:
+        if render_ticket_entered and render_ticket is not None:
+            render_ticket_entered = False
+            await render_ticket.__aexit__(None, None, None)
         # Clean up temp files on failure or success
         try:
             temp_dir = settings.base_dir / "temp" / profile_id / "product_gen"
