@@ -173,6 +173,9 @@ verify_encoding_integration.py
 # GSD/AI loop runtime artifacts
 progress.txt
 
+# CodeGraph local tooling state (per-machine: db, logs, daemon pid)
+.codegraph/
+
 # Keep directory structure
 !.gitkeep
 !input/.gitkeep
