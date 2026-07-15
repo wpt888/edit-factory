@@ -28,7 +28,8 @@ services:
       MEDIA_DIR: /data/media
       ALLOWED_ORIGINS: https://blipstudio.blipost.com
       BLIPOST_PLATFORM_BASE_URL: https://blipost.com
-      MAX_CONCURRENT_RENDERS: "1"
+      STUDIO_SERVICE_TOKEN: ${STUDIO_SERVICE_TOKEN}
+      MAX_CONCURRENT_RENDERS: ${MAX_CONCURRENT_RENDERS}
       MAX_CONCURRENT_PREP: "2"
       OUTPUT_TTL_HOURS: "72"
       SUPABASE_URL: ${SUPABASE_URL}

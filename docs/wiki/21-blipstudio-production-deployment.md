@@ -96,6 +96,10 @@ Required backend/build inputs:
   `DESKTOP_SUPABASE_ANON_KEY`.
 - `SUPABASE_SERVICE_ROLE_KEY` — same value as
   `DESKTOP_SUPABASE_SERVICE_ROLE_KEY`.
+- `STUDIO_SERVICE_TOKEN` — same high-entropy server-only value as WEB's
+  `STUDIO_SERVICE_TOKEN`; the backend sends it as the metering Bearer token.
+- `MAX_CONCURRENT_RENDERS` — set to `1` for the launch deployment. The fair
+  per-user scheduler remains above this configurable FFmpeg slot limit.
 
 Authentication verification policy:
 
