@@ -19,6 +19,7 @@ import {
 import {
   Video,
   Upload,
+  FolderOpen,
   Trash2,
   Star,
   StarOff,
@@ -49,6 +50,7 @@ import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/dialogs/product-picker-dialog";
 import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
+import { pickLocalVideoFiles } from "@/lib/desktop";
 import { ApiError } from "@/lib/api-error";
 import { useRouter } from "next/navigation";
 import { useProfile } from "@/contexts/profile-context";
@@ -58,6 +60,8 @@ import { EmptyState } from "@/components/empty-state";
 import { invalidateCachedSourceVideos } from "@/lib/source-video-cache";
 import { getRouteSessionState, setRouteSessionState } from "@/lib/route-session-state";
 import { isTextEditingTarget, useUndo } from "@/contexts/undo-context";
+
+const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
 interface SourceVideo {
   id: string;
@@ -182,6 +186,13 @@ export default function SegmentsPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Desktop-only local file dialog (uses the original path without copying).
+  const [showLocalDialog, setShowLocalDialog] = useState(false);
+  const [localPath, setLocalPath] = useState("");
+  const [localName, setLocalName] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [addingLocal, setAddingLocal] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   const uploadPollRef = useRef<ReturnType<typeof setInterval> | null>(null); // Bug #52
@@ -656,7 +667,7 @@ export default function SegmentsPage() {
     };
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
@@ -666,8 +677,29 @@ export default function SegmentsPage() {
     const videoFile = files.find((f) => f.type.startsWith("video/"));
     if (!videoFile) return;
 
-    // Browser clients cannot expose a reusable local path. Always upload the
-    // selected file so it remains available from cloud-backed sessions.
+    if (DESKTOP_MODE) {
+      // Desktop drag/drop can resolve the reusable source path and avoid a copy.
+      try {
+        const findRes = await apiPost("/segments/find-local", {
+          filename: videoFile.name,
+          size: videoFile.size,
+        });
+        if (findRes.ok) {
+          const data = await findRes.json();
+          if (data.file_path) {
+            setLocalPath(data.file_path);
+            setLocalName(videoFile.name.replace(/\.[^/.]+$/, ""));
+            setLocalError(null);
+            setShowLocalDialog(true);
+            return;
+          }
+        }
+      } catch {
+        // Fall back to uploading when the desktop path cannot be resolved.
+      }
+    }
+
+    // Browser clients cannot expose a reusable local path, so upload the file.
     setUploadFile(videoFile);
     const nameWithoutExt = videoFile.name.replace(/\.[^/.]+$/, "");
     setUploadName(nameWithoutExt);
@@ -739,6 +771,179 @@ export default function SegmentsPage() {
       setUploadError("Failed to upload video. Check your connection and try again.");
     } finally {
       setUploadingVideo(false);
+    }
+  };
+
+  const handleBrowseLocal = async () => {
+    setBrowsing(true);
+    try {
+      const paths = await pickLocalVideoFiles();
+      if (paths === null) {
+        setLocalError("File picker unavailable — paste the full path below.");
+        return;
+      }
+      if (paths.length > 0) {
+        setLocalPath(paths[0]);
+        if (!localName.trim()) {
+          const filename = paths[0].split(/[/\\]/).pop() || "";
+          setLocalName(filename.replace(/\.[^/.]+$/, ""));
+        }
+      }
+    } catch {
+      setLocalError("Failed to open file picker.");
+    } finally {
+      setBrowsing(false);
+    }
+  };
+
+  const handleAddLocal = async () => {
+    if (!localPath.trim()) return;
+
+    setAddingLocal(true);
+    setLocalError(null);
+    try {
+      const res = await apiPost("/segments/source-videos/local", {
+        file_path: localPath.trim(),
+        name: localName.trim() || undefined,
+      });
+
+      if (res.ok) {
+        const newVideo = await res.json() as SourceVideo;
+        invalidateCachedSourceVideos(currentProfile?.id);
+        setSourceVideos((prev) => [newVideo, ...prev]);
+        setSelectedVideo(newVideo);
+        setShowLocalDialog(false);
+        setLocalPath("");
+        setLocalName("");
+        setLocalError(null);
+
+        if (uploadPollRef.current) {
+          clearInterval(uploadPollRef.current);
+          uploadPollRef.current = null;
+        }
+        if (newVideo.status === "processing") {
+          uploadPollRef.current = setInterval(async () => {
+            try {
+              const pollRes = await apiGetWithRetry(
+                `/segments/source-videos/${newVideo.id}`,
+                { cache: "no-store", memoryCache: false }
+              );
+              if (!pollRes.ok) {
+                if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+                uploadPollRef.current = null;
+                return;
+              }
+              const updated: SourceVideo = await pollRes.json();
+              if (updated.status === "ready" || updated.status === "error") {
+                if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+                uploadPollRef.current = null;
+                setSourceVideos((prev) =>
+                  prev.map((video) => video.id === updated.id ? updated : video)
+                );
+                setSelectedVideo((prev) => prev?.id === updated.id ? updated : prev);
+                if (updated.status === "error") {
+                  setLocalError("Video processing failed.");
+                }
+              }
+            } catch {
+              if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+              uploadPollRef.current = null;
+            }
+          }, 2000);
+        }
+      } else {
+        const errorData = await res.json().catch(() => null);
+        setLocalError(errorData?.detail || `Failed to add video (${res.status})`);
+      }
+    } catch (error) {
+      handleApiError(error, "Error adding local video");
+      setLocalError("Failed to add video. Check the path and try again.");
+    } finally {
+      setAddingLocal(false);
+    }
+  };
+
+  const handlePickLocalVideos = async () => {
+    setBrowsing(true);
+    try {
+      const paths = await pickLocalVideoFiles();
+      if (paths === null) {
+        setLocalPath("");
+        setShowLocalDialog(true);
+        return;
+      }
+      if (paths.length === 0) return;
+      if (paths.length === 1) {
+        setLocalPath(paths[0]);
+        const filename = paths[0].split(/[/\\]/).pop() || "";
+        setLocalName(filename.replace(/\.[^/.]+$/, ""));
+        setShowLocalDialog(true);
+        return;
+      }
+
+      setAddingLocal(true);
+      const addedVideos: SourceVideo[] = [];
+      for (const filePath of paths) {
+        const filename = filePath.split(/[/\\]/).pop() || "";
+        try {
+          const addRes = await apiPost("/segments/source-videos/local", {
+            file_path: filePath,
+            name: filename.replace(/\.[^/.]+$/, "") || undefined,
+          });
+          if (addRes.ok) {
+            const newVideo = await addRes.json() as SourceVideo;
+            invalidateCachedSourceVideos(currentProfile?.id);
+            addedVideos.push(newVideo);
+            setSourceVideos((prev) => [newVideo, ...prev]);
+            setSelectedVideo(newVideo);
+          }
+        } catch {
+          // Continue with the remaining selected files.
+        }
+      }
+
+      const processingIds = new Set(
+        addedVideos
+          .filter((video) => video.status === "processing")
+          .map((video) => video.id)
+      );
+      if (processingIds.size > 0) {
+        if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+        uploadPollRef.current = setInterval(async () => {
+          for (const videoId of [...processingIds]) {
+            try {
+              const pollRes = await apiGetWithRetry(
+                `/segments/source-videos/${videoId}`,
+                { cache: "no-store", memoryCache: false }
+              );
+              if (!pollRes.ok) {
+                processingIds.delete(videoId);
+                continue;
+              }
+              const updated: SourceVideo = await pollRes.json();
+              if (updated.status === "ready" || updated.status === "error") {
+                processingIds.delete(videoId);
+                setSourceVideos((prev) =>
+                  prev.map((video) => video.id === updated.id ? updated : video)
+                );
+                setSelectedVideo((prev) => prev?.id === updated.id ? updated : prev);
+              }
+            } catch {
+              processingIds.delete(videoId);
+            }
+          }
+          if (processingIds.size === 0 && uploadPollRef.current) {
+            clearInterval(uploadPollRef.current);
+            uploadPollRef.current = null;
+          }
+        }, 2000);
+      }
+    } catch {
+      setLocalError("Failed to open file picker.");
+      setShowLocalDialog(true);
+    } finally {
+      setBrowsing(false);
+      setAddingLocal(false);
     }
   };
 
@@ -1493,13 +1698,109 @@ export default function SegmentsPage() {
 
         {/* Videos tab */}
         <TabsContent value="videos" className="flex-1 flex flex-col min-h-0 mt-0">
-          {/* Cloud upload */}
-          <div className="p-2 border-b border-border">
+          {/* Desktop local source / cloud upload */}
+          <div className="p-2 border-b border-border flex gap-1.5">
+            {DESKTOP_MODE && (
+              <>
+                <Button
+                  size="sm"
+                  className="flex-1 h-7 text-xs"
+                  disabled={browsing || addingLocal}
+                  onClick={handlePickLocalVideos}
+                >
+                  <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                  {browsing ? "Selecting..." : addingLocal ? "Adding..." : "Add Local"}
+                </Button>
+
+                <Dialog open={showLocalDialog} onOpenChange={setShowLocalDialog}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Add Local Video</DialogTitle>
+                      <DialogDescription>
+                        Use a video directly from your computer — no copy, instant
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="local-path">File Path</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="local-path"
+                            placeholder="D:\Videos\my-video.mp4"
+                            value={localPath}
+                            className="flex-1"
+                            onChange={(event) => {
+                              setLocalPath(event.target.value);
+                              if (!localName.trim() && event.target.value) {
+                                const filename = event.target.value.split(/[/\\]/).pop() || "";
+                                setLocalName(filename.replace(/\.[^/.]+$/, ""));
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBrowseLocal}
+                            disabled={browsing}
+                            className="shrink-0"
+                          >
+                            {browsing ? "..." : "Browse"}
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Click Browse to select, or paste the full path
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="local-name">Name (optional)</Label>
+                        <Input
+                          id="local-name"
+                          placeholder="Auto-filled from filename"
+                          value={localName}
+                          onChange={(event) => setLocalName(event.target.value)}
+                        />
+                      </div>
+                    </div>
+                    {localError && (
+                      <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                        <span>{localError}</span>
+                      </div>
+                    )}
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowLocalDialog(false);
+                          setLocalError(null);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleAddLocal}
+                        disabled={!localPath.trim() || addingLocal}
+                        className="min-w-[100px]"
+                      >
+                        {addingLocal ? "Adding..." : "Add Video"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </>
+            )}
+
             <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" className="h-8 w-full text-xs" title="Upload a source video">
-                  <Upload className="h-3.5 w-3.5 mr-1" />
-                  Upload Video
+                <Button
+                  size="sm"
+                  variant={DESKTOP_MODE ? "outline" : "default"}
+                  className={DESKTOP_MODE ? "h-7 text-xs px-2" : "h-8 w-full text-xs"}
+                  title={DESKTOP_MODE ? "Upload video (copies file)" : "Upload a source video"}
+                >
+                  <Upload className={`h-3.5 w-3.5 ${DESKTOP_MODE ? "" : "mr-1"}`} />
+                  {!DESKTOP_MODE && "Upload Video"}
                 </Button>
               </DialogTrigger>
               <DialogContent>
