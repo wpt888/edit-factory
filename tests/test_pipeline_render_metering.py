@@ -268,3 +268,242 @@ def test_status_reconciles_capture_after_output_persistence(monkeypatch):
         pipeline_routes._pipelines.pop(pipeline_id, None)
 
     asyncio.run(scenario())
+
+
+def test_status_replays_lost_render_reserve_response_then_refunds(monkeypatch):
+    async def scenario():
+        pipeline_id = "render-metering-lost-reserve"
+        record = {
+            **new_metering_record(
+                "studio.render_output_minute",
+                1,
+                "pipeline:render-metering-lost-reserve:render:0:attempt",
+            ),
+            "state": "reserve_pending",
+            "supabase_user_id": "user-1",
+        }
+        pipeline = {
+            "pipeline_id": pipeline_id,
+            "profile_id": "profile-1",
+            "provider": "gemini",
+            "scripts": ["Test script"],
+            "render_jobs": {
+                0: {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Render interrupted",
+                    "metering": record,
+                }
+            },
+            "previews": {},
+            "tts_previews": {},
+            "meta_multiplication": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        pipeline_routes._pipelines[pipeline_id] = pipeline
+        events = []
+
+        class _Queue:
+            async def snapshots(self, _job_ids):
+                return {}
+
+        async def reserve(identity, current, *, client=None):
+            assert identity.supabase_user_id == "user-1"
+            events.append(("reserve", current["idempotency_key"]))
+            return {
+                **current,
+                "state": "reserved",
+                "reservation_id": "reservation-render-replayed",
+                "replayed": True,
+            }
+
+        async def settle(identity, current, *, delivered, result_metadata=None, client=None):
+            assert identity.supabase_user_id == "user-1"
+            assert delivered is False
+            events.append(("refund", current["idempotency_key"]))
+            return {**current, "state": "released"}
+
+        monkeypatch.setattr(pipeline_routes, "get_render_queue", lambda: _Queue())
+        monkeypatch.setattr(pipeline_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(pipeline_routes, "settle_metering_record", settle)
+        monkeypatch.setattr(pipeline_routes, "_db_update_render_jobs", lambda *_args: None)
+
+        response = await pipeline_routes.get_pipeline_status(pipeline_id)
+
+        assert response.variants[0].status == "failed"
+        assert events == [
+            ("reserve", record["idempotency_key"]),
+            ("refund", record["idempotency_key"]),
+        ]
+        recovered = pipeline["render_jobs"][0]["metering"]
+        assert recovered["reservation_id"] == "reservation-render-replayed"
+        assert recovered["state"] == "released"
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())
+
+
+def test_render_preserves_lost_reserve_attempt_when_replay_is_unavailable(
+    monkeypatch, tmp_path
+):
+    async def scenario():
+        audio = tmp_path / "voice.mp3"
+        audio.write_bytes(b"a" * 101)
+        pipeline_id = "render-metering-replay-offline"
+        record = {
+            **new_metering_record(
+                "studio.render_output_minute",
+                1,
+                "pipeline:render-metering-replay-offline:render:0:attempt",
+            ),
+            "state": "reserve_pending",
+            "supabase_user_id": "user-1",
+        }
+        pipeline = _pipeline(pipeline_id, str(audio))
+        pipeline["render_jobs"][0] = {
+            "status": "failed",
+            "progress": 0,
+            "current_step": "Render interrupted",
+            "metering": record,
+        }
+        _install_render_route_fakes(monkeypatch, pipeline_id, pipeline)
+        reserve_keys = []
+
+        async def unavailable(_identity, current):
+            reserve_keys.append(current["idempotency_key"])
+            raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+
+        monkeypatch.setattr(pipeline_routes, "reserve_metering_record", unavailable)
+
+        with pytest.raises(HTTPException) as error:
+            await pipeline_routes.render_variants(
+                _request(),
+                pipeline_id,
+                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                BackgroundTasks(),
+                ProfileContext(profile_id="profile-1", user_id="user-1"),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        assert error.value.detail["code"] == "metering_unavailable"
+        assert reserve_keys == [record["idempotency_key"]]
+        preserved = pipeline["render_jobs"][0]["metering"]
+        assert preserved["idempotency_key"] == record["idempotency_key"]
+        assert preserved["state"] == "reserve_pending"
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())
+
+
+def test_render_preserves_refund_pending_attempt_when_settlement_is_unavailable(
+    monkeypatch, tmp_path
+):
+    async def scenario():
+        audio = tmp_path / "voice.mp3"
+        audio.write_bytes(b"a" * 101)
+        pipeline_id = "render-metering-refund-offline"
+        record = {
+            **new_metering_record(
+                "studio.render_output_minute",
+                1,
+                "pipeline:render-metering-refund-offline:render:0:attempt",
+            ),
+            "state": "refund_pending",
+            "reservation_id": "reservation-refund-pending",
+            "supabase_user_id": "user-1",
+        }
+        pipeline = _pipeline(pipeline_id, str(audio))
+        pipeline["render_jobs"][0] = {
+            "status": "failed",
+            "progress": 0,
+            "current_step": "Render failed",
+            "metering": record,
+        }
+        _install_render_route_fakes(monkeypatch, pipeline_id, pipeline)
+        settlement_keys = []
+
+        async def still_pending(_identity, current, *, delivered, result_metadata=None):
+            assert delivered is False
+            settlement_keys.append(current["idempotency_key"])
+            return {
+                **current,
+                "state": "refund_pending",
+                "last_error": {"code": "metering_unavailable"},
+            }
+
+        monkeypatch.setattr(pipeline_routes, "settle_metering_record", still_pending)
+
+        with pytest.raises(HTTPException) as error:
+            await pipeline_routes.render_variants(
+                _request(),
+                pipeline_id,
+                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                BackgroundTasks(),
+                ProfileContext(profile_id="profile-1", user_id="user-1"),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        assert error.value.detail["code"] == "metering_unavailable"
+        assert settlement_keys == [record["idempotency_key"]]
+        preserved = pipeline["render_jobs"][0]["metering"]
+        assert preserved["idempotency_key"] == record["idempotency_key"]
+        assert preserved["reservation_id"] == "reservation-refund-pending"
+        assert preserved["state"] == "refund_pending"
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())
+
+
+def test_remake_preserves_lost_reserve_attempt_when_replay_is_unavailable(
+    monkeypatch, tmp_path
+):
+    async def scenario():
+        audio = tmp_path / "voice.mp3"
+        audio.write_bytes(b"a" * 101)
+        pipeline_id = "remake-metering-replay-offline"
+        record = {
+            **new_metering_record(
+                "studio.render_output_minute",
+                1,
+                "pipeline:remake-metering-replay-offline:render:0:attempt",
+            ),
+            "state": "reserve_pending",
+            "supabase_user_id": "user-1",
+        }
+        pipeline = _pipeline(pipeline_id, str(audio))
+        pipeline["render_jobs"][0] = {
+            "status": "failed",
+            "progress": 0,
+            "current_step": "Render interrupted",
+            "metering": record,
+        }
+        _install_render_route_fakes(monkeypatch, pipeline_id, pipeline)
+
+        async def unavailable(_identity, current):
+            assert current["idempotency_key"] == record["idempotency_key"]
+            raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+
+        monkeypatch.setattr(pipeline_routes, "reserve_metering_record", unavailable)
+
+        with pytest.raises(HTTPException) as error:
+            await pipeline_routes.remake_variant(
+                _request(),
+                pipeline_id,
+                0,
+                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                BackgroundTasks(),
+                None,
+                ProfileContext(profile_id="profile-1", user_id="user-1"),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        assert error.value.detail["code"] == "metering_unavailable"
+        preserved = pipeline["render_jobs"][0]["metering"]
+        assert preserved["idempotency_key"] == record["idempotency_key"]
+        assert preserved["state"] == "reserve_pending"
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())

@@ -1389,6 +1389,66 @@ async def _settle_render_metering(
     return _replace_render_metering(pipeline_id, job_key, settled)
 
 
+async def _recover_render_reservation_for_settlement(
+    pipeline_id: str,
+    job_key: Any,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Replay a render reserve response lost before queue/provider entry."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    jobs = (pipeline or {}).get("render_jobs") or {}
+    job = jobs.get(job_key)
+    if job is None and isinstance(job_key, str):
+        try:
+            job = jobs.get(int(job_key))
+        except (TypeError, ValueError):
+            job = None
+    if not isinstance(job, dict):
+        return {}
+    record = job.get("metering")
+    if not isinstance(record, dict) or record.get("reservation_id"):
+        return job
+    if (
+        job.get("status") not in {"failed", "cancelled"}
+        or record.get("provider_started")
+        or record.get("state") not in {"pending", "reserve_pending"}
+    ):
+        return job
+    user_id = record.get("supabase_user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+    identity = MeteringIdentity(user_id, record.get("email"))
+    try:
+        recovered = await reserve_metering_record(identity, record)
+    except StudioMeteringBlocked as error:
+        pending = {
+            **record,
+            "state": (
+                "denied"
+                if error.code == "insufficient_credits"
+                else "reserve_pending"
+            ),
+            "last_error": error.as_http_detail(),
+        }
+        return _replace_render_metering(pipeline_id, job_key, pending)
+    return _replace_render_metering(pipeline_id, job_key, recovered)
+
+
+def _ensure_render_metering_replaceable(job: dict) -> None:
+    """Fail closed while an older render attempt still needs reconciliation."""
+    if job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+        return
+    record = job.get("metering")
+    if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+        return
+    raise _metering_http_exception(
+        StudioMeteringBlocked(
+            "metering_unavailable",
+            "Previous render metering reconciliation is still pending",
+        )
+    )
+
+
 def _render_job_is_stale(job: dict) -> bool:
     if job.get("status") != "processing":
         return False
@@ -2074,6 +2134,13 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                     and render_metering.get("state") not in {"captured", "released", "refunded"}
                 ):
                     render_metering["state"] = "refund_pending"
+                elif (
+                    isinstance(render_metering, dict)
+                    and not render_metering.get("reservation_id")
+                    and not render_metering.get("provider_started")
+                    and render_metering.get("state") == "pending"
+                ):
+                    render_metering["state"] = "reserve_pending"
                 interrupted_render_jobs = True
                 logger.info(f"Pipeline {pipeline_id}: marked queued/processing render job interrupted")
 
@@ -2775,6 +2842,11 @@ async def cancel_pipeline_render(
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
     for metered_job_key in metered_job_keys:
+        await _recover_render_reservation_for_settlement(
+            pipeline_id,
+            metered_job_key,
+            profile.user_id,
+        )
         await _settle_render_metering(
             pipeline_id,
             metered_job_key,
@@ -2881,6 +2953,11 @@ async def cancel_variant_render(
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
     for cancelled_key in cancelled_keys:
+        await _recover_render_reservation_for_settlement(
+            pipeline_id,
+            cancelled_key,
+            profile.user_id,
+        )
         await _settle_render_metering(
             pipeline_id,
             cancelled_key,
@@ -5688,10 +5765,36 @@ async def render_variants(
         if not isinstance(existing_job, dict):
             continue
         existing_metering = existing_job.get("metering")
-        if not isinstance(existing_metering, dict) or not existing_metering.get("reservation_id"):
+        if not isinstance(existing_metering, dict):
+            continue
+        if _render_job_is_stale(existing_job):
+            with state_lock:
+                existing_job["status"] = "failed"
+                existing_job["progress"] = 0
+                existing_job["current_step"] = "Render failed (stale)"
+                existing_job["error"] = (
+                    "Render did not survive a backend restart. Submit the render again."
+                )
+                existing_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                if existing_metering.get("reservation_id"):
+                    existing_metering["state"] = "refund_pending"
+                elif not existing_metering.get("provider_started"):
+                    existing_metering["state"] = "reserve_pending"
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+        existing_job = await _recover_render_reservation_for_settlement(
+            pipeline_id,
+            job_key,
+            profile.user_id,
+        )
+        existing_metering = existing_job.get("metering") if isinstance(existing_job, dict) else None
+        if not isinstance(existing_metering, dict):
+            continue
+        if not existing_metering.get("reservation_id"):
+            _ensure_render_metering_replaceable(existing_job)
             continue
         if existing_job.get("status") == "completed" or existing_metering.get("output_persisted"):
-            await _settle_render_metering(
+            existing_job = await _settle_render_metering(
                 pipeline_id,
                 job_key,
                 profile.user_id,
@@ -5702,23 +5805,10 @@ async def render_variants(
                 },
             )
         elif existing_job.get("status") in {"failed", "cancelled"}:
-            await _settle_render_metering(
+            existing_job = await _settle_render_metering(
                 pipeline_id, job_key, profile.user_id, delivered=False
             )
-        elif _render_job_is_stale(existing_job):
-            with state_lock:
-                existing_job["status"] = "failed"
-                existing_job["progress"] = 0
-                existing_job["current_step"] = "Render failed (stale)"
-                existing_job["error"] = (
-                    "Render did not survive a backend restart. Submit the render again."
-                )
-                existing_job["failed_at"] = datetime.now(timezone.utc).isoformat()
-                existing_metering["state"] = "refund_pending"
-            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
-            await _settle_render_metering(
-                pipeline_id, job_key, profile.user_id, delivered=False
-            )
+        _ensure_render_metering_replaceable(existing_job)
 
     # Initialize render jobs for each variant and collect which ones to render.
     _render_tasks_to_run = []
@@ -6691,10 +6781,16 @@ async def remake_variant(
             detail="Voice-over duration is unavailable. Regenerate TTS before remaking.",
         )
 
+    if isinstance(existing_job, dict):
+        existing_job = await _recover_render_reservation_for_settlement(
+            pipeline_id,
+            job_key,
+            profile.user_id,
+        )
     existing_metering = existing_job.get("metering") if isinstance(existing_job, dict) else None
     if isinstance(existing_metering, dict) and existing_metering.get("reservation_id"):
         if existing_job.get("status") == "completed" or existing_metering.get("output_persisted"):
-            await _settle_render_metering(
+            existing_job = await _settle_render_metering(
                 pipeline_id,
                 job_key,
                 profile.user_id,
@@ -6705,9 +6801,11 @@ async def remake_variant(
                 },
             )
         elif existing_job.get("status") in {"failed", "cancelled"}:
-            await _settle_render_metering(
+            existing_job = await _settle_render_metering(
                 pipeline_id, job_key, profile.user_id, delivered=False
             )
+    if isinstance(existing_job, dict):
+        _ensure_render_metering_replaceable(existing_job)
 
     # 4. Build strong avoid set (current variant's segments + cross-variant + DB usage)
     remake_avoid_ids: set = set()
@@ -7217,6 +7315,13 @@ def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
                 and metering.get("state") not in {"captured", "released", "refunded"}
             ):
                 metering["state"] = "refund_pending"
+            elif (
+                isinstance(metering, dict)
+                and not metering.get("reservation_id")
+                and not metering.get("provider_started")
+                and metering.get("state") == "pending"
+            ):
+                metering["state"] = "reserve_pending"
             changed = True
             logger.warning(f"Pipeline {pipeline_id}: marked stale 'processing' render job as failed")
     if changed:
@@ -7249,6 +7354,10 @@ async def get_pipeline_status(pipeline_id: str):
     for job_key, job in list((pipeline.get("render_jobs") or {}).items()):
         if not isinstance(job, dict):
             continue
+        job = await _recover_render_reservation_for_settlement(
+            pipeline_id,
+            job_key,
+        )
         metering = job.get("metering")
         if not isinstance(metering, dict) or not metering.get("reservation_id"):
             continue
