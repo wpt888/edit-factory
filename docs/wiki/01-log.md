@@ -1,5 +1,27 @@
 # Engineering Change Log
 
+## 2026-07-15 — Fair multi-tenant render queue (Goal C)
+
+- Added a process-local scheduler that dispatches final Pipeline renders in
+  round-robin order between users while preserving FIFO inside each user's
+  queue and the existing `MAX_CONCURRENT_RENDERS`/FFmpeg semaphore limit.
+- Persisted `queued` before background execution; status polling now exposes
+  one-based queue position and a recent-duration ETA. Step 4 distinguishes
+  queued work from active rendering and permits immediate queued cancellation.
+- Made restart behavior honest: persisted queued/processing records whose
+  callbacks vanished are marked interrupted/failed and can be submitted again.
+- Added scheduler and Pipeline integration tests, a deterministic Step 4
+  Playwright transition test, and two browser screenshots.
+- Fixed a pre-existing Windows signing-key flake exposed by the full suite:
+  binary key material is now persisted with `O_BINARY`, so `0x0A` is never
+  converted to CRLF.
+- Verification: **564 passed, 1 skipped, 18 xfailed, 0 failed** in the full
+  backend suite; TypeScript passed; focused ESLint had zero errors; Playwright
+  and browser queue-to-render transition checks passed. No deployment or push
+  was performed.
+
+See [Fair multi-tenant render queue](23-render-queue-multi-tenant.md).
+
 ## 2026-07-15 — Backend suite green: five pre-existing failures fixed
 
 - Aligned the three `TestTTSGenerate` tests with the multi-provider

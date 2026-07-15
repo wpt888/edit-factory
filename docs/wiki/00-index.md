@@ -21,3 +21,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Poziționare ecosistem: fabrică, nu studio](20-pozitionare-ecosistem.md)
 - [BlipStudio production deployment](21-blipstudio-production-deployment.md)
 - [BlipStudio web remediation: local boundaries and race-safe async pipeline jobs](22-blipstudio-web-remediation.md)
+- [Fair multi-tenant render queue](23-render-queue-multi-tenant.md)
