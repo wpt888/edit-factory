@@ -142,8 +142,15 @@ function PipelinePage() {
     const params = new URLSearchParams();
     params.set("step", String(stepNum));
     if (pid) params.set("id", pid);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [router, pathname]);
+    const nextQuery = params.toString();
+
+    // Avoid navigating to the URL that is already active. In the desktop
+    // standalone build, a same-URL replace remounts this page, which runs the
+    // pipelineId sync effect again and creates an endless navigation loop.
+    if (searchParams.toString() === nextQuery) return;
+
+    router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+  }, [router, pathname, searchParams]);
 
   // BUG-FE-33: searchParams in deps ensures URL stays in sync; stale closure risk is
   // mitigated because searchParams is read synchronously within the callback.
