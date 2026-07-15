@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Progress } from "@/components/ui/progress";
 import { apiPost, apiPatch, handleApiError } from "@/lib/api";
 import {
   Loader2,
@@ -62,6 +63,10 @@ type TtsResult = {
   audio_duration: number;
   generating: boolean;
   stale: boolean;
+  status?: "queued" | "processing" | "completed" | "failed" | "cancelled";
+  progress?: number;
+  current_step?: string;
+  error?: string | null;
   srt_content?: string;
   script_word_count?: number;
   srt_word_count?: number;
@@ -813,11 +818,22 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       {/* Per-script TTS controls */}
                       <div className="flex flex-wrap items-center gap-2">
                         {ttsResults[index]?.generating ? (
-                          <Button variant="outline" size="sm" disabled>
-                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                            Generating...
-                          </Button>
-                        ) : ttsResults[index] && !ttsResults[index].stale ? (
+                          <div
+                            className="min-w-[14rem] max-w-sm flex-1 rounded-md border bg-muted/30 px-3 py-2"
+                            data-testid={`tts-progress-${index}`}
+                          >
+                            <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+                              <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                                <span className="truncate">{ttsResults[index].current_step || "Generating voice-over"}</span>
+                              </span>
+                              <span className="tabular-nums text-muted-foreground">
+                                {Math.round(ttsResults[index].progress || 0)}%
+                              </span>
+                            </div>
+                            <Progress value={ttsResults[index].progress || 0} className="h-1.5" />
+                          </div>
+                        ) : (ttsResults[index]?.audio_duration || 0) > 0 && !ttsResults[index].stale ? (
                           <>
                             <Button
                               variant="outline"
@@ -896,6 +912,11 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                             Script changed — audio outdated
                           </Badge>
                         )}
+                        {ttsResults[index]?.error && !ttsResults[index]?.generating && (
+                          <span className="text-xs text-destructive" role="alert">
+                            {ttsResults[index].error}
+                          </span>
+                        )}
                         {libraryMatches[index] && !ttsResults[index] && (
                           <Button
                             variant="outline"
@@ -907,7 +928,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                             Use Library Audio ({formatDuration(libraryMatches[index].audio_duration)})
                           </Button>
                         )}
-                        {ttsResults[index] && !ttsResults[index].generating && !ttsResults[index].stale && (
+                        {(ttsResults[index]?.audio_duration || 0) > 0 && !ttsResults[index].generating && !ttsResults[index].stale && (
                           <div className="ml-auto flex items-center gap-2 rounded-md border border-success/20 bg-success/10 px-2.5 py-1">
                             <Checkbox
                               id={`approve-script-${index}`}
@@ -978,7 +999,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
 
             {/* Compact status and action dock */}
             {(() => {
-              const ttsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
+              const ttsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && r.audio_duration > 0 && !r.generating && !r.stale; }).length;
               const allTtsReady = ttsCount === scripts.length && scripts.length > 0;
               const previewTargetCount = allTtsReady ? previewCards.length : scripts.length;
               const hasPreviews = Object.keys(previews).length > 0;

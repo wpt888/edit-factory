@@ -10,7 +10,6 @@ import { usePolling } from "@/hooks";
 import { useLocalStorageConfig } from "@/hooks/use-local-storage-config";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
-import { checkFallbacks } from "@/lib/api-fallback";
 import { getCachedSourceVideos } from "@/lib/source-video-cache";
 import {
   DEFAULT_PIPELINE_LAYOUT,
@@ -50,6 +49,7 @@ import {
   CatalogPagination,
   Voice,
   ContextProduct,
+  AsyncJobState,
   META_SUBTITLE_STYLE_BY_VERSION,
 } from "./pipeline-types";
 import { PipelineErrorBoundary } from "./components/pipeline-error-boundary";
@@ -81,6 +81,22 @@ const createScriptSetName = (idea: string): string => {
   const firstWords = idea.trim().split(/\s+/).filter(Boolean).slice(0, 7).join(" ");
   return firstWords.replace(/[.,;:!?]+$/, "").slice(0, 80) || "Untitled script set";
 };
+
+type TtsResult = {
+  audio_duration: number;
+  generating: boolean;
+  stale: boolean;
+  status?: AsyncJobState["status"];
+  progress?: number;
+  current_step?: string;
+  error?: string | null;
+  srt_content?: string;
+  script_word_count?: number;
+  srt_word_count?: number;
+};
+
+const isActiveAsyncJob = (job?: Partial<AsyncJobState> | null) =>
+  job?.status === "queued" || job?.status === "processing";
 
 export default function PipelinePageWrapper() {
   return (
@@ -145,6 +161,7 @@ function PipelinePage() {
   const [targetScriptDuration, setTargetScriptDuration] = useState(30);
   const [provider, setProvider] = useState("gemini");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationJob, setGenerationJob] = useState<Partial<AsyncJobState> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aiInstructions, setAiInstructions] = useState("");
   const [aiRulesExpanded, setAiRulesExpanded] = useState(false);
@@ -272,7 +289,8 @@ function PipelinePage() {
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
-  const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>>({});
+  const [historyTtsInfo, setHistoryTtsInfo] = useState<NonNullable<PipelineScriptsResponse["tts_info"]>>({});
+  const [historyTtsJobs, setHistoryTtsJobs] = useState<Record<string, Partial<AsyncJobState>>>({});
   const [historyContextProducts, setHistoryContextProducts] = useState<ContextProduct[]>([]);
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
@@ -320,7 +338,7 @@ function PipelinePage() {
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
 
   // Step 2: Per-script TTS previews
-  const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean; srt_content?: string; script_word_count?: number; srt_word_count?: number }>>({});
+  const [ttsResults, setTtsResults] = useState<Record<number, TtsResult>>({});
   const [regeneratingAll, setRegeneratingAll] = useState(false);
   const [regeneratingAllIndex, setRegeneratingAllIndex] = useState<number | null>(null);
   const [regeneratingVariantAudio, setRegeneratingVariantAudio] = useState<Record<number, boolean>>({});
@@ -703,6 +721,9 @@ function PipelinePage() {
 
         setPipelineId(data.pipeline_id);
         pipelineIdRef.current = data.pipeline_id; // Set ref immediately for URL sync
+        const restoredGenerationJob = data.generation_job || null;
+        setGenerationJob(restoredGenerationJob);
+        setIsGenerating(isActiveAsyncJob(restoredGenerationJob));
         setScripts((data.scripts || []).map((s: string) => {
           const lines = s.trim().split('\n').filter((l: string) => l.trim());
           if (lines.length >= 3) return s;
@@ -729,9 +750,9 @@ function PipelinePage() {
         if (data.library_project_id) setLibraryProjectId(data.library_project_id);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
-        const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }> = data.tts_info || {};
+        const ttsInfo = data.tts_info || {};
         const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
-        const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+        const restoredTts: Record<number, TtsResult> = {};
         const restoredApproved = new Set<number>();
         // Bound restored keys to the current script count. The backend can hold
         // stale tts_info for variants deleted from the scripts array (delete-script
@@ -750,7 +771,15 @@ function PipelinePage() {
           if (!info.has_audio) return;
           const idx = toBaseVariant(key);
           if (idx === null || idx >= scriptCount) return;
-          restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          restoredTts[idx] = {
+            audio_duration: info.audio_duration,
+            generating: false,
+            stale: false,
+            status: "completed",
+            srt_content: info.srt_content,
+            script_word_count: info.script_word_count,
+            srt_word_count: info.srt_word_count,
+          };
           if (info.approved) restoredApproved.add(idx);
         });
         // Per-variant fallback: fill gaps from preview_info (Step 3 audio may
@@ -761,6 +790,31 @@ function PipelinePage() {
           if (idx === null || idx >= scriptCount) return;
           if (!restoredTts[idx]) {
             restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          }
+        });
+        Object.entries(data.tts_jobs || {}).forEach(([key, rawJob]) => {
+          const idx = toBaseVariant(key);
+          if (idx === null || idx >= scriptCount) return;
+          const job = rawJob as Partial<AsyncJobState>;
+          if (isActiveAsyncJob(job)) {
+            restoredTts[idx] = {
+              audio_duration: 0,
+              generating: true,
+              stale: false,
+              status: job.status,
+              progress: job.progress || 0,
+              current_step: job.current_step || "Generating voice-over",
+            };
+          } else if ((job.status === "failed" || job.status === "cancelled") && !restoredTts[idx]) {
+            restoredTts[idx] = {
+              audio_duration: 0,
+              generating: false,
+              stale: false,
+              status: job.status,
+              progress: job.progress || 0,
+              current_step: job.current_step,
+              error: job.error,
+            };
           }
         });
         setTtsResults(restoredTts);
@@ -813,8 +867,16 @@ function PipelinePage() {
           }
         }
 
-        // Navigate to step 2 if on step 1 (scripts are loaded)
-        if (step === 1) setStep(2);
+        // Completed pipelines reopen in Step 2. Active/failed generation jobs
+        // stay on Step 1, where polling and recovery controls are visible.
+        if ((data.scripts || []).length > 0) {
+          if (step === 1) setStep(2);
+        } else {
+          setStep(1);
+          if (restoredGenerationJob?.status === "failed") {
+            setError(restoredGenerationJob.error || "Script generation failed. Please try again.");
+          }
+        }
       } catch {
         // Pipeline not found or expired — clear ID from URL and drop the dead pointer
         updateUrlParams(step, null);
@@ -1513,6 +1575,8 @@ function PipelinePage() {
 
     setError(null);
     setIsGenerating(true);
+    setGenerationJob(null);
+    let queued = false;
 
     try {
       const res = await apiPost("/pipeline/generate", {
@@ -1523,7 +1587,7 @@ function PipelinePage() {
         variant_count: variantCount,
         provider,
         target_script_duration: targetScriptDuration,
-      }, { timeout: 300_000, signal: abortController.signal }); // 5 min — AI script generation is slow
+      }, { timeout: 60_000, signal: abortController.signal });
 
       if (abortController.signal.aborted || !isMountedRef.current) return;
 
@@ -1531,11 +1595,13 @@ function PipelinePage() {
       const data = await res.json();
       if (!isMountedRef.current) return;
       setPipelineId(data.pipeline_id);
-      setScripts((data.scripts || []).map(formatScript));
-      setScriptNames(defaultScriptNames((data.scripts || []).length));
-      setTotalSegmentDuration(data.total_segment_duration || 0);
-      setStep(2);
-      if (!isMountedRef.current) return;
+      pipelineIdRef.current = data.pipeline_id;
+      setGenerationJob(data.job || {
+        status: data.status || "queued",
+        progress: 0,
+        current_step: "Queued for script generation",
+      });
+      queued = true;
       fetchHistory();
     } catch (err) {
       if (abortController.signal.aborted) return;
@@ -1550,16 +1616,32 @@ function PipelinePage() {
         setError("Network error. Please check if the backend is running.");
       }
     } finally {
-      if (!abortController.signal.aborted && isMountedRef.current) {
+      if (!queued && !abortController.signal.aborted && isMountedRef.current) {
         setIsGenerating(false);
       }
     }
   };
 
-  const handleCancelGenerate = () => {
+  const handleCancelGenerate = async () => {
     scriptAbortRef.current?.abort();
     scriptAbortRef.current = null;
-    setIsGenerating(false);
+    if (!pipelineId) {
+      setIsGenerating(false);
+      return;
+    }
+    try {
+      const res = await apiPost(`/pipeline/generation-cancel/${pipelineId}`, {});
+      const data = await res.json();
+      setGenerationJob(data.job || {
+        status: "cancelled",
+        progress: generationJob?.progress || 0,
+        current_step: "Generation cancelled",
+      });
+    } catch (err) {
+      handleApiError(err, "Could not cancel script generation");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // Create a pipeline with empty script slots so the user can author them by hand
@@ -1569,6 +1651,7 @@ function PipelinePage() {
     if (isGenerating) return;
     setError(null);
     setIsGenerating(true);
+    setGenerationJob(null);
     try {
       const emptyScripts = Array.from({ length: variantCount }, () => "");
       const resolvedPipelineName = pipelineName.trim() || createScriptSetName(idea || "Manual scripts");
@@ -1619,7 +1702,7 @@ function PipelinePage() {
     // Snapshot ready-count BEFORE the loop. ttsResultsRef is mutated during the loop
     // (setTtsResults triggers re-renders that update the ref), so evaluating this after
     // the loop would always be "all ready" and trigger auto-advance incorrectly.
-    const initialReadyCount = scripts.filter((_, i) => { const r = ttsResultsRef.current[i]; return !!r && !r.generating && !r.stale; }).length;
+    const initialReadyCount = scripts.filter((_, i) => { const r = ttsResultsRef.current[i]; return !!r && r.audio_duration > 0 && !r.generating && !r.stale; }).length;
     const skipReview = initialReadyCount === scripts.length && scripts.length > 0;
 
     // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called
@@ -2098,6 +2181,8 @@ function PipelinePage() {
     setProvider("gemini");
     setError(null);
     setPipelineId(null);
+    setGenerationJob(null);
+    setIsGenerating(false);
     setScripts([]);
     setScriptNames([]);
     setPreviews({});
@@ -2140,6 +2225,59 @@ function PipelinePage() {
     }
   }, [currentProfile?.id]);
 
+  // Script generation is process-independent from the page lifecycle: the
+  // persisted job can be polled again after refresh or history restore.
+  const generationJobStatus = generationJob?.status;
+  useEffect(() => {
+    if (!pipelineId || (generationJobStatus !== "queued" && generationJobStatus !== "processing")) return;
+    let disposed = false;
+    let requestInFlight = false;
+
+    const pollGeneration = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const res = await apiGet(`/pipeline/generation-status/${pipelineId}`);
+        const data = await res.json();
+        if (disposed || !isMountedRef.current) return;
+        const job = (data.job || {}) as Partial<AsyncJobState>;
+        setGenerationJob(job);
+
+        if (job.status === "completed") {
+          const generatedScripts = (data.scripts || []) as string[];
+          const result = (job.result || {}) as Record<string, unknown>;
+          setScripts(generatedScripts.map(formatScript));
+          setScriptNames(
+            data.script_names?.length === generatedScripts.length
+              ? data.script_names
+              : defaultScriptNames(generatedScripts.length),
+          );
+          setTotalSegmentDuration(Number(result.total_segment_duration) || 0);
+          setIsGenerating(false);
+          setStep(2);
+          fetchHistory();
+        } else if (job.status === "failed" || job.status === "cancelled") {
+          setIsGenerating(false);
+          if (job.status === "failed") {
+            setError(job.error || "Script generation failed. Please try again.");
+          }
+          fetchHistory();
+        }
+      } catch (err) {
+        if (!disposed) handleApiError(err, "Could not refresh script generation status");
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    void pollGeneration();
+    const timer = window.setInterval(pollGeneration, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [pipelineId, generationJobStatus, fetchHistory, setStep]);
+
   // History sidebar: fetch scripts for a specific pipeline
   const fetchHistoryScripts = async (id: string) => {
     if (selectedHistoryId === id) {
@@ -2149,6 +2287,7 @@ function PipelinePage() {
       setHistorySelectedScripts(new Set());
       setHistoryPreviewInfo({});
       setHistoryTtsInfo({});
+      setHistoryTtsJobs({});
       return;
     }
     setSelectedHistoryId(id);
@@ -2157,6 +2296,20 @@ function PipelinePage() {
     try {
       const res = await apiGet(`/pipeline/scripts/${id}`);
       const data = await res.json();
+      const restoredJob = (data.generation_job || {}) as Partial<AsyncJobState>;
+      if (isActiveAsyncJob(restoredJob)) {
+        setPipelineId(id);
+        pipelineIdRef.current = id;
+        setGenerationJob(restoredJob);
+        setIsGenerating(true);
+        if (data.name) setPipelineName(data.name);
+        if (data.idea) setIdea(data.idea);
+        if (data.provider) setProvider(data.provider);
+        if (data.variant_count) setVariantCount(data.variant_count);
+        setSelectedHistoryId(null);
+        setStep(1);
+        return;
+      }
       const scriptsArr = data.scripts || data || [];
       setHistoryScripts(scriptsArr);
       setHistoryScriptNames(
@@ -2174,6 +2327,7 @@ function PipelinePage() {
       }
       // Store TTS info (Step 2 per-script TTS)
       setHistoryTtsInfo(data.tts_info || {});
+      setHistoryTtsJobs(data.tts_jobs || {});
       // Store context products for restore
       setHistoryContextProducts(data.context_products || []);
     } catch (err) {
@@ -2325,6 +2479,7 @@ function PipelinePage() {
     setHistorySelectedScripts(new Set());
     setHistoryPreviewInfo({});
     setHistoryTtsInfo({});
+    setHistoryTtsJobs({});
   }, [currentProfile?.id, fetchHistory, fetchTtsLibrary]);
 
   // Fetch source videos on mount
@@ -2775,22 +2930,56 @@ function PipelinePage() {
   // orphan keys makes ttsCount exceed scripts.length → "4 of 3 scripts, -1
   // remaining" and a jammed Continue gate. Drop any key >= scriptCount.
   const buildRestoredTts = (
-    ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>,
+    ttsInfo: NonNullable<PipelineScriptsResponse["tts_info"]>,
     previewInfo: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>,
     scriptCount: number,
-  ): { tts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }>; approved: Set<number> } => {
-    const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+    ttsJobs: Record<string, Partial<AsyncJobState>> = {},
+  ): { tts: Record<number, TtsResult>; approved: Set<number> } => {
+    const restoredTts: Record<number, TtsResult> = {};
     const restoredApproved = new Set<number>();
     Object.entries(ttsInfo).forEach(([key, info]) => {
-      if (info.has_audio && Number(key) < scriptCount) {
-        restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-        if (info.approved) restoredApproved.add(Number(key));
+      const index = Number.parseInt(key, 10);
+      if (info.has_audio && index < scriptCount) {
+        restoredTts[index] = {
+          audio_duration: info.audio_duration,
+          generating: false,
+          stale: false,
+          status: "completed",
+          srt_content: info.srt_content,
+          script_word_count: info.script_word_count,
+          srt_word_count: info.srt_word_count,
+        };
+        if (info.approved) restoredApproved.add(index);
       }
     });
     // Per-variant fallback: fill gaps from preview_info
     Object.entries(previewInfo).forEach(([key, info]) => {
       if (info.has_audio && Number(key) < scriptCount && !restoredTts[Number(key)]) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+      }
+    });
+    Object.entries(ttsJobs).forEach(([key, job]) => {
+      const index = Number.parseInt(key, 10);
+      if (!Number.isInteger(index) || index < 0 || index >= scriptCount) return;
+      if (isActiveAsyncJob(job)) {
+        restoredTts[index] = {
+          audio_duration: 0,
+          generating: true,
+          stale: false,
+          status: job.status,
+          progress: job.progress || 0,
+          current_step: job.current_step || "Generating voice-over",
+        };
+      } else if ((job.status === "failed" || job.status === "cancelled") && !restoredTts[index]) {
+        restoredTts[index] = {
+          audio_duration: 0,
+          generating: false,
+          stale: false,
+          status: job.status,
+          progress: job.progress || 0,
+          current_step: job.current_step,
+          error: job.error,
+        };
       }
     });
     return { tts: restoredTts, approved: restoredApproved };
@@ -2813,7 +3002,7 @@ function PipelinePage() {
           : defaultScriptNames(historyScripts.length),
       );
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
+      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length, historyTtsJobs);
       setTtsResults(restored.tts);
       if (restored.approved.size > 0) setApprovedScripts(restored.approved);
       // Restore context products from history
@@ -3254,7 +3443,14 @@ function PipelinePage() {
 
     setTtsResults(prev => ({
       ...prev,
-      [variantIndex]: { audio_duration: 0, generating: true, stale: false }
+      [variantIndex]: {
+        audio_duration: 0,
+        generating: true,
+        stale: false,
+        status: "queued",
+        progress: 0,
+        current_step: "Queued for voice-over generation",
+      }
     }));
     // Clear approval — TTS regenerated, needs re-verification
     setApprovedScripts(prev => {
@@ -3278,36 +3474,39 @@ function PipelinePage() {
         words_per_subtitle: wordsPerSubtitle,
         min_segment_duration: minSegmentDuration,
         ultra_rapid_intro: ultraRapidIntro,
-      }, { timeout: 300_000 });
+      }, { timeout: 60_000 });
 
       // apiPost throws on non-OK responses (FE-01)
       const data = await res.json();
-      checkFallbacks(data);
       setTtsResults(prev => ({
         ...prev,
         [variantIndex]: {
-          audio_duration: data.audio_duration,
-          generating: false,
+          audio_duration: 0,
+          generating: true,
           stale: false,
-          srt_content: data.srt_content,
-          script_word_count: data.script_word_count,
-          srt_word_count: data.srt_word_count,
+          status: data.job?.status || data.status || "queued",
+          progress: data.job?.progress || 0,
+          current_step: data.job?.current_step || "Queued for voice-over generation",
         }
       }));
-      // Credits consumed — refresh badge
-      fetchElevenCredits();
     } catch (err) {
       handleApiError(err, "TTS generation error");
-      if (err instanceof ApiError && err.isTimeout) {
-        setPreviewError("TTS generation timed out. Try again.");
-      } else {
-        setPreviewError("Network error. Please check if the backend is running.");
-      }
-      setTtsResults(prev => {
-        const next = { ...prev };
-        delete next[variantIndex];
-        return next;
-      });
+      const message = err instanceof ApiError
+        ? err.detail || err.message
+        : "Network error. Please check if the backend is running.";
+      setPreviewError(message);
+      setTtsResults(prev => ({
+        ...prev,
+        [variantIndex]: {
+          audio_duration: 0,
+          generating: false,
+          stale: false,
+          status: "failed",
+          progress: 0,
+          current_step: "Voice-over failed",
+          error: message,
+        },
+      }));
     }
   };
 
@@ -3325,13 +3524,20 @@ function PipelinePage() {
     // Clear all approvals — all TTS being regenerated
     setApprovedScripts(new Set());
 
-    for (let i = 0; i < scripts.length; i++) {
-      if (abortController.signal.aborted) break;
+    await Promise.all(scripts.map(async (_, i) => {
+      if (abortController.signal.aborted) return;
 
       setRegeneratingAllIndex(i);
       setTtsResults(prev => ({
         ...prev,
-        [i]: { audio_duration: 0, generating: true, stale: false }
+        [i]: {
+          audio_duration: 0,
+          generating: true,
+          stale: false,
+          status: "queued",
+          progress: 0,
+          current_step: "Queued for voice-over generation",
+        }
       }));
 
       try {
@@ -3348,66 +3554,185 @@ function PipelinePage() {
           words_per_subtitle: wordsPerSubtitle,
           min_segment_duration: minSegmentDuration,
           ultra_rapid_intro: ultraRapidIntro,
-        }, { timeout: 300_000, signal: abortController.signal });
+        }, { timeout: 60_000, signal: abortController.signal });
 
-        if (abortController.signal.aborted || !isMountedRef.current) break;
+        if (abortController.signal.aborted || !isMountedRef.current) return;
 
         // apiPost throws on non-OK responses (FE-01)
         const data = await res.json();
-        checkFallbacks(data);
-        if (!isMountedRef.current) break;
+        if (!isMountedRef.current) return;
         setTtsResults(prev => ({
           ...prev,
           [i]: {
-            audio_duration: data.audio_duration,
-            generating: false,
+            audio_duration: 0,
+            generating: true,
             stale: false,
-            srt_content: data.srt_content,
-            script_word_count: data.script_word_count,
-            srt_word_count: data.srt_word_count,
+            status: data.job?.status || data.status || "queued",
+            progress: data.job?.progress || 0,
+            current_step: data.job?.current_step || "Queued for voice-over generation",
           }
         }));
       } catch (err) {
-        if (abortController.signal.aborted) break;
+        if (abortController.signal.aborted) return;
         handleApiError(err, "TTS regeneration error");
-        setTtsResults(prev => { const next = { ...prev }; delete next[i]; return next; });
-        break;
+        const message = err instanceof ApiError ? err.detail || err.message : "Voice-over dispatch failed";
+        setTtsResults(prev => ({
+          ...prev,
+          [i]: {
+            audio_duration: 0,
+            generating: false,
+            stale: false,
+            status: "failed",
+            progress: 0,
+            current_step: "Voice-over failed",
+            error: message,
+          },
+        }));
       }
-    }
+    }));
 
-    // Clean up any entries left in generating state (e.g. after abort)
-    setTtsResults(prev => {
-      const next = { ...prev };
-      let changed = false;
-      for (const key of Object.keys(next)) {
-        if (next[Number(key)]?.generating) {
-          delete next[Number(key)];
-          changed = true;
+    if (abortController.signal.aborted) {
+      setTtsResults(prev => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          if (next[Number(key)]?.generating) {
+            next[Number(key)] = {
+              ...next[Number(key)],
+              generating: false,
+              status: "cancelled",
+              current_step: "Voice-over cancelled",
+            };
+          }
         }
-      }
-      return changed ? next : prev;
-    });
-
-    setRegeneratingAll(false);
-    setRegeneratingAllIndex(null);
+        return next;
+      });
+      setRegeneratingAll(false);
+      setRegeneratingAllIndex(null);
+    }
   };
 
-  const handleCancelRegenerateAll = () => {
+  const handleCancelRegenerateAll = async () => {
     regenerateAbortRef.current?.abort();
     regenerateAbortRef.current = null;
+    if (pipelineId) {
+      try {
+        await apiPost(`/pipeline/tts-cancel/${pipelineId}`, {
+          variant_indices: scripts.map((_, index) => index),
+        });
+      } catch (err) {
+        handleApiError(err, "Could not cancel voice-over generation");
+      }
+    }
     setRegeneratingAll(false);
     setRegeneratingAllIndex(null);
-    // Mark any currently-generating entries as not generating
     setTtsResults(prev => {
       const next = { ...prev };
       for (const key of Object.keys(next)) {
         if (next[Number(key)]?.generating) {
-          delete next[Number(key)];
+          next[Number(key)] = {
+            ...next[Number(key)],
+            generating: false,
+            status: "cancelled",
+            current_step: "Voice-over cancelled",
+          };
         }
       }
       return next;
     });
   };
+
+  const hasActiveTtsJobs = Object.values(ttsResults).some(result => result.generating);
+
+  useEffect(() => {
+    if (!pipelineId || !hasActiveTtsJobs) return;
+    let disposed = false;
+    let requestInFlight = false;
+
+    const pollTtsJobs = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const res = await apiGet(`/pipeline/tts-status/${pipelineId}`);
+        const data = await res.json();
+        if (disposed || !isMountedRef.current) return;
+
+        const jobs = (data.jobs || {}) as Record<string, Partial<AsyncJobState>>;
+        const results = (data.results || {}) as Record<string, Partial<TtsResult>>;
+        const activeIndices = Object.entries(jobs)
+          .filter(([, job]) => isActiveAsyncJob(job))
+          .map(([key]) => Number(key))
+          .filter(index => Number.isInteger(index) && index >= 0 && index < scripts.length);
+        const firstActive = activeIndices.length > 0 ? activeIndices[0] : null;
+        const completedAny = Object.values(jobs).some(job => job.status === "completed");
+        const firstFailure = Object.values(jobs)
+          .find(job => job.status === "failed" && job.error)?.error || null;
+
+        setTtsResults(prev => {
+          const next = { ...prev };
+          for (const [key, job] of Object.entries(jobs)) {
+            const index = Number(key);
+            if (!Number.isInteger(index) || index < 0 || index >= scripts.length) continue;
+            if (isActiveAsyncJob(job)) {
+              next[index] = {
+                audio_duration: 0,
+                generating: true,
+                stale: false,
+                status: job.status,
+                progress: job.progress || 0,
+                current_step: job.current_step || "Generating voice-over",
+              };
+              continue;
+            }
+
+            if (job.status === "completed") {
+              const result = results[key] || (job.result as Partial<TtsResult> | undefined) || {};
+              next[index] = {
+                audio_duration: Number(result.audio_duration) || 0,
+                generating: false,
+                stale: false,
+                status: "completed",
+                progress: 100,
+                current_step: job.current_step || "Voice-over ready",
+                srt_content: result.srt_content,
+                script_word_count: result.script_word_count,
+                srt_word_count: result.srt_word_count,
+              };
+            } else if (job.status === "failed" || job.status === "cancelled") {
+              const message = job.error || (job.status === "failed" ? "Voice-over generation failed" : null);
+              next[index] = {
+                audio_duration: 0,
+                generating: false,
+                stale: false,
+                status: job.status,
+                progress: job.progress || 0,
+                current_step: job.current_step,
+                error: message,
+              };
+            }
+          }
+          return next;
+        });
+
+        setRegeneratingAllIndex(firstActive);
+        if (firstActive === null) {
+          setRegeneratingAll(false);
+          if (completedAny) fetchElevenCredits();
+          if (firstFailure) setPreviewError(firstFailure);
+        }
+      } catch {
+        if (!disposed) setPreviewError("Could not refresh voice-over progress. Retrying...");
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    void pollTtsJobs();
+    const timer = window.setInterval(pollTtsJobs, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [pipelineId, hasActiveTtsJobs, scripts.length, fetchElevenCredits]);
 
   // Step 3: Regenerate audio for a single variant (force TTS regeneration + re-match)
   const handleRegenerateVariantAudio = async (variantIndex: number, previewKey?: string, visualVersion?: string) => {
@@ -3659,6 +3984,7 @@ function PipelinePage() {
     error,
     totalSegmentDuration,
     isGenerating,
+    generationJob,
     handleCancelGenerate,
     handleGenerate,
     handleCreateManual,
@@ -3864,6 +4190,7 @@ function PipelinePage() {
     formatScript,
     buildRestoredTts,
     historyTtsInfo,
+    historyTtsJobs,
     historyPreviewInfo,
     historyContextProducts,
     setSelectedSourceIds,

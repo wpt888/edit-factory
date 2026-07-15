@@ -44,6 +44,20 @@ export interface PreviewData {
 
 export type PreviewKey = string;
 
+export type AsyncJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
+
+export interface AsyncJobState {
+  status: AsyncJobStatus;
+  progress: number;
+  current_step: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error?: string | null;
+  result?: Record<string, unknown>;
+}
+
 /**
  * StyleKey — discriminator for per-Meta-version subtitle style overrides.
  *
@@ -85,6 +99,7 @@ export interface PipelineListItem {
   keyword_count: number;
   created_at: string;
   target_script_duration?: number | null;
+  generation_job?: Partial<AsyncJobState>;
 }
 
 export interface VariantStatus {
@@ -115,7 +130,14 @@ export interface PipelineScriptsResponse {
   script_names?: string[];
   context_products?: ContextProduct[];
   preview_info?: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>;
-  tts_info?: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>;
+  tts_info?: Record<string, {
+    has_audio: boolean;
+    audio_duration: number;
+    approved?: boolean;
+    srt_content?: string;
+    script_word_count?: number;
+    srt_word_count?: number;
+  }>;
   captions?: Record<string, string[]>;
   selected_captions?: Record<string, string>;
   name?: string;
@@ -125,6 +147,8 @@ export interface PipelineScriptsResponse {
   variant_count?: number;
   meta_multiplication?: boolean;
   library_project_id?: string | null;
+  generation_job?: Partial<AsyncJobState>;
+  tts_jobs?: Record<string, Partial<AsyncJobState>>;
 }
 
 export interface CatalogProduct {

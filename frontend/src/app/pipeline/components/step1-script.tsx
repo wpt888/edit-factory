@@ -22,6 +22,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Progress } from "@/components/ui/progress";
 import {
   Collapsible,
   CollapsibleContent,
@@ -117,6 +118,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
     error,
     totalSegmentDuration,
     isGenerating,
+    generationJob,
     handleCancelGenerate,
     handleGenerate,
     handleCreateManual,
@@ -606,6 +608,20 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 {/* Generate button */}
                 {isGenerating ? (
                   <div className="flex flex-wrap justify-end gap-2">
+                    <div className="w-full rounded-md border bg-muted/30 p-3" data-testid="script-generation-progress">
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                        <span className="font-medium">
+                          {generationJob?.current_step || "Starting script generation"}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {Math.round(generationJob?.progress || 0)}%
+                        </span>
+                      </div>
+                      <Progress value={generationJob?.progress || 0} className="h-2" />
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        You can refresh this page; progress is saved automatically.
+                      </p>
+                    </div>
                     <Button
                       disabled
                       className="w-full sm:w-auto sm:min-w-48"

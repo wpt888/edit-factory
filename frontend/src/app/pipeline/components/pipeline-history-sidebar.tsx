@@ -57,6 +57,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     formatScript,
     buildRestoredTts,
     historyTtsInfo,
+    historyTtsJobs,
     historyPreviewInfo,
     setTtsResults,
     setApprovedScripts,
@@ -210,6 +211,14 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                           onClick={() => fetchHistoryScripts(item.pipeline_id)}
                         >
                           <Badge variant="outline" className="text-xs">{item.provider}</Badge>
+                          {(item.generation_job?.status === "queued" || item.generation_job?.status === "processing") && (
+                            <Badge variant="secondary" className="text-xs">
+                              Generating {Math.round(item.generation_job.progress || 0)}%
+                            </Badge>
+                          )}
+                          {item.generation_job?.status === "failed" && (
+                            <Badge variant="destructive" className="text-xs">Generation failed</Badge>
+                          )}
                           <span className="text-xs text-muted-foreground">
                             {item.variant_count} scripts
                           </span>
@@ -239,7 +248,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
                                     // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-                                    const restored2 = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
+                                    const restored2 = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length, historyTtsJobs);
                                     setTtsResults(restored2.tts);
                                     if (restored2.approved.size > 0) setApprovedScripts(restored2.approved);
                                     // Restore pipeline metadata for "Back to Input"
