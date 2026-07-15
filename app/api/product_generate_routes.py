@@ -20,7 +20,7 @@ import logging
 import math
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +46,11 @@ from app.utils import normalize_path
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["product-video"])
+
+_PROCESS_INSTANCE_ID = uuid.uuid4().hex
+_ACTIVE_PRODUCT_JOB_STATUSES = frozenset({"pending", "queued", "processing"})
+_TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "denied"})
+_PRODUCT_JOB_LEASE_SECONDS = 30 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +117,32 @@ def _product_render_queue_job_id(job_id: str) -> str:
     return f"product:{job_id}"
 
 
+def _product_lease_deadline() -> str:
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=_PRODUCT_JOB_LEASE_SECONDS)
+    ).isoformat()
+
+
+def _refresh_product_job_lease(
+    job_id: str,
+    profile_id: str,
+    parent_batch_id: Optional[str] = None,
+) -> None:
+    storage = get_job_storage()
+    deadline = _product_lease_deadline()
+    storage.update_job(
+        job_id,
+        {"lease_expires_at": deadline},
+        profile_id=profile_id,
+    )
+    if parent_batch_id:
+        storage.update_job(
+            parent_batch_id,
+            {"lease_expires_at": deadline},
+            profile_id=profile_id,
+        )
+
+
 def _new_product_metering_bundle(
     job_id: str,
     request: ProductGenerateRequest,
@@ -149,6 +180,51 @@ def _replace_product_metering(job_id: str, bundle: dict[str, dict]) -> dict:
     ) or {**job, "metering": bundle}
 
 
+async def _recover_product_reservations_for_settlement(
+    job_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Replay only bundle reserve calls whose responses may have been lost."""
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    if job.get("status") not in {"failed", "cancelled"}:
+        return job
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        return job
+    updated = {key: dict(value) for key, value in bundle.items() if isinstance(value, dict)}
+    changed = False
+    for component, record in list(updated.items()):
+        if (
+            record.get("reservation_id")
+            or record.get("provider_started")
+            or record.get("state") != "reserve_pending"
+        ):
+            continue
+        user_id = record.get("supabase_user_id") or fallback_user_id
+        if not isinstance(user_id, str) or not user_id:
+            continue
+        try:
+            recovered = await reserve_metering_record(
+                MeteringIdentity(user_id, record.get("email")),
+                record,
+            )
+        except StudioMeteringBlocked as error:
+            recovered = {
+                **record,
+                "state": (
+                    "denied"
+                    if error.code == "insufficient_credits"
+                    else "reserve_pending"
+                ),
+                "last_error": error.as_http_detail(),
+            }
+        updated[component] = recovered
+        changed = True
+        _replace_product_metering(job_id, updated)
+    return storage.get_job(job_id) or ({**job, "metering": updated} if changed else job)
+
+
 async def _settle_product_metering(
     job_id: str,
     user_id: str,
@@ -157,13 +233,23 @@ async def _settle_product_metering(
     result_metadata: Optional[dict] = None,
 ) -> dict:
     storage = get_job_storage()
-    job = storage.get_job(job_id) or {}
+    if not delivered:
+        job = await _recover_product_reservations_for_settlement(job_id, user_id)
+    else:
+        job = storage.get_job(job_id) or {}
     bundle = job.get("metering")
     if not isinstance(bundle, dict):
         return job
     updated: dict[str, dict] = {}
     for component, raw_record in bundle.items():
         if not isinstance(raw_record, dict):
+            continue
+        if not raw_record.get("reservation_id"):
+            updated[component] = dict(raw_record)
+            continue
+        terminal_states = {"captured"} if delivered else {"released", "refunded"}
+        if raw_record.get("state") in terminal_states:
+            updated[component] = dict(raw_record)
             continue
         component_metadata = dict(result_metadata or {})
         component_metadata["component"] = component
@@ -187,36 +273,52 @@ async def _reserve_product_metering(
         raise RuntimeError("Product job has no durable metering bundle")
 
     reserved: dict[str, dict] = {}
+    attempted_component: Optional[str] = None
     try:
         for component, record in bundle.items():
-            reserved[component] = await reserve_metering_record(identity, record)
+            attempted_component = component
+            reserve_pending = {**record, "state": "reserve_pending"}
+            _replace_product_metering(
+                job_id,
+                {**bundle, **reserved, component: reserve_pending},
+            )
+            reserved[component] = await reserve_metering_record(identity, reserve_pending)
             _replace_product_metering(job_id, {**bundle, **reserved})
     except StudioMeteringBlocked as error:
-        await _settle_product_metering(
-            job_id,
-            identity.supabase_user_id,
-            delivered=False,
-        )
         failed_job = storage.get_job(job_id) or {}
         failed_bundle = dict(failed_job.get("metering") or bundle)
         for component, record in failed_bundle.items():
             if isinstance(record, dict) and not record.get("reservation_id"):
+                possibly_reserved = (
+                    component == attempted_component
+                    and record.get("state") == "reserve_pending"
+                    and error.code != "insufficient_credits"
+                )
                 failed_bundle[component] = {
                     **record,
-                    "state": "denied",
+                    "state": "reserve_pending" if possibly_reserved else "denied",
                     "last_error": error.as_http_detail(),
                 }
         storage.update_job(
             job_id,
             {
                 "status": "failed",
-                "progress": "Blipost credits required",
+                "progress": (
+                    "Blipost credits required"
+                    if error.code == "insufficient_credits"
+                    else "Blipost credit verification unavailable"
+                ),
                 "status_code": 402,
                 "error": error.as_http_detail()["message"],
                 "error_detail": error.as_http_detail(),
                 "metering": failed_bundle,
             },
             profile_id=failed_job.get("profile_id"),
+        )
+        await _settle_product_metering(
+            job_id,
+            identity.supabase_user_id,
+            delivered=False,
         )
         raise
 
@@ -250,6 +352,159 @@ def _mark_product_output_persisted(job_id: str) -> dict[str, dict]:
             }
     _replace_product_metering(job_id, bundle)
     return bundle
+
+
+def _product_job_lease_is_live(job: dict) -> bool:
+    if job.get("process_instance_id") == _PROCESS_INSTANCE_ID:
+        return True
+    lease_expires_at = job.get("lease_expires_at")
+    if not lease_expires_at:
+        return False
+    try:
+        lease_expiry = datetime.fromisoformat(
+            str(lease_expires_at).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        return False
+    if lease_expiry.tzinfo is None:
+        lease_expiry = lease_expiry.replace(tzinfo=timezone.utc)
+    return lease_expiry > datetime.now(timezone.utc)
+
+
+def _find_persisted_product_output(job: dict) -> Optional[dict]:
+    result = job.get("result") or {}
+    clip_id = job.get("planned_clip_id") or result.get("clip_id")
+    if not clip_id:
+        return None
+    try:
+        clip = get_repository().get_clip(clip_id)
+    except Exception:
+        logger.exception("Could not inspect planned product clip %s", clip_id)
+        return None
+    if not isinstance(clip, dict) or clip.get("final_status") != "completed":
+        return None
+    video_path = clip.get("final_video_path") or clip.get("raw_video_path")
+    if not video_path or not Path(video_path).is_file():
+        return None
+    return {
+        "clip_id": clip_id,
+        "project_id": clip.get("project_id") or job.get("planned_project_id"),
+        "video_path": video_path,
+    }
+
+
+def _persist_recovered_product_output(job_id: str, output: dict) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = dict(job.get("metering") or {})
+    updated_bundle: dict[str, dict] = {}
+    for component, record in bundle.items():
+        if not isinstance(record, dict):
+            continue
+        if record.get("state") in {"released", "refunded", "denied"}:
+            return job
+        updated_bundle[component] = {
+            **record,
+            "output_persisted": True,
+            "state": (
+                record.get("state")
+                if record.get("state") == "captured"
+                else "output_persisted"
+            ),
+        }
+    return storage.update_job(
+        job_id,
+        {
+            "status": "completed",
+            "progress": "100",
+            "result": dict(output),
+            "metering": updated_bundle,
+        },
+        profile_id=job.get("profile_id"),
+    ) or {**job, "status": "completed", "result": output, "metering": updated_bundle}
+
+
+def _mark_interrupted_product_job(job_id: str, job: dict) -> dict:
+    if job.get("status") not in _ACTIVE_PRODUCT_JOB_STATUSES:
+        return job
+    if not job.get("process_instance_id") or _product_job_lease_is_live(job):
+        return job
+    bundle = dict(job.get("metering") or {})
+    for component, record in list(bundle.items()):
+        if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+            continue
+        if record.get("reservation_id"):
+            bundle[component] = {**record, "state": "refund_pending"}
+        elif record.get("state") == "reserve_pending" and not record.get("provider_started"):
+            bundle[component] = dict(record)
+        elif record.get("state") == "pending" and not record.get("provider_started"):
+            bundle[component] = {**record, "state": "denied"}
+    message = "Product generation did not survive a backend restart. Submit it again."
+    return get_job_storage().update_job(
+        job_id,
+        {
+            "status": "failed",
+            "progress": "Interrupted",
+            "error": message,
+            "metering": bundle,
+        },
+        profile_id=job.get("profile_id"),
+    ) or {**job, "status": "failed", "error": message, "metering": bundle}
+
+
+async def _reconcile_product_job(
+    job_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Recover durable product output or settle an interrupted attempt."""
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    if not job:
+        return job
+    if (
+        job.get("status") in _ACTIVE_PRODUCT_JOB_STATUSES
+        and job.get("process_instance_id")
+        and _product_job_lease_is_live(job)
+    ):
+        return job
+    output = _find_persisted_product_output(job)
+    if output and (
+        job.get("status") != "completed"
+        or not any(
+            isinstance(record, dict) and record.get("output_persisted")
+            for record in (job.get("metering") or {}).values()
+        )
+    ):
+        job = _persist_recovered_product_output(job_id, output)
+    job = _mark_interrupted_product_job(job_id, job)
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        return job
+    first_record = next(
+        (record for record in bundle.values() if isinstance(record, dict)),
+        {},
+    )
+    user_id = first_record.get("supabase_user_id") or job.get("user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+    output_persisted = any(
+        isinstance(record, dict) and record.get("output_persisted")
+        for record in bundle.values()
+    )
+    if job.get("status") == "completed" or output_persisted:
+        result = job.get("result") or {}
+        return await _settle_product_metering(
+            job_id,
+            user_id,
+            delivered=True,
+            result_metadata={
+                "studio_job_id": job_id,
+                "output_id": result.get("clip_id") or result.get("project_id"),
+            },
+        )
+    if job.get("status") in {"failed", "cancelled"}:
+        return await _settle_product_metering(job_id, user_id, delivered=False)
+    return job
 
 
 class _ProductGenerationCancelled(Exception):
@@ -459,6 +714,10 @@ async def generate_product_video(
             "product_id": product_id,
             "profile_id": profile.profile_id,
             "user_id": profile.user_id,
+            "process_instance_id": _PROCESS_INSTANCE_ID,
+            "lease_expires_at": _product_lease_deadline(),
+            "planned_project_id": str(uuid.uuid4()),
+            "planned_clip_id": str(uuid.uuid4()),
             "metering": metering,
         },
         profile_id=profile.profile_id,
@@ -470,7 +729,10 @@ async def generate_product_video(
             MeteringIdentity(profile.user_id, current_user.email),
         )
     except StudioMeteringBlocked as error:
-        raise HTTPException(status_code=402, detail=error.as_http_detail())
+        raise HTTPException(
+            status_code=402,
+            detail={**error.as_http_detail(), "studio_job_id": job_id},
+        )
 
     background_tasks.add_task(
         _generate_product_video_task,
@@ -553,6 +815,8 @@ async def batch_generate_products(
             "progress": "0",
             "profile_id": profile.profile_id,
             "user_id": profile.user_id,
+            "process_instance_id": _PROCESS_INSTANCE_ID,
+            "lease_expires_at": _product_lease_deadline(),
             "product_jobs": product_jobs,
             "total": len(product_jobs),
             "completed": 0,
@@ -573,6 +837,10 @@ async def batch_generate_products(
                 "product_id": product_job["product_id"],
                 "profile_id": profile.profile_id,
                 "user_id": profile.user_id,
+                "process_instance_id": _PROCESS_INSTANCE_ID,
+                "lease_expires_at": _product_lease_deadline(),
+                "planned_project_id": str(uuid.uuid4()),
+                "planned_clip_id": str(uuid.uuid4()),
                 "parent_batch_id": batch_id,
                 "metering": _new_product_metering_bundle(
                     child_job_id,
@@ -607,7 +875,11 @@ async def batch_generate_products(
             child = job_storage.get_job(child_job_id) or {}
             bundle = dict(child.get("metering") or {})
             for component, record in list(bundle.items()):
-                if isinstance(record, dict) and not record.get("reservation_id"):
+                if (
+                    isinstance(record, dict)
+                    and not record.get("reservation_id")
+                    and record.get("state") == "pending"
+                ):
                     bundle[component] = {
                         **record,
                         "state": "denied",
@@ -617,7 +889,11 @@ async def batch_generate_products(
                 child_job_id,
                 {
                     "status": "failed",
-                    "progress": "Blipost credits required",
+                    "progress": (
+                        "Blipost credits required"
+                        if error.code == "insufficient_credits"
+                        else "Blipost credit verification unavailable"
+                    ),
                     "status_code": 402,
                     "error": error.as_http_detail()["message"],
                     "error_detail": error.as_http_detail(),
@@ -640,7 +916,10 @@ async def batch_generate_products(
             },
             profile_id=profile.profile_id,
         )
-        raise HTTPException(status_code=402, detail=error.as_http_detail())
+        raise HTTPException(
+            status_code=402,
+            detail={**error.as_http_detail(), "studio_job_id": batch_id},
+        )
 
     job_storage.update_job(
         batch_id,
@@ -659,6 +938,23 @@ async def batch_generate_products(
     )
 
     return {"batch_id": batch_id, "total": len(product_jobs)}
+
+
+def _mark_interrupted_product_batch(batch_id: str, batch: dict) -> dict:
+    if batch.get("status") not in _ACTIVE_PRODUCT_JOB_STATUSES:
+        return batch
+    if not batch.get("process_instance_id") or _product_job_lease_is_live(batch):
+        return batch
+    message = "Product batch did not survive a backend restart. Submit it again."
+    return get_job_storage().update_job(
+        batch_id,
+        {
+            "status": "failed",
+            "progress": "Interrupted",
+            "error": message,
+        },
+        profile_id=batch.get("profile_id"),
+    ) or {**batch, "status": "failed", "error": message}
 
 
 @router.get("/batch/{batch_id}/status")
@@ -689,6 +985,7 @@ async def get_batch_status(
 
     if batch.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied")
+    batch = _mark_interrupted_product_batch(batch_id, batch)
 
     product_statuses = []
     for pj in batch.get("product_jobs", []):
@@ -698,47 +995,29 @@ async def get_batch_status(
             and child.get("status") not in {"completed", "failed", "cancelled"}
         ):
             child_status = "cancelled" if batch.get("status") == "cancelled" else "failed"
+            child_bundle = dict(child.get("metering") or {})
+            for component, record in list(child_bundle.items()):
+                if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+                    continue
+                if record.get("reservation_id"):
+                    child_bundle[component] = {**record, "state": "refund_pending"}
+                elif record.get("state") == "pending" and not record.get("provider_started"):
+                    child_bundle[component] = {**record, "state": "denied"}
             child = job_storage.update_job(
                 pj["job_id"],
                 {
                     "status": child_status,
                     "progress": "Batch interrupted",
                     "error": batch.get("error") or "Batch did not complete",
+                    "metering": child_bundle,
                 },
                 profile_id=profile.profile_id,
             ) or child
-        bundle = child.get("metering")
-        if isinstance(bundle, dict):
-            first_record = next(
-                (record for record in bundle.values() if isinstance(record, dict)),
-                {},
-            )
-            metering_user_id = first_record.get("supabase_user_id") or batch.get("user_id")
-            output_persisted = any(
-                isinstance(record, dict) and record.get("output_persisted")
-                for record in bundle.values()
-            )
-            if metering_user_id and (
-                child.get("status") == "completed" or output_persisted
-            ):
-                result = child.get("result") or {}
-                await _settle_product_metering(
-                    pj["job_id"],
-                    metering_user_id,
-                    delivered=True,
-                    result_metadata={
-                        "studio_job_id": pj["job_id"],
-                        "output_id": result.get("clip_id") or result.get("project_id"),
-                    },
-                )
-                child = job_storage.get_job(pj["job_id"]) or child
-            elif metering_user_id and child.get("status") in {"failed", "cancelled"}:
-                await _settle_product_metering(
-                    pj["job_id"],
-                    metering_user_id,
-                    delivered=False,
-                )
-                child = job_storage.get_job(pj["job_id"]) or child
+        if isinstance(child.get("metering"), dict):
+            child = await _reconcile_product_job(
+                pj["job_id"],
+                batch.get("user_id"),
+            ) or child
         product_statuses.append({
             "product_id": pj["product_id"],
             "job_id": pj["job_id"],
@@ -795,6 +1074,11 @@ async def _batch_generate_task(
     job_storage = get_job_storage()
 
     for product_index, product_job in enumerate(product_jobs):
+        job_storage.update_job(
+            batch_id,
+            {"lease_expires_at": _product_lease_deadline()},
+            profile_id=profile_id,
+        )
         # Check if batch was cancelled
         if job_storage.is_job_cancelled(batch_id):
             logger.info("[batch %s] Batch cancelled by user, stopping", batch_id)
@@ -986,6 +1270,7 @@ async def _generate_product_video_task(
 
     try:
         _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
+        _refresh_product_job_lease(job_id, profile_id, parent_batch_id)
         # ---------------------------------------------------------------
         # Stage 1: Setup (0 -> 10%)
         # ---------------------------------------------------------------
@@ -1150,6 +1435,7 @@ async def _generate_product_video_task(
             raise ValueError("Voiceover text is empty — cannot generate TTS")
 
         job_storage.update_job(job_id, {"progress": "25"}, profile_id=profile_id)
+        _refresh_product_job_lease(job_id, profile_id, parent_batch_id)
 
         # TTS synthesis
         tts_audio_path = temp_dir / f"tts_{job_id}.mp3"
@@ -1200,6 +1486,7 @@ async def _generate_product_video_task(
             )
 
         job_storage.update_job(job_id, {"progress": "40"}, profile_id=profile_id)
+        _refresh_product_job_lease(job_id, profile_id, parent_batch_id)
 
         # Cancel checkpoint
         _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
@@ -1265,6 +1552,7 @@ async def _generate_product_video_task(
             {"status": "processing", "progress": "Queued for render"},
             profile_id=profile_id,
         )
+        _refresh_product_job_lease(job_id, profile_id, parent_batch_id)
         render_ticket = await get_render_queue().enqueue(
             user_id=user_id,
             job_id=_product_render_queue_job_id(job_id),
@@ -1353,6 +1641,7 @@ async def _generate_product_video_task(
 
         logger.info("[%s] Final render complete: %s", job_id, final_path)
         job_storage.update_job(job_id, {"progress": "90"}, profile_id=profile_id)
+        _refresh_product_job_lease(job_id, profile_id, parent_batch_id)
         render_ticket_entered = False
         await render_ticket.__aexit__(None, None, None)
         _raise_if_product_cancelled(job_storage, job_id, parent_batch_id)
@@ -1362,23 +1651,29 @@ async def _generate_product_video_task(
         # ---------------------------------------------------------------
         project_name = f"[Product] {product.get('title', 'Unknown')[:50]}"
         now = datetime.now(timezone.utc).isoformat()
+        runtime_job = job_storage.get_job(job_id) or {}
+        planned_project_id = runtime_job.get("planned_project_id")
+        planned_clip_id = runtime_job.get("planned_clip_id")
 
         # Insert editai_projects row
-        project_insert = repo.create_project({
+        project_payload = {
             "name": project_name,
             "profile_id": profile_id,
             "status": "completed",
             "target_duration": request.duration_s,
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        if planned_project_id:
+            project_payload["id"] = planned_project_id
+        project_insert = repo.create_project(project_payload)
 
         project_id = project_insert.get("id") if project_insert else None
         if not project_id:
             raise ValueError("Failed to insert editai_projects row — no id returned")
 
         # Insert editai_clips row
-        clip_insert = repo.create_clip({
+        clip_payload = {
             "project_id": project_id,
             "profile_id": profile_id,
             "raw_video_path": str(composed_path),
@@ -1388,11 +1683,18 @@ async def _generate_product_video_task(
             "is_selected": True,
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        if planned_clip_id:
+            clip_payload["id"] = planned_clip_id
+        clip_insert = repo.create_clip(clip_payload)
 
         clip_id = clip_insert.get("id") if clip_insert else None
+        if not clip_id and planned_clip_id:
+            persisted_clip = repo.get_clip(planned_clip_id)
+            if persisted_clip:
+                clip_id = planned_clip_id
         if not clip_id:
-            logger.warning("[%s] editai_clips insert returned no id — library insert may have failed", job_id)
+            raise ValueError("Failed to insert editai_clips row - no id returned")
 
         job_storage.update_job(
             job_id,
@@ -1448,6 +1750,25 @@ async def _generate_product_video_task(
             exc,
             traceback.format_exc(),
         )
+        failed_job = job_storage.get_job(job_id) or {}
+        persisted_output = _find_persisted_product_output(failed_job)
+        if persisted_output:
+            _persist_recovered_product_output(job_id, persisted_output)
+            await _settle_product_metering(
+                job_id,
+                user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": job_id,
+                    "output_id": persisted_output["clip_id"],
+                },
+            )
+            logger.info(
+                "[%s] Recovered persisted product output after worker failure: %s",
+                job_id,
+                persisted_output["clip_id"],
+            )
+            return
         try:
             job_storage.update_job(
                 job_id,

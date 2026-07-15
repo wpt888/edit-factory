@@ -51,14 +51,26 @@ class _Repo:
         raise AssertionError(f"Unexpected table query: {table}")
 
     def create_project(self, payload):
-        created = {**deepcopy(payload), "id": f"project-{len(self.projects) + 1}"}
+        created = {
+            **deepcopy(payload),
+            "id": payload.get("id") or f"project-{len(self.projects) + 1}",
+        }
         self.projects.append(created)
         return created
 
     def create_clip(self, payload):
-        created = {**deepcopy(payload), "id": f"clip-{len(self.clips) + 1}"}
+        created = {
+            **deepcopy(payload),
+            "id": payload.get("id") or f"clip-{len(self.clips) + 1}",
+        }
         self.clips.append(created)
         return created
+
+    def get_clip(self, clip_id):
+        return next(
+            (deepcopy(row) for row in self.clips if row["id"] == clip_id),
+            None,
+        )
 
 
 class _Ticket:
@@ -544,5 +556,375 @@ def test_generic_cancel_removes_product_from_queue_and_refunds(
         job = memory_job_storage.get_job(job_id)
         assert job["status"] == "cancelled"
         assert all(record["state"] == "released" for record in job["metering"].values())
+
+    asyncio.run(scenario())
+
+
+def test_product_status_replays_lost_bundle_reserve_then_refunds(
+    monkeypatch, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        monkeypatch.setattr(routes, "get_job_storage", lambda: memory_job_storage)
+
+        async def unavailable(_identity, _record):
+            raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", unavailable)
+
+        with pytest.raises(HTTPException) as error:
+            await product_generate_routes.generate_product_video(
+                "product-1",
+                product_generate_routes.ProductGenerateRequest(),
+                BackgroundTasks(),
+                _context(),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        job_id = error.value.detail["studio_job_id"]
+        original = memory_job_storage.get_job(job_id)["metering"]["tts"]
+        assert original["state"] == "reserve_pending"
+        events = []
+
+        async def replay(_identity, record):
+            events.append(("reserve", record["idempotency_key"]))
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": "product-tts-replayed",
+                "replayed": True,
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            events.append(("refund", record["idempotency_key"]))
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", replay)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", settle)
+
+        response = await routes.get_job(job_id, _context())
+
+        assert response.status == "failed"
+        assert events == [
+            ("reserve", original["idempotency_key"]),
+            ("refund", original["idempotency_key"]),
+        ]
+        bundle = memory_job_storage.get_job(job_id)["metering"]
+        assert bundle["tts"]["reservation_id"] == "product-tts-replayed"
+        assert bundle["tts"]["state"] == "released"
+        assert bundle["render"]["state"] == "denied"
+
+    asyncio.run(scenario())
+
+
+def test_batch_status_preserves_and_replays_failed_child_reserve(
+    monkeypatch, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        target_key = None
+
+        async def reserve(_identity, record):
+            nonlocal target_key
+            if target_key is None and record["idempotency_key"].endswith(":tts"):
+                existing_product_jobs = [
+                    job
+                    for job in memory_job_storage.memory_store.values()
+                    if job.get("job_type") == "product_video"
+                ]
+                if len(existing_product_jobs) == 2 and record["idempotency_key"].startswith(
+                    f"product:{existing_product_jobs[1]['job_id']}:"
+                ):
+                    target_key = record["idempotency_key"]
+            if record["idempotency_key"] == target_key:
+                raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": f"reservation-{record['idempotency_key']}",
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", settle)
+
+        with pytest.raises(HTTPException) as error:
+            await product_generate_routes.batch_generate_products(
+                product_generate_routes.BatchGenerateRequest(
+                    product_ids=["product-1", "product-2"]
+                ),
+                BackgroundTasks(),
+                _context(),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        batch_id = error.value.detail["studio_job_id"]
+        batch = memory_job_storage.get_job(batch_id)
+        failed_child_id = batch["product_jobs"][1]["job_id"]
+        original = memory_job_storage.get_job(failed_child_id)["metering"]["tts"]
+        assert original["idempotency_key"] == target_key
+        assert original["state"] == "reserve_pending"
+        events = []
+
+        async def replay(_identity, record):
+            events.append(("reserve", record["idempotency_key"]))
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": "batch-child-replayed",
+            }
+
+        async def refund(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            events.append(("refund", record["idempotency_key"]))
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", replay)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", refund)
+
+        status = await product_generate_routes.get_batch_status(batch_id, _context())
+
+        assert status["status"] == "failed"
+        assert events == [("reserve", target_key), ("refund", target_key)]
+        bundle = memory_job_storage.get_job(failed_child_id)["metering"]
+        assert bundle["tts"]["reservation_id"] == "batch-child-replayed"
+        assert bundle["tts"]["state"] == "released"
+        assert bundle["render"]["state"] == "denied"
+
+    asyncio.run(scenario())
+
+
+def test_product_status_refunds_reserved_job_interrupted_by_restart(
+    monkeypatch, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        monkeypatch.setattr(routes, "get_job_storage", lambda: memory_job_storage)
+        refunds = []
+
+        async def reserve(_identity, record):
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": f"reservation-{record['operation']}",
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            refunds.append(record["operation"])
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", settle)
+        background = BackgroundTasks()
+        response = await product_generate_routes.generate_product_video(
+            "product-1",
+            product_generate_routes.ProductGenerateRequest(),
+            background,
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        job_id = response["job_id"]
+        memory_job_storage.update_job(
+            job_id,
+            {
+                "process_instance_id": "previous-process",
+                "lease_expires_at": "2000-01-01T00:00:00+00:00",
+            },
+            profile_id="profile-1",
+        )
+
+        status = await routes.get_job(job_id, _context())
+
+        assert status.status == "failed"
+        assert refunds == ["studio.tts_variant", "studio.render_output_minute"]
+        job = memory_job_storage.get_job(job_id)
+        assert all(record["state"] == "released" for record in job["metering"].values())
+        assert len(background.tasks) == 1
+
+    asyncio.run(scenario())
+
+
+def test_product_status_keeps_live_foreign_worker_lease(
+    monkeypatch, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        monkeypatch.setattr(routes, "get_job_storage", lambda: memory_job_storage)
+
+        async def reserve(_identity, record):
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": f"reservation-{record['operation']}",
+            }
+
+        async def unexpected_settlement(*_args, **_kwargs):
+            raise AssertionError("live product job was settled")
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(
+            product_generate_routes,
+            "settle_metering_record",
+            unexpected_settlement,
+        )
+        response = await product_generate_routes.generate_product_video(
+            "product-1",
+            product_generate_routes.ProductGenerateRequest(),
+            BackgroundTasks(),
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        job_id = response["job_id"]
+        memory_job_storage.update_job(
+            job_id,
+            {"process_instance_id": "other-live-worker"},
+            profile_id="profile-1",
+        )
+
+        status = await routes.get_job(job_id, _context())
+
+        assert status.status == "pending"
+        job = memory_job_storage.get_job(job_id)
+        assert all(record["state"] == "reserved" for record in job["metering"].values())
+
+    asyncio.run(scenario())
+
+
+def test_product_status_captures_preplanned_clip_persisted_before_restart(
+    monkeypatch, tmp_path, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        monkeypatch.setattr(routes, "get_job_storage", lambda: memory_job_storage)
+        captures = []
+
+        async def reserve(_identity, record):
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": f"reservation-{record['operation']}",
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is True
+            captures.append((record["operation"], result_metadata["output_id"]))
+            return {**record, "state": "captured"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", settle)
+        response = await product_generate_routes.generate_product_video(
+            "product-1",
+            product_generate_routes.ProductGenerateRequest(),
+            BackgroundTasks(),
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        job_id = response["job_id"]
+        job = memory_job_storage.get_job(job_id)
+        output_path = tmp_path / "persisted-product.mp4"
+        output_path.write_bytes(b"v" * 128)
+        repo.create_clip(
+            {
+                "id": job["planned_clip_id"],
+                "project_id": job["planned_project_id"],
+                "profile_id": "profile-1",
+                "final_video_path": str(output_path),
+                "final_status": "completed",
+            }
+        )
+        memory_job_storage.update_job(
+            job_id,
+            {
+                "process_instance_id": "previous-process",
+                "lease_expires_at": "2000-01-01T00:00:00+00:00",
+            },
+            profile_id="profile-1",
+        )
+
+        status = await routes.get_job(job_id, _context())
+
+        assert status.status == "completed"
+        assert status.result["clip_id"] == job["planned_clip_id"]
+        assert captures == [
+            ("studio.tts_variant", job["planned_clip_id"]),
+            ("studio.render_output_minute", job["planned_clip_id"]),
+        ]
+        recovered = memory_job_storage.get_job(job_id)
+        assert all(record["state"] == "captured" for record in recovered["metering"].values())
+
+    asyncio.run(scenario())
+
+
+def test_batch_status_refunds_children_after_expired_restart_lease(
+    monkeypatch, memory_job_storage
+):
+    async def scenario():
+        repo = _Repo()
+        _install_route_fakes(monkeypatch, memory_job_storage, repo)
+        refunds = []
+
+        async def reserve(_identity, record):
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": f"reservation-{record['idempotency_key']}",
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            refunds.append(record["idempotency_key"])
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(product_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(product_generate_routes, "settle_metering_record", settle)
+        background = BackgroundTasks()
+        response = await product_generate_routes.batch_generate_products(
+            product_generate_routes.BatchGenerateRequest(
+                product_ids=["product-1", "product-2"]
+            ),
+            background,
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        batch_id = response["batch_id"]
+        batch = memory_job_storage.get_job(batch_id)
+        expired = {
+            "process_instance_id": "previous-process",
+            "lease_expires_at": "2000-01-01T00:00:00+00:00",
+        }
+        memory_job_storage.update_job(
+            batch_id,
+            expired,
+            profile_id="profile-1",
+        )
+        for item in batch["product_jobs"]:
+            memory_job_storage.update_job(
+                item["job_id"],
+                expired,
+                profile_id="profile-1",
+            )
+
+        status = await product_generate_routes.get_batch_status(batch_id, _context())
+
+        assert status["status"] == "failed"
+        assert status["failed"] == 2
+        assert len(refunds) == 4
+        assert len(background.tasks) == 1
+        for item in batch["product_jobs"]:
+            child = memory_job_storage.get_job(item["job_id"])
+            assert child["status"] == "failed"
+            assert all(record["state"] == "released" for record in child["metering"].values())
 
     asyncio.run(scenario())

@@ -704,6 +704,15 @@ async def stream_job_progress(job_id: str, request: Request):
             if not current_job:
                 yield f"event: failed\ndata: {json.dumps({'job_id': job_id, 'error': 'Job not found'})}\n\n"
                 break
+            if current_job.get("job_type") == "product_video" and isinstance(
+                current_job.get("metering"), dict
+            ):
+                from app.api.product_generate_routes import _reconcile_product_job
+
+                current_job = await _reconcile_product_job(
+                    job_id,
+                    current_job.get("user_id"),
+                ) or current_job
 
             current_progress = current_job.get("progress")
             current_status = current_job.get("status")
@@ -776,37 +785,9 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.get("job_type") == "product_video" and isinstance(job.get("metering"), dict):
-        from app.api.product_generate_routes import _settle_product_metering
+        from app.api.product_generate_routes import _reconcile_product_job
 
-        bundle = job["metering"]
-        first_record = next(
-            (record for record in bundle.values() if isinstance(record, dict)),
-            {},
-        )
-        metering_user_id = first_record.get("supabase_user_id") or job.get("user_id")
-        output_persisted = any(
-            isinstance(record, dict) and record.get("output_persisted")
-            for record in bundle.values()
-        )
-        if metering_user_id and (job.get("status") == "completed" or output_persisted):
-            result = job.get("result") or {}
-            await _settle_product_metering(
-                job_id,
-                metering_user_id,
-                delivered=True,
-                result_metadata={
-                    "studio_job_id": job_id,
-                    "output_id": result.get("clip_id") or result.get("project_id"),
-                },
-            )
-            job = get_job_storage().get_job(job_id) or job
-        elif metering_user_id and job.get("status") in {"failed", "cancelled"}:
-            await _settle_product_metering(
-                job_id,
-                metering_user_id,
-                delivered=False,
-            )
-            job = get_job_storage().get_job(job_id) or job
+        job = await _reconcile_product_job(job_id, profile.user_id) or job
 
     response = JobResponse(
         job_id=job["job_id"],
