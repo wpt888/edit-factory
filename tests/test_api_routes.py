@@ -17,6 +17,7 @@ Endpoints covered:
 """
 import io
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
@@ -173,8 +174,15 @@ class TestUploadEndpoint:
         body = response.json()
         assert "detail" in body, f"Missing 'detail' in 422 response: {body}"
 
-    def test_upload_invalid_mime_returns_400(self, client):
+    def test_upload_invalid_mime_returns_400(self, client, monkeypatch):
         """Uploading a text file (invalid MIME) returns 400 when python-magic is available."""
+        from app.api import desktop_only
+
+        monkeypatch.setattr(
+            desktop_only,
+            "get_settings",
+            lambda: SimpleNamespace(desktop_mode=True),
+        )
         fake_text_content = b"This is not a video file, just plain text content for testing."
         files = {"video": ("test.txt", io.BytesIO(fake_text_content), "text/plain")}
         # Mock validate_file_mime_type to simulate MIME rejection (testing the validation pathway)
@@ -193,12 +201,19 @@ class TestUploadEndpoint:
         body = response.json()
         assert "detail" in body, f"Missing 'detail' in 400 MIME response: {body}"
 
-    def test_upload_video_returns_job_or_4xx(self, client):
+    def test_upload_video_returns_job_or_4xx(self, client, monkeypatch):
         """Uploading a minimal binary file returns either a job response or a 4xx (MIME rejection).
 
         We do not require a real video — just verify the response shape.
         Valid video: job_id in response. Invalid MIME: detail in response.
         """
+        from app.api import desktop_only
+
+        monkeypatch.setattr(
+            desktop_only,
+            "get_settings",
+            lambda: SimpleNamespace(desktop_mode=True),
+        )
         # Use bytes that look like a minimal MP4 ftyp box (magic number: 0x66 0x74 0x79 0x70)
         # This helps pass MIME validation if python-magic is available
         fake_mp4_header = (

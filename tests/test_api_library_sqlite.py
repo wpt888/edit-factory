@@ -12,6 +12,8 @@ Each test uses the ``sqlite_backend`` fixture (defined in tests/conftest.py)
 which yields ``(client, repo, profile_id)`` and seeds a fresh dev profile
 per test (tmp_path-scoped SQLite file — no cross-test contamination).
 """
+from types import SimpleNamespace
+
 from tests.conftest import (
     _seed_project,
     _seed_clip,
@@ -206,7 +208,14 @@ def test_cleanup_exports_returns_non_503(sqlite_backend):
     assert r.status_code in (200, 500)
 
 
-def test_render_clip_returns_non_503(sqlite_backend):
+def test_render_clip_returns_non_503(sqlite_backend, monkeypatch):
+    from app.api import desktop_only
+
+    monkeypatch.setattr(
+        desktop_only,
+        "get_settings",
+        lambda: SimpleNamespace(desktop_mode=True),
+    )
     client, repo, profile_id = sqlite_backend
     clip = _seed_clip(repo, profile_id, raw_video_path="/nonexistent/video.mp4")
     _seed_clip_content(repo, clip["id"])
@@ -233,7 +242,14 @@ def test_regenerate_voiceover_returns_non_503(sqlite_backend):
     assert r.status_code in (200, 202, 400)
 
 
-def test_bulk_render_returns_non_503(sqlite_backend):
+def test_bulk_render_returns_non_503(sqlite_backend, monkeypatch):
+    from app.api import desktop_only
+
+    monkeypatch.setattr(
+        desktop_only,
+        "get_settings",
+        lambda: SimpleNamespace(desktop_mode=True),
+    )
     client, repo, profile_id = sqlite_backend
     c1 = _seed_clip(repo, profile_id, variant_index=1)
     c2 = _seed_clip(repo, profile_id, variant_index=2)

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.config import get_settings, APP_VERSION
 from app.services.file_storage import get_file_storage
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.desktop_only import require_desktop_legacy_ai_workflow
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
     validate_file_mime_type, ALLOWED_VIDEO_MIMES, ALLOWED_AUDIO_MIMES, ALLOWED_SUBTITLE_MIMES,
@@ -443,6 +444,7 @@ async def create_job(
         variant_count: Numarul de variante video de generat (1-10)
         mute_source_voice: Daca sa muta vocea din video-ul sursa (pastreaza efectele sonore)
     """
+    require_desktop_legacy_ai_workflow()
     settings = get_settings()
     settings.ensure_dirs()
 
@@ -944,6 +946,7 @@ async def generate_tts_legacy(
     Returns:
         Job ID for tracking - processing runs in background
     """
+    require_desktop_legacy_ai_workflow()
     settings = get_settings()
     settings.ensure_dirs()
 
@@ -1151,6 +1154,7 @@ async def add_tts_to_videos(
         min_silence_duration: Pauses shorter than this are kept (natural rhythm)
         silence_padding: Padding around words to avoid cutting
     """
+    require_desktop_legacy_ai_workflow()
     import json as json_lib
 
     settings = get_settings()

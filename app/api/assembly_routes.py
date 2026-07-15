@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.desktop_only import require_desktop_legacy_ai_workflow
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.assembly_service import get_assembly_service
@@ -213,6 +214,7 @@ async def preview_assembly(
     Performs TTS generation, SRT creation, and keyword matching to show
     which segments will be used, but does NOT trigger expensive video render.
     """
+    require_desktop_legacy_ai_workflow()
     logger.info(f"[Profile {profile.profile_id}] Preview assembly for script ({len(request.script_text)} chars)")
 
     try:
@@ -264,6 +266,7 @@ async def render_assembly(
 
     Returns job_id immediately. Client polls /assembly/status/{job_id} for progress.
     """
+    require_desktop_legacy_ai_workflow()
     logger.info(f"[Profile {profile.profile_id}] Starting assembly render for script ({len(request.script_text)} chars)")
 
     repo = get_repository()

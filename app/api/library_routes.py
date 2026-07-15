@@ -21,7 +21,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
-from app.api.desktop_only import require_desktop_local_filesystem
+from app.api.desktop_only import (
+    require_desktop_legacy_ai_workflow,
+    require_desktop_local_filesystem,
+)
 from app.services.file_storage import get_file_storage
 from app.services.media_manager import get_media_manager
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
@@ -872,6 +875,7 @@ async def generate_raw_clips(
     - video: uploaded file
     - video_path: local path to video file (for testing)
     """
+    require_desktop_legacy_ai_workflow()
     if video_path and not (video and video.filename):
         require_desktop_local_filesystem()
 
@@ -3236,6 +3240,7 @@ async def render_final_clip(
     Randează clipul final cu TTS și subtitrări.
     Folosește preset-ul de export specificat pentru encoding optimizat.
     """
+    require_desktop_legacy_ai_workflow()
     repo = get_repository()
 
     # Parse boolean strings (HTML forms send strings)
@@ -4380,24 +4385,25 @@ class BulkRenderRequest(BaseModel):
 @router.post("/clips/bulk-render")
 @limiter.limit("5/minute")
 async def bulk_render_clips(
-    http_request: Request,
+    request: Request,
     background_tasks: BackgroundTasks,
-    request: BulkRenderRequest,
+    body: BulkRenderRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Randează mai multe clipuri selectate cu același preset."""
+    require_desktop_legacy_ai_workflow()
     background_tasks.add_task(
         _bulk_render_sequential,
-        clip_ids=request.clip_ids,
-        preset_name=request.preset_name,
+        clip_ids=body.clip_ids,
+        preset_name=body.preset_name,
         profile_id=profile.profile_id
     )
 
     return {
         "status": "processing",
-        "count": len(request.clip_ids),
-        "preset": request.preset_name,
-        "message": f"Rendering {len(request.clip_ids)} clips..."
+        "count": len(body.clip_ids),
+        "preset": body.preset_name,
+        "message": f"Rendering {len(body.clip_ids)} clips..."
     }
 
 
