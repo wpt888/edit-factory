@@ -5,19 +5,27 @@
 - Added a fail-closed Studio-to-web metering client with durable idempotent
   reserve/capture/refund state and desktop-only structured usage logging.
 - Metered asynchronous Pipeline scripts and per-variant TTS, Pipeline final
-  renders/remakes, fixed-five-second Seedance, and single/batch product jobs,
+  renders/remakes, fixed-five-second Seedance, single/batch product jobs,
+  standalone TTS, TTS Library assets, and Library voiceover regeneration,
   including cancellation, failure refund, settlement retry, and restart paths.
+- Closed historical web-mode provider/render bypasses with explicit
+  desktop-only guards, while preserving those compatibility routes in Electron.
+- Added terminal crash-window recovery so a completed capture/refund cannot
+  leave a pending job or cause paid provider work to run again after restart.
 - Reserved final-render credits before fair queue entry so denied work never
   occupies queue capacity; product composition and encoding share one ticket.
 - Added shared friendly HTTP 402 guidance with a billing action across every
-  affected UI flow and fixed web Seedance to its five-second rate-card unit.
-- Verification: full backend **594 passed, 1 skipped, 18 xfailed**; TypeScript,
-  focused ESLint, production Next build, and deterministic Chromium 402 test
-  passed. No push was performed.
+  affected UI flow and fixed web Seedance to its five-second rate-card unit;
+  Library voiceover render billing is re-quoted from exact generated audio.
+- Verification: full backend **652 passed, 1 skipped, 18 xfailed**; focused
+  metering **83 passed**; legacy guards **15 passed**; TypeScript, ESLint with
+  zero errors, production Next Webpack build/post-build, and three deterministic
+  Chromium 402 scenarios passed. No push was performed.
 - Live two-app E2E found a Goal B1 blocker: web private mode redirects the
   internal metering routes because `/api/internal/studio` is absent from its
-  public API prefixes. B2's web-read-only rule was preserved; the exact fix and
-  rerun steps are documented in the page below.
+  public API prefixes. The inspected local environments also lack the shared
+  service token. B2's web-read-only rule was preserved; the exact fix,
+  provisioning, and rerun steps are documented in the page below.
 
 See [BlipStudio credit metering](24-blipstudio-credit-metering.md).
 

@@ -1,10 +1,11 @@
 # BlipStudio credit metering
 
-Status on 2026-07-15: the Goal B2 implementation is complete and committed
-locally in the Studio repository. No push or deployment was performed. The
-Studio backend suite and production frontend build are green. The final live
-two-application credit scenarios are blocked by a Goal B1 web proxy omission
-described in [Live integration blocker](#live-integration-blocker).
+Status on 2026-07-15: the Studio side of Goal B2 is complete and committed
+locally. No push or deployment was performed. The full Studio backend suite,
+frontend checks, production build, and deterministic Chromium UI scenarios are
+green. The final live two-application credit scenarios remain blocked by Goal
+B1 web routing and local service-token provisioning described in
+[Live integration blocker](#live-integration-blocker).
 
 ## Billing contract
 
@@ -53,16 +54,45 @@ Safe reserve replay is deliberately strict: a replay can execute only when the
 durable record proves the provider has not started. This prevents a lost HTTP
 response from creating a second paid provider call.
 
+Restart reconciliation also closes the narrow terminal crash window where the
+web ledger completed a capture/refund but Studio stopped before writing the
+job's terminal status. A terminal ledger state plus durable output evidence is
+translated into an honest completed/failed/cancelled job without dispatching
+the provider a second time.
+
 ### Pipeline scripts and TTS
 
 - New script generation and script regeneration each reserve one
   `studio.script_pipeline` unit before their asynchronous worker starts.
+- Pipeline batch-script generation creates durable child attempts and reserves
+  each one before dispatch. If a later reserve fails, every earlier reservation
+  is released and no script provider starts.
 - Each initial TTS variant and each regenerated variant reserves one
   `studio.tts_variant` unit. The metering record lives with the durable TTS job.
+- Step 3 preview voiceovers use the same per-variant contract instead of a
+  provider-only shortcut.
 - Script/TTS cancellation refunds queued or running reservations. Late worker
   completion cannot overwrite a durable cancelled state.
 - Interrupted jobs are reconciled honestly after process restart; unsettled
   reservations remain retryable.
+
+### Standalone TTS, TTS Library, and Library voiceovers
+
+- `POST /tts/generate` now creates a durable job first, reserves one
+  `studio.tts_variant` unit before provider dispatch, checkpoints the output
+  file before capture, and participates in the generic `/jobs` status, SSE,
+  cancellation, and restart-reconciliation paths.
+- TTS Library create/update generation reserves per generated asset, captures
+  only after the asset is marked ready, and restores the previous asset when a
+  replacement fails.
+- Library clip voiceover regeneration reserves both TTS and a provisional final
+  render quote while leaving the existing clip intact. After TTS persistence,
+  it re-quotes the render from the exact processed-audio duration: when the
+  minute boundary changes, the provisional render reservation is released and
+  the exact reservation is acquired before FFmpeg starts. A denied exact quote
+  refunds TTS and preserves the prior playable clip.
+- These flows retry settlement with the same durable IDs and repair terminal
+  capture/refund crash windows without repeating provider work.
 
 ### Pipeline final renders and remakes
 
@@ -99,6 +129,26 @@ bundle captures only after the final video is present in the library. Any
 downstream failure or child/parent cancellation refunds every reserved bundle
 component.
 
+## Web compatibility surface
+
+Historical provider/render compatibility endpoints could otherwise bypass the
+launch metering contract. In web mode the following POST paths now fail with an
+explicit desktop-only response before provider or render work starts; desktop
+behavior remains available:
+
+- `/jobs`
+- `/tts/generate-legacy`
+- `/tts/add-to-videos`
+- `/assembly/preview`
+- `/assembly/render`
+- `/library/projects/{id}/generate`
+- `/library/clips/{id}/render`
+- `/library/clips/bulk-render`
+
+The supported web launch paths are Pipeline (including preview/regeneration and
+batch scripts), `/video-gen`, product and product-batch generation, standalone
+TTS, TTS Library, Library voiceover regeneration, and final renders/remakes.
+
 ## Render queue reservation decision
 
 Credits are reserved **before queue entry**, not when a render reaches the head
@@ -117,7 +167,8 @@ The shared frontend API error handler recognizes HTTP 402, extracts the
 backend's friendly structured message, states that the operation was not
 started, and shows a **Manage credits** action for
 `https://blipost.com/billing`. Pipeline, batch, Seedance, single-product, local
-product batch, catalog batch, and batch-retry starts all use this handler.
+product batch, catalog batch, batch retry, standalone TTS, TTS Library, and
+Library voiceover starts all use this guidance.
 
 The web Seedance duration control is fixed and disabled at five seconds; the
 desktop build retains the full duration list.
@@ -131,20 +182,28 @@ desktop build retains the full duration list.
   logging, durable settlement retries, cancellation, failure refunds, exact
   render-minute calculation, multi-reservation rollback, batch propagation,
   and queue ordering.
-- A deterministic Chromium test sends a real Studio UI request, verifies web
-  Seedance submits exactly `duration: "5"`, returns a mocked contract-level 402,
-  asserts the friendly billing action, and writes the screenshot above.
-- Frontend TypeScript and focused ESLint pass. The Next 16 production build and
-  standalone post-build copy pass.
-- Full Studio backend suite: **594 passed, 1 skipped, 18 xfailed, 0 failed**
-  across 613 collected tests in 57.26 seconds.
+- Three deterministic Chromium scenarios exercise Seedance, TTS Library
+  creation, and Library voiceover regeneration. They submit real Studio UI
+  requests against mocked contract-level 402 responses and assert the friendly
+  billing action; Seedance also proves the web request is fixed to
+  `duration: "5"`. Result: **3 passed**.
+- Frontend TypeScript passes. ESLint reports **0 errors** (89 pre-existing
+  warnings). A supported Next 16 Webpack production build, route generation,
+  output tracing, and the standalone post-build static/public copy pass in an
+  isolated copy. The original output directory could not be rebuilt in place
+  because the already-running Electron standalone process holds
+  `.next/standalone`; it was not terminated.
+- Full Studio backend suite: **652 passed, 1 skipped, 18 xfailed, 0 failed**
+  across 671 collected tests in 56.4 seconds.
+- Metering-focused backend suite: **83 passed**. Legacy web guard suite:
+  **15 passed**.
 - Goal B1's `npm run studio-metering:check` passes its in-memory handler suite,
   including reserve/capture balance changes, refund, 402, auth, identity,
   ownership, and idempotency.
 
 ## Live integration blocker
 
-A real POST to the running local web app at
+A fresh real POST to the running local web app at
 `/api/internal/studio/metering/reserve` returned HTTP 307 to
 `/login?callbackUrl=%2Fapi%2Finternal%2Fstudio%2Fmetering%2Freserve` before the
 Bearer-authenticated route handler ran.
@@ -156,13 +215,22 @@ does not cover `proxy.ts`. Since Goal B2 explicitly permits only reading and
 running the web repository, no web code or persistent private-mode setting was
 changed here.
 
+The inspected local Studio settings also still use the production-default
+`blipost_platform_base_url` and have no `studio_service_token`; the inspected
+web `.env` has no matching `STUDIO_SERVICE_TOKEN`. No secret value was printed
+or changed. Even with token provisioning, the current 307 remains the first
+blocking boundary because the proxy runs before the route's Bearer check.
+
 Before launch, Goal B1 must:
 
 1. add `/api/internal/studio` to the private-mode public prefixes (the endpoint
    still performs its own constant-time Bearer authentication);
 2. add a proxy-level regression proving the route is not redirected while an
    invalid Bearer token still receives 401;
-3. rerun the three live local scenarios: sufficient credits and exact balance
+3. provision the same high-entropy `STUDIO_SERVICE_TOKEN` on WEB and
+   `studio_service_token` plus the local WEB base URL on Studio for the E2E
+   environment;
+4. rerun the three live local scenarios: sufficient credits and exact balance
    decrease, zero credits and the real UI 402, and desktop pass-through.
 
 The installed in-app Browser skill was also missing its required
@@ -179,3 +247,17 @@ could not be performed in this environment.
 - `0ce603c` - meter Seedance generation
 - `6d102ef` - meter and queue product/batch jobs
 - `bc20f3b` - show billing guidance in affected Studio flows
+- `d787839` - meter Pipeline preview voiceovers
+- `bb2e29a` - reconcile script-regeneration metering
+- `12ade5a` - meter Pipeline batch scripts
+- `4bc830e` - recover interrupted Pipeline reservations
+- `51969cf` - recover interrupted render reservations
+- `3308757` - recover interrupted Seedance reservations
+- `9c59986` - recover interrupted product reservations
+- `b1c54e0` - meter TTS Library generation
+- `08d1aa2` - show TTS Library billing guidance
+- `dd22315` - meter Library voiceover regeneration
+- `25241ec` - meter standalone TTS generation
+- `94e2aba` - close legacy web AI bypasses
+- `bf18012` - recover terminal metering crash windows
+- `185d393` - preserve the desktop-only guard contract
