@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { apiGetWithRetry, apiPost, apiPut, apiDelete, API_URL } from "@/lib/api";
+import { apiGetWithRetry, apiPost, apiPut, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { TTSAsset, ELEVENLABS_MODELS } from "@/types/video-processing";
@@ -258,7 +258,7 @@ export default function TTSLibraryPage() {
       setCreateText("");
       setCreateModel("eleven_flash_v2_5");
     } catch (err) {
-      toast.error("Failed to create TTS asset"); // Bug #59
+      handleApiError(err, "Failed to create TTS asset");
     } finally {
       setCreating(false);
     }
@@ -276,8 +276,8 @@ export default function TTSLibraryPage() {
         prev.map((a) => (a.id === updated.id ? updated : a))
       );
       setEditingAsset(null);
-    } catch {
-      toast.error("Failed to update TTS asset"); // Bug #59
+    } catch (err) {
+      handleApiError(err, "Failed to update TTS asset");
     } finally {
       setSaving(false);
     }

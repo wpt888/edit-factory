@@ -68,3 +68,69 @@ test("web Seedance is fixed to five seconds and shows the 402 billing action", a
     fullPage: true,
   });
 });
+
+test("TTS Library creation shows the shared 402 billing action", async ({ page }) => {
+  const profile = {
+    id: "metering-tts-profile",
+    name: "Metering TTS",
+    is_default: true,
+    created_at: "2026-07-15T00:00:00Z",
+  };
+  let createRequests = 0;
+
+  await page.addInitScript((initialProfile) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([initialProfile]));
+    localStorage.setItem("editai_current_profile_id", initialProfile.id);
+  }, profile);
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+
+    if (request.method() === "POST" && path.endsWith("/tts-library/")) {
+      createRequests += 1;
+      await route.fulfill({
+        status: 402,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: {
+            code: "insufficient_credits",
+            message: "You do not have enough Blipost credits for this operation. Add credits to continue.",
+            billing_url: "https://blipost.com/billing",
+          },
+        }),
+      });
+      return;
+    }
+
+    if (path.endsWith("/profiles/")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([profile]),
+      });
+      return;
+    }
+
+    if (path.endsWith("/tts-library/")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "[]",
+      });
+      return;
+    }
+
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/tts-library");
+  await page.getByRole("button", { name: "New TTS" }).click();
+  await page.getByPlaceholder("Enter voiceover text...").fill("A friendly metered voice-over");
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+
+  await expect(page.getByText("You do not have enough Blipost credits for this operation. Add credits to continue.")).toBeVisible();
+  await expect(page.getByText("The operation was not started. Add credits to continue.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Manage credits" })).toBeVisible();
+  expect(createRequests).toBe(1);
+});
