@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
+from app.api.desktop_only import require_desktop_local_filesystem
 from app.services.file_storage import get_file_storage
 from app.services.media_manager import get_media_manager
 from app.api.auth import ProfileContext, get_profile_context
@@ -855,6 +856,9 @@ async def generate_raw_clips(
     - video: uploaded file
     - video_path: local path to video file (for testing)
     """
+    if video_path and not (video and video.filename):
+        require_desktop_local_filesystem()
+
     repo = get_repository()
 
     settings = get_settings()

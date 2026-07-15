@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.desktop_only import require_desktop_local_filesystem
 from app.api.media_session import (
     get_profile_context_with_media_session,
     get_source_media_profile_context,
@@ -648,6 +649,8 @@ async def find_local_file(
     Used when the browser drag & drop provides filename + size but not the full path.
     Searches common user directories first, then all drives.
     """
+    require_desktop_local_filesystem()
+
     import os as _os
 
     filename = body.filename
@@ -758,22 +761,12 @@ async def browse_local_file(
     request: Request,
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Open a native file picker dialog and return the selected file path.
+    """Open a fallback native picker for legacy desktop shells only."""
+    require_desktop_local_filesystem()
 
-    Web/dev only — the desktop shell provides its own native dialog via
-    Electron IPC. tkinter runs in a throwaway subprocess: on Windows a Tk
-    abort (0xC0000409) would otherwise kill the whole uvicorn process.
-    """
     import asyncio
     import json as _json
-    import os as _os
     import sys as _sys
-
-    if _os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes"):
-        raise HTTPException(
-            status_code=501,
-            detail="Native file dialog is provided by the desktop shell — update Blipost.",
-        )
 
     proc = await asyncio.create_subprocess_exec(
         _sys.executable, "-c", _PICKER_SCRIPT,
@@ -809,6 +802,8 @@ async def add_local_source_video(
     For local desktop usage: the file stays in its original location,
     avoiding slow HTTP uploads and disk duplication.
     """
+    require_desktop_local_filesystem()
+
     repo = get_repository()
 
     local_path = Path(body.file_path)
