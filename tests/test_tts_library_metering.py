@@ -260,3 +260,43 @@ def test_restart_replays_lost_reserve_then_refunds(monkeypatch, memory_job_stora
         ]
 
     asyncio.run(scenario())
+
+
+def test_restart_repairs_status_after_capture_completed(monkeypatch, memory_job_storage):
+    async def scenario():
+        repo = _Repo()
+        _install(monkeypatch, memory_job_storage, repo)
+        record = new_metering_record(
+            "studio.tts_variant",
+            1,
+            "tts-library:job-captured:generate",
+        )
+        record.update({
+            "state": "captured",
+            "reservation_id": "reservation-captured",
+            "provider_started": True,
+            "supabase_user_id": "user-1",
+        })
+        memory_job_storage.create_job({
+            "job_id": "job-captured",
+            "job_type": "tts_library_asset",
+            "status": "processing",
+            "progress": "Capturing credits",
+            "profile_id": "profile-1",
+            "user_id": "user-1",
+            "asset_id": "asset-1",
+            "process_instance_id": "old-process",
+            "output_persisted": True,
+            "metering": record,
+        }, profile_id="profile-1")
+
+        job = await tts_library_routes._reconcile_tts_library_job(
+            "job-captured",
+            "user-1",
+        )
+
+        assert job["status"] == "completed"
+        assert job["progress"] == "Ready"
+        assert job["metering"]["state"] == "captured"
+
+    asyncio.run(scenario())

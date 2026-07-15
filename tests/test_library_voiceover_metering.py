@@ -434,3 +434,34 @@ def test_restart_captures_output_only_when_clip_points_to_planned_path(
         assert captured == [("tts", True), ("render", True)]
 
     asyncio.run(scenario())
+
+
+def test_restart_repairs_voiceover_status_after_bundle_capture(
+    monkeypatch, memory_job_storage, tmp_path
+):
+    async def scenario():
+        planned = tmp_path / "planned.mp4"
+        planned.write_bytes(b"new")
+        repo = _Repo(planned)
+        _install(monkeypatch, memory_job_storage, repo)
+        captured_bundle = {
+            component: {**record, "state": "captured"}
+            for component, record in _reserved_bundle().items()
+        }
+        _create_reserved_job(
+            memory_job_storage,
+            planned,
+            bundle=captured_bundle,
+            process_instance_id="old-process",
+            status="processing",
+            output_persisted=True,
+            delivered_components=["tts", "render"],
+        )
+
+        job = await library_routes._reconcile_library_voiceover_job("job-1", "user-1")
+
+        assert job["status"] == "completed"
+        assert job["progress"] == "Ready"
+        assert all(record["state"] == "captured" for record in job["metering"].values())
+
+    asyncio.run(scenario())

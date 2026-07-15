@@ -1099,6 +1099,26 @@ def _mark_interrupted_regeneration_attempts(pipeline: dict) -> bool:
         if not isinstance(record, dict):
             continue
         if record.get("state") in _TERMINAL_METERING_STATES:
+            delivered = (
+                record.get("state") == "captured"
+                and _regeneration_output_is_persisted(pipeline, attempt)
+            )
+            attempt.update(
+                {
+                    "status": "completed" if delivered else "failed",
+                    "interrupted": True,
+                    "completed_at": interrupted_at,
+                    "updated_at": interrupted_at,
+                    "error": (
+                        None
+                        if delivered
+                        else attempt.get("error") or "Script regeneration was interrupted."
+                    ),
+                }
+            )
+            if delivered:
+                record["output_persisted"] = True
+            changed = True
             continue
 
         delivered = _regeneration_output_is_persisted(pipeline, attempt)
@@ -2171,25 +2191,32 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         interrupted_async_jobs = False
         interrupted_at = _job_timestamp()
         if generation_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            generation_metering = generation_job.get("metering")
+            delivered = bool(
+                isinstance(generation_metering, dict)
+                and generation_metering.get("state") == "captured"
+                and generation_metering.get("output_persisted")
+            )
             generation_job.update(
                 {
-                    "status": "failed",
-                    "progress": 0,
-                    "current_step": "Generation interrupted — try again",
-                    "error": "Generation did not survive a backend restart.",
+                    "status": "completed" if delivered else "failed",
+                    "progress": 100 if delivered else 0,
+                    "current_step": "Scripts ready" if delivered else "Generation interrupted — try again",
+                    "error": None if delivered else "Generation did not survive a backend restart.",
                     "completed_at": interrupted_at,
                     "updated_at": interrupted_at,
                 }
             )
-            generation_metering = generation_job.get("metering")
             if (
-                isinstance(generation_metering, dict)
+                not delivered
+                and isinstance(generation_metering, dict)
                 and generation_metering.get("reservation_id")
                 and generation_metering.get("state") not in {"captured", "released", "refunded"}
             ):
                 generation_metering["state"] = "refund_pending"
             elif (
-                isinstance(generation_metering, dict)
+                not delivered
+                and isinstance(generation_metering, dict)
                 and not generation_metering.get("reservation_id")
                 and not generation_metering.get("provider_started")
                 and generation_metering.get("state") == "pending"
@@ -2199,25 +2226,32 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         for tts_job in tts_jobs.values():
             if not isinstance(tts_job, dict) or tts_job.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES:
                 continue
+            tts_metering = tts_job.get("metering")
+            delivered = bool(
+                isinstance(tts_metering, dict)
+                and tts_metering.get("state") == "captured"
+                and tts_metering.get("output_persisted")
+            )
             tts_job.update(
                 {
-                    "status": "failed",
-                    "progress": 0,
-                    "current_step": "Voice-over interrupted — try again",
-                    "error": "Voice-over generation did not survive a backend restart.",
+                    "status": "completed" if delivered else "failed",
+                    "progress": 100 if delivered else 0,
+                    "current_step": "Voice-over ready" if delivered else "Voice-over interrupted — try again",
+                    "error": None if delivered else "Voice-over generation did not survive a backend restart.",
                     "completed_at": interrupted_at,
                     "updated_at": interrupted_at,
                 }
             )
-            tts_metering = tts_job.get("metering")
             if (
-                isinstance(tts_metering, dict)
+                not delivered
+                and isinstance(tts_metering, dict)
                 and tts_metering.get("reservation_id")
                 and tts_metering.get("state") not in {"captured", "released", "refunded"}
             ):
                 tts_metering["state"] = "refund_pending"
             elif (
-                isinstance(tts_metering, dict)
+                not delivered
+                and isinstance(tts_metering, dict)
                 and not tts_metering.get("reservation_id")
                 and not tts_metering.get("provider_started")
                 and tts_metering.get("state") == "pending"
@@ -4171,6 +4205,28 @@ async def get_generation_status(
                 profile.user_id,
                 delivered=False,
             )
+    generation_metering = generation_job.get("metering") or {}
+    if generation_job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES and isinstance(
+        generation_metering, dict
+    ):
+        state = generation_metering.get("state")
+        if state == "captured" and generation_metering.get("output_persisted"):
+            generation_job = _update_generation_job(
+                pipeline_id,
+                status="completed",
+                progress=100,
+                current_step="Scripts ready",
+                completed_at=_job_timestamp(),
+                error=None,
+            )
+        elif state in {"released", "refunded", "denied"}:
+            generation_job = _update_generation_job(
+                pipeline_id,
+                status="failed",
+                current_step="Generation did not complete",
+                completed_at=_job_timestamp(),
+                error=generation_job.get("error") or "Script generation was interrupted.",
+            )
     generation_job = await _reconcile_regeneration_metering(
         pipeline_id,
         profile.user_id,
@@ -4817,7 +4873,7 @@ async def get_tts_jobs_status(
         if not isinstance(metering, dict) or not metering.get("reservation_id"):
             continue
         if job.get("status") == "completed" or metering.get("output_persisted"):
-            await _settle_tts_metering(
+            job = await _settle_tts_metering(
                 pipeline_id,
                 index,
                 profile.user_id,
@@ -4828,12 +4884,36 @@ async def get_tts_jobs_status(
                 },
             )
         elif job.get("status") in {"failed", "cancelled"}:
-            await _settle_tts_metering(
+            job = await _settle_tts_metering(
                 pipeline_id,
                 index,
                 profile.user_id,
                 delivered=False,
             )
+        latest_metering = job.get("metering") or {}
+        if job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES and isinstance(
+            latest_metering, dict
+        ):
+            state = latest_metering.get("state")
+            if state == "captured" and latest_metering.get("output_persisted"):
+                _update_tts_job(
+                    pipeline_id,
+                    index,
+                    status="completed",
+                    progress=100,
+                    current_step="Voice-over ready",
+                    completed_at=_job_timestamp(),
+                    error=None,
+                )
+            elif state in {"released", "refunded", "denied"}:
+                _update_tts_job(
+                    pipeline_id,
+                    index,
+                    status="failed",
+                    current_step="Voice-over did not complete",
+                    completed_at=_job_timestamp(),
+                    error=job.get("error") or "TTS generation was interrupted.",
+                )
 
     results: Dict[str, dict] = {}
     for raw_index, value in (pipeline.get("tts_previews") or {}).items():

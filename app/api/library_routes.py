@@ -3147,12 +3147,36 @@ async def _reconcile_library_voiceover_job(
     storage = get_job_storage()
     job = storage.get_job(job_id) or {}
     bundle = job.get("metering")
-    if not isinstance(bundle, dict) or all(
+    if not isinstance(bundle, dict):
+        return job
+    all_terminal = all(
         isinstance(record, dict)
         and record.get("state") in _LIBRARY_VOICEOVER_TERMINAL_METERING
         for record in bundle.values()
-    ):
-        return job
+    )
+    if all_terminal:
+        if job.get("status") in {"pending", "queued", "processing"}:
+            delivered = _library_voiceover_output_is_delivered(job)
+            billable = job.get("billable_components") or ["tts", "render"]
+            captured = all(
+                isinstance(bundle.get(component), dict)
+                and bundle[component].get("state") == "captured"
+                for component in billable
+            )
+            storage.update_job(
+                job_id,
+                {
+                    "status": "completed" if delivered and captured else "failed",
+                    "progress": "Ready" if delivered and captured else "Generation did not complete",
+                    "error": (
+                        None
+                        if delivered and captured
+                        else job.get("error") or "Voice-over regeneration was interrupted"
+                    ),
+                },
+                profile_id=job.get("profile_id"),
+            )
+        return storage.get_job(job_id) or job
     active_here = (
         job.get("status") in {"pending", "queued", "processing"}
         and job.get("process_instance_id") == _LIBRARY_PROCESS_INSTANCE_ID

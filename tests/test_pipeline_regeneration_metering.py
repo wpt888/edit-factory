@@ -137,6 +137,50 @@ def test_restart_captures_regeneration_when_output_fingerprint_is_persisted(
     assert attempt["metering"]["output_persisted"] is True
 
 
+def test_restart_repairs_regeneration_status_after_capture_completed(
+    sqlite_backend,
+):
+    client, repo, _profile_id = sqlite_backend
+    pipeline_id = _import_pipeline(client)
+    regenerated = "The captured regeneration output is already durable."
+    record = _metering_record(
+        pipeline_id,
+        state="captured",
+        reservation_id="reservation-already-captured",
+        provider_started=True,
+    )
+    repo.update_pipeline(
+        pipeline_id,
+        {
+            "scripts": [regenerated],
+            "generation_job": {
+                "regenerations": {
+                    "attempt-captured": {
+                        "status": "settling",
+                        "variant_index": 0,
+                        "created_at": "2026-07-15T10:00:00+00:00",
+                        "output_fingerprint": pipeline_routes._stable_hash(regenerated),
+                        "metering": record,
+                    }
+                }
+            },
+        },
+    )
+    _evict_pipeline(pipeline_id)
+
+    response = client.get(
+        f"/api/v1/pipeline/generation-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    attempt = response.json()["job"]["regenerations"]["attempt-captured"]
+    assert attempt["status"] == "completed"
+    assert attempt["error"] is None
+    assert attempt["metering"]["state"] == "captured"
+    assert attempt["metering"]["output_persisted"] is True
+
+
 def test_restart_refunds_regeneration_interrupted_during_provider_call(
     sqlite_backend,
     monkeypatch,

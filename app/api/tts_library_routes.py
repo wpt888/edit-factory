@@ -185,8 +185,22 @@ async def _reconcile_tts_library_job(
     storage = get_job_storage()
     job = storage.get_job(job_id) or {}
     record = job.get("metering")
-    if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+    if not isinstance(record, dict):
         return job
+
+    if record.get("state") in _TERMINAL_METERING_STATES:
+        if job.get("status") in {"pending", "processing"}:
+            delivered = record.get("state") == "captured" and bool(job.get("output_persisted"))
+            storage.update_job(
+                job_id,
+                {
+                    "status": "completed" if delivered else "failed",
+                    "progress": "Ready" if delivered else "Generation did not complete",
+                    "error": None if delivered else job.get("error") or "TTS generation was interrupted",
+                },
+                profile_id=job.get("profile_id"),
+            )
+        return storage.get_job(job_id) or job
 
     active_here = (
         job.get("status") in {"pending", "processing"}
@@ -224,7 +238,7 @@ async def _reconcile_profile_tts_library_jobs(profile_id: str, user_id: str) -> 
         if job.get("job_type") != _TTS_LIBRARY_JOB_TYPE:
             continue
         record = job.get("metering")
-        if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+        if not isinstance(record, dict):
             continue
         await _reconcile_tts_library_job(job.get("job_id"), user_id)
 

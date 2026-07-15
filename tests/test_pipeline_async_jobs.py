@@ -273,6 +273,53 @@ def test_active_generation_state_is_interrupted_after_memory_eviction(sqlite_bac
     assert "did not survive" in job["error"]
 
 
+def test_captured_generation_state_completes_after_memory_eviction(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    pipeline_id = "captured-generation-recovery"
+    metering = new_metering_record(
+        "studio.script_pipeline",
+        1,
+        f"pipeline:{pipeline_id}:script",
+    )
+    metering.update({
+        "state": "captured",
+        "reservation_id": "reservation-generation-captured",
+        "provider_started": True,
+        "output_persisted": True,
+        "supabase_user_id": "user-generation-captured",
+    })
+    repo.upsert_pipeline({
+        "id": pipeline_id,
+        "profile_id": profile_id,
+        "name": "Captured generation",
+        "idea": "Capture won before process exit",
+        "provider": "gemini",
+        "variant_count": 1,
+        "keyword_count": 0,
+        "scripts": ["The durable generated script."],
+        "generation_job": {
+            "status": "processing",
+            "progress": 99,
+            "current_step": "Finalizing Blipost credits",
+            "result": {"variant_count": 1},
+            "metering": metering,
+        },
+        "tts_jobs": {},
+    })
+    _evict_pipeline_memory(pipeline_id)
+
+    response = client.get(
+        f"/api/v1/pipeline/generation-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["status"] == "completed"
+    assert job["progress"] == 100
+    assert job["metering"]["state"] == "captured"
+
+
 def test_generation_status_replays_lost_reserve_response_then_refunds(
     sqlite_backend,
     monkeypatch,
@@ -398,6 +445,55 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     )
     assert restored.status_code == 200
     assert restored.json()["jobs"]["0"]["status"] == "completed"
+
+
+def test_captured_tts_state_completes_after_memory_eviction(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    pipeline_id = "captured-tts-recovery"
+    metering = new_metering_record(
+        "studio.tts_variant",
+        1,
+        f"pipeline:{pipeline_id}:tts:0:durable-attempt",
+    )
+    metering.update({
+        "state": "captured",
+        "reservation_id": "reservation-tts-captured",
+        "provider_started": True,
+        "output_persisted": True,
+        "supabase_user_id": "user-tts-captured",
+    })
+    repo.upsert_pipeline({
+        "id": pipeline_id,
+        "profile_id": profile_id,
+        "name": "Captured TTS",
+        "idea": "Capture won before process exit",
+        "provider": "gemini",
+        "variant_count": 1,
+        "keyword_count": 0,
+        "scripts": ["A durable voice-over script."],
+        "generation_job": {},
+        "tts_jobs": {
+            "0": {
+                "status": "processing",
+                "progress": 94,
+                "current_step": "Finalizing voice-over",
+                "result": {"audio_duration": 1.25},
+                "metering": metering,
+            }
+        },
+    })
+    _evict_pipeline_memory(pipeline_id)
+
+    response = client.get(
+        f"/api/v1/pipeline/tts-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    job = response.json()["jobs"]["0"]
+    assert job["status"] == "completed"
+    assert job["progress"] == 100
+    assert job["metering"]["state"] == "captured"
 
 
 def test_tts_status_replays_lost_reserve_response_then_refunds(
