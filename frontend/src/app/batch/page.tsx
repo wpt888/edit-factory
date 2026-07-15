@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPost, handleApiError } from "@/lib/api";
+import { BLIPOST_BILLING_URL } from "@/lib/api-error";
 import { useProfile } from "@/contexts/profile-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ interface BatchItem {
   status: string; // queued | generating_script | generating_preview | ready_for_review | failed
   pipeline_id?: string | null;
   error?: string | null;
+  status_code?: number | null;
   updated_at?: string;
 }
 
@@ -515,12 +517,24 @@ export default function BatchPage() {
                               {item.idea}
                             </p>
                             {item.status === "failed" && item.error && (
-                              <p
-                                className="text-xs text-destructive truncate mt-0.5"
-                                title={item.error}
-                              >
-                                {item.error}
-                              </p>
+                              <div className="mt-0.5 flex items-center gap-2">
+                                <p
+                                  className="min-w-0 truncate text-xs text-destructive"
+                                  title={item.error}
+                                >
+                                  {item.error}
+                                </p>
+                                {item.status_code === 402 && (
+                                  <a
+                                    href={BLIPOST_BILLING_URL}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="shrink-0 text-xs font-medium text-primary underline underline-offset-2"
+                                  >
+                                    Manage credits
+                                  </a>
+                                )}
+                              </div>
                             )}
                             {renderState?.status === "rendering" && (
                               <p className="text-xs text-muted-foreground mt-0.5">
