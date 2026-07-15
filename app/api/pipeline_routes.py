@@ -988,6 +988,16 @@ def _db_update_async_jobs(
     try:
         get_repository().update_pipeline(pipeline_id, updates)
     except Exception as e:
+        if any(_is_missing_column_error(e, column) for column in updates):
+            # Migration 054 is additive, but older installations should remain
+            # usable while it is pending. The in-memory job state still powers
+            # the current session; only cross-restart persistence is unavailable.
+            logger.debug(
+                "Pipeline async job columns are not migrated; "
+                "skipping persistence for %s",
+                pipeline_id,
+            )
+            return
         logger.warning(f"Failed to persist async jobs for {pipeline_id}: {e}")
 
 
@@ -2087,15 +2097,39 @@ async def list_pipelines(
     try:
         repo = get_repository()
         if repo:
-            result = repo.list_pipelines(
-                profile.profile_id,
-                QueryFilters(
-                    select="id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration, generation_job",
-                    order_by="created_at",
-                    order_desc=True,
-                    limit=limit,
-                ),
+            select_columns = (
+                "id, name, idea, provider, variant_count, keyword_count, "
+                "created_at, target_script_duration, generation_job"
             )
+            try:
+                result = repo.list_pipelines(
+                    profile.profile_id,
+                    QueryFilters(
+                        select=select_columns,
+                        order_by="created_at",
+                        order_desc=True,
+                        limit=limit,
+                    ),
+                )
+            except Exception as list_err:
+                if not _is_missing_column_error(list_err, "generation_job"):
+                    raise
+                # Migration 054 is additive, but older cloud projects can be
+                # opened before it is applied. History remains usable there;
+                # only resumable job metadata is absent until migration.
+                logger.info(
+                    "Pipeline async job columns are not migrated; listing "
+                    "history without generation_job"
+                )
+                result = repo.list_pipelines(
+                    profile.profile_id,
+                    QueryFilters(
+                        select=select_columns.replace(", generation_job", ""),
+                        order_by="created_at",
+                        order_desc=True,
+                        limit=limit,
+                    ),
+                )
             if result.data:
                 for row in result.data:
                     items.append(PipelineListItem(

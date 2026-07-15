@@ -223,7 +223,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!isMountedRef.current) return;
 
         if (currentSession) {
+          // Electron has its own Chromium profile and cannot read the Auth.js
+          // cookie from the user's normal browser. Creative-session binding
+          // is therefore a web-only contract; enforcing it in the native
+          // renderer creates an endless Creative -> Studio redirect loop and
+          // aborts every API request started during page mount.
+          const enforceCreativeBinding = !window.editFactory?.isDesktop;
           const creativeSessionValid =
+            !enforceCreativeBinding ||
             !isCreativeBoundSession(currentSession) ||
             (await isCreativeSessionActive(currentSession.user));
           if (!creativeSessionValid) {
@@ -288,7 +295,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // logout in another tab takes effect immediately, plus periodically for a
   // Studio tab that remains open in the foreground.
   useEffect(() => {
-    if (!supabase || !session || !isCreativeBoundSession(session)) return;
+    if (
+      !supabase ||
+      !session ||
+      window.editFactory?.isDesktop ||
+      !isCreativeBoundSession(session)
+    ) return;
 
     let checking = false;
     let disposed = false;

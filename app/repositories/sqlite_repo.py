@@ -802,7 +802,10 @@ class SQLiteRepository(DataRepository):
             direction = "DESC" if filters.order_desc else "ASC"
             sql += f' ORDER BY "{filters.order_by}" {direction}'
         else:
-            sql += ' ORDER BY "sequence_order" ASC'
+            # The base segment table has no sequence_order column; that field
+            # exists on editai_project_segments only. Keep the two repository
+            # implementations aligned on a real, deterministic column.
+            sql += ' ORDER BY "created_at" ASC'
 
         if filters:
             if filters.limit is not None:

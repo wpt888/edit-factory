@@ -266,7 +266,12 @@ class SupabaseRepository(DataRepository):
         query = sb.table("editai_segments").select(select_cols).eq("profile_id", profile_id)
         query = self._apply_filters(query, filters)
         if not filters or not filters.order_by:
-            query = query.order("sequence_order")
+            # `sequence_order` belongs to editai_project_segments (migration
+            # 012), not editai_segments. Ordering the base segment table by it
+            # makes every default list fail against the canonical Supabase
+            # schema. created_at is present in both cloud and SQLite schemas
+            # and gives callers a deterministic default.
+            query = query.order("created_at")
         result = query.execute()
         data = result.data or []
         return QueryResult(data=data, count=len(data))

@@ -5,6 +5,8 @@ import copy
 import threading
 
 from app.api import pipeline_routes
+from app.api.auth import ProfileContext
+from app.repositories.models import QueryResult
 
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
@@ -16,6 +18,64 @@ class _FakeScriptGenerator:
             "First generated script.",
             "Second generated script.",
         ]
+
+
+def test_pipeline_history_falls_back_before_async_job_migration(monkeypatch):
+    class LegacyPipelineRepository:
+        def __init__(self):
+            self.selects = []
+
+        def list_pipelines(self, _profile_id, filters):
+            self.selects.append(filters.select)
+            if "generation_job" in filters.select:
+                raise RuntimeError(
+                    "column editai_pipelines.generation_job does not exist"
+                )
+            return QueryResult(data=[{
+                "id": "legacy-pipeline",
+                "name": "Legacy history",
+                "idea": "Still visible before migration 054",
+                "provider": "gemini",
+                "variant_count": 1,
+                "keyword_count": 0,
+                "created_at": "2026-07-15T08:00:00Z",
+                "target_script_duration": 30,
+            }])
+
+    repo = LegacyPipelineRepository()
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repo)
+
+    response = asyncio.run(pipeline_routes.list_pipelines(
+        ProfileContext(profile_id="profile-1", user_id="user-1"),
+        limit=20,
+    ))
+
+    assert [item.pipeline_id for item in response.pipelines] == ["legacy-pipeline"]
+    assert response.pipelines[0].generation_job == {}
+    assert len(repo.selects) == 2
+    assert "generation_job" in repo.selects[0]
+    assert "generation_job" not in repo.selects[1]
+
+
+def test_async_job_update_tolerates_pending_schema_migration(monkeypatch, caplog):
+    class LegacyPipelineRepository:
+        def update_pipeline(self, _pipeline_id, _updates):
+            raise RuntimeError(
+                "column editai_pipelines.generation_job does not exist"
+            )
+
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_repository",
+        lambda: LegacyPipelineRepository(),
+    )
+
+    pipeline_routes._db_update_async_jobs(
+        "legacy-pipeline",
+        generation_job={"status": "processing"},
+    )
+
+    assert not [record for record in caplog.records if record.levelname == "WARNING"]
 
 
 def _evict_pipeline_memory(pipeline_id: str) -> None:

@@ -133,5 +133,15 @@ assert.match(
   /window\.location\.replace\(creativeLoginUrl\(\)\)/,
   "an expired SSO binding must return to the single Creative login",
 );
+assert.match(
+  authProvider,
+  /enforceCreativeBinding = !window\.editFactory\?\.isDesktop/,
+  "Electron must not validate a browser-only Creative cookie during startup",
+);
+assert.match(
+  authProvider,
+  /window\.editFactory\?\.isDesktop \|\|\s*!isCreativeBoundSession\(session\)/,
+  "Electron must not start the periodic Creative cookie check",
+);
 
 console.log("Studio auth callback verification passed.");
