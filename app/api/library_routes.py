@@ -3,6 +3,7 @@ EditAI Library & Workflow Routes
 Gestionează proiecte, clipuri, asocieri și exporturi pentru noul workflow.
 """
 import asyncio
+import math
 import time as _time_mod
 import uuid
 import shutil
@@ -23,7 +24,7 @@ from app.config import get_settings
 from app.api.desktop_only import require_desktop_local_filesystem
 from app.services.file_storage import get_file_storage
 from app.services.media_manager import get_media_manager
-from app.api.auth import ProfileContext, get_profile_context
+from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
 from app.api.ml_gating import _enforce_ml_installed
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -36,12 +37,27 @@ from app.services.video_effects.filters import VideoFilters, DenoiseConfig, Shar
 from app.services.video_effects.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full, SRTValidator
+from app.services.job_storage import get_job_storage
+from app.services.render_queue import RenderQueueCancelled, get_render_queue
+from app.services.studio_metering import (
+    MeteringIdentity,
+    StudioMeteringBlocked,
+    new_metering_record,
+    reserve_metering_record,
+    settle_metering_record,
+)
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/library", tags=["library"])
+
+_LIBRARY_PROCESS_INSTANCE_ID = uuid.uuid4().hex
+_LIBRARY_VOICEOVER_JOB_TYPE = "library_voiceover_regeneration"
+_LIBRARY_VOICEOVER_TERMINAL_METERING = frozenset(
+    {"captured", "released", "refunded", "denied"}
+)
 
 # ============== PROJECT LOCKS (prevent race conditions) ==============
 _project_locks: Dict[str, threading.Lock] = {}
@@ -2189,6 +2205,13 @@ async def get_clip(
         if not clip or clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
 
+        await _reconcile_library_voiceover_jobs_for_clip(
+            clip_id,
+            clip.get("project_id"),
+            profile.user_id,
+        )
+        clip = repo.get_clip(clip_id) or clip
+
         content = repo.get_clip_content(clip_id)
 
         return {
@@ -2820,6 +2843,368 @@ async def cleanup_old_exports(
         raise HTTPException(status_code=500, detail="Failed to cleanup exports")
 
 
+# ============== LIBRARY VOICE-OVER METERING ==============
+
+
+class _LibraryVoiceoverCancelled(Exception):
+    pass
+
+
+def _library_voiceover_queue_job_id(job_id: str) -> str:
+    return f"library-voiceover:{job_id}"
+
+
+def _new_library_voiceover_metering(
+    job_id: str,
+    user_id: str,
+    email: Optional[str],
+    render_units: int,
+) -> dict[str, dict]:
+    bundle = {
+        "tts": new_metering_record(
+            "studio.tts_variant",
+            1,
+            f"library:{job_id}:voiceover:tts",
+        ),
+        "render": new_metering_record(
+            "studio.render_output_minute",
+            render_units,
+            f"library:{job_id}:voiceover:render",
+        ),
+    }
+    for record in bundle.values():
+        record.update({"supabase_user_id": user_id, "email": email})
+    return bundle
+
+
+def _replace_library_voiceover_metering(job_id: str, bundle: dict[str, dict]) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    return storage.update_job(
+        job_id,
+        {"metering": {key: dict(value) for key, value in bundle.items()}},
+        profile_id=job.get("profile_id"),
+    ) or {**job, "metering": bundle}
+
+
+async def _recover_library_voiceover_reservations(
+    job_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        return job
+    updated = {
+        component: dict(record)
+        for component, record in bundle.items()
+        if isinstance(record, dict)
+    }
+    for component, record in list(updated.items()):
+        if (
+            record.get("reservation_id")
+            or record.get("provider_started")
+            or record.get("state") != "reserve_pending"
+        ):
+            continue
+        user_id = record.get("supabase_user_id") or fallback_user_id
+        if not isinstance(user_id, str) or not user_id:
+            continue
+        try:
+            recovered = await reserve_metering_record(
+                MeteringIdentity(user_id, record.get("email")),
+                record,
+            )
+        except StudioMeteringBlocked as error:
+            recovered = {
+                **record,
+                "state": (
+                    "denied"
+                    if error.code == "insufficient_credits"
+                    else "reserve_pending"
+                ),
+                "last_error": error.as_http_detail(),
+            }
+        updated[component] = recovered
+        _replace_library_voiceover_metering(job_id, updated)
+    return storage.get_job(job_id) or {**job, "metering": updated}
+
+
+async def _settle_library_voiceover_metering(job_id: str, user_id: str) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    delivered_components = set(job.get("delivered_components") or [])
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        return job
+    if any(component not in delivered_components for component in bundle):
+        job = await _recover_library_voiceover_reservations(job_id, user_id)
+        bundle = job.get("metering") or bundle
+
+    updated: dict[str, dict] = {}
+    for component, raw_record in bundle.items():
+        if not isinstance(raw_record, dict):
+            continue
+        delivered = component in delivered_components
+        terminal = {"captured"} if delivered else {"released", "refunded"}
+        if not raw_record.get("reservation_id") or raw_record.get("state") in terminal:
+            updated[component] = dict(raw_record)
+            continue
+        updated[component] = await settle_metering_record(
+            MeteringIdentity(user_id),
+            raw_record,
+            delivered=delivered,
+            result_metadata={
+                "studio_job_id": job_id,
+                "output_id": job.get("clip_id"),
+                "component": component,
+            } if delivered else None,
+        )
+    return _replace_library_voiceover_metering(job_id, updated)
+
+
+async def _reserve_library_voiceover_metering(
+    job_id: str,
+    identity: MeteringIdentity,
+) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict):
+        raise RuntimeError("Library voice-over job has no durable metering bundle")
+
+    reserved: dict[str, dict] = {}
+    attempted_component: Optional[str] = None
+    try:
+        for component, record in bundle.items():
+            attempted_component = component
+            reserve_pending = {**record, "state": "reserve_pending"}
+            _replace_library_voiceover_metering(
+                job_id,
+                {**bundle, **reserved, component: reserve_pending},
+            )
+            reserved[component] = await reserve_metering_record(identity, reserve_pending)
+            _replace_library_voiceover_metering(job_id, {**bundle, **reserved})
+    except StudioMeteringBlocked as error:
+        failed_job = storage.get_job(job_id) or job
+        failed_bundle = dict(failed_job.get("metering") or bundle)
+        for component, record in list(failed_bundle.items()):
+            if not isinstance(record, dict) or record.get("reservation_id"):
+                continue
+            possibly_reserved = (
+                component == attempted_component
+                and record.get("state") == "reserve_pending"
+                and error.code != "insufficient_credits"
+            )
+            failed_bundle[component] = {
+                **record,
+                "state": "reserve_pending" if possibly_reserved else "denied",
+                "last_error": error.as_http_detail(),
+            }
+        storage.update_job(
+            job_id,
+            {
+                "status": "failed",
+                "progress": "Blipost credits required",
+                "status_code": 402,
+                "error": error.as_http_detail()["message"],
+                "error_detail": error.as_http_detail(),
+                "metering": failed_bundle,
+            },
+            profile_id=failed_job.get("profile_id"),
+        )
+        await _settle_library_voiceover_metering(job_id, identity.supabase_user_id)
+        raise
+    return _replace_library_voiceover_metering(job_id, {**bundle, **reserved})
+
+
+def _mark_library_voiceover_started(job_id: str, component: str) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = dict(job.get("metering") or {})
+    record = dict(bundle.get(component) or {})
+    if record:
+        record["provider_started"] = True
+        bundle[component] = record
+        _replace_library_voiceover_metering(job_id, bundle)
+    return storage.get_job(job_id) or job
+
+
+async def _requote_library_voiceover_render(
+    job_id: str,
+    actual_duration_seconds: float,
+) -> dict:
+    """Replace the provisional render quote if regenerated audio crosses a minute boundary."""
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = dict(job.get("metering") or {})
+    provisional = dict(bundle.get("render") or {})
+    actual_units = max(1, math.ceil(max(1.0, actual_duration_seconds) / 60))
+    if provisional.get("units") == actual_units:
+        storage.update_job(
+            job_id,
+            {
+                "metered_output_duration_seconds": actual_duration_seconds,
+                "billable_components": ["tts", "render"],
+            },
+            profile_id=job.get("profile_id"),
+        )
+        return storage.get_job(job_id) or job
+
+    user_id = provisional.get("supabase_user_id") or job.get("user_id")
+    email = provisional.get("email")
+    if not isinstance(user_id, str) or not user_id:
+        raise RuntimeError("Library voice-over render quote has no user identity")
+
+    released = await settle_metering_record(
+        MeteringIdentity(user_id, email),
+        provisional,
+        delivered=False,
+    )
+    bundle["render"] = released
+    _replace_library_voiceover_metering(job_id, bundle)
+    if released.get("state") not in {"released", "refunded"}:
+        raise StudioMeteringBlocked(
+            "metering_unavailable",
+            "Could not replace the provisional render reservation",
+        )
+
+    actual = new_metering_record(
+        "studio.render_output_minute",
+        actual_units,
+        f"library:{job_id}:voiceover:render:actual",
+    )
+    actual.update({"supabase_user_id": user_id, "email": email, "state": "reserve_pending"})
+    bundle["render_actual"] = actual
+    _replace_library_voiceover_metering(job_id, bundle)
+    try:
+        bundle["render_actual"] = await reserve_metering_record(
+            MeteringIdentity(user_id, email),
+            actual,
+        )
+    except StudioMeteringBlocked as error:
+        bundle["render_actual"] = {
+            **actual,
+            "state": (
+                "denied"
+                if error.code == "insufficient_credits"
+                else "reserve_pending"
+            ),
+            "last_error": error.as_http_detail(),
+        }
+        _replace_library_voiceover_metering(job_id, bundle)
+        storage.update_job(
+            job_id,
+            {
+                "status_code": 402,
+                "error": error.as_http_detail()["message"],
+                "error_detail": error.as_http_detail(),
+            },
+            profile_id=job.get("profile_id"),
+        )
+        raise
+
+    _replace_library_voiceover_metering(job_id, bundle)
+    storage.update_job(
+        job_id,
+        {
+            "metered_output_duration_seconds": actual_duration_seconds,
+            "billable_components": ["tts", "render_actual"],
+        },
+        profile_id=job.get("profile_id"),
+    )
+    return storage.get_job(job_id) or job
+
+
+def _library_voiceover_output_is_delivered(job: dict) -> bool:
+    if job.get("output_persisted"):
+        return True
+    planned_path = job.get("planned_final_path")
+    clip_id = job.get("clip_id")
+    if not planned_path or not clip_id or not Path(planned_path).exists():
+        return False
+    try:
+        clip = get_repository().get_clip(clip_id)
+        actual_path = clip.get("final_video_path") if clip else None
+        return bool(
+            actual_path
+            and Path(actual_path).resolve(strict=False)
+            == Path(planned_path).resolve(strict=False)
+        )
+    except Exception:
+        return False
+
+
+async def _reconcile_library_voiceover_job(
+    job_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(job_id) or {}
+    bundle = job.get("metering")
+    if not isinstance(bundle, dict) or all(
+        isinstance(record, dict)
+        and record.get("state") in _LIBRARY_VOICEOVER_TERMINAL_METERING
+        for record in bundle.values()
+    ):
+        return job
+    active_here = (
+        job.get("status") in {"pending", "queued", "processing"}
+        and job.get("process_instance_id") == _LIBRARY_PROCESS_INSTANCE_ID
+    )
+    if active_here:
+        return job
+
+    first_record = next(
+        (record for record in bundle.values() if isinstance(record, dict)),
+        {},
+    )
+    user_id = first_record.get("supabase_user_id") or job.get("user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+
+    delivered = _library_voiceover_output_is_delivered(job)
+    if delivered:
+        billable_components = job.get("billable_components") or ["tts", "render"]
+        storage.update_job(
+            job_id,
+            {
+                "output_persisted": True,
+                "delivered_components": billable_components,
+            },
+            profile_id=job.get("profile_id"),
+        )
+    settled = await _settle_library_voiceover_metering(job_id, user_id)
+    latest = storage.get_job(job_id) or settled
+    if latest.get("status") in {"pending", "queued", "processing"}:
+        storage.update_job(
+            job_id,
+            {
+                "status": "completed" if delivered else "failed",
+                "progress": "Ready" if delivered else "Interrupted before output was saved",
+                "error": None if delivered else "Voice-over regeneration was interrupted by a backend restart",
+            },
+            profile_id=latest.get("profile_id"),
+        )
+    return storage.get_job(job_id) or latest
+
+
+async def _reconcile_library_voiceover_jobs_for_clip(
+    clip_id: str,
+    project_id: Optional[str],
+    user_id: str,
+) -> None:
+    if not project_id:
+        return
+    for job in get_job_storage().get_jobs_by_project(project_id):
+        if (
+            job.get("job_type") == _LIBRARY_VOICEOVER_JOB_TYPE
+            and job.get("clip_id") == clip_id
+        ):
+            await _reconcile_library_voiceover_job(job.get("job_id"), user_id)
+
+
 # ============== FINAL RENDER ==============
 
 @router.post("/clips/{clip_id}/render")
@@ -2933,7 +3318,8 @@ async def regenerate_voiceover(
     request: Request,
     background_tasks: BackgroundTasks,
     clip_id: str,
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """
     Regenerează voice-over-ul unui clip: generează TTS nou la viteza naturală
@@ -2973,16 +3359,89 @@ async def regenerate_voiceover(
         if not content_data or not content_data.get("tts_text"):
             raise HTTPException(status_code=400, detail="No TTS text found for this clip.")
 
+        job_id = str(uuid.uuid4())
+        output_duration = float(clip_row.get("duration") or 0)
+        try:
+            probed_duration = await asyncio.to_thread(_get_video_duration, final_video)
+            if probed_duration > 0:
+                output_duration = probed_duration
+        except Exception as duration_error:
+            logger.warning(
+                "Could not probe existing output duration for clip %s: %s",
+                clip_id,
+                duration_error,
+            )
+        render_units = max(1, math.ceil(max(1.0, output_duration) / 60))
+        planned_final_path = final_video.with_name(
+            f"{final_video.stem}_regen_{job_id[:8]}{final_video.suffix}"
+        )
+        metering = _new_library_voiceover_metering(
+            job_id,
+            profile.user_id,
+            current_user.email,
+            render_units,
+        )
+        storage = get_job_storage()
+        storage.create_job(
+            {
+                "job_id": job_id,
+                "job_type": _LIBRARY_VOICEOVER_JOB_TYPE,
+                "status": "pending",
+                "progress": "Awaiting credit reservation",
+                "profile_id": profile.profile_id,
+                "user_id": profile.user_id,
+                "project_id": clip_row.get("project_id"),
+                "clip_id": clip_id,
+                "process_instance_id": _LIBRARY_PROCESS_INSTANCE_ID,
+                "planned_final_path": str(planned_final_path),
+                "metered_output_duration_seconds": output_duration,
+                "billable_components": ["tts", "render"],
+                "output_persisted": False,
+                "delivered_components": [],
+                "metering": metering,
+            },
+            profile_id=profile.profile_id,
+        )
+
+        try:
+            await _reserve_library_voiceover_metering(
+                job_id,
+                MeteringIdentity(profile.user_id, current_user.email),
+            )
+        except StudioMeteringBlocked as error:
+            raise HTTPException(
+                status_code=402,
+                detail={**error.as_http_detail(), "studio_job_id": job_id},
+            )
+
+        try:
+            repo.update_clip(clip_id, {
+                "final_status": "processing",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            storage.update_job(
+                job_id,
+                {"status": "failed", "progress": "Could not start regeneration"},
+                profile_id=profile.profile_id,
+            )
+            await _settle_library_voiceover_metering(job_id, profile.user_id)
+            raise
+
         background_tasks.add_task(
             _regenerate_voiceover_task,
+            job_id=job_id,
             clip_id=clip_id,
             profile_id=profile.profile_id,
+            user_id=profile.user_id,
             clip_data=clip_row,
             content_data=content_data,
+            planned_final_path=str(planned_final_path),
         )
 
         return {
             "status": "processing",
+            "job_id": job_id,
             "clip_id": clip_id,
             "message": "Regenerating voice-over (full re-render from scratch)..."
         }
@@ -2994,10 +3453,13 @@ async def regenerate_voiceover(
 
 
 async def _regenerate_voiceover_task(
+    job_id: str,
     clip_id: str,
     profile_id: str,
+    user_id: str,
     clip_data: dict,
     content_data: dict,
+    planned_final_path: str,
 ):
     """
     Background task: generează TTS nou la viteza naturală și reconstruiește
@@ -3009,6 +3471,12 @@ async def _regenerate_voiceover_task(
     logger.info(f"[Profile {profile_id}] Starting voiceover regeneration for clip {clip_id}")
 
     repo = get_repository()
+    storage = get_job_storage()
+    storage.update_job(
+        job_id,
+        {"status": "processing", "progress": "Preparing voice-over"},
+        profile_id=profile_id,
+    )
 
     # Mark as processing
     try:
@@ -3020,10 +3488,12 @@ async def _regenerate_voiceover_task(
         logger.error(f"Failed to set processing status: {e}")
 
     settings = get_settings()
-    temp_dir = Path(settings.output_dir) / "temp" / f"vo_regen_{clip_id}"
+    temp_dir = Path(settings.output_dir) / "temp" / f"vo_regen_{clip_id}_{job_id[:8]}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        if storage.is_job_cancelled(job_id):
+            raise _LibraryVoiceoverCancelled("Voice-over regeneration cancelled before TTS")
         final_video_path = Path(clip_data["final_video_path"])
         media_manager = get_media_manager()
 
@@ -3056,6 +3526,7 @@ async def _regenerate_voiceover_task(
         original_speed = float(voice_settings.get("speed", 1.18))
 
         natural_audio_path = temp_dir / f"tts_natural_{clip_id}.mp3"
+        _mark_library_voiceover_started(job_id, "tts")
         tts_result, tts_timestamps = await tts_service.generate_audio_with_timestamps(
             text=content_data["tts_text"],
             voice_id=tts_voice_id or tts_service._voice_id,
@@ -3069,6 +3540,8 @@ async def _regenerate_voiceover_task(
 
         if natural_duration <= 0:
             raise RuntimeError("TTS generated empty audio")
+        if storage.is_job_cancelled(job_id):
+            raise _LibraryVoiceoverCancelled("Voice-over regeneration cancelled after TTS")
 
         logger.info(f"Voiceover regen clip {clip_id}: TTS generated at speed={original_speed:.2f}, duration={natural_duration:.1f}s")
 
@@ -3104,32 +3577,21 @@ async def _regenerate_voiceover_task(
         processed_audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
         if processed_audio_duration <= 0:
             processed_audio_duration = natural_duration
+        await _requote_library_voiceover_render(job_id, processed_audio_duration)
 
-        # 4. Persist TTS asset and metadata to DB before re-render
-        try:
-            tts_persist_path = media_manager.tts_path(clip_data["project_id"], clip_id)
-            shutil.copy2(str(audio_path), str(tts_persist_path))
-            upsert_data = {
-                "clip_id": clip_id,
-                "tts_audio_path": str(tts_persist_path),
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            if new_srt_content:
-                upsert_data["srt_content"] = new_srt_content
-            if tts_timestamps:
-                upsert_data["tts_timestamps"] = json.dumps(tts_timestamps)
-            upsert_data["voice_settings"] = voice_settings
-            # update_clip_content is UPDATE-only on both backends; use table_query
-            # upsert (established pattern from Plan 80-01) so the row is created
-            # when missing.
-            repo.table_query(
-                "editai_clip_content",
-                "upsert",
-                data=upsert_data,
-                filters=QueryFilters(on_conflict="clip_id"),
-            )
-        except Exception as persist_err:
-            logger.warning(f"Failed to persist regenerated TTS for clip {clip_id}: {persist_err}")
+        # Prepare the downloadable TTS metadata, but do not replace the existing
+        # asset until the new final video is durably attached to the clip.
+        tts_persist_path = media_manager.tts_path(clip_data["project_id"], clip_id)
+        tts_upsert_data = {
+            "clip_id": clip_id,
+            "tts_audio_path": str(tts_persist_path),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "voice_settings": voice_settings,
+        }
+        if new_srt_content:
+            tts_upsert_data["srt_content"] = new_srt_content
+        if tts_timestamps:
+            tts_upsert_data["tts_timestamps"] = json.dumps(tts_timestamps)
 
         # 5. Full re-render via assembly service
         from app.services.assembly_service import get_assembly_service
@@ -3242,38 +3704,112 @@ async def _regenerate_voiceover_task(
                     f"will use fresh keyword matching across entire library"
                 )
 
-        # Call full assembly pipeline with reused audio (audio_path is silence-removed,
-        # the assembly render pipeline handles its own normalization)
-        new_final_path, new_raw_path, new_seg_composition = await asyncio.wait_for(
-            assembly_service.assemble_and_render(
-                script_text=content_data["tts_text"],
-                profile_id=profile_id,
-                preset_data=preset_data,
-                subtitle_settings=sub_settings,
-                elevenlabs_model=content_data.get("tts_model", "eleven_flash_v2_5"),
-                voice_id=voice_id,
-                source_video_ids=source_video_ids_filter,
-                match_overrides=stored_composition,
-                reuse_audio_path=str(audio_path),
-                reuse_audio_duration=processed_audio_duration,
-                reuse_srt_content=new_srt_content,
-                max_words_per_phrase=max_wpf,
-                voice_settings=voice_settings_dict,
-            ),
-            timeout=600  # 10 minutes for full re-render
+        # Enter the per-user fair queue before the final assembly/render starts.
+        storage.update_job(
+            job_id,
+            {"status": "queued", "progress": "Queued for render"},
+            profile_id=profile_id,
+        )
+        try:
+            render_ticket = await get_render_queue().enqueue(
+                user_id=user_id,
+                job_id=_library_voiceover_queue_job_id(job_id),
+            )
+            async with render_ticket:
+                if storage.is_job_cancelled(job_id):
+                    raise _LibraryVoiceoverCancelled(
+                        "Voice-over regeneration cancelled before render"
+                    )
+                _mark_library_voiceover_started(job_id, "render")
+                storage.update_job(
+                    job_id,
+                    {"status": "processing", "progress": "Rendering replacement"},
+                    profile_id=profile_id,
+                )
+                new_final_path, new_raw_path, new_seg_composition = await asyncio.wait_for(
+                    assembly_service.assemble_and_render(
+                        script_text=content_data["tts_text"],
+                        profile_id=profile_id,
+                        preset_data=preset_data,
+                        subtitle_settings=sub_settings,
+                        elevenlabs_model=content_data.get("tts_model", "eleven_flash_v2_5"),
+                        voice_id=voice_id,
+                        source_video_ids=source_video_ids_filter,
+                        match_overrides=stored_composition,
+                        reuse_audio_path=str(audio_path),
+                        reuse_audio_duration=processed_audio_duration,
+                        reuse_srt_content=new_srt_content,
+                        max_words_per_phrase=max_wpf,
+                        voice_settings=voice_settings_dict,
+                    ),
+                    timeout=600,
+                )
+        except RenderQueueCancelled as error:
+            raise _LibraryVoiceoverCancelled(
+                "Voice-over regeneration cancelled while queued"
+            ) from error
+
+        if storage.is_job_cancelled(job_id):
+            raise _LibraryVoiceoverCancelled(
+                "Voice-over regeneration cancelled before output persistence"
+            )
+
+        # Attach a versioned replacement path so the previous rendered file stays
+        # recoverable until the DB points at the fully persisted new output.
+        persisted_final_path = Path(planned_final_path)
+        persisted_final_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(new_final_path), str(persisted_final_path))
+        clip_update = {
+            "final_video_path": str(persisted_final_path),
+            "final_status": "completed",
+            "duration": processed_audio_duration,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if new_raw_path and Path(new_raw_path).exists():
+            raw_dest = persisted_final_path.parent / f"{persisted_final_path.stem}_raw.mp4"
+            shutil.move(str(new_raw_path), str(raw_dest))
+            clip_update["raw_video_path"] = str(raw_dest)
+
+        repo.update_clip(clip_id, clip_update)
+        billable_components = (
+            storage.get_job(job_id) or {}
+        ).get("billable_components") or ["tts", "render"]
+        storage.update_job(
+            job_id,
+            {
+                "output_persisted": True,
+                "delivered_components": billable_components,
+                "progress": "Capturing credits",
+                "result": {
+                    "clip_id": clip_id,
+                    "final_video_path": str(persisted_final_path),
+                },
+            },
+            profile_id=profile_id,
+        )
+        logger.info(
+            "Voiceover re-rendered for clip %s: %s",
+            clip_id,
+            persisted_final_path,
         )
 
-        # 6. Replace the original final video with the new render
-        shutil.move(str(new_final_path), str(final_video_path))
-        logger.info(f"Voiceover re-rendered for clip {clip_id}: {final_video_path}")
-
-        # Update raw_video_path to the new truly raw assembly (subtitle-free)
-        if new_raw_path and Path(new_raw_path).exists():
-            raw_dest = final_video_path.parent / f"{final_video_path.stem}_raw.mp4"
-            shutil.move(str(new_raw_path), str(raw_dest))
-            repo.update_clip(clip_id, {
-                "raw_video_path": str(raw_dest),
-            })
+        # The final video already delivers the generated voice-over. Persist the
+        # standalone MP3/SRT as a best-effort convenience after that checkpoint.
+        try:
+            shutil.copy2(str(audio_path), str(tts_persist_path))
+            repo.table_query(
+                "editai_clip_content",
+                "upsert",
+                data=tts_upsert_data,
+                filters=QueryFilters(on_conflict="clip_id"),
+            )
+        except Exception as persist_error:
+            logger.warning(
+                "Failed to persist regenerated TTS asset for clip %s: %s",
+                clip_id,
+                persist_error,
+            )
 
         # 7. Persist updated segment composition for future regenerations
         if new_seg_composition:
@@ -3286,23 +3822,38 @@ async def _regenerate_voiceover_task(
             except Exception as comp_err:
                 logger.warning(f"Failed to update segment_composition for clip {clip_id}: {comp_err}")
 
-        # 8. Mark completed
-        repo.update_clip(clip_id, {
-            "final_status": "completed",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+        await _settle_library_voiceover_metering(job_id, user_id)
+        storage.update_job(
+            job_id,
+            {"status": "completed", "progress": "Ready", "error": None},
+            profile_id=profile_id,
+        )
 
         logger.info(f"Voiceover regeneration completed for clip {clip_id}")
 
     except Exception as e:
+        cancelled = isinstance(e, _LibraryVoiceoverCancelled)
         logger.error(f"Voiceover regeneration failed for clip {clip_id}: {e}")
         try:
-            repo.update_clip(clip_id, {
-                "final_status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            if not _library_voiceover_output_is_delivered(storage.get_job(job_id) or {}):
+                repo.update_clip(clip_id, {
+                    "final_status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
         except Exception:
             logger.critical(f"Clip {clip_id} stuck in processing — DB update for failed status also failed.")
+        await _settle_library_voiceover_metering(job_id, user_id)
+        latest = storage.get_job(job_id) or {}
+        if latest.get("status") != "cancelled":
+            storage.update_job(
+                job_id,
+                {
+                    "status": "cancelled" if cancelled else "failed",
+                    "progress": "Cancelled" if cancelled else "Regeneration failed",
+                    "error": str(e),
+                },
+                profile_id=profile_id,
+            )
     finally:
         # Cleanup temp files
         try:

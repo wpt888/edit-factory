@@ -134,3 +134,84 @@ test("TTS Library creation shows the shared 402 billing action", async ({ page }
   await expect(page.getByRole("button", { name: "Manage credits" })).toBeVisible();
   expect(createRequests).toBe(1);
 });
+
+test("Library voice-over regeneration shows the shared 402 billing action", async ({ page }) => {
+  const profile = {
+    id: "metering-library-profile",
+    name: "Metering Library",
+    is_default: true,
+    created_at: "2026-07-15T00:00:00Z",
+  };
+  const clip = {
+    id: "metered-clip",
+    project_id: "metered-project",
+    project_name: "Metered project",
+    variant_index: 0,
+    variant_name: "Variant 1",
+    raw_video_path: "output/metered-clip.mp4",
+    final_video_path: "output/metered-clip.mp4",
+    thumbnail_path: null,
+    duration: 30,
+    final_status: "completed",
+    created_at: "2026-07-15T00:00:00Z",
+    has_subtitles: true,
+    has_voiceover: true,
+    has_audio: true,
+    tts_text: "Existing voice-over",
+  };
+
+  await page.addInitScript((initialProfile) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([initialProfile]));
+    localStorage.setItem("editai_current_profile_id", initialProfile.id);
+  }, profile);
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+
+    if (
+      request.method() === "POST"
+      && path.endsWith("/library/clips/metered-clip/regenerate-voiceover")
+    ) {
+      await route.fulfill({
+        status: 402,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: {
+            code: "insufficient_credits",
+            message: "You do not have enough Blipost credits for this operation. Add credits to continue.",
+            billing_url: "https://blipost.com/billing",
+          },
+        }),
+      });
+      return;
+    }
+
+    if (path.endsWith("/profiles/")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([profile]),
+      });
+      return;
+    }
+
+    if (path.endsWith("/library/all-clips")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ clips: [clip], next_cursor: null, has_more: false }),
+      });
+      return;
+    }
+
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/librarie");
+  await page.locator('button[title="Regenerate voice-over"]').click();
+
+  await expect(page.getByText("You do not have enough Blipost credits for this operation. Add credits to continue.")).toBeVisible();
+  await expect(page.getByText("The operation was not started. Add credits to continue.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Manage credits" })).toBeVisible();
+});

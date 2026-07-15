@@ -722,6 +722,15 @@ async def stream_job_progress(job_id: str, request: Request):
                     job_id,
                     current_job.get("user_id"),
                 ) or current_job
+            elif current_job.get("job_type") == "library_voiceover_regeneration" and isinstance(
+                current_job.get("metering"), dict
+            ):
+                from app.api.library_routes import _reconcile_library_voiceover_job
+
+                current_job = await _reconcile_library_voiceover_job(
+                    job_id,
+                    current_job.get("user_id"),
+                ) or current_job
 
             current_progress = current_job.get("progress")
             current_status = current_job.get("status")
@@ -801,6 +810,12 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
         from app.api.tts_library_routes import _reconcile_tts_library_job
 
         job = await _reconcile_tts_library_job(job_id, profile.user_id) or job
+    elif job.get("job_type") == "library_voiceover_regeneration" and isinstance(
+        job.get("metering"), dict
+    ):
+        from app.api.library_routes import _reconcile_library_voiceover_job
+
+        job = await _reconcile_library_voiceover_job(job_id, profile.user_id) or job
 
     response = JobResponse(
         job_id=job["job_id"],
@@ -1493,6 +1508,21 @@ async def cancel_job(job_id: str, profile: ProfileContext = Depends(get_profile_
             metering_user_id,
             delivered=bool(job.get("output_persisted")),
         )
+    elif job.get("job_type") == "library_voiceover_regeneration":
+        from app.api.library_routes import (
+            _library_voiceover_queue_job_id,
+            _settle_library_voiceover_metering,
+        )
+        from app.services.render_queue import get_render_queue
+
+        await get_render_queue().cancel(_library_voiceover_queue_job_id(job_id))
+        bundle = job.get("metering") or {}
+        first_record = next(
+            (record for record in bundle.values() if isinstance(record, dict)),
+            {},
+        )
+        metering_user_id = first_record.get("supabase_user_id") or job.get("user_id") or profile.user_id
+        await _settle_library_voiceover_metering(job_id, metering_user_id)
     return {"status": "cancelled", "job_id": job_id}
 
 
