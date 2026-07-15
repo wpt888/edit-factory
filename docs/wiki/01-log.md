@@ -1,5 +1,25 @@
 # Engineering Change Log
 
+## 2026-07-15 — BlipStudio remediation: post-verification fixes
+
+- Kept the `generate_raw_clips` web-mode guard (a bare `video_path` reads the
+  server disk) and updated its test to assert `501` in web mode plus the
+  non-503 path under desktop mode.
+- Made `GET /segments/browse-local` an always-`501` stub in both modes and
+  deleted the dead tkinter `_PICKER_SCRIPT`; the native picker is the Electron
+  IPC bridge, so no client calls the HTTP endpoint.
+- Removed the `profile_id` parameter from `_get_pipeline_state_lock` so
+  `save_matches` and the async-job mutators can no longer resolve two different
+  locks for the same pipeline.
+- Committed the superseded local-video spec deletions and ignored `.codegraph/`
+  tooling state (dropping the tracked `daemon.pid`).
+- Migration `054_add_pipeline_async_jobs.sql` remains unapplied — no consecrated
+  migration path exists; it is documented to run at deploy.
+- Full backend suite: 550 passed, 5 failed (all pre-existing/contention,
+  unrelated to these fixes), 1 skipped, 18 xfailed. Frontend `tsc` clean.
+
+See [BlipStudio web remediation](22-blipstudio-web-remediation.md).
+
 ## 2026-07-15 — BlipStudio web remediation delivered (phases B–D)
 
 - Made local browse/find segment operations return `501` immediately in web

@@ -10,7 +10,8 @@ executed.
 `GET /api/v1/segments/find-local` are desktop capabilities. When
 `DESKTOP_MODE=false`, both now return `501 Not Implemented` immediately with a
 clear desktop-only message. The web UI does not render the local browse/find
-controls; Electron keeps the previous behavior.
+controls. (Superseded 2026-07-15 for `browse-local`: it now returns 501 in
+every mode — see Post-verification fixes below.)
 
 The follow-up router audit found no additional obvious user-facing server-home
 scans in scope. TTS intermediates, pipeline output paths, managed file routes,
@@ -83,3 +84,69 @@ queue is introduced in a separately approved scope.
 
 Related deployment constraints remain documented in
 [BlipStudio production deployment](21-blipstudio-production-deployment.md).
+
+## Post-verification fixes (2026-07-15)
+
+An adversarial re-verification of the remediation (commits `4c8b7cc`…`b07d256`)
+surfaced six follow-ups. All are fixed and committed locally, unpushed.
+
+- **generate_raw_clips guard test.** `4c8b7cc` also guarded
+  `POST /library/projects/{id}/generate` when a bare `video_path` is supplied
+  with no upload. That branch resolves `Path(video_path)` against the *server*
+  disk in web mode, so the guard is semantically correct. The pre-existing
+  `test_generate_raw_clips_returns_non_503` now asserts `501` in web mode and
+  runs the non-503 check under desktop mode.
+- **browse-local in desktop mode.** The remediation left
+  `GET /segments/browse-local` spawning a tkinter subprocess in desktop mode.
+  No client calls it — the native picker is the Electron IPC bridge
+  (`window.editFactory.selectVideoFiles`, `frontend/src/lib/desktop.ts`), and
+  even the former web caller was already removed. The endpoint is now an
+  always-`501` stub in both modes and the dead `_PICKER_SCRIPT` is gone, so
+  tkinter can never abort the packaged backend (`0xC0000409`).
+- **Pipeline state lock key.** `save_matches` resolved its per-pipeline state
+  lock with a profile-scoped key (`profile:pipeline`) while every async-job
+  mutator and `_evict_stale_pipelines` use the bare pipeline id, so one pipeline
+  mapped to two locks. The `profile_id` parameter was removed from
+  `_get_pipeline_state_lock`, making the divergence structurally impossible;
+  the lock body nests no second acquire, so no deadlock is introduced.
+- **Superseded specs.** The desktop-only screenshot scratch
+  `verify-local-button.spec.ts` and `segments-local-processing.spec.ts` were
+  removed; `segments-source-video-management.spec.ts` carries the same
+  polling regression against the new Upload Video flow.
+- **CodeGraph state.** `.codegraph/` is now gitignored and its tracked
+  `daemon.pid`/`.gitignore` were dropped from the index (pid file never
+  committed).
+
+### Migration 054 status — pending, run at deploy
+
+`054_add_pipeline_async_jobs.sql` (additive `generation_job`/`tts_jobs` JSONB
+columns, `DEFAULT '{}'`) is still **not applied**. The repository has no
+consecrated migration path: there is no `supabase/config.toml`, no migration
+runner, and the Supabase REST API cannot execute DDL. Direct `psql` against the
+live database (which has desktop users) is out of scope and was not attempted.
+The code degrades gracefully without the migration — missing-column errors are
+caught and only cross-restart job persistence is unavailable. Apply at deploy
+via the Supabase SQL editor (or a linked `supabase db push`), then verify:
+
+```sql
+select generation_job, tts_jobs from public.editai_pipelines limit 1;
+```
+
+### Full backend suite
+
+`venv/Scripts/python.exe -m pytest` (no coverage): **550 passed, 5 failed,
+1 skipped, 18 xfailed** in ~139 s. Frontend `tsc --noEmit` is clean. None of the
+five failures come from the remediation or these fixes:
+
+- 3× `test_api_routes.py::TestTTSGenerate` — the TTS endpoint requires
+  `provider`/`voice_id`; these tests predate that and send neither (`422`).
+- `test_output_naming.py::test_build_output_basename_uses_human_readable_labels`
+  — a label-truncation mismatch in an untouched module.
+- `test_ml_gating.py::test_generate_from_segments_skips_ml_when_mute_false` —
+  `sqlite3 database is locked`; it passes in isolation and is a contention
+  artifact of parallel test runs sharing the dev database.
+
+Environment note: the suite cannot complete unless the broken `import magic`
+(python-magic hangs in this environment) is neutralized. `validate_file_mime_type`
+already degrades gracefully when magic is absent, so the run blocked the import;
+this is an environment defect, not a code issue.
