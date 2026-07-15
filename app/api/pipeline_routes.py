@@ -967,6 +967,10 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
 
 _ACTIVE_ASYNC_JOB_STATUSES = frozenset({"queued", "processing"})
 _TERMINAL_ASYNC_JOB_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "denied"})
+_ACTIVE_REGENERATION_STATUSES = frozenset(
+    {"pending", "reserved", "processing", "persisting", "settling"}
+)
 
 
 def _job_timestamp() -> str:
@@ -1038,17 +1042,182 @@ def _replace_regeneration_metering(
         attempt.update(changes)
         attempt["metering"] = dict(record)
         attempt["updated_at"] = _job_timestamp()
-        # Bound durable history while retaining enough attempts for diagnosis.
-        if len(attempts) > 20:
-            oldest = sorted(
-                attempts,
+        # Bound settled history without ever evicting a reservation that still
+        # needs capture/refund reconciliation.
+        settled_attempt_ids = [
+            key
+            for key, value in attempts.items()
+            if isinstance(value, dict)
+            and isinstance(value.get("metering"), dict)
+            and value["metering"].get("state") in _TERMINAL_METERING_STATES
+        ]
+        if len(settled_attempt_ids) > 20:
+            oldest_settled = sorted(
+                settled_attempt_ids,
                 key=lambda key: str((attempts.get(key) or {}).get("created_at") or ""),
             )[:-20]
-            for key in oldest:
+            for key in oldest_settled:
                 attempts.pop(key, None)
         snapshot = dict(generation_job)
         _db_update_async_jobs(pipeline_id, generation_job=snapshot)
     return dict(attempt)
+
+
+def _regeneration_output_is_persisted(pipeline: dict, attempt: dict) -> bool:
+    record = attempt.get("metering")
+    if isinstance(record, dict) and record.get("output_persisted"):
+        return True
+    output_fingerprint = attempt.get("output_fingerprint")
+    variant_index = attempt.get("variant_index")
+    if not isinstance(output_fingerprint, str) or not output_fingerprint:
+        return False
+    if not isinstance(variant_index, int):
+        return False
+    scripts = pipeline.get("scripts") or []
+    if variant_index < 0 or variant_index >= len(scripts):
+        return False
+    return _stable_hash(str(scripts[variant_index])) == output_fingerprint
+
+
+def _mark_interrupted_regeneration_attempts(pipeline: dict) -> bool:
+    """Make restart-interrupted synchronous attempts explicitly reconcilable."""
+    generation_job = pipeline.get("generation_job")
+    if not isinstance(generation_job, dict):
+        return False
+    attempts = generation_job.get("regenerations")
+    if not isinstance(attempts, dict):
+        return False
+
+    changed = False
+    interrupted_at = _job_timestamp()
+    for attempt in attempts.values():
+        if not isinstance(attempt, dict):
+            continue
+        if attempt.get("status") not in _ACTIVE_REGENERATION_STATUSES:
+            continue
+        record = attempt.get("metering")
+        if not isinstance(record, dict):
+            continue
+        if record.get("state") in _TERMINAL_METERING_STATES:
+            continue
+
+        delivered = _regeneration_output_is_persisted(pipeline, attempt)
+        attempt.update(
+            {
+                "status": "completed" if delivered else "failed",
+                "interrupted": True,
+                "completed_at": interrupted_at,
+                "updated_at": interrupted_at,
+            }
+        )
+        if delivered:
+            attempt["error"] = None
+            record["output_persisted"] = True
+            record["state"] = "capture_pending"
+        else:
+            attempt["error"] = "Script regeneration did not survive a backend restart."
+            if record.get("reservation_id"):
+                record["state"] = "refund_pending"
+            elif not record.get("provider_started"):
+                # A reserve response may have been lost before its reservation
+                # ID was persisted. Replaying the same durable key is safe only
+                # while this record proves the provider never started.
+                record["state"] = "reserve_pending"
+        changed = True
+    return changed
+
+
+async def _reconcile_regeneration_metering(
+    pipeline_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Retry reserve/capture/refund for durable synchronous regeneration attempts."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    generation_job = (pipeline or {}).get("generation_job") or {}
+    attempts = generation_job.get("regenerations") or {}
+    if not isinstance(attempts, dict):
+        return generation_job
+
+    for attempt_id, raw_attempt in list(attempts.items()):
+        if not isinstance(raw_attempt, dict):
+            continue
+        attempt = dict(raw_attempt)
+        record = attempt.get("metering")
+        if not isinstance(record, dict) or record.get("state") in _TERMINAL_METERING_STATES:
+            continue
+        user_id = record.get("supabase_user_id") or fallback_user_id
+        if not isinstance(user_id, str) or not user_id:
+            continue
+        identity = MeteringIdentity(user_id, record.get("email"))
+
+        if not record.get("reservation_id"):
+            if (
+                not attempt.get("interrupted")
+                or record.get("provider_started")
+                or record.get("state") not in {"pending", "reserve_pending"}
+            ):
+                continue
+            try:
+                record = await reserve_metering_record(identity, record)
+            except StudioMeteringBlocked as error:
+                retry_record = {
+                    **record,
+                    "state": (
+                        "denied"
+                        if error.code == "insufficient_credits"
+                        else "reserve_pending"
+                    ),
+                    "last_error": error.as_http_detail(),
+                }
+                _replace_regeneration_metering(
+                    pipeline_id,
+                    str(attempt_id),
+                    retry_record,
+                    status="failed",
+                    status_code=402,
+                    error=error.as_http_detail()["message"],
+                )
+                continue
+            _replace_regeneration_metering(
+                pipeline_id,
+                str(attempt_id),
+                record,
+                status="failed",
+            )
+
+        live_pipeline = _get_pipeline_or_load(pipeline_id) or pipeline or {}
+        live_generation_job = live_pipeline.get("generation_job") or {}
+        live_attempts = live_generation_job.get("regenerations") or {}
+        live_attempt = live_attempts.get(attempt_id) or live_attempts.get(str(attempt_id)) or attempt
+        delivered = _regeneration_output_is_persisted(live_pipeline, live_attempt)
+        if not delivered and not (
+            live_attempt.get("status") in {"failed", "cancelled"}
+            or live_attempt.get("interrupted")
+        ):
+            continue
+        result_metadata = None
+        if delivered:
+            result_metadata = {
+                "studio_job_id": pipeline_id,
+                "output_id": f"script-{live_attempt.get('variant_index')}",
+            }
+        settled = await settle_metering_record(
+            identity,
+            record,
+            delivered=delivered,
+            result_metadata=result_metadata,
+        )
+        _replace_regeneration_metering(
+            pipeline_id,
+            str(attempt_id),
+            settled,
+            status="completed" if delivered else "failed",
+            completed_at=live_attempt.get("completed_at") or _job_timestamp(),
+            error=None if delivered else live_attempt.get("error"),
+        )
+
+    refreshed = _get_pipeline_or_load(pipeline_id)
+    return (refreshed or {}).get("generation_job") or generation_job
 
 
 async def _settle_generation_metering(
@@ -1963,6 +2132,9 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "subtitle_settings_by_key": subtitle_settings_by_key,
             "attention_timeline": row.get("attention_timeline") or {},
         }
+
+        if _mark_interrupted_regeneration_attempts(pipeline):
+            interrupted_async_jobs = True
 
         _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
 
@@ -3097,6 +3269,8 @@ async def regenerate_script(
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     scripts = pipeline.get("scripts", [])
     if variant_index < 0 or variant_index >= len(scripts):
@@ -3194,19 +3368,24 @@ async def regenerate_script(
 
     attempt_id = uuid.uuid4().hex
     identity = MeteringIdentity(profile.user_id, current_user.email)
-    metering = new_metering_record(
-        "studio.script_pipeline",
-        1,
-        f"pipeline:{pipeline_id}:script-regenerate:{variant_index}:{attempt_id}",
-    )
+    metering = {
+        **new_metering_record(
+            "studio.script_pipeline",
+            1,
+            f"pipeline:{pipeline_id}:script-regenerate:{variant_index}:{attempt_id}",
+        ),
+        **identity.as_payload(),
+    }
     _replace_regeneration_metering(
         pipeline_id,
         attempt_id,
         metering,
         status="pending",
         variant_index=variant_index,
+        prior_script_fingerprint=_stable_hash(str(scripts[variant_index])),
         created_at=_job_timestamp(),
     )
+    output_persisted = False
     try:
         metering = await reserve_metering_record(identity, metering)
     except StudioMeteringBlocked as error:
@@ -3257,6 +3436,14 @@ async def regenerate_script(
             raise HTTPException(status_code=500, detail="AI returned no script")
 
         new_script = new_scripts[0]
+        output_fingerprint = _stable_hash(new_script)
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="persisting",
+            output_fingerprint=output_fingerprint,
+        )
 
         # Update pipeline state
         with _get_pipeline_state_lock(pipeline_id):
@@ -3284,6 +3471,7 @@ async def regenerate_script(
 
         metering["output_persisted"] = True
         metering["state"] = "output_persisted"
+        output_persisted = True
         _replace_regeneration_metering(
             pipeline_id,
             attempt_id,
@@ -3321,42 +3509,76 @@ async def regenerate_script(
 
     except ValueError as e:
         metering = await settle_metering_record(
-            MeteringIdentity(profile.user_id), metering, delivered=False
+            MeteringIdentity(profile.user_id),
+            metering,
+            delivered=output_persisted,
+            result_metadata=(
+                {
+                    "studio_job_id": pipeline_id,
+                    "output_id": f"script-{variant_index}",
+                }
+                if output_persisted
+                else None
+            ),
         )
         _replace_regeneration_metering(
             pipeline_id,
             attempt_id,
             metering,
-            status="failed",
+            status="completed" if output_persisted else "failed",
             completed_at=_job_timestamp(),
-            error=str(e),
+            error=None if output_persisted else str(e),
         )
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException as error:
         metering = await settle_metering_record(
-            MeteringIdentity(profile.user_id), metering, delivered=False
+            MeteringIdentity(profile.user_id),
+            metering,
+            delivered=output_persisted,
+            result_metadata=(
+                {
+                    "studio_job_id": pipeline_id,
+                    "output_id": f"script-{variant_index}",
+                }
+                if output_persisted
+                else None
+            ),
         )
         _replace_regeneration_metering(
             pipeline_id,
             attempt_id,
             metering,
-            status="failed",
+            status="completed" if output_persisted else "failed",
             completed_at=_job_timestamp(),
-            error=str(error.detail),
+            error=None if output_persisted else str(error.detail),
         )
         raise
     except Exception as e:
         logger.error(f"Script regeneration failed: {e}", exc_info=True)
         metering = await settle_metering_record(
-            MeteringIdentity(profile.user_id), metering, delivered=False
+            MeteringIdentity(profile.user_id),
+            metering,
+            delivered=output_persisted,
+            result_metadata=(
+                {
+                    "studio_job_id": pipeline_id,
+                    "output_id": f"script-{variant_index}",
+                }
+                if output_persisted
+                else None
+            ),
         )
         _replace_regeneration_metering(
             pipeline_id,
             attempt_id,
             metering,
-            status="failed",
+            status="completed" if output_persisted else "failed",
             completed_at=_job_timestamp(),
-            error="Script regeneration service unavailable. Please try again.",
+            error=(
+                None
+                if output_persisted
+                else "Script regeneration service unavailable. Please try again."
+            ),
         )
         raise HTTPException(
             status_code=503,
@@ -3778,6 +4000,10 @@ async def get_generation_status(
                 profile.user_id,
                 delivered=False,
             )
+    generation_job = await _reconcile_regeneration_metering(
+        pipeline_id,
+        profile.user_id,
+    )
     return {
         "pipeline_id": pipeline_id,
         "job": generation_job,
@@ -6893,6 +7119,7 @@ async def get_pipeline_status(pipeline_id: str):
         raise HTTPException(status_code=404, detail="Pipeline not found")
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
     _mark_stale_render_jobs(pipeline_id, pipeline)
+    await _reconcile_regeneration_metering(pipeline_id)
 
     for job_key, job in list((pipeline.get("render_jobs") or {}).items()):
         if not isinstance(job, dict):
