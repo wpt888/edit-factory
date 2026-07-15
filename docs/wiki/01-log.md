@@ -1,5 +1,26 @@
 # Engineering Change Log
 
+## 2026-07-15 - BlipStudio credit metering (Goal B2)
+
+- Added a fail-closed Studio-to-web metering client with durable idempotent
+  reserve/capture/refund state and desktop-only structured usage logging.
+- Metered asynchronous Pipeline scripts and per-variant TTS, Pipeline final
+  renders/remakes, fixed-five-second Seedance, and single/batch product jobs,
+  including cancellation, failure refund, settlement retry, and restart paths.
+- Reserved final-render credits before fair queue entry so denied work never
+  occupies queue capacity; product composition and encoding share one ticket.
+- Added shared friendly HTTP 402 guidance with a billing action across every
+  affected UI flow and fixed web Seedance to its five-second rate-card unit.
+- Verification: full backend **594 passed, 1 skipped, 18 xfailed**; TypeScript,
+  focused ESLint, production Next build, and deterministic Chromium 402 test
+  passed. No push was performed.
+- Live two-app E2E found a Goal B1 blocker: web private mode redirects the
+  internal metering routes because `/api/internal/studio` is absent from its
+  public API prefixes. B2's web-read-only rule was preserved; the exact fix and
+  rerun steps are documented in the page below.
+
+See [BlipStudio credit metering](24-blipstudio-credit-metering.md).
+
 ## 2026-07-15 — Fair multi-tenant render queue (Goal C)
 
 - Added a process-local scheduler that dispatches final Pipeline renders in

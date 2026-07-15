@@ -22,3 +22,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [BlipStudio production deployment](21-blipstudio-production-deployment.md)
 - [BlipStudio web remediation: local boundaries and race-safe async pipeline jobs](22-blipstudio-web-remediation.md)
 - [Fair multi-tenant render queue](23-render-queue-multi-tenant.md)
+- [BlipStudio credit metering](24-blipstudio-credit-metering.md)
