@@ -731,6 +731,15 @@ async def stream_job_progress(job_id: str, request: Request):
                     job_id,
                     current_job.get("user_id"),
                 ) or current_job
+            elif current_job.get("job_type") == "tts_generation" and isinstance(
+                current_job.get("metering"), dict
+            ):
+                from app.api.tts_routes import _reconcile_tts_generation_job
+
+                current_job = await _reconcile_tts_generation_job(
+                    job_id,
+                    current_job.get("user_id"),
+                ) or current_job
 
             current_progress = current_job.get("progress")
             current_status = current_job.get("status")
@@ -816,6 +825,10 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
         from app.api.library_routes import _reconcile_library_voiceover_job
 
         job = await _reconcile_library_voiceover_job(job_id, profile.user_id) or job
+    elif job.get("job_type") == "tts_generation" and isinstance(job.get("metering"), dict):
+        from app.api.tts_routes import _reconcile_tts_generation_job
+
+        job = await _reconcile_tts_generation_job(job_id, profile.user_id) or job
 
     response = JobResponse(
         job_id=job["job_id"],
@@ -1523,6 +1536,20 @@ async def cancel_job(job_id: str, profile: ProfileContext = Depends(get_profile_
         )
         metering_user_id = first_record.get("supabase_user_id") or job.get("user_id") or profile.user_id
         await _settle_library_voiceover_metering(job_id, metering_user_id)
+    elif job.get("job_type") == "tts_generation":
+        from app.api.tts_routes import _settle_tts_generation_metering
+
+        metering = job.get("metering") or {}
+        metering_user_id = (
+            metering.get("supabase_user_id")
+            or job.get("user_id")
+            or profile.user_id
+        )
+        await _settle_tts_generation_metering(
+            job_id,
+            metering_user_id,
+            delivered=bool(job.get("output_persisted")),
+        )
     return {"status": "cancelled", "job_id": job_id}
 
 
