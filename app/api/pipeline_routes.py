@@ -996,10 +996,18 @@ def _update_generation_job(pipeline_id: str, **changes: Any) -> dict:
         return {}
     with _get_pipeline_state_lock(pipeline_id):
         job = pipeline.setdefault("generation_job", _new_async_job())
+        # Cancellation and other terminal states are authoritative. A worker may
+        # have completed a slow external call after the cancel request won the
+        # lock; that late result must not resurrect the job.
+        if job.get("status") in _TERMINAL_ASYNC_JOB_STATUSES:
+            return dict(job)
         job.update(changes)
         job["updated_at"] = _job_timestamp()
         snapshot = dict(job)
-    _db_update_async_jobs(pipeline_id, generation_job=snapshot)
+        # Keep the state transition and its focused DB write in one per-pipeline
+        # critical section. Otherwise concurrent workers can persist snapshots
+        # in reverse order and regress a job after memory already moved forward.
+        _db_update_async_jobs(pipeline_id, generation_job=snapshot)
     return snapshot
 
 
@@ -1010,11 +1018,15 @@ def _update_tts_job(pipeline_id: str, variant_index: int, **changes: Any) -> dic
     with _get_pipeline_state_lock(pipeline_id):
         jobs = pipeline.setdefault("tts_jobs", {})
         job = jobs.setdefault(variant_index, _new_async_job())
+        if job.get("status") in _TERMINAL_ASYNC_JOB_STATUSES:
+            return dict(job)
         job.update(changes)
         job["updated_at"] = _job_timestamp()
         job_snapshot = dict(job)
         jobs_snapshot = dict(jobs)
-    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+        # Multiple variants run concurrently. Serialize persistence with the
+        # mutation so an older, smaller job map cannot overwrite a newer map.
+        _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
     return job_snapshot
 
 
@@ -3152,11 +3164,13 @@ async def _run_pipeline_generation_job(
             "total_segment_duration": round(total_segment_duration, 1),
         }
         with _get_pipeline_state_lock(pipeline_id):
+            generation_job = pipeline.setdefault("generation_job", {})
+            if generation_job.get("status") in _TERMINAL_ASYNC_JOB_STATUSES:
+                return
             pipeline["scripts"] = scripts
             pipeline["script_names"] = [f"Script {index + 1}" for index in range(len(scripts))]
             pipeline["variant_count"] = len(scripts)
             pipeline["keyword_count"] = len(unique_keywords)
-            generation_job = pipeline.setdefault("generation_job", {})
             generation_job.update({
                 "status": "completed",
                 "progress": 100,
@@ -3742,19 +3756,19 @@ async def generate_variant_tts(
     if variant_index < 0 or variant_index >= len(pipeline.get("scripts") or []):
         raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
 
-    jobs = pipeline.get("tts_jobs") or {}
-    existing = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
-    if existing.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "Voice-over generation is already running", "job": existing},
-        )
-
-    job = _new_async_job("Queued for voice-over generation")
     with _get_pipeline_state_lock(pipeline_id):
-        pipeline.setdefault("tts_jobs", {})[variant_index] = job
-        jobs_snapshot = dict(pipeline["tts_jobs"])
-    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+        jobs = pipeline.setdefault("tts_jobs", {})
+        existing = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+        if existing.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Voice-over generation is already running", "job": existing},
+            )
+
+        job = _new_async_job("Queued for voice-over generation")
+        jobs[variant_index] = job
+        jobs_snapshot = dict(jobs)
+        _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
     background_tasks.add_task(
         _run_variant_tts_job,
         pipeline_id,
@@ -3832,7 +3846,7 @@ async def cancel_tts_jobs(
                 })
                 cancelled.append(index)
         jobs_snapshot = dict(jobs)
-    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+        _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
     return {"pipeline_id": pipeline_id, "cancelled": cancelled, "jobs": jobs_snapshot}
 
 
