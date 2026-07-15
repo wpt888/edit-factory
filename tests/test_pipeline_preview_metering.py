@@ -144,10 +144,17 @@ def test_preview_fresh_tts_reserves_then_captures_after_pipeline_persistence(
         "_persist_tts_audio",
         lambda **_kwargs: (str(fresh_audio), "asset-preview-1"),
     )
+
+    def persist_pipeline(*_args, **_kwargs):
+        record = pipeline["tts_jobs"][0]["metering"]
+        assert record["output_persisted"] is True
+        assert record["state"] == "output_persisted"
+        events.append("persist")
+
     monkeypatch.setattr(
         pipeline_routes,
         "_db_save_pipeline",
-        lambda *_args, **_kwargs: events.append("persist"),
+        persist_pipeline,
     )
 
     response = asyncio.run(_call_preview(pipeline_routes))
@@ -158,6 +165,8 @@ def test_preview_fresh_tts_reserves_then_captures_after_pipeline_persistence(
     assert job["status"] == "completed"
     assert job["metering"]["state"] == "captured"
     assert job["metering"]["output_persisted"] is True
+    assert job["metering"]["supabase_user_id"] == "user-1"
+    assert job["metering"]["email"] == "person@example.com"
     assert pipeline["tts_previews"][0]["audio_path"] == str(fresh_audio)
     assert pipeline["tts_previews"][0]["script_hash"] == pipeline_routes._stable_hash(
         pipeline["scripts"][0]

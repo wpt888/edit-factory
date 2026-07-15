@@ -1264,6 +1264,80 @@ async def _settle_tts_metering(
     return _replace_tts_metering(pipeline_id, variant_index, settled)
 
 
+async def _recover_generation_reservation_for_settlement(
+    pipeline_id: str,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Replay a lost reserve response only after the job is terminal/interrupted."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    job = (pipeline or {}).get("generation_job") or {}
+    record = job.get("metering")
+    if not isinstance(record, dict) or record.get("reservation_id"):
+        return job
+    if (
+        job.get("status") not in {"failed", "cancelled"}
+        or record.get("provider_started")
+        or record.get("state") not in {"pending", "reserve_pending"}
+    ):
+        return job
+    user_id = record.get("supabase_user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+    identity = MeteringIdentity(user_id, record.get("email"))
+    try:
+        recovered = await reserve_metering_record(identity, record)
+    except StudioMeteringBlocked as error:
+        pending = {
+            **record,
+            "state": (
+                "denied"
+                if error.code == "insufficient_credits"
+                else "reserve_pending"
+            ),
+            "last_error": error.as_http_detail(),
+        }
+        return _replace_generation_metering(pipeline_id, pending)
+    return _replace_generation_metering(pipeline_id, recovered)
+
+
+async def _recover_tts_reservation_for_settlement(
+    pipeline_id: str,
+    variant_index: int,
+    fallback_user_id: Optional[str] = None,
+) -> dict:
+    """Replay one lost TTS reserve response without ever restarting its provider."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    jobs = (pipeline or {}).get("tts_jobs") or {}
+    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    record = job.get("metering")
+    if not isinstance(record, dict) or record.get("reservation_id"):
+        return job
+    if (
+        job.get("status") not in {"failed", "cancelled"}
+        or record.get("provider_started")
+        or record.get("state") not in {"pending", "reserve_pending"}
+    ):
+        return job
+    user_id = record.get("supabase_user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+    identity = MeteringIdentity(user_id, record.get("email"))
+    try:
+        recovered = await reserve_metering_record(identity, record)
+    except StudioMeteringBlocked as error:
+        pending = {
+            **record,
+            "state": (
+                "denied"
+                if error.code == "insufficient_credits"
+                else "reserve_pending"
+            ),
+            "last_error": error.as_http_detail(),
+        }
+        return _replace_tts_metering(pipeline_id, variant_index, pending)
+    return _replace_tts_metering(pipeline_id, variant_index, recovered)
+
+
 def _replace_render_metering(pipeline_id: str, job_key: Any, record: dict) -> dict:
     """Persist one render reservation without changing its terminal job status."""
     pipeline = _get_pipeline_or_load(pipeline_id)
@@ -2047,6 +2121,13 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 and generation_metering.get("state") not in {"captured", "released", "refunded"}
             ):
                 generation_metering["state"] = "refund_pending"
+            elif (
+                isinstance(generation_metering, dict)
+                and not generation_metering.get("reservation_id")
+                and not generation_metering.get("provider_started")
+                and generation_metering.get("state") == "pending"
+            ):
+                generation_metering["state"] = "reserve_pending"
             interrupted_async_jobs = True
         for tts_job in tts_jobs.values():
             if not isinstance(tts_job, dict) or tts_job.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES:
@@ -2068,6 +2149,13 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 and tts_metering.get("state") not in {"captured", "released", "refunded"}
             ):
                 tts_metering["state"] = "refund_pending"
+            elif (
+                isinstance(tts_metering, dict)
+                and not tts_metering.get("reservation_id")
+                and not tts_metering.get("provider_started")
+                and tts_metering.get("state") == "pending"
+            ):
+                tts_metering["state"] = "reserve_pending"
             interrupted_async_jobs = True
 
         # PIP-14: Load preview_renders from DB. Same meta-multiplication
@@ -3903,12 +3991,16 @@ async def generate_pipeline(
         raise HTTPException(status_code=400, detail="idea cannot be empty")
 
     pipeline_id = str(uuid.uuid4())
+    identity = MeteringIdentity(profile.user_id, current_user.email)
     generation_job = _new_async_job("Queued for script generation")
-    generation_job["metering"] = new_metering_record(
-        "studio.script_pipeline",
-        1,
-        f"pipeline:{pipeline_id}:script",
-    )
+    generation_job["metering"] = {
+        **new_metering_record(
+            "studio.script_pipeline",
+            1,
+            f"pipeline:{pipeline_id}:script",
+        ),
+        **identity.as_payload(),
+    }
     pipeline = {
         "pipeline_id": pipeline_id,
         "scripts": [],
@@ -3938,7 +4030,6 @@ async def generate_pipeline(
         _pipelines[pipeline_id] = pipeline
     _db_save_pipeline(pipeline_id, dict(pipeline))
 
-    identity = MeteringIdentity(profile.user_id, current_user.email)
     try:
         reserved = await reserve_metering_record(identity, generation_job["metering"])
     except StudioMeteringBlocked as error:
@@ -3984,7 +4075,10 @@ async def get_generation_status(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
-    generation_job = pipeline.get("generation_job") or {}
+    generation_job = await _recover_generation_reservation_for_settlement(
+        pipeline_id,
+        profile.user_id,
+    )
     metering = generation_job.get("metering") or {}
     if isinstance(metering, dict) and metering.get("reservation_id"):
         if generation_job.get("status") == "completed" or metering.get("output_persisted"):
@@ -4031,6 +4125,10 @@ async def cancel_generation_job(
             status="cancelled",
             current_step="Generation cancelled",
             completed_at=_job_timestamp(),
+        )
+        job = await _recover_generation_reservation_for_settlement(
+            pipeline_id,
+            profile.user_id,
         )
         job = await _settle_generation_metering(
             pipeline_id,
@@ -4555,6 +4653,7 @@ async def generate_variant_tts(
     if variant_index < 0 or variant_index >= len(pipeline.get("scripts") or []):
         raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
 
+    identity = MeteringIdentity(profile.user_id, current_user.email)
     with _get_pipeline_state_lock(pipeline_id):
         jobs = pipeline.setdefault("tts_jobs", {})
         existing = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
@@ -4566,15 +4665,17 @@ async def generate_variant_tts(
 
         job = _new_async_job("Queued for voice-over generation")
         attempt_id = uuid.uuid4().hex
-        job["metering"] = new_metering_record(
-            "studio.tts_variant",
-            1,
-            f"pipeline:{pipeline_id}:tts:{variant_index}:{attempt_id}",
-        )
+        job["metering"] = {
+            **new_metering_record(
+                "studio.tts_variant",
+                1,
+                f"pipeline:{pipeline_id}:tts:{variant_index}:{attempt_id}",
+            ),
+            **identity.as_payload(),
+        }
         jobs[variant_index] = job
         jobs_snapshot = dict(jobs)
         _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
-    identity = MeteringIdentity(profile.user_id, current_user.email)
     try:
         reserved = await reserve_metering_record(identity, job["metering"])
     except StudioMeteringBlocked as error:
@@ -4630,6 +4731,11 @@ async def get_tts_jobs_status(
             index = int(raw_index)
         except (TypeError, ValueError):
             continue
+        job = await _recover_tts_reservation_for_settlement(
+            pipeline_id,
+            index,
+            profile.user_id,
+        )
         metering = job.get("metering") or {}
         if not isinstance(metering, dict) or not metering.get("reservation_id"):
             continue
@@ -4711,7 +4817,21 @@ async def cancel_tts_jobs(
                 refunds.append(index)
         jobs_snapshot = dict(jobs)
         _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
-    for index in refunds:
+    for raw_index, job in jobs_snapshot.items():
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        if wanted and index not in wanted:
+            continue
+        if isinstance(job, dict) and job.get("status") in {"failed", "cancelled"}:
+            refunds.append(index)
+    for index in sorted(set(refunds)):
+        await _recover_tts_reservation_for_settlement(
+            pipeline_id,
+            index,
+            profile.user_id,
+        )
         await _settle_tts_metering(
             pipeline_id,
             index,
@@ -4879,6 +4999,10 @@ async def preview_variant(
     # operation as POST /pipeline/tts; persisted Step 2 reuse remains free.
     preview_tts_metered = reuse_audio_path is None
     if preview_tts_metered:
+        identity = MeteringIdentity(
+            profile.user_id,
+            getattr(current_user, "email", None),
+        )
         state_lock = _get_pipeline_state_lock(pipeline_id)
         with state_lock:
             jobs = pipeline.setdefault("tts_jobs", {})
@@ -4893,20 +5017,19 @@ async def preview_variant(
             preview_job.update(
                 {
                     "source": "pipeline_preview",
-                    "metering": new_metering_record(
-                        "studio.tts_variant",
-                        1,
-                        f"pipeline:{pipeline_id}:preview-tts:{variant_index}:{attempt_id}",
-                    ),
+                    "metering": {
+                        **new_metering_record(
+                            "studio.tts_variant",
+                            1,
+                            f"pipeline:{pipeline_id}:preview-tts:{variant_index}:{attempt_id}",
+                        ),
+                        **identity.as_payload(),
+                    },
                 }
             )
             jobs[variant_index] = preview_job
             _db_update_async_jobs(pipeline_id, tts_jobs=dict(jobs))
 
-        identity = MeteringIdentity(
-            profile.user_id,
-            getattr(current_user, "email", None),
-        )
         try:
             reserved = await reserve_metering_record(identity, preview_job["metering"])
         except StudioMeteringBlocked as error:
@@ -5126,18 +5249,20 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
                 if _persisted_asset_id:
                     pipeline["tts_previews"][variant_index]["library_asset_id"] = _persisted_asset_id
+                live_jobs = pipeline.get("tts_jobs") or {}
+                live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
+                live_metering = live_job.get("metering")
+                if isinstance(live_metering, dict):
+                    # Persist the output and its proof in the same pipeline row.
+                    # A restart between this save and capture can then safely
+                    # retry capture instead of refunding delivered audio.
+                    live_metering["output_persisted"] = True
+                    live_metering["state"] = "output_persisted"
 
         # Persist to DB (outside lock — DB I/O should not hold the state lock)
         _db_save_pipeline(pipeline_id, pipeline)
 
         if preview_tts_metered:
-            live_pipeline = _get_pipeline_or_load(pipeline_id)
-            live_jobs = (live_pipeline or {}).get("tts_jobs") or {}
-            live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
-            metering = dict(live_job.get("metering") or {})
-            metering["output_persisted"] = True
-            metering["state"] = "output_persisted"
-            _replace_tts_metering(pipeline_id, variant_index, metering)
             await _settle_tts_metering(
                 pipeline_id,
                 variant_index,

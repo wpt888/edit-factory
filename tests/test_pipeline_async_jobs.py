@@ -121,6 +121,7 @@ def test_script_generation_is_acknowledged_and_persisted(sqlite_backend, monkeyp
     assert status.json()["job"]["progress"] == 100
     assert status.json()["job"]["metering"]["mode"] == "desktop"
     assert status.json()["job"]["metering"]["state"] == "captured"
+    assert status.json()["job"]["metering"]["supabase_user_id"]
     assert status.json()["scripts"] == [
         "First generated script.",
         "Second generated script.",
@@ -272,6 +273,74 @@ def test_active_generation_state_is_interrupted_after_memory_eviction(sqlite_bac
     assert "did not survive" in job["error"]
 
 
+def test_generation_status_replays_lost_reserve_response_then_refunds(
+    sqlite_backend,
+    monkeypatch,
+):
+    client, repo, profile_id = sqlite_backend
+    pipeline_id = "generation-lost-reserve-response"
+    record = {
+        **new_metering_record(
+            "studio.script_pipeline",
+            1,
+            f"pipeline:{pipeline_id}:script",
+        ),
+        "supabase_user_id": "user-generation-recovery",
+    }
+    repo.upsert_pipeline({
+        "id": pipeline_id,
+        "profile_id": profile_id,
+        "name": "Recover generation reserve",
+        "idea": "Server restarted after reserve",
+        "provider": "gemini",
+        "variant_count": 1,
+        "keyword_count": 0,
+        "scripts": [],
+        "generation_job": {
+            "status": "queued",
+            "progress": 0,
+            "current_step": "Queued",
+            "metering": record,
+        },
+        "tts_jobs": {},
+    })
+    _evict_pipeline_memory(pipeline_id)
+    events: list[tuple[str, str]] = []
+
+    async def reserve(identity, current, *, client=None):
+        assert identity.supabase_user_id == "user-generation-recovery"
+        events.append(("reserve", current["idempotency_key"]))
+        return {
+            **current,
+            "state": "reserved",
+            "reservation_id": "reservation-generation-replayed",
+            "replayed": True,
+        }
+
+    async def settle(_identity, current, *, delivered, result_metadata=None, client=None):
+        assert delivered is False
+        events.append(("refund", current["idempotency_key"]))
+        return {**current, "state": "released"}
+
+    monkeypatch.setattr(pipeline_routes, "reserve_metering_record", reserve)
+    monkeypatch.setattr(pipeline_routes, "settle_metering_record", settle)
+
+    response = client.get(
+        f"/api/v1/pipeline/generation-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert events == [
+        ("reserve", record["idempotency_key"]),
+        ("refund", record["idempotency_key"]),
+    ]
+    assert job["status"] == "failed"
+    assert job["metering"]["reservation_id"] == "reservation-generation-replayed"
+    assert job["metering"]["state"] == "released"
+
+
 def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeypatch):
     client, repo, _profile_id = sqlite_backend
     imported = client.post(
@@ -319,6 +388,7 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     assert job["status"] == "completed"
     assert job["progress"] == 100
     assert job["result"]["audio_duration"] == 1.25
+    assert job["metering"]["supabase_user_id"]
     assert repo.get_pipeline(pipeline_id)["tts_jobs"]["0"]["status"] == "completed"
 
     _evict_pipeline_memory(pipeline_id)
@@ -328,6 +398,76 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     )
     assert restored.status_code == 200
     assert restored.json()["jobs"]["0"]["status"] == "completed"
+
+
+def test_tts_status_replays_lost_reserve_response_then_refunds(
+    sqlite_backend,
+    monkeypatch,
+):
+    client, repo, profile_id = sqlite_backend
+    pipeline_id = "tts-lost-reserve-response"
+    record = {
+        **new_metering_record(
+            "studio.tts_variant",
+            1,
+            f"pipeline:{pipeline_id}:tts:0:durable-attempt",
+        ),
+        "supabase_user_id": "user-tts-recovery",
+    }
+    repo.upsert_pipeline({
+        "id": pipeline_id,
+        "profile_id": profile_id,
+        "name": "Recover TTS reserve",
+        "idea": "Server restarted after TTS reserve",
+        "provider": "gemini",
+        "variant_count": 1,
+        "keyword_count": 0,
+        "scripts": ["A voice-over that never started."],
+        "generation_job": {},
+        "tts_jobs": {
+            "0": {
+                "status": "queued",
+                "progress": 0,
+                "current_step": "Queued",
+                "metering": record,
+            }
+        },
+    })
+    _evict_pipeline_memory(pipeline_id)
+    events: list[tuple[str, str]] = []
+
+    async def reserve(identity, current, *, client=None):
+        assert identity.supabase_user_id == "user-tts-recovery"
+        events.append(("reserve", current["idempotency_key"]))
+        return {
+            **current,
+            "state": "reserved",
+            "reservation_id": "reservation-tts-replayed",
+            "replayed": True,
+        }
+
+    async def settle(_identity, current, *, delivered, result_metadata=None, client=None):
+        assert delivered is False
+        events.append(("refund", current["idempotency_key"]))
+        return {**current, "state": "released"}
+
+    monkeypatch.setattr(pipeline_routes, "reserve_metering_record", reserve)
+    monkeypatch.setattr(pipeline_routes, "settle_metering_record", settle)
+
+    response = client.get(
+        f"/api/v1/pipeline/tts-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    job = response.json()["jobs"]["0"]
+    assert events == [
+        ("reserve", record["idempotency_key"]),
+        ("refund", record["idempotency_key"]),
+    ]
+    assert job["status"] == "failed"
+    assert job["metering"]["reservation_id"] == "reservation-tts-replayed"
+    assert job["metering"]["state"] == "released"
 
 
 def test_tts_failure_refunds_reserved_credits(sqlite_backend, monkeypatch):
