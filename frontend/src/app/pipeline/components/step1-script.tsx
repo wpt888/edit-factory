@@ -23,6 +23,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -46,9 +51,10 @@ import {
   X,
   Info,
   Pencil,
+  Settings2,
 } from "lucide-react";
 import { DebouncedInput, DebouncedTextarea } from "../pipeline-utils";
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
 import { WorkspaceSplit } from "./workspace-split";
@@ -115,8 +121,18 @@ export function Step1Script({ ctx }: { ctx: any }) {
     handleGenerate,
     handleCreateManual,
     pipelineLayout,
+    sourceVideos,
+    selectedSourceIds,
   }: Step1Ctx = ctx;
   const workspaceLayout = pipelineLayout !== "guided";
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const selectedSegmentCount = sourceVideos
+    .filter((video: { id: string }) => selectedSourceIds.has(video.id))
+    .reduce(
+      (total: number, video: { segments_count: number }) => total + video.segments_count,
+      0
+    );
+  const hasSelectedSegments = selectedSegmentCount > 0;
   return (
           <WorkspaceSplit
             splitId="step1"
@@ -152,10 +168,46 @@ export function Step1Script({ ctx }: { ctx: any }) {
               <CardHeader className={workspaceLayout ? "min-[1280px]:border-b min-[1280px]:px-5 min-[1280px]:pb-4" : undefined}>
                 <CardTitle>Video Idea</CardTitle>
                 <CardDescription>
-                  Describe your video idea and configure generation options
+                  Describe the video you want to create, then generate scripts.
                 </CardDescription>
               </CardHeader>
               <CardContent className={`space-y-4 ${workspaceLayout ? "min-[1280px]:px-5 min-[1280px]:pb-5" : ""}`}>
+                <div className="space-y-2">
+                  <Label htmlFor="idea">Video Idea *</Label>
+                  <DebouncedTextarea
+                    id="idea"
+                    placeholder="Describe your video idea..."
+                    rows={8}
+                    value={idea}
+                    onCommit={setIdea}
+                    className="resize-y [field-sizing:fixed]"
+                  />
+                </div>
+
+                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full justify-between border border-dashed px-3 text-muted-foreground hover:text-foreground"
+                      data-testid="step1-advanced-trigger"
+                      aria-label="Advanced generation options"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Settings2 className="size-4" />
+                        Advanced
+                      </span>
+                      {advancedOpen ? (
+                        <ChevronUp className="size-4" />
+                      ) : (
+                        <ChevronDown className="size-4" />
+                      )}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent
+                    className="space-y-4 pt-4"
+                    data-testid="step1-advanced-content"
+                  >
                 {/* Persistent script-generation rules */}
                 <div className="flex items-center gap-2">
                   <Button
@@ -250,27 +302,17 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   <div className="space-y-4">
                     {/* Script set name */}
                     <div className="space-y-2">
-                      <Label htmlFor="pipeline-name">Script Set Name</Label>
+                      <Label htmlFor="pipeline-name">Script Set Name (optional)</Label>
                       <DebouncedInput
                         id="pipeline-name"
-                        placeholder="e.g. Nike Air Max Campaign, Summer Sale Promo..."
+                        placeholder="Generated automatically from your idea"
                         value={pipelineName}
                         onCommit={setPipelineName}
                         maxLength={200}
                       />
-                    </div>
-
-                    {/* Idea textarea */}
-                    <div className="space-y-2">
-                      <Label htmlFor="idea">Video Idea *</Label>
-                      <DebouncedTextarea
-                        id="idea"
-                        placeholder="Describe your video idea..."
-                        rows={8}
-                        value={idea}
-                        onCommit={setIdea}
-                        className="resize-y [field-sizing:fixed]"
-                      />
+                      <p className="text-xs text-muted-foreground">
+                        Leave blank to use the first words of your idea. You can rename it later.
+                      </p>
                     </div>
                   </div>
 
@@ -542,6 +584,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     </Select>
                   </div>
                 </div>
+                  </CollapsibleContent>
+                </Collapsible>
 
                 {/* Error display */}
                 {error && (
@@ -591,13 +635,22 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     <Button
                       variant="cta"
                       onClick={handleGenerate}
-                      disabled={!idea.trim()}
+                      disabled={!idea.trim() || !hasSelectedSegments}
                       className="w-full sm:w-auto sm:min-w-48"
+                      title={!hasSelectedSegments
+                        ? "Select footage with at least one segment before generating"
+                        : undefined
+                      }
                     >
                       <Sparkles className="h-4 w-4 mr-2" />
                       Generate Scripts
                     </Button>
                   </div>
+                )}
+                {!hasSelectedSegments && (
+                  <p className="text-right text-xs text-warning" role="status">
+                    Select footage with at least one segment to enable generation.
+                  </p>
                 )}
               </CardContent>
             </Card>

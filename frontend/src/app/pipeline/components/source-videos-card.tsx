@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +14,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { API_URL } from "@/lib/api";
 import {
-  AlertTriangle,
-  CheckCircle,
   Clock,
   Film,
   LayoutGrid,
@@ -24,6 +21,7 @@ import {
   Loader2,
   Scissors,
   Search,
+  Upload,
   X,
 } from "lucide-react";
 import { formatDuration } from "../pipeline-utils";
@@ -42,6 +40,10 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
     setSourceVideoViewMode,
     handleSourceToggle,
   } = ctx;
+  const totalAvailableSegments = sourceVideos.reduce(
+    (total: number, video: { segments_count: number }) => total + video.segments_count,
+    0
+  );
 
   return (
     <Card
@@ -93,18 +95,57 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
             Loading source videos...
           </div>
         ) : sourceVideos.length === 0 ? (
-          <Alert className="border-warning/50 bg-warning/10">
-            <AlertTriangle className="h-4 w-4 text-warning" />
-            <AlertDescription className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span>No video material yet — scripts will have nothing to match.</span>
-              <Button asChild variant="outline" size="sm" className="shrink-0">
-                <Link href="/segments">Add source videos</Link>
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <div
+            className="flex flex-col items-center rounded-lg border border-dashed border-warning/50 bg-warning/5 px-5 py-8 text-center"
+            data-testid="source-videos-empty-state"
+          >
+            <div className="mb-3 rounded-full bg-warning/10 p-3 text-warning">
+              <Upload className="size-5" />
+            </div>
+            <p className="font-medium">Add footage before generating</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              Upload a source video and mark reusable segments so scripts have visuals to match.
+            </p>
+            <Button asChild variant="cta" size="sm" className="mt-4">
+              <Link href="/segments?action=upload">Upload & create segments</Link>
+            </Button>
+          </div>
+        ) : totalAvailableSegments === 0 ? (
+          <div
+            className="flex flex-col items-center rounded-lg border border-dashed border-warning/50 bg-warning/5 px-5 py-8 text-center"
+            data-testid="source-segments-empty-state"
+          >
+            <div className="mb-3 rounded-full bg-warning/10 p-3 text-warning">
+              <Scissors className="size-5" />
+            </div>
+            <p className="font-medium">Create segments from your footage</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              Your source videos are ready, but none contain reusable segments yet.
+            </p>
+            <Button asChild variant="cta" size="sm" className="mt-4">
+              <Link href={sourceVideos.length === 1
+                ? `/segments?video=${encodeURIComponent(sourceVideos[0].id)}`
+                : "/segments"
+              }>
+                Open footage & segment it
+              </Link>
+            </Button>
+          </div>
         ) : sourceVideos.length === 1 ? (
-          <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
-            <CheckCircle className="h-4 w-4 text-primary flex-shrink-0" />
+          <div
+            className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${
+              selectedSourceIds.has(sourceVideos[0].id)
+                ? "border-primary/30 bg-primary/5"
+                : "hover:bg-muted/50"
+            }`}
+            onClick={() => handleSourceToggle(sourceVideos[0].id)}
+          >
+            <Checkbox
+              checked={selectedSourceIds.has(sourceVideos[0].id)}
+              onCheckedChange={() => handleSourceToggle(sourceVideos[0].id)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Select ${sourceVideos[0].name}`}
+            />
             {sourceVideos[0].thumbnail_path ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img

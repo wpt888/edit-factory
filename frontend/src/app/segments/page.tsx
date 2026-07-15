@@ -396,6 +396,14 @@ export default function SegmentsPage() {
   const restoredFromUrl = useRef(false);
   const skipSelectionPersistence = useRef(false);
 
+  // Pipeline empty-state CTA can open the upload flow directly.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("action") !== "upload") return;
+
+    setShowUploadDialog(true);
+  }, []);
+
   // Sync selected video to URL (?video=<id>)
   useEffect(() => {
     if (!restoredFromUrl.current) return;

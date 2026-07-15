@@ -77,6 +77,11 @@ const LEGACY_PIPELINE_DRAFT_KEY = "ef_pipeline_draft";
 const defaultScriptNames = (count: number) =>
   Array.from({ length: count }, (_, index) => `Script ${index + 1}`);
 
+const createScriptSetName = (idea: string): string => {
+  const firstWords = idea.trim().split(/\s+/).filter(Boolean).slice(0, 7).join(" ");
+  return firstWords.replace(/[.,;:!?]+$/, "").slice(0, 80) || "Untitled script set";
+};
+
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
@@ -1025,6 +1030,12 @@ function PipelinePage() {
     () => Array.from(selectedSourceIds),
     [selectedSourceIdsKey]
   );
+  const selectedSegmentCount = useMemo(
+    () => sourceVideos
+      .filter((video) => selectedSourceIds.has(video.id))
+      .reduce((total, video) => total + video.segments_count, 0),
+    [sourceVideos, selectedSourceIds]
+  );
 
   const buildPreviewKey = useCallback((baseIndex: number, visualVersion?: string) => {
     return visualVersion ? `${baseIndex}_${visualVersion}` : String(baseIndex);
@@ -1488,6 +1499,13 @@ function PipelinePage() {
     // BUG-FE-28: Guard against double-click while already generating
     if (isGenerating) return;
     if (!idea.trim()) return;
+    if (selectedSegmentCount === 0) {
+      setError("Select footage with at least one segment before generating scripts.");
+      return;
+    }
+
+    const resolvedPipelineName = pipelineName.trim() || createScriptSetName(idea);
+    if (!pipelineName.trim()) setPipelineName(resolvedPipelineName);
 
     scriptAbortRef.current?.abort();
     const abortController = new AbortController();
@@ -1498,7 +1516,7 @@ function PipelinePage() {
 
     try {
       const res = await apiPost("/pipeline/generate", {
-        name: pipelineName.trim() || undefined,
+        name: resolvedPipelineName,
         idea: idea.trim(),
         context: stripEmbeddedProductBlocks(context) || undefined,
         context_products: contextProducts.length > 0 ? contextProducts : undefined,
@@ -1553,8 +1571,10 @@ function PipelinePage() {
     setIsGenerating(true);
     try {
       const emptyScripts = Array.from({ length: variantCount }, () => "");
+      const resolvedPipelineName = pipelineName.trim() || createScriptSetName(idea || "Manual scripts");
+      if (!pipelineName.trim()) setPipelineName(resolvedPipelineName);
       const res = await apiPost("/pipeline/import", {
-        name: pipelineName.trim() || "Manual pipeline",
+        name: resolvedPipelineName,
         idea: idea.trim() || "Manual scripts",
         context: stripEmbeddedProductBlocks(context) || "",
         context_products: contextProducts,
