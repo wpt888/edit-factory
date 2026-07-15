@@ -244,7 +244,7 @@ class TestTTSGenerate:
 
     def test_tts_generate_returns_job_id(self, client):
         """TTS generate with valid text returns a job_id in the response."""
-        data = {"text": "Hello world, this is a test."}
+        data = {"text": "Hello world, this is a test.", "provider": "edge", "voice_id": "en-US-AriaNeural"}
         response = client.post("/api/v1/tts/generate", data=data)
         # Should be 200 (job created) — background task may fail later without ElevenLabs
         assert response.status_code == 200, (
@@ -255,17 +255,17 @@ class TestTTSGenerate:
 
     def test_tts_generate_response_structure(self, client):
         """TTS generate response contains required JobResponse fields."""
-        data = {"text": "Test text for TTS generation."}
+        data = {"text": "Test text for TTS generation.", "provider": "edge", "voice_id": "en-US-AriaNeural"}
         response = client.post("/api/v1/tts/generate", data=data)
         assert response.status_code == 200
         body = response.json()
         assert "job_id" in body
         assert "status" in body
-        assert body["status"] == "pending"
+        assert body["status"] == "processing"
 
     def test_tts_empty_text_returns_400(self, client):
         """TTS generate with empty text string returns 400 (text validation)."""
-        data = {"text": "   "}
+        data = {"text": "   ", "provider": "edge", "voice_id": "en-US-AriaNeural"}
         response = client.post("/api/v1/tts/generate", data=data)
         assert response.status_code == 400
         body = response.json()
