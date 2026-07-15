@@ -1,5 +1,23 @@
 # Engineering Change Log
 
+## 2026-07-15 — BlipStudio web remediation delivered (phases B–D)
+
+- Made local browse/find segment operations return `501` immediately in web
+  mode and kept the controls/behavior available only in Electron.
+- Simplified Pipeline Step 1 to footage + Video Idea, with an optional generated
+  name, collapsed Advanced settings, and an upload CTA plus hard guard at zero
+  segments.
+- Moved script generation and per-variant TTS to persisted FastAPI background
+  jobs with `202` dispatch, polling, cancellation, parallel TTS start, progress
+  per variant, and restoration after refresh or from Pipeline History.
+- Added the additive `generation_job`/`tts_jobs` schema migration without
+  applying it to any database.
+- Verified 22 backend tests, TypeScript, focused lint with zero errors, and the
+  reload/history/progress flows through Playwright MCP on isolated SQLite data.
+  No push or deployment was performed.
+
+See [BlipStudio web remediation](22-blipstudio-web-remediation.md).
+
 ## 2026-07-15 — BlipStudio production stack prepared (deployment pending approval)
 
 - Replaced the obsolete production override with a standalone Coolify Compose
