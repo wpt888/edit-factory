@@ -104,7 +104,7 @@ export interface PipelineListItem {
 
 export interface VariantStatus {
   variant_index: number;
-  status: "not_started" | "processing" | "completed" | "failed" | "cancelled";
+  status: "not_started" | "queued" | "processing" | "completed" | "failed" | "cancelled";
   progress: number;
   current_step: string;
   final_video_path?: string;
@@ -116,6 +116,8 @@ export interface VariantStatus {
   render_fingerprint?: string;
   visual_version?: string;
   meta_platform?: string;
+  queue_position?: number;
+  eta_seconds?: number;
 }
 
 export interface VariantPreviewInfo {

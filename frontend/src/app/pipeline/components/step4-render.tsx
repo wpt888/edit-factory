@@ -21,6 +21,7 @@ import {
   AlertTriangle,
   Share2,
   RefreshCw,
+  Clock3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
@@ -49,6 +50,17 @@ type Step4Ctx = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
+
+function formatQueueEta(etaSeconds?: number) {
+  if (etaSeconds === undefined || etaSeconds === null) return "estimating";
+  return `${Math.max(1, Math.ceil(etaSeconds / 60))} min`;
+}
+
+function renderStatusKey(status: VariantStatus) {
+  return status.visual_version
+    ? `${status.variant_index}_${status.visual_version}`
+    : String(status.variant_index);
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function Step4Render({ ctx }: { ctx: any }) {
@@ -145,6 +157,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             variant={
                               status.status === "completed"
                                 ? "outline"
+                                : status.status === "queued"
+                                ? "outline"
                                 : status.status === "failed" || status.status === "cancelled"
                                 ? "destructive"
                                 : "secondary"
@@ -152,13 +166,19 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             className={
                               status.status === "completed"
                                 ? "border-primary/70 bg-transparent text-primary"
+                                : status.status === "queued"
+                                ? "border-amber-500/60 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                                 : undefined
                             }
                           >
-                            {status.status}
+                            {status.status === "queued"
+                              ? "Queued"
+                              : status.status === "processing"
+                              ? "Rendering"
+                              : status.status}
                           </Badge>
                         )}
-                        {(status.status === "processing" || status.status === "not_started") && isRendering && (
+                        {(status.status === "queued" || status.status === "processing" || status.status === "not_started") && isRendering && (
                           <Button
                             variant="destructive"
                             size="sm"
@@ -180,7 +200,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                                       ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
                                       : v.variant_index === status.variant_index && !v.visual_version;
                                     return matches
-                                      ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0 }
+                                      ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0, queue_position: undefined, eta_seconds: undefined }
                                       : v;
                                   })
                                 );
@@ -265,23 +285,45 @@ export function Step4Render({ ctx }: { ctx: any }) {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {/* Progress bar */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Progress</span>
-                        <span className="font-semibold">
-                          {status.progress >= 100 && status.status === "processing"
-                            ? "Finalizing..."
-                            : `${Math.round(status.progress)}%`}
-                        </span>
+                    {/* Queue state vs active render progress */}
+                    {status.status === "queued" ? (
+                      <div
+                        className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-3"
+                        data-testid={`render-queue-status-${renderStatusKey(status)}`}
+                      >
+                        <Clock3 className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" />
+                        <div>
+                          <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                            Queued — position {status.queue_position ?? "…"}
+                          </p>
+                          <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
+                            ETA ~{formatQueueEta(status.eta_seconds)}
+                          </p>
+                        </div>
                       </div>
-                      <div className="w-full bg-secondary rounded-full h-2">
-                        <div
-                          className="bg-primary h-2 rounded-full transition-all"
-                          style={{ width: `${status.progress >= 100 && status.status === "processing" ? 99 : status.progress}%` }}
-                        />
+                    ) : (
+                      <div
+                        className="space-y-2"
+                        data-testid={status.status === "processing" ? `render-active-status-${renderStatusKey(status)}` : undefined}
+                      >
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">
+                            {status.status === "processing" ? "Rendering" : "Progress"}
+                          </span>
+                          <span className="font-semibold">
+                            {status.progress >= 100 && status.status === "processing"
+                              ? "Finalizing..."
+                              : `${Math.round(status.progress)}%`}
+                          </span>
+                        </div>
+                        <div className="w-full bg-secondary rounded-full h-2">
+                          <div
+                            className="bg-primary h-2 rounded-full transition-all"
+                            style={{ width: `${status.progress >= 100 && status.status === "processing" ? 99 : status.progress}%` }}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* Current step */}
                     <p className="text-sm text-muted-foreground">{status.current_step}</p>

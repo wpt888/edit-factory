@@ -1505,6 +1505,9 @@ function PipelinePage() {
             );
           if (allDone) {
             setIsRendering(false);
+          } else if (rendered.some((v: { status: string }) => v.status === "queued" || v.status === "processing")) {
+            // Resume polling after reopening a pipeline with live queue/render work.
+            setIsRendering(true);
           }
           return rendered;  // Pass fresh statuses to the next .then()
         })
@@ -2078,9 +2081,9 @@ function PipelinePage() {
       }
       return {
         variant_index: idx,
-        status: "processing" as const,
+        status: "queued" as const,
         progress: 0,
-        current_step: "Initializing render...",
+        current_step: "Queued for render",
       };
     });
 
@@ -2121,8 +2124,8 @@ function PipelinePage() {
       setIsRendering(false);
       setVariantStatuses(prev =>
         prev.map(v =>
-          v.status === "processing"
-            ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0 }
+          v.status === "queued" || v.status === "processing"
+            ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0, queue_position: undefined, eta_seconds: undefined }
             : v
         )
       );
@@ -2139,11 +2142,11 @@ function PipelinePage() {
       v.variant_index === variantIndex &&
       (visualVersion ? v.visual_version === visualVersion : !v.visual_version);
 
-    // Optimistic UI: set variant back to processing
+    // Optimistic UI: the remake enters the same fair queue as new renders.
     setVariantStatuses(prev =>
       prev.map(v =>
         statusMatches(v)
-          ? { ...v, status: "processing" as const, progress: 0, current_step: "Remaking with new segments...", final_video_path: undefined, render_fingerprint: undefined }
+          ? { ...v, status: "queued" as const, progress: 0, current_step: "Queued for remake", final_video_path: undefined, render_fingerprint: undefined, queue_position: undefined, eta_seconds: undefined }
           : v
       )
     );
