@@ -89,11 +89,14 @@ def test_desktop_media_cookie_authenticates_matching_profile(tmp_path, monkeypat
     assert mismatch.value.status_code == 403
 
 
-def test_desktop_signing_key_is_reused(tmp_path):
+def test_desktop_signing_key_is_reused(tmp_path, monkeypatch):
     key_path = tmp_path / "cache" / ".source_media_session.key"
+    expected_key = bytes(range(32))
+    monkeypatch.setattr(media_session.secrets, "token_bytes", lambda size: expected_key)
 
     first = media_session._read_or_create_desktop_key(key_path)
     second = media_session._read_or_create_desktop_key(key_path)
 
-    assert len(first) == 32
+    assert first == expected_key
     assert second == first
+    assert key_path.read_bytes() == expected_key

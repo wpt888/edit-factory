@@ -67,7 +67,8 @@ def _read_or_create_desktop_key(path: Path) -> bytes:
     key = secrets.token_bytes(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o600)
         try:
             os.write(fd, key)
         finally:
