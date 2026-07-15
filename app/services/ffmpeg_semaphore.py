@@ -108,6 +108,12 @@ async def _get_render_semaphore() -> asyncio.Semaphore:
     return _ffmpeg_render_semaphore
 
 
+async def get_render_concurrency() -> int:
+    """Return the initialized final-render slot count for this container."""
+    await _get_render_semaphore()
+    return MAX_CONCURRENT_RENDERS
+
+
 async def _get_prep_semaphore() -> asyncio.Semaphore:
     """Lazily create prep semaphore in the running event loop."""
     global _ffmpeg_prep_semaphore
