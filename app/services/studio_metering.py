@@ -21,7 +21,7 @@ from typing import Any, Mapping, Optional
 
 import httpx
 
-from app.config import get_settings
+from app import config
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class StudioMeteringClient:
         transport: Optional[httpx.AsyncBaseTransport] = None,
         timeout: httpx.Timeout = _TIMEOUT,
     ) -> None:
-        settings = get_settings()
+        settings = config.get_settings()
         self.base_url = (base_url if base_url is not None else settings.blipost_platform_base_url).rstrip("/")
         self._token = token if token is not None else settings.studio_service_token
         self.desktop_mode = settings.desktop_mode if desktop_mode is None else desktop_mode
