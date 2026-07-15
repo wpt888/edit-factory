@@ -60,6 +60,12 @@ class _Repo:
         self.source_videos.append(deepcopy(payload))
         return deepcopy(payload)
 
+    def get_source_video(self, video_id):
+        return next(
+            (deepcopy(row) for row in self.source_videos if row["id"] == video_id),
+            None,
+        )
+
     def create_project(self, payload):
         self.projects.append(deepcopy(payload))
         return deepcopy(payload)
@@ -67,6 +73,12 @@ class _Repo:
     def create_clip(self, payload):
         self.clips.append(deepcopy(payload))
         return deepcopy(payload)
+
+    def get_clip(self, clip_id):
+        return next(
+            (deepcopy(row) for row in self.clips if row["id"] == clip_id),
+            None,
+        )
 
 
 class _Generator:
@@ -424,5 +436,231 @@ def test_desktop_seedance_keeps_flexible_duration_and_logs_locally(
         assert job["metering"]["mode"] == "desktop"
         assert job["metering"]["units"] == 1
         assert len(background.tasks) == 1
+
+    asyncio.run(scenario())
+
+
+def test_seedance_status_replays_lost_reserve_response_then_refunds(
+    monkeypatch, tmp_path, memory_job_storage
+):
+    async def scenario():
+        repo = _install_common_fakes(monkeypatch, tmp_path, memory_job_storage)
+        monkeypatch.setattr(
+            video_generate_routes, "StudioMeteringClient", _WebMeteringClient
+        )
+
+        async def unavailable(_identity, _record):
+            raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+
+        monkeypatch.setattr(video_generate_routes, "reserve_metering_record", unavailable)
+
+        with pytest.raises(HTTPException) as error:
+            await video_generate_routes.generate_video(
+                _request(),
+                video_generate_routes.GenerateVideoRequest(
+                    prompt="Create a product clip", duration="5"
+                ),
+                BackgroundTasks(),
+                _context(),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 402
+        video_id = error.value.detail["studio_job_id"]
+        original = memory_job_storage.get_job(video_id)["metering"]
+        assert original["state"] == "reserve_pending"
+        events = []
+
+        async def replay(_identity, record):
+            events.append(("reserve", record["idempotency_key"]))
+            return {
+                **record,
+                "state": "reserved",
+                "reservation_id": "seedance-replayed",
+                "replayed": True,
+            }
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            events.append(("refund", record["idempotency_key"]))
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(video_generate_routes, "reserve_metering_record", replay)
+        monkeypatch.setattr(video_generate_routes, "settle_metering_record", settle)
+
+        status = await video_generate_routes.video_status(video_id, _context())
+
+        assert status["status"] == "failed"
+        assert events == [
+            ("reserve", original["idempotency_key"]),
+            ("refund", original["idempotency_key"]),
+        ]
+        recovered = memory_job_storage.get_job(video_id)["metering"]
+        assert recovered["reservation_id"] == "seedance-replayed"
+        assert recovered["state"] == "released"
+        assert repo.generated[video_id]["status"] == "failed"
+
+    asyncio.run(scenario())
+
+
+def test_seedance_status_refunds_reserved_job_interrupted_by_restart(
+    monkeypatch, tmp_path, memory_job_storage
+):
+    async def scenario():
+        repo = _install_common_fakes(monkeypatch, tmp_path, memory_job_storage)
+        monkeypatch.setattr(
+            video_generate_routes, "StudioMeteringClient", _WebMeteringClient
+        )
+        events = []
+
+        async def reserve(_identity, record):
+            return {**record, "state": "reserved", "reservation_id": "seedance-old"}
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is False
+            events.append("refund")
+            return {**record, "state": "released"}
+
+        monkeypatch.setattr(video_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(video_generate_routes, "settle_metering_record", settle)
+        background = BackgroundTasks()
+        response = await video_generate_routes.generate_video(
+            _request(),
+            video_generate_routes.GenerateVideoRequest(
+                prompt="Create a product clip", duration="5"
+            ),
+            background,
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        video_id = response["video_id"]
+        memory_job_storage.update_job(
+            video_id,
+            {
+                "process_instance_id": "previous-process",
+                "lease_expires_at": "2000-01-01T00:00:00+00:00",
+            },
+            profile_id="profile-1",
+        )
+
+        status = await video_generate_routes.video_status(video_id, _context())
+
+        assert status["status"] == "failed"
+        assert events == ["refund"]
+        job = memory_job_storage.get_job(video_id)
+        assert job["status"] == "failed"
+        assert job["metering"]["state"] == "released"
+        assert repo.generated[video_id]["status"] == "failed"
+        assert len(background.tasks) == 1
+
+    asyncio.run(scenario())
+
+
+def test_seedance_status_keeps_live_foreign_worker_lease(
+    monkeypatch, tmp_path, memory_job_storage
+):
+    async def scenario():
+        repo = _install_common_fakes(monkeypatch, tmp_path, memory_job_storage)
+        monkeypatch.setattr(
+            video_generate_routes, "StudioMeteringClient", _WebMeteringClient
+        )
+
+        async def reserve(_identity, record):
+            return {**record, "state": "reserved", "reservation_id": "seedance-live"}
+
+        async def unexpected_settlement(*_args, **_kwargs):
+            raise AssertionError("live foreign-worker job was settled")
+
+        monkeypatch.setattr(video_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(
+            video_generate_routes, "settle_metering_record", unexpected_settlement
+        )
+        response = await video_generate_routes.generate_video(
+            _request(),
+            video_generate_routes.GenerateVideoRequest(
+                prompt="Create a product clip", duration="5"
+            ),
+            BackgroundTasks(),
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        video_id = response["video_id"]
+        memory_job_storage.update_job(
+            video_id,
+            {"process_instance_id": "other-live-worker"},
+            profile_id="profile-1",
+        )
+
+        status = await video_generate_routes.video_status(video_id, _context())
+
+        assert status["status"] == "pending"
+        job = memory_job_storage.get_job(video_id)
+        assert job["status"] == "queued"
+        assert job["metering"]["state"] == "reserved"
+        assert repo.generated[video_id]["status"] == "pending"
+
+    asyncio.run(scenario())
+
+
+def test_seedance_status_captures_preplanned_output_persisted_before_restart(
+    monkeypatch, tmp_path, memory_job_storage
+):
+    async def scenario():
+        repo = _install_common_fakes(monkeypatch, tmp_path, memory_job_storage)
+        monkeypatch.setattr(
+            video_generate_routes, "StudioMeteringClient", _WebMeteringClient
+        )
+        captures = []
+
+        async def reserve(_identity, record):
+            return {**record, "state": "reserved", "reservation_id": "seedance-output"}
+
+        async def settle(_identity, record, *, delivered, result_metadata=None):
+            assert delivered is True
+            captures.append(result_metadata["output_id"])
+            return {**record, "state": "captured"}
+
+        monkeypatch.setattr(video_generate_routes, "reserve_metering_record", reserve)
+        monkeypatch.setattr(video_generate_routes, "settle_metering_record", settle)
+        response = await video_generate_routes.generate_video(
+            _request(),
+            video_generate_routes.GenerateVideoRequest(
+                prompt="Create a product clip", duration="5"
+            ),
+            BackgroundTasks(),
+            _context(),
+            AuthUser("user-1", "person@example.com"),
+        )
+        video_id = response["video_id"]
+        job = memory_job_storage.get_job(video_id)
+        source_video_id = job["planned_source_video_id"]
+        output_path = tmp_path / "persisted-seedance.mp4"
+        output_path.write_bytes(b"v" * 128)
+        repo.create_source_video(
+            {
+                "id": source_video_id,
+                "profile_id": "profile-1",
+                "file_path": str(output_path),
+                "status": "processing",
+            }
+        )
+        memory_job_storage.update_job(
+            video_id,
+            {
+                "process_instance_id": "previous-process",
+                "lease_expires_at": "2000-01-01T00:00:00+00:00",
+            },
+            profile_id="profile-1",
+        )
+
+        status = await video_generate_routes.video_status(video_id, _context())
+
+        assert status["status"] == "completed"
+        assert status["source_video_id"] == source_video_id
+        assert captures == [source_video_id]
+        recovered = memory_job_storage.get_job(video_id)
+        assert recovered["status"] == "completed"
+        assert recovered["metering"]["output_persisted"] is True
+        assert recovered["metering"]["state"] == "captured"
 
     asyncio.run(scenario())

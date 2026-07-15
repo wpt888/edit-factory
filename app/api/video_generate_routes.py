@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -31,6 +31,10 @@ router = APIRouter(prefix="/video-gen", tags=["AI Video Generation"])
 
 _progress: dict[str, dict] = {}
 _lock = threading.Lock()
+_PROCESS_INSTANCE_ID = uuid.uuid4().hex
+_ACTIVE_VIDEO_STATUSES = frozenset({"pending", "queued", "processing", "generating"})
+_TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "denied"})
+_VIDEO_JOB_LEASE_SECONDS = 30 * 60
 
 
 class GenerateVideoRequest(BaseModel):
@@ -47,14 +51,62 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _lease_deadline() -> str:
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=_VIDEO_JOB_LEASE_SECONDS)
+    ).isoformat()
+
+
 def _update(video_id: str, profile_id: str, **values: object) -> None:
     values["updated_at"] = _now()
     get_repository().table_query("generated_videos", "update", data=values,
         filters=QueryFilters(eq={"id": video_id, "profile_id": profile_id}))
 
 
-def _metering_http_exception(error: StudioMeteringBlocked) -> HTTPException:
-    return HTTPException(status_code=402, detail=error.as_http_detail())
+def _replace_video_metering(video_id: str, record: dict) -> dict:
+    storage = get_job_storage()
+    job = storage.get_job(video_id) or {}
+    return storage.update_job(
+        video_id,
+        {"metering": dict(record)},
+        profile_id=job.get("profile_id"),
+    ) or {**job, "metering": dict(record)}
+
+
+async def _recover_video_reservation_for_settlement(
+    video_id: str,
+    fallback_user_id: str | None = None,
+) -> dict:
+    """Replay a lost reserve response only for a terminal, unstarted clip."""
+    job = get_job_storage().get_job(video_id) or {}
+    metering = job.get("metering")
+    if not isinstance(metering, dict) or metering.get("reservation_id"):
+        return job
+    if (
+        job.get("status") not in {"failed", "cancelled"}
+        or metering.get("provider_started")
+        or metering.get("state") not in {"pending", "reserve_pending"}
+    ):
+        return job
+    user_id = metering.get("supabase_user_id") or fallback_user_id
+    if not isinstance(user_id, str) or not user_id:
+        return job
+    try:
+        recovered = await reserve_metering_record(
+            MeteringIdentity(user_id, metering.get("email")),
+            metering,
+        )
+    except StudioMeteringBlocked as error:
+        recovered = {
+            **metering,
+            "state": (
+                "denied"
+                if error.code == "insufficient_credits"
+                else "reserve_pending"
+            ),
+            "last_error": error.as_http_detail(),
+        }
+    return _replace_video_metering(video_id, recovered)
 
 
 async def _settle_video_metering(
@@ -64,8 +116,10 @@ async def _settle_video_metering(
     delivered: bool,
     result_metadata: dict | None = None,
 ) -> dict:
-    storage = get_job_storage()
-    job = storage.get_job(video_id) or {}
+    if not delivered:
+        job = await _recover_video_reservation_for_settlement(video_id, user_id)
+    else:
+        job = get_job_storage().get_job(video_id) or {}
     metering = job.get("metering")
     if not isinstance(metering, dict):
         return job
@@ -75,11 +129,138 @@ async def _settle_video_metering(
         delivered=delivered,
         result_metadata=result_metadata,
     )
-    return storage.update_job(
+    return _replace_video_metering(video_id, settled)
+
+
+def _find_persisted_video_output(job: dict, row: dict) -> dict | None:
+    """Use preallocated IDs to prove output persistence after a crash."""
+    repo = get_repository()
+    clip_id = (
+        job.get("planned_library_clip_id")
+        or job.get("library_clip_id")
+        or row.get("library_clip_id")
+    )
+    if clip_id:
+        try:
+            clip = repo.get_clip(clip_id)
+        except Exception:
+            logger.exception("Could not inspect planned Seedance Library clip %s", clip_id)
+        else:
+            if isinstance(clip, dict) and clip.get("final_status") == "completed":
+                return {
+                    "output_id": clip_id,
+                    "library_clip_id": clip_id,
+                    "library_project_id": clip.get("project_id")
+                    or job.get("planned_library_project_id"),
+                    "source_video_id": job.get("planned_source_video_id"),
+                    "output_path": clip.get("final_video_path") or clip.get("raw_video_path"),
+                }
+
+    source_video_id = (
+        job.get("planned_source_video_id")
+        or job.get("source_video_id")
+        or row.get("source_video_id")
+    )
+    if not source_video_id:
+        return None
+    try:
+        source_video = repo.get_source_video(source_video_id)
+    except Exception:
+        logger.exception("Could not inspect planned Seedance source video %s", source_video_id)
+        return None
+    if not isinstance(source_video, dict):
+        return None
+    output_path = source_video.get("file_path")
+    if not output_path or not Path(output_path).is_file():
+        return None
+    return {
+        "output_id": source_video_id,
+        "source_video_id": source_video_id,
+        "library_project_id": row.get("library_project_id"),
+        "library_clip_id": None,
+        "output_path": output_path,
+    }
+
+
+def _persist_recovered_video_output(
+    video_id: str,
+    profile_id: str,
+    job: dict,
+    row: dict,
+    output: dict,
+) -> dict:
+    metering = dict(job.get("metering") or {})
+    if metering.get("state") not in _TERMINAL_METERING_STATES:
+        metering["output_persisted"] = True
+        metering["state"] = "output_persisted"
+    row_updates = {
+        "status": "completed",
+        "local_video_path": output.get("output_path"),
+        "source_video_id": output.get("source_video_id"),
+        "library_project_id": output.get("library_project_id"),
+        "library_clip_id": output.get("library_clip_id"),
+        "error_message": None,
+    }
+    _update(video_id, profile_id, **row_updates)
+    row.update(row_updates)
+    return get_job_storage().update_job(
         video_id,
-        {"metering": settled},
-        profile_id=job.get("profile_id"),
-    ) or {**job, "metering": settled}
+        {
+            "status": "completed",
+            "progress": "Completed",
+            "metering": metering,
+            "source_video_id": output.get("source_video_id"),
+            "library_project_id": output.get("library_project_id"),
+            "library_clip_id": output.get("library_clip_id"),
+            "output_path": output.get("output_path"),
+        },
+        profile_id=profile_id,
+    ) or {**job, "status": "completed", "metering": metering, **output}
+
+
+def _mark_interrupted_video_job(
+    video_id: str,
+    profile_id: str,
+    job: dict,
+    row: dict,
+) -> dict:
+    if job.get("status") not in _ACTIVE_VIDEO_STATUSES:
+        return job
+    if not job.get("process_instance_id") or job.get("process_instance_id") == _PROCESS_INSTANCE_ID:
+        return job
+    lease_expires_at = job.get("lease_expires_at")
+    if lease_expires_at:
+        try:
+            lease_expiry = datetime.fromisoformat(
+                str(lease_expires_at).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            lease_expiry = None
+        if lease_expiry and lease_expiry.tzinfo is None:
+            lease_expiry = lease_expiry.replace(tzinfo=timezone.utc)
+        if lease_expiry and lease_expiry > datetime.now(timezone.utc):
+            return job
+    metering = dict(job.get("metering") or {})
+    if metering.get("state") not in _TERMINAL_METERING_STATES:
+        if metering.get("reservation_id"):
+            metering["state"] = "refund_pending"
+        elif not metering.get("provider_started"):
+            metering["state"] = "reserve_pending"
+    message = "Seedance generation did not survive a backend restart. Submit it again."
+    updated = get_job_storage().update_job(
+        video_id,
+        {
+            "status": "failed",
+            "progress": "Interrupted",
+            "error": message,
+            "metering": metering,
+        },
+        profile_id=profile_id,
+    ) or {**job, "status": "failed", "error": message, "metering": metering}
+    if row.get("status") != "completed":
+        _update(video_id, profile_id, status="failed", error_message=message)
+        row.update({"status": "failed", "error_message": message})
+    return updated
 
 
 class _SeedanceCancelled(Exception):
@@ -116,6 +297,7 @@ def _generate_video_task(
             {
                 "status": "processing",
                 "progress": "Generating Seedance clip",
+                "lease_expires_at": _lease_deadline(),
                 "metering": metering,
             },
             profile_id=profile_id,
@@ -132,12 +314,22 @@ def _generate_video_task(
             video_url = (result.get("video") or {}).get("url")
             if not video_url:
                 raise RuntimeError("Seedance returned no video URL")
+            storage.update_job(
+                video_id,
+                {"lease_expires_at": _lease_deadline()},
+                profile_id=profile_id,
+            )
             _raise_if_video_cancelled(video_id)
             with _lock:
                 _progress[key] = {"status": "downloading", "progress": 70}
             settings = get_settings()
             local_path = settings.base_dir / "source_videos" / "generated" / profile_id / f"{video_id}.mp4"
             generator.download_video(video_url, local_path)
+            storage.update_job(
+                video_id,
+                {"lease_expires_at": _lease_deadline()},
+                profile_id=profile_id,
+            )
             _raise_if_video_cancelled(video_id)
         finally:
             generator.close()
@@ -145,7 +337,7 @@ def _generate_video_task(
         # A source-video record is what makes the generated MP4 immediately
         # selectable by the editor. Reuse its normal metadata/thumbnail flow.
         repo = get_repository()
-        source_video_id = str(uuid.uuid4())
+        source_video_id = job.get("planned_source_video_id") or str(uuid.uuid4())
         display_name = request.name or f"AI Video {video_id[:8]}"
         repo.create_source_video({
             "id": source_video_id, "profile_id": profile_id, "name": display_name,
@@ -160,20 +352,24 @@ def _generate_video_task(
 
         # A standalone completed Library clip makes the asset publishable and
         # eligible for the existing voiceover/caption workflows without a render.
+        planned_project_id = job.get("planned_library_project_id") or str(uuid.uuid4())
         project = repo.create_project({
-            "id": str(uuid.uuid4()), "profile_id": profile_id, "name": display_name,
+            "id": planned_project_id, "profile_id": profile_id, "name": display_name,
             "description": "AI video generated with Seedance 2.0", "status": "completed",
             "target_duration": info.get("duration"), "variants_count": 1,
         })
         project_id = project.get("id")
         if not project_id:
             raise RuntimeError("Could not create Library project for AI video")
+        planned_clip_id = job.get("planned_library_clip_id") or str(uuid.uuid4())
         clip = repo.create_clip({
-            "id": str(uuid.uuid4()), "project_id": project_id, "profile_id": profile_id,
+            "id": planned_clip_id, "project_id": project_id, "profile_id": profile_id,
             "variant_index": 0, "variant_name": display_name, "raw_video_path": str(local_path),
             "final_video_path": str(local_path), "duration": info.get("duration"),
             "is_selected": True, "is_deleted": False, "final_status": "completed",
         }) or {}
+        if not clip.get("id"):
+            raise RuntimeError("Could not create Library clip for AI video")
         _update(video_id, profile_id, status="completed", video_url=video_url,
                 local_video_path=str(local_path), source_video_id=source_video_id,
                 library_project_id=project_id, library_clip_id=clip.get("id"))
@@ -224,6 +420,40 @@ def _generate_video_task(
         asyncio.run(_settle_video_metering(video_id, user_id, delivered=False))
     except Exception as exc:
         logger.exception("AI video generation failed for %s", video_id)
+        storage = get_job_storage()
+        failed_job = storage.get_job(video_id) or {}
+        try:
+            persisted_output = _find_persisted_video_output(failed_job, {})
+        except Exception:
+            logger.exception("Could not reconcile Seedance output after failure")
+            persisted_output = None
+        if persisted_output:
+            recovered_job = _persist_recovered_video_output(
+                video_id,
+                profile_id,
+                failed_job,
+                {},
+                persisted_output,
+            )
+            asyncio.run(
+                _settle_video_metering(
+                    video_id,
+                    user_id,
+                    delivered=True,
+                    result_metadata={
+                        "studio_job_id": video_id,
+                        "output_id": persisted_output["output_id"],
+                    },
+                )
+            )
+            with _lock:
+                _progress[key] = {
+                    "status": "completed",
+                    "progress": 100,
+                    "source_video_id": recovered_job.get("source_video_id"),
+                    "library_clip_id": recovered_job.get("library_clip_id"),
+                }
+            return
         if local_path:
             local_path.unlink(missing_ok=True)
         with _lock:
@@ -254,6 +484,9 @@ async def generate_video(request: Request, body: GenerateVideoRequest, backgroun
             detail="BlipStudio web Seedance generation uses a fixed 5-second clip.",
         )
     video_id = str(uuid.uuid4())
+    planned_source_video_id = str(uuid.uuid4())
+    planned_library_project_id = str(uuid.uuid4())
+    planned_library_clip_id = str(uuid.uuid4())
     get_repository().table_query("generated_videos", "insert", data={
         "id": video_id, "profile_id": ctx.profile_id, "prompt": body.prompt,
         "name": body.name, "model": "seedance-2.0", "duration": body.duration,
@@ -276,6 +509,11 @@ async def generate_video(request: Request, body: GenerateVideoRequest, backgroun
             "status": "pending",
             "progress": "Awaiting credit reservation",
             "user_id": ctx.user_id,
+            "process_instance_id": _PROCESS_INSTANCE_ID,
+            "lease_expires_at": _lease_deadline(),
+            "planned_source_video_id": planned_source_video_id,
+            "planned_library_project_id": planned_library_project_id,
+            "planned_library_clip_id": planned_library_clip_id,
             "metering": metering,
         },
         profile_id=ctx.profile_id,
@@ -284,16 +522,23 @@ async def generate_video(request: Request, body: GenerateVideoRequest, backgroun
     try:
         metering = await reserve_metering_record(identity, metering)
     except StudioMeteringBlocked as error:
+        denied_state = (
+            "denied" if error.code == "insufficient_credits" else "reserve_pending"
+        )
         denied = {
             **metering,
-            "state": "denied",
+            "state": denied_state,
             "last_error": error.as_http_detail(),
         }
         storage.update_job(
             video_id,
             {
                 "status": "failed",
-                "progress": "Blipost credits required",
+                "progress": (
+                    "Blipost credits required"
+                    if denied_state == "denied"
+                    else "Blipost credit verification unavailable"
+                ),
                 "status_code": 402,
                 "error": error.as_http_detail()["message"],
                 "metering": denied,
@@ -306,7 +551,8 @@ async def generate_video(request: Request, body: GenerateVideoRequest, backgroun
             status="failed",
             error_message=error.as_http_detail()["message"],
         )
-        raise _metering_http_exception(error)
+        detail = {**error.as_http_detail(), "studio_job_id": video_id}
+        raise HTTPException(status_code=402, detail=detail)
     storage.update_job(
         video_id,
         {"status": "queued", "progress": "Queued", "metering": metering},
@@ -334,10 +580,24 @@ async def video_status(video_id: str, ctx: ProfileContext = Depends(get_profile_
     job = get_job_storage().get_job(video_id) or {}
     if job.get("profile_id") and job.get("profile_id") != ctx.profile_id:
         raise HTTPException(status_code=404, detail="AI video not found")
+    row_data = row[0]
+    persisted_output = _find_persisted_video_output(job, row_data)
+    if persisted_output and (
+        row_data.get("status") != "completed"
+        or not (job.get("metering") or {}).get("output_persisted")
+    ):
+        job = _persist_recovered_video_output(
+            video_id,
+            ctx.profile_id,
+            job,
+            row_data,
+            persisted_output,
+        )
+    job = _mark_interrupted_video_job(video_id, ctx.profile_id, job, row_data)
     metering = job.get("metering")
-    if isinstance(metering, dict) and metering.get("reservation_id"):
+    if isinstance(metering, dict):
         metering_user_id = metering.get("supabase_user_id") or ctx.user_id
-        row_status = row[0].get("status")
+        row_status = row_data.get("status")
         if row_status == "completed" or metering.get("output_persisted"):
             await _settle_video_metering(
                 video_id,
@@ -345,7 +605,7 @@ async def video_status(video_id: str, ctx: ProfileContext = Depends(get_profile_
                 delivered=True,
                 result_metadata={
                     "studio_job_id": video_id,
-                    "output_id": row[0].get("library_clip_id") or row[0].get("source_video_id"),
+                    "output_id": row_data.get("library_clip_id") or row_data.get("source_video_id"),
                 },
             )
         elif row_status in {"failed", "cancelled"} or job.get("status") in {"failed", "cancelled"}:
@@ -356,13 +616,13 @@ async def video_status(video_id: str, ctx: ProfileContext = Depends(get_profile_
             )
     if job.get("status") == "cancelled":
         progress = {"status": "cancelled", "progress": 0}
-    elif job.get("status") == "failed" and row[0].get("status") != "completed":
+    elif job.get("status") == "failed" and row_data.get("status") != "completed":
         progress = {
             "status": "failed",
             "progress": 0,
-            "error": job.get("error") or row[0].get("error_message"),
+            "error": job.get("error") or row_data.get("error_message"),
         }
-    return {**row[0], **(progress or {})}
+    return {**row_data, **(progress or {})}
 
 
 @router.get("/history")
