@@ -266,15 +266,28 @@ def test_generate_from_segments_returns_non_503(sqlite_backend):
     assert r.status_code in (200, 202, 400)
 
 
-def test_generate_raw_clips_returns_non_503(sqlite_backend):
+def test_generate_raw_clips_returns_non_503(sqlite_backend, monkeypatch):
     client, repo, profile_id = sqlite_backend
     project = _seed_project(repo, profile_id)
+    from types import SimpleNamespace
+    from app.api import desktop_only
+
+    url = f"/api/v1/library/projects/{project['id']}/generate"
     # Multipart form requires file OR video_path
-    r = client.post(
-        f"/api/v1/library/projects/{project['id']}/generate",
-        data={"video_path": "/nonexistent/source.mp4", "variant_count": 1},
-        headers=HEADERS,
+    payload = {"video_path": "/nonexistent/source.mp4", "variant_count": 1}
+
+    # Web mode: a bare video_path reads the *server* disk, so the endpoint
+    # must reject it (501) before any filesystem access.
+    r = client.post(url, data=payload, headers=HEADERS)
+    assert r.status_code == 501
+
+    # Desktop mode: local paths are allowed; a missing file yields 400,
+    # never 503 (the Phase-80 gate this test guards).
+    monkeypatch.setattr(
+        desktop_only, "get_settings",
+        lambda: SimpleNamespace(desktop_mode=True),
     )
+    r = client.post(url, data=payload, headers=HEADERS)
     _assert_not_db_unavailable(r)
     # 400 because path doesn't exist OR 202 if the background task is dispatched
     assert r.status_code in (200, 202, 400)
