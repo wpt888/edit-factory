@@ -841,6 +841,8 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             previews_json = {str(k): v for k, v in dict(pipeline_dict.get("previews", {})).items()}
             render_jobs_json = {str(k): v for k, v in dict(pipeline_dict.get("render_jobs", {})).items()}
             tts_previews_json = {str(k): v for k, v in dict(pipeline_dict.get("tts_previews", {})).items()}
+            generation_job_json = dict(pipeline_dict.get("generation_job") or {})
+            tts_jobs_json = {str(k): v for k, v in dict(pipeline_dict.get("tts_jobs", {})).items()}
             # PIP-14: Include preview render paths in serialization
             preview_renders_json = {str(k): v for k, v in dict(pipeline_dict.get("preview_renders", {})).items()}
             segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
@@ -873,6 +875,8 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "previews": previews_json,
                 "render_jobs": render_jobs_json,
                 "tts_previews": tts_previews_json,
+                "generation_job": generation_job_json,
+                "tts_jobs": tts_jobs_json,
                 "preview_renders": preview_renders_json,
                 "segment_usage": segment_usage_json,
                 "source_video_ids": pipeline_dict.get("source_video_ids", []),
@@ -891,7 +895,15 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             except Exception as upsert_err:
                 err_str = str(upsert_err)
                 # Graceful degradation for pre-migration databases
-                if "attention_timeline" in err_str:
+                if "generation_job" in err_str or "tts_jobs" in err_str:
+                    logger.warning(
+                        "Async pipeline job columns missing; run migration 054. "
+                        "Retrying without persisted job state."
+                    )
+                    row.pop("generation_job", None)
+                    row.pop("tts_jobs", None)
+                    repo.upsert_pipeline(row)
+                elif "attention_timeline" in err_str:
                     logger.warning("attention_timeline column missing; retrying without it")
                     row.pop("attention_timeline", None)
                     repo.upsert_pipeline(row)
@@ -934,6 +946,93 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
         logger.debug(f"Pipeline {pipeline_id} render_jobs updated in DB")
     except Exception as e:
         logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
+
+
+_ACTIVE_ASYNC_JOB_STATUSES = frozenset({"queued", "processing"})
+_TERMINAL_ASYNC_JOB_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _job_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_async_job(current_step: str = "Queued") -> dict:
+    now = _job_timestamp()
+    return {
+        "status": "queued",
+        "progress": 0,
+        "current_step": current_step,
+        "created_at": now,
+        "updated_at": now,
+        "started_at": None,
+        "completed_at": None,
+        "error": None,
+    }
+
+
+def _db_update_async_jobs(
+    pipeline_id: str,
+    *,
+    generation_job: Optional[dict] = None,
+    tts_jobs: Optional[dict] = None,
+) -> None:
+    """Persist only async job state, avoiding a heavyweight full pipeline save."""
+    updates: Dict[str, Any] = {}
+    if generation_job is not None:
+        updates["generation_job"] = dict(generation_job)
+    if tts_jobs is not None:
+        updates["tts_jobs"] = {str(k): v for k, v in dict(tts_jobs).items()}
+    if not updates:
+        return
+    try:
+        get_repository().update_pipeline(pipeline_id, updates)
+    except Exception as e:
+        logger.warning(f"Failed to persist async jobs for {pipeline_id}: {e}")
+
+
+def _update_generation_job(pipeline_id: str, **changes: Any) -> dict:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        job = pipeline.setdefault("generation_job", _new_async_job())
+        job.update(changes)
+        job["updated_at"] = _job_timestamp()
+        snapshot = dict(job)
+    _db_update_async_jobs(pipeline_id, generation_job=snapshot)
+    return snapshot
+
+
+def _update_tts_job(pipeline_id: str, variant_index: int, **changes: Any) -> dict:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        jobs = pipeline.setdefault("tts_jobs", {})
+        job = jobs.setdefault(variant_index, _new_async_job())
+        job.update(changes)
+        job["updated_at"] = _job_timestamp()
+        job_snapshot = dict(job)
+        jobs_snapshot = dict(jobs)
+    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+    return job_snapshot
+
+
+def _generation_job_cancelled(pipeline_id: str) -> bool:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    return bool(
+        pipeline
+        and (pipeline.get("generation_job") or {}).get("status") == "cancelled"
+    )
+
+
+def _tts_job_cancelled(pipeline_id: str, variant_index: int) -> bool:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return True
+    jobs = pipeline.get("tts_jobs") or {}
+    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    return job.get("status") == "cancelled"
 
 
 def _fetch_preset_and_settings(render_request) -> tuple:
@@ -1523,6 +1622,18 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
 
+        generation_job = (
+            dict(row.get("generation_job"))
+            if isinstance(row.get("generation_job"), dict)
+            else {}
+        )
+        tts_jobs = {}
+        for k, v in (row.get("tts_jobs") or {}).items():
+            try:
+                tts_jobs[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid tts_jobs key: {k}")
+
         # PIP-14: Load preview_renders from DB. Same meta-multiplication
         # key handling as `previews` above.
         preview_renders = {}
@@ -1564,15 +1675,19 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "variant_count": row.get("variant_count", 0),
             "keyword_count": row.get("keyword_count", 0),
             "scripts": row.get("scripts") or [],
+            "script_names": row.get("script_names") or [],
             "previews": previews,
             "render_jobs": render_jobs,
             "tts_previews": tts_previews,
+            "generation_job": generation_job,
+            "tts_jobs": tts_jobs,
             "preview_renders": preview_renders,
             "segment_usage": segment_usage,
             "source_video_ids": row.get("source_video_ids") or [],
             "context_products": row.get("context_products") or [],
             "captions": row.get("captions") or {},
             "selected_captions": row.get("selected_captions") or {},
+            "target_script_duration": row.get("target_script_duration"),
             "min_segment_duration": _clamp_min_segment_duration(
                 row.get("min_segment_duration", 3.0)
             ),
@@ -1683,6 +1798,13 @@ class PipelineGenerateResponse(BaseModel):
     keyword_count: int                  # How many keywords were available
     variant_count: int                  # Number of variants generated
     total_segment_duration: float = 0.0 # Total duration (seconds) of available video segments
+
+
+class PipelineJobStartResponse(BaseModel):
+    """Immediate acknowledgement for a persisted background pipeline job."""
+    pipeline_id: str
+    status: str
+    job: Dict[str, Any]
 
 
 class MatchPreview(BaseModel):
@@ -1919,6 +2041,7 @@ class PipelineListItem(BaseModel):
     keyword_count: int
     created_at: str
     target_script_duration: Optional[float] = None
+    generation_job: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineListResponse(BaseModel):
@@ -1954,7 +2077,7 @@ async def list_pipelines(
             result = repo.list_pipelines(
                 profile.profile_id,
                 QueryFilters(
-                    select="id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration",
+                    select="id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration, generation_job",
                     order_by="created_at",
                     order_desc=True,
                     limit=limit,
@@ -1970,7 +2093,8 @@ async def list_pipelines(
                         variant_count=row.get("variant_count", 0),
                         keyword_count=row.get("keyword_count", 0),
                         created_at=row.get("created_at", ""),
-                        target_script_duration=row.get("target_script_duration")
+                        target_script_duration=row.get("target_script_duration"),
+                        generation_job=row.get("generation_job") or {},
                     ))
                 return PipelineListResponse(pipelines=items, total=len(items))
     except Exception as e:
@@ -1993,7 +2117,8 @@ async def list_pipelines(
             variant_count=p.get("variant_count", 0),
             keyword_count=p.get("keyword_count", 0),
             created_at=p.get("created_at", ""),
-            target_script_duration=p.get("target_script_duration")
+            target_script_duration=p.get("target_script_duration"),
+            generation_job=p.get("generation_job") or {},
         ))
 
     return PipelineListResponse(pipelines=items, total=len(items))
@@ -2921,115 +3046,81 @@ async def import_pipeline(
     )
 
 
-@router.post("/generate", response_model=PipelineGenerateResponse)
-@limiter.limit("5/minute")
-async def generate_pipeline(
-    request: Request,
-    body: PipelineGenerateRequest,
-    profile: ProfileContext = Depends(get_profile_context)
-):
-    """
-    Generate N script variants and create a pipeline.
+async def _run_pipeline_generation_job(
+    pipeline_id: str,
+    body_data: Dict[str, Any],
+    profile_id: str,
+) -> None:
+    """Generate scripts after the HTTP response and persist every job transition."""
+    try:
+        body = PipelineGenerateRequest.model_validate(body_data)
+        if _generation_job_cancelled(pipeline_id):
+            return
 
-    This is step 1 of the multi-variant workflow: create scripts with AI.
-    Next steps: preview each variant, then batch-render selected variants.
-    """
-    # Validate input
-    if body.variant_count < 1 or body.variant_count > 10:
-        raise HTTPException(
-            status_code=400,
-            detail="variant_count must be between 1 and 10"
+        _update_generation_job(
+            pipeline_id,
+            status="processing",
+            progress=5,
+            current_step="Loading footage context",
+            started_at=_job_timestamp(),
+            error=None,
         )
 
-    if body.provider not in ["gemini", "claude"]:
-        raise HTTPException(
-            status_code=400,
-            detail="provider must be 'gemini' or 'claude'"
-        )
+        repo = get_repository()
+        unique_keywords: List[str] = []
+        product_groups_dict: Dict[str, Any] = {}
+        selected_product_titles = [p.title for p in body.context_products]
 
-    if not body.idea.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="idea cannot be empty"
-        )
-
-    # Fetch unique keywords from editai_segments table, grouped by product_group
-    # When context_products are selected, filter to only those product groups
-    repo = get_repository()
-    unique_keywords = []
-    product_groups_dict = {}  # {group_label: [keywords]}
-
-    # Build product filter from selected catalog products
-    selected_product_titles = [p.title for p in body.context_products] if body.context_products else []
-
-    if repo:
         try:
             seg_filters = QueryFilters(select="keywords, product_group")
-            # Filter segments to only the selected product groups
             if selected_product_titles:
                 seg_filters.in_ = {"product_group": selected_product_titles}
-            result = repo.list_segments(profile.profile_id, seg_filters)
-
-            # Flatten and deduplicate keywords, and group by product_group
+            result = repo.list_segments(profile_id, seg_filters)
             all_keywords = set()
             for seg in result.data:
                 keywords_list = seg.get("keywords") or []
-                pg = seg.get("product_group")
-                for kw in keywords_list:
-                    all_keywords.add(kw)
-                    if pg:
-                        if pg not in product_groups_dict:
-                            product_groups_dict[pg] = set()
-                        product_groups_dict[pg].add(kw)
-
+                product_group = seg.get("product_group")
+                for keyword in keywords_list:
+                    all_keywords.add(keyword)
+                    if product_group:
+                        product_groups_dict.setdefault(product_group, set()).add(keyword)
             unique_keywords = sorted(all_keywords)
-            # Convert sets to sorted lists
-            product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
-
-            if selected_product_titles:
-                logger.info(
-                    f"[Profile {profile.profile_id}] Filtered keywords by selected products: "
-                    f"{selected_product_titles}"
-                )
-
+            product_groups_dict = {
+                key: sorted(values) for key, values in product_groups_dict.items()
+            }
         except Exception as e:
-            logger.warning(f"Failed to fetch keywords from database: {e}")
-    else:
-        logger.warning("Repository not available, continuing without keywords")
+            logger.warning(f"Failed to fetch keywords for pipeline {pipeline_id}: {e}")
 
-    # Compute total segment duration using shared helper
-    total_segment_duration = _compute_segment_duration(profile.profile_id)
+        if _generation_job_cancelled(pipeline_id):
+            return
+        total_segment_duration = _compute_segment_duration(profile_id)
+        _update_generation_job(
+            pipeline_id,
+            progress=20,
+            current_step="Preparing generation rules",
+        )
 
-    logger.info(
-        f"[Profile {profile.profile_id}] Fetched {len(unique_keywords)} unique keywords, "
-        f"{len(product_groups_dict)} product groups, "
-        f"total segment duration: {total_segment_duration:.1f}s"
-    )
-
-    # Fetch AI instructions from profile
-    ai_instructions = ""
-    if repo:
+        ai_instructions = ""
         try:
-            profile_row = repo.get_profile(profile.profile_id)
+            profile_row = repo.get_profile(profile_id)
             if profile_row:
                 ai_instructions = profile_row.get("ai_instructions") or ""
         except Exception as e:
-            logger.warning(f"Failed to fetch AI instructions for profile {profile.profile_id}: {e}")
+            logger.warning(f"Failed to fetch AI instructions for profile {profile_id}: {e}")
 
-    # Generate scripts
-    logger.info(
-        f"[Profile {profile.profile_id}] Generating pipeline with {body.variant_count} variants "
-        f"using {body.provider}"
-    )
+        if _generation_job_cancelled(pipeline_id):
+            return
+        _update_generation_job(
+            pipeline_id,
+            progress=35,
+            current_step=f"Generating {body.variant_count} script variants",
+        )
 
-    try:
-        generator = get_script_generator_for_profile(profile.profile_id)
-        # SCR-03: Run synchronous AI call in a thread to avoid blocking the async event loop
+        generator = get_script_generator_for_profile(profile_id)
         effective_context = _build_effective_pipeline_context(
             body.context,
             body.context_products,
         )
-
         scripts = await asyncio.to_thread(
             generator.generate_scripts,
             idea=body.idea,
@@ -3037,66 +3128,168 @@ async def generate_pipeline(
             keywords=unique_keywords,
             variant_count=body.variant_count,
             provider=body.provider,
-            product_groups=product_groups_dict if product_groups_dict else None,
+            product_groups=product_groups_dict or None,
             ai_instructions=ai_instructions,
-            target_duration=body.target_script_duration
+            target_duration=body.target_script_duration,
         )
 
-        # Generate pipeline ID
-        pipeline_id = str(uuid.uuid4())
+        if _generation_job_cancelled(pipeline_id):
+            return
+        _update_generation_job(
+            pipeline_id,
+            progress=90,
+            current_step="Saving generated scripts",
+        )
 
-        # Store pipeline state (with eviction)
-        _evict_old_pipelines()
-        with _pipelines_lock:
-            _pipelines[pipeline_id] = {
-                "pipeline_id": pipeline_id,
-                "scripts": scripts,
-                "provider": body.provider,
-                "name": body.name,
-                "idea": body.idea,
-                "context": body.context,
-                "context_products": [p.dict() for p in body.context_products],
-                "variant_count": len(scripts),
-                "keyword_count": len(unique_keywords),
-                "previews": {},
-                "tts_previews": {},
-                "segment_usage": {},
-                "preview_renders": {},
-                "render_jobs": {},
-                "meta_multiplication": True,
-                "min_segment_duration": 3.0,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "profile_id": profile.profile_id,
-                "target_script_duration": body.target_script_duration
-            }
-            pipeline_snapshot = dict(_pipelines[pipeline_id])
-
-        # Persist to DB
+        pipeline = _get_pipeline_or_load(pipeline_id)
+        if not pipeline:
+            raise RuntimeError("Pipeline disappeared while scripts were generating")
+        completed_at = _job_timestamp()
+        result = {
+            "provider": body.provider,
+            "keyword_count": len(unique_keywords),
+            "variant_count": len(scripts),
+            "total_segment_duration": round(total_segment_duration, 1),
+        }
+        with _get_pipeline_state_lock(pipeline_id):
+            pipeline["scripts"] = scripts
+            pipeline["script_names"] = [f"Script {index + 1}" for index in range(len(scripts))]
+            pipeline["variant_count"] = len(scripts)
+            pipeline["keyword_count"] = len(unique_keywords)
+            generation_job = pipeline.setdefault("generation_job", {})
+            generation_job.update({
+                "status": "completed",
+                "progress": 100,
+                "current_step": "Scripts ready",
+                "updated_at": completed_at,
+                "completed_at": completed_at,
+                "error": None,
+                "result": result,
+            })
+            pipeline_snapshot = dict(pipeline)
         _db_save_pipeline(pipeline_id, pipeline_snapshot)
-
         logger.info(
-            f"[Profile {profile.profile_id}] Created pipeline {pipeline_id} "
-            f"with {len(scripts)} scripts"
+            f"[Profile {profile_id}] Background generation completed for "
+            f"pipeline {pipeline_id} with {len(scripts)} scripts"
         )
-
-        return PipelineGenerateResponse(
-            pipeline_id=pipeline_id,
-            scripts=scripts,
-            provider=body.provider,
-            keyword_count=len(unique_keywords),
-            variant_count=len(scripts),
-            total_segment_duration=round(total_segment_duration, 1)
-        )
-
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        # SCR-11: Log detailed error server-side but return sanitized message to client
-        logger.error(f"Pipeline generation failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail="Pipeline generation service unavailable. Please try again later."
+        _update_generation_job(
+            pipeline_id,
+            status="failed",
+            current_step="Generation failed",
+            error=str(e),
+            completed_at=_job_timestamp(),
         )
+    except Exception as e:
+        logger.error(f"Pipeline generation failed for {pipeline_id}: {e}", exc_info=True)
+        _update_generation_job(
+            pipeline_id,
+            status="failed",
+            current_step="Generation failed",
+            error="Pipeline generation service unavailable. Please try again later.",
+            completed_at=_job_timestamp(),
+        )
+
+
+@router.post(
+    "/generate",
+    response_model=PipelineJobStartResponse,
+    status_code=202,
+)
+@limiter.limit("5/minute")
+async def generate_pipeline(
+    request: Request,
+    body: PipelineGenerateRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Queue script generation and immediately return a persisted pipeline ID."""
+    if body.provider not in {"gemini", "claude"}:
+        raise HTTPException(status_code=400, detail="provider must be 'gemini' or 'claude'")
+    if not body.idea.strip():
+        raise HTTPException(status_code=400, detail="idea cannot be empty")
+
+    pipeline_id = str(uuid.uuid4())
+    generation_job = _new_async_job("Queued for script generation")
+    pipeline = {
+        "pipeline_id": pipeline_id,
+        "scripts": [],
+        "script_names": [],
+        "provider": body.provider,
+        "name": body.name,
+        "idea": body.idea,
+        "context": body.context,
+        "context_products": [product.model_dump() for product in body.context_products],
+        "variant_count": body.variant_count,
+        "keyword_count": 0,
+        "previews": {},
+        "tts_previews": {},
+        "generation_job": generation_job,
+        "tts_jobs": {},
+        "segment_usage": {},
+        "preview_renders": {},
+        "render_jobs": {},
+        "meta_multiplication": True,
+        "min_segment_duration": 3.0,
+        "created_at": _job_timestamp(),
+        "profile_id": profile.profile_id,
+        "target_script_duration": body.target_script_duration,
+    }
+    _evict_old_pipelines()
+    with _pipelines_lock:
+        _pipelines[pipeline_id] = pipeline
+    _db_save_pipeline(pipeline_id, dict(pipeline))
+
+    background_tasks.add_task(
+        _run_pipeline_generation_job,
+        pipeline_id,
+        body.model_dump(),
+        profile.profile_id,
+    )
+    return PipelineJobStartResponse(
+        pipeline_id=pipeline_id,
+        status="queued",
+        job=generation_job,
+    )
+
+
+@router.get("/generation-status/{pipeline_id}")
+async def get_generation_status(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    return {
+        "pipeline_id": pipeline_id,
+        "job": pipeline.get("generation_job") or {},
+        "scripts": pipeline.get("scripts") or [],
+        "script_names": pipeline.get("script_names") or [],
+    }
+
+
+@router.post("/generation-cancel/{pipeline_id}")
+async def cancel_generation_job(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    job = pipeline.get("generation_job") or {}
+    if job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES:
+        job = _update_generation_job(
+            pipeline_id,
+            status="cancelled",
+            current_step="Generation cancelled",
+            completed_at=_job_timestamp(),
+        )
+    return {"pipeline_id": pipeline_id, "job": job}
 
 
 @router.get("/segment-duration")
@@ -3123,6 +3316,17 @@ class PipelineTtsResponse(BaseModel):
     srt_content: Optional[str] = None
     script_word_count: Optional[int] = None
     srt_word_count: Optional[int] = None
+
+
+class PipelineTtsJobStartResponse(BaseModel):
+    pipeline_id: str
+    variant_index: int
+    status: str
+    job: Dict[str, Any]
+
+
+class PipelineTtsCancelRequest(BaseModel):
+    variant_indices: Optional[List[int]] = Field(default=None, max_length=10)
 
 
 class PipelineTtsFromLibraryRequest(BaseModel):
@@ -3219,12 +3423,11 @@ async def adopt_library_tts(
     )
 
 
-@router.post("/tts/{pipeline_id}/{variant_index}", response_model=PipelineTtsResponse)
-async def generate_variant_tts(
+async def _generate_variant_tts_work(
     pipeline_id: str,
     variant_index: int,
     request: PipelineTtsRequest,
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext,
 ):
     """
     Generate TTS audio for a single script variant without segment matching.
@@ -3254,6 +3457,12 @@ async def generate_variant_tts(
     )
 
     try:
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            progress=20,
+            current_step="Preparing voice settings",
+        )
         assembly_service = get_assembly_service()
 
         # Bust TTS file cache so ElevenLabs is re-called with fresh audio.
@@ -3294,6 +3503,15 @@ async def generate_variant_tts(
             voice_settings=request.voice_settings
         )
 
+        if _tts_job_cancelled(pipeline_id, variant_index):
+            return PipelineTtsResponse(status="cancelled", audio_duration=0)
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            progress=65,
+            current_step="Creating subtitles",
+        )
+
         # Generate SRT from timestamps for subtitle preview
         srt_content = None
         script_word_count = None
@@ -3326,6 +3544,15 @@ async def generate_variant_tts(
                 )
             else:
                 srt_word_count = 0
+
+        if _tts_job_cancelled(pipeline_id, variant_index):
+            return PipelineTtsResponse(status="cancelled", audio_duration=0)
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            progress=82,
+            current_step="Saving voice-over",
+        )
 
         # Store TTS preview result (protected by state lock)
         # Use cleaned_text hash so tag changes don't invalidate audio cache
@@ -3391,6 +3618,15 @@ async def generate_variant_tts(
                 if _lib_asset_id:
                     pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
 
+        if _tts_job_cancelled(pipeline_id, variant_index):
+            return PipelineTtsResponse(status="cancelled", audio_duration=0)
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            progress=94,
+            current_step="Finalizing voice-over",
+        )
+
         # Persist to DB (outside lock)
         logger.info(
             f"[Profile {profile.profile_id}] Saving TTS for variant {variant_index}: "
@@ -3414,6 +3650,190 @@ async def generate_variant_tts(
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] TTS generation failed for variant {variant_index}: {e}")
         raise HTTPException(status_code=500, detail="TTS generation failed")
+
+
+async def _run_variant_tts_job(
+    pipeline_id: str,
+    variant_index: int,
+    request_data: Dict[str, Any],
+    profile_id: str,
+    user_id: str,
+) -> None:
+    """Execute one TTS variant in the background and persist terminal state."""
+    if _tts_job_cancelled(pipeline_id, variant_index):
+        return
+    _update_tts_job(
+        pipeline_id,
+        variant_index,
+        status="processing",
+        progress=5,
+        current_step="Starting voice-over",
+        started_at=_job_timestamp(),
+        error=None,
+    )
+    try:
+        result = await _generate_variant_tts_work(
+            pipeline_id,
+            variant_index,
+            PipelineTtsRequest.model_validate(request_data),
+            ProfileContext(profile_id=profile_id, user_id=user_id),
+        )
+        if result.status == "cancelled" or _tts_job_cancelled(pipeline_id, variant_index):
+            return
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            status="completed",
+            progress=100,
+            current_step="Voice-over ready",
+            completed_at=_job_timestamp(),
+            error=None,
+            result=result.model_dump(),
+        )
+    except HTTPException as e:
+        detail = e.detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or detail.get("detail") or "TTS generation failed")
+        else:
+            message = str(detail)
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            status="failed",
+            current_step="Voice-over failed",
+            completed_at=_job_timestamp(),
+            error=message,
+            error_detail=detail,
+            status_code=e.status_code,
+        )
+    except Exception as e:
+        logger.error(
+            f"Background TTS failed for pipeline {pipeline_id} variant {variant_index}: {e}",
+            exc_info=True,
+        )
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            status="failed",
+            current_step="Voice-over failed",
+            completed_at=_job_timestamp(),
+            error="TTS generation failed. Please try again.",
+        )
+
+
+@router.post(
+    "/tts/{pipeline_id}/{variant_index}",
+    response_model=PipelineTtsJobStartResponse,
+    status_code=202,
+)
+async def generate_variant_tts(
+    pipeline_id: str,
+    variant_index: int,
+    request: PipelineTtsRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Queue one per-script voice-over without holding the request open."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    if variant_index < 0 or variant_index >= len(pipeline.get("scripts") or []):
+        raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
+
+    jobs = pipeline.get("tts_jobs") or {}
+    existing = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    if existing.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Voice-over generation is already running", "job": existing},
+        )
+
+    job = _new_async_job("Queued for voice-over generation")
+    with _get_pipeline_state_lock(pipeline_id):
+        pipeline.setdefault("tts_jobs", {})[variant_index] = job
+        jobs_snapshot = dict(pipeline["tts_jobs"])
+    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+    background_tasks.add_task(
+        _run_variant_tts_job,
+        pipeline_id,
+        variant_index,
+        request.model_dump(),
+        profile.profile_id,
+        profile.user_id,
+    )
+    return PipelineTtsJobStartResponse(
+        pipeline_id=pipeline_id,
+        variant_index=variant_index,
+        status="queued",
+        job=job,
+    )
+
+
+@router.get("/tts-status/{pipeline_id}")
+async def get_tts_jobs_status(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    results: Dict[str, dict] = {}
+    for raw_index, value in (pipeline.get("tts_previews") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        results[str(raw_index)] = {
+            "audio_duration": value.get("audio_duration", 0),
+            "srt_content": value.get("srt_content"),
+            "script_word_count": value.get("script_word_count"),
+            "srt_word_count": value.get("srt_word_count"),
+        }
+    return {
+        "pipeline_id": pipeline_id,
+        "jobs": {str(k): v for k, v in (pipeline.get("tts_jobs") or {}).items()},
+        "results": results,
+    }
+
+
+@router.post("/tts-cancel/{pipeline_id}")
+async def cancel_tts_jobs(
+    pipeline_id: str,
+    request: PipelineTtsCancelRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    wanted = set(request.variant_indices or [])
+    cancelled: List[int] = []
+    with _get_pipeline_state_lock(pipeline_id):
+        jobs = pipeline.setdefault("tts_jobs", {})
+        for raw_index, job in list(jobs.items()):
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if wanted and index not in wanted:
+                continue
+            if isinstance(job, dict) and job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+                now = _job_timestamp()
+                job.update({
+                    "status": "cancelled",
+                    "current_step": "Voice-over cancelled",
+                    "updated_at": now,
+                    "completed_at": now,
+                })
+                cancelled.append(index)
+        jobs_snapshot = dict(jobs)
+    _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+    return {"pipeline_id": pipeline_id, "cancelled": cancelled, "jobs": jobs_snapshot}
 
 
 @router.get("/tts-audio/{pipeline_id}/{variant_index}")
@@ -5440,6 +5860,9 @@ async def get_pipeline_scripts(pipeline_id: str):
                 "has_audio": has_audio,
                 "audio_duration": audio_duration,
                 "approved": bool(tts_data.get("approved", False)),
+                "srt_content": tts_data.get("srt_content"),
+                "script_word_count": tts_data.get("script_word_count"),
+                "srt_word_count": tts_data.get("srt_word_count"),
             }
 
     return {
@@ -5458,6 +5881,8 @@ async def get_pipeline_scripts(pipeline_id: str):
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
         "meta_multiplication": bool(pipeline.get("meta_multiplication", True)),
         "library_project_id": pipeline.get("library_project_id"),
+        "generation_job": pipeline.get("generation_job") or {},
+        "tts_jobs": {str(k): v for k, v in (pipeline.get("tts_jobs") or {}).items()},
     }
 
 

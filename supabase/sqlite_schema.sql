@@ -445,6 +445,8 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     previews        TEXT NOT NULL DEFAULT '{}',
     render_jobs     TEXT NOT NULL DEFAULT '{}',
     tts_previews    TEXT NOT NULL DEFAULT '{}',
+    generation_job  TEXT NOT NULL DEFAULT '{}',
+    tts_jobs        TEXT NOT NULL DEFAULT '{}',
     preview_renders TEXT NOT NULL DEFAULT '{}',
     segment_usage   TEXT NOT NULL DEFAULT '{}',
     captions        TEXT NOT NULL DEFAULT '{}',

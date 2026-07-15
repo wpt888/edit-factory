@@ -35,6 +35,7 @@ _JSON_COLUMNS = frozenset({
     # Without these, callers passing raw dicts (e.g., _db_save_pipeline) get
     # `sqlite3.ProgrammingError: type 'dict' is not supported` on the bind.
     "tts_previews", "preview_renders", "segment_usage", "captions",
+    "generation_job", "tts_jobs",
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
     "selected_captions", "subtitle_settings_by_key", "attention_timeline", "config",
@@ -135,9 +136,10 @@ class SQLiteRepository(DataRepository):
             "selected_captions": "TEXT DEFAULT '{}'",
             "target_script_duration": "REAL",
             "min_segment_duration": "REAL DEFAULT 3.0",
-            "min_segment_duration": "REAL DEFAULT 3.0",
             "subtitle_settings_by_key": "TEXT",
             "attention_timeline": "TEXT DEFAULT '{}'",
+            "generation_job": "TEXT DEFAULT '{}'",
+            "tts_jobs": "TEXT DEFAULT '{}'",
         }
         try:
             cur = self._conn.execute('PRAGMA table_info("editai_pipelines")')
