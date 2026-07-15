@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useBatchPolling, type BatchStatus, type ProductJobStatus } from "@/hooks/use-batch-polling";
-import { apiPost, apiGet } from "@/lib/api";
+import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Clock,
@@ -199,8 +199,8 @@ function BatchGenerateContent() {
         const err = await res.json().catch(() => ({ detail: "Retry failed" }));
         toast.error(err.detail || "Retry failed");
       }
-    } catch {
-      toast.error("Network error retrying batch");
+    } catch (error) {
+      handleApiError(error, "Could not retry the batch");
     } finally {
       setRetryLoading(false);
     }

@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { apiGetWithRetry, apiPost } from "@/lib/api";
+import { apiGetWithRetry, apiPost, handleApiError } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import {
@@ -413,8 +413,8 @@ export default function ProductsPage() {
         const err = await res.json().catch(() => ({ detail: "Batch generation failed" }));
         toast.error(err.detail || "Batch generation failed");
       }
-    } catch {
-      toast.error("Network error starting batch generation");
+    } catch (error) {
+      handleApiError(error, "Could not start batch generation");
     } finally {
       setBatchLoading(false);
       setBatchDialogOpen(false);

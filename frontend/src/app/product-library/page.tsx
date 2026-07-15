@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { apiGetWithRetry, apiDelete, apiUpload, apiPost, apiFetch, API_URL } from "@/lib/api";
+import { apiGetWithRetry, apiDelete, apiUpload, apiPost, apiFetch, API_URL, handleApiError } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import {
@@ -282,7 +282,7 @@ export default function ProductLibraryPage() {
       const params = new URLSearchParams({ batch_id: data.batch_id, src: "local" });
       router.push(`/batch-generate?${params.toString()}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Batch generation failed");
+      handleApiError(error, "Batch generation failed");
     } finally {
       setBatchLoading(false);
     }

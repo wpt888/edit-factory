@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { apiPost, apiGet, apiPatch, apiGetWithRetry } from "@/lib/api";
+import { apiPost, apiGet, apiPatch, apiGetWithRetry, handleApiError } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { useJobPolling, formatElapsedTime } from "@/hooks/use-job-polling";
 import { toast } from "sonner";
@@ -216,8 +216,7 @@ function ProductVideoContent() {
     } catch (err) {
       setIsGenerating(false);
       setHasError(true);
-      const message = err instanceof Error ? err.message : "Unknown error";
-      toast.error(`Failed to start generation: ${message}`);
+      handleApiError(err, "Failed to start generation");
     }
   };
 

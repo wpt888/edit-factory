@@ -1,5 +1,7 @@
 import { toast } from "sonner";
 
+export const BLIPOST_BILLING_URL = "https://blipost.com/billing";
+
 /**
  * Structured API error with HTTP status, detail message, and timeout flag.
  */
@@ -18,7 +20,17 @@ export class ApiError extends Error {
 }
 
 function stringifyApiDetail(detail: unknown): string {
-  if (typeof detail === "string") return detail;
+  if (typeof detail === "string") {
+    const trimmed = detail.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return stringifyApiDetail(JSON.parse(trimmed));
+      } catch {
+        // The backend detail is not JSON after all; show it as plain text.
+      }
+    }
+    return detail;
+  }
   if (Array.isArray(detail)) {
     return detail
       .map((item) => {
@@ -50,6 +62,21 @@ function stringifyApiDetail(detail: unknown): string {
  */
 export function handleApiError(error: unknown, context?: string): void {
   if (error instanceof ApiError) {
+    if (error.status === 402) {
+      toast.error(
+        stringifyApiDetail(error.detail)
+          || "You do not have enough Blipost credits for this operation.",
+        {
+          description: "The operation was not started. Add credits to continue.",
+          duration: 12_000,
+          action: {
+            label: "Manage credits",
+            onClick: () => window.open(BLIPOST_BILLING_URL, "_blank", "noopener,noreferrer"),
+          },
+        },
+      );
+      return;
+    }
     if (error.status === 429) {
       toast.error("Too many requests. Try again later.");
       return;
