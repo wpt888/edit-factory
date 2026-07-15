@@ -10,9 +10,12 @@
 - Moved script generation and per-variant TTS to persisted FastAPI background
   jobs with `202` dispatch, polling, cancellation, parallel TTS start, progress
   per variant, and restoration after refresh or from Pipeline History.
+- Serialized job mutation with its per-pipeline DB write so concurrent TTS
+  variants cannot regress the persisted map; terminal cancellation now wins
+  against a late worker completion.
 - Added the additive `generation_job`/`tts_jobs` schema migration without
   applying it to any database.
-- Verified 22 backend tests, TypeScript, focused lint with zero errors, and the
+- Verified 30 backend tests, TypeScript, focused lint with zero errors, and the
   reload/history/progress flows through Playwright MCP on isolated SQLite data.
   No push or deployment was performed.
 

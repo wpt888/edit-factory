@@ -45,6 +45,11 @@ Script generation and per-variant TTS follow the existing render pattern:
 - one frontend poll updates independent progress bars and only counts variants
   with completed audio as ready.
 
+Job mutation and its focused DB write share the same per-pipeline critical
+section. This prevents out-of-order concurrent TTS snapshots from dropping a
+variant. Terminal states are authoritative, so a late generation/TTS worker
+cannot overwrite a cancellation after returning from a slow provider call.
+
 The pipeline record stores `generation_job` plus the `tts_jobs` map as JSON.
 SQLite schema bootstrap and the additive Supabase migration
 `054_add_pipeline_async_jobs.sql` define the same contract. The migration file
@@ -64,9 +69,10 @@ queue is introduced in a separately approved scope.
 
 ## Verification record
 
-- Backend: 22 focused compatibility and async-job tests passed, including DB
-  restore after in-memory eviction, per-variant TTS persistence, duplicate-job
-  rejection, and the existing full SQLite pipeline flow.
+- Backend: 30 focused compatibility and async-job tests passed, including DB
+  restore after in-memory eviction, race-safe per-variant TTS persistence,
+  cancellation precedence, duplicate-job rejection, and the existing full
+  SQLite pipeline flow.
 - Frontend: `tsc --noEmit` passed; focused ESLint reported zero errors and 13
   pre-existing warnings.
 - Browser: Playwright MCP showed script progress surviving reload, History

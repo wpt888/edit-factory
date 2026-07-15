@@ -20,4 +20,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Web-first Creative Studio: mutarea editorului în blipost.com](19-web-first-creative-studio.md)
 - [Poziționare ecosistem: fabrică, nu studio](20-pozitionare-ecosistem.md)
 - [BlipStudio production deployment](21-blipstudio-production-deployment.md)
-- [BlipStudio web remediation: local boundaries and async pipeline jobs](22-blipstudio-web-remediation.md)
+- [BlipStudio web remediation: local boundaries and race-safe async pipeline jobs](22-blipstudio-web-remediation.md)
