@@ -10,7 +10,7 @@ DESKTOP_ONLY_LOCAL_FILESYSTEM_DETAIL = (
     "BlipStudio desktop app."
 )
 DESKTOP_ONLY_LEGACY_AI_DETAIL = (
-    "This legacy AI workflow is available only in the BlipStudio desktop app. "
+    "This legacy AI workflow is desktop-only and is available in the BlipStudio desktop app. "
     "Use the metered Pipeline, Product, TTS Library, or Video Generator workflow "
     "in the web app."
 )
