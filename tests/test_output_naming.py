@@ -13,7 +13,7 @@ def test_build_output_basename_uses_human_readable_labels():
         created_at=datetime(2026, 4, 9, 23, 51, 41),
     )
 
-    assert stem == "summer_launch_hooks_3_motive_pentru_care_acest_produs_merita_v2a_20260409_235141"
+    assert stem == "summer_launch_hooks_3_motive_pentru_care_acest_produs_v2a_20260409_235141"
 
 
 def test_build_output_basename_keeps_non_default_preset():
