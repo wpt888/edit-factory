@@ -18,7 +18,10 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.desktop_only import require_desktop_local_filesystem
+from app.api.desktop_only import (
+    DESKTOP_ONLY_LOCAL_FILESYSTEM_DETAIL,
+    require_desktop_local_filesystem,
+)
 from app.api.media_session import (
     get_profile_context_with_media_session,
     get_source_media_profile_context,
@@ -739,54 +742,23 @@ async def find_local_file(
     return {"matches": safe_matches, "file_path": safe_matches[0]}
 
 
-_PICKER_SCRIPT = r"""
-import json, sys
-try:
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-    paths = filedialog.askopenfilenames(
-        title="Select Video Files",
-        filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.mpeg *.mpg *.3gp *.ogg"),
-                   ("All files", "*.*")])
-    root.destroy()
-    sys.stdout.write(json.dumps(list(paths)))
-except Exception:
-    sys.stdout.write("[]")
-"""
-
-
 @router.get("/browse-local")
 async def browse_local_file(
     request: Request,
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Open a fallback native picker for legacy desktop shells only."""
-    require_desktop_local_filesystem()
+    """Deprecated stub — always returns 501.
 
-    import asyncio
-    import json as _json
-    import sys as _sys
-
-    proc = await asyncio.create_subprocess_exec(
-        _sys.executable, "-c", _PICKER_SCRIPT,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+    The native file picker is delivered by the Electron IPC bridge
+    (``window.editFactory.selectVideoFiles`` — see frontend/src/lib/desktop.ts).
+    No web or desktop client calls this HTTP endpoint anymore, so it is inert
+    in both modes. Keeping it dead also keeps tkinter out of the packaged
+    desktop backend, where a Tk abort (0xC0000409) would kill uvicorn.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail=DESKTOP_ONLY_LOCAL_FILESYSTEM_DETAIL,
     )
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return {"file_path": None, "file_paths": []}
-
-    try:
-        paths = _json.loads((out or b"[]").decode("utf-8", "replace").strip() or "[]")
-    except Exception:
-        paths = []
-    if not paths:
-        return {"file_path": None, "file_paths": []}
-
-    return {"file_path": paths[0], "file_paths": paths}
 
 
 @router.post("/source-videos/local", response_model=SourceVideoResponse)

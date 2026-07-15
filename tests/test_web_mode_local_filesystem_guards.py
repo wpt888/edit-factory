@@ -108,3 +108,27 @@ def test_desktop_mode_allows_local_filesystem_guard(monkeypatch):
     )
 
     desktop_only.require_desktop_local_filesystem()
+
+
+def test_browse_local_is_dead_in_desktop_mode(monkeypatch):
+    # The native picker moved to the Electron IPC bridge; the HTTP endpoint is
+    # inert in *both* modes and must never spawn tkinter inside the packaged
+    # desktop backend (0xC0000409).
+    monkeypatch.setattr(
+        desktop_only,
+        "get_settings",
+        lambda: SimpleNamespace(desktop_mode=True),
+    )
+
+    async def fail_spawn(*_args, **_kwargs):
+        raise AssertionError("desktop mode must not spawn a native picker either")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_spawn)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(segments_routes.browse_local_file(
+            request=None,
+            profile=PROFILE,
+        ))
+
+    _assert_desktop_only(exc_info)
