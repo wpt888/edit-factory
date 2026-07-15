@@ -38,7 +38,8 @@ from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.config import get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
-from app.services.ffmpeg_semaphore import acquire_render_slot, acquire_preview_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
+from app.services.ffmpeg_semaphore import acquire_preview_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
+from app.services.render_queue import RenderQueueCancelled, RenderQueueTicket, get_render_queue
 
 
 def _stable_hash(text: str) -> str:
@@ -398,6 +399,11 @@ _preview_locks_meta_lock = threading.Lock()
 # from concurrent preview/TTS/render tasks racing on the same pipeline dict.
 _pipeline_state_locks: Dict[str, threading.Lock] = {}
 _pipeline_state_locks_meta: threading.Lock = threading.Lock()
+
+
+def _render_queue_job_id(pipeline_id: str, job_key: Any) -> str:
+    """Build the process-local scheduler key for one pipeline render."""
+    return f"{pipeline_id}:{job_key}"
 
 
 def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
@@ -1618,20 +1624,24 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                     logger.warning(f"Skipping invalid render_jobs key: {k}")
                     continue
 
-        # Wave 2.3: this load path only runs for pipelines NOT already live in
-        # this process, so any render job still mid-progress was interrupted by a
-        # previous crash/restart. Mark it clearly (re-render to resume) instead of
-        # leaving a frozen/vanishing progress bar.
+        # This load path only runs for pipelines NOT already live in this
+        # process. The fair queue is intentionally in-memory/per-container, so
+        # both queued and processing jobs were interrupted by a crash/restart.
+        # Mark them honestly instead of pretending that a vanished callback can
+        # resume from persisted JSON.
+        interrupted_render_jobs = False
         for _rj in render_jobs.values():
             if not isinstance(_rj, dict):
                 continue
-            _pct = _rj.get("progress") or 0
-            _step = str(_rj.get("current_step") or "").lower()
-            _terminal = _pct >= 100 or any(t in _step for t in ("complete", "failed", "cancel", "interrupt"))
-            if 0 < _pct < 100 and not _terminal:
+            if _rj.get("status") in ("queued", "processing"):
+                _rj["status"] = "failed"
+                _rj["progress"] = 0
                 _rj["current_step"] = "Render întrerupt — apasă Render din nou"
                 _rj["interrupted"] = True
-                logger.info(f"Pipeline {pipeline_id}: marked interrupted render job at {_pct}%")
+                _rj["error"] = "Render did not survive a backend restart. Submit the render again."
+                _rj["failed_at"] = datetime.now(timezone.utc).isoformat()
+                interrupted_render_jobs = True
+                logger.info(f"Pipeline {pipeline_id}: marked queued/processing render job interrupted")
 
         tts_previews = {}
         for k, v in (row.get("tts_previews") or {}).items():
@@ -1725,6 +1735,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         # Cache in memory
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
+        if interrupted_render_jobs:
+            _db_update_render_jobs(pipeline_id, render_jobs)
         logger.info(f"Pipeline {pipeline_id} loaded from DB")
         return pipeline
 
@@ -1978,7 +1990,7 @@ class PipelineRenderResponse(BaseModel):
 class VariantStatus(BaseModel):
     """Status of a single variant in the pipeline."""
     variant_index: int
-    status: str                         # "not_started", "processing", "completed", "failed"
+    status: str                         # "not_started", "queued", "processing", "completed", "failed"
     progress: int                       # 0-100
     current_step: str
     final_video_path: Optional[str] = None
@@ -1990,6 +2002,8 @@ class VariantStatus(BaseModel):
     render_fingerprint: Optional[str] = None
     visual_version: Optional[str] = None    # "A", "B" when meta_multiplication active
     meta_platform: Optional[str] = None     # "instagram", "facebook"
+    queue_position: Optional[int] = None
+    eta_seconds: Optional[int] = None
 
 
 class RenderCheckResult(BaseModel):
@@ -2223,6 +2237,12 @@ async def cancel_pipeline_render(
 
     mark_pipeline_cancelled(pipeline_id)
 
+    # Remove waiting items before touching FFmpeg. Running items are left to the
+    # existing cancellation flag + process registry path below.
+    queue = get_render_queue()
+    for job_key in list(pipeline.get("render_jobs", {}).keys()):
+        await queue.cancel(_render_queue_job_id(pipeline_id, job_key))
+
     # PIP-03: Acquire per-pipeline render lock before mutating render_jobs state
     pipeline_id_str = str(pipeline_id)
     with _render_locks_meta_lock:
@@ -2235,7 +2255,7 @@ async def cancel_pipeline_render(
 
     with render_lock:
         for idx, job in pipeline.get("render_jobs", {}).items():
-            if job.get("status") == "processing":
+            if job.get("status") in ("queued", "processing"):
                 from app.services.ffmpeg_registry import kill_job
                 kill_job(f"{pipeline_id}:{idx}")
                 job["status"] = "cancelled"
@@ -2252,7 +2272,7 @@ async def cancel_pipeline_render(
     return {"status": "cancelled", "pipeline_id": pipeline_id}
 
 
-def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_lock: threading.Lock) -> bool:
+async def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_lock: threading.Lock) -> bool:
     """Mark one render_jobs entry cancelled and kill any live ffmpeg process.
 
     Returns True if a job with that key existed and was not already in a
@@ -2272,9 +2292,10 @@ def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_lock: t
     if not job:
         return False
     mark_variant_cancelled(pipeline_id, job_key)
+    await get_render_queue().cancel(_render_queue_job_id(pipeline_id, job_key))
     kill_job(f"{pipeline_id}:{job_key}")
     with render_lock:
-        if job.get("status") in ("processing", "not_started", "pending", None):
+        if job.get("status") in ("queued", "processing", "not_started", "pending", None):
             job["status"] = "cancelled"
             job["current_step"] = "Cancelled by user"
             job["progress"] = 0
@@ -2322,20 +2343,20 @@ async def cancel_variant_render(
     if is_bare_variant:
         # Cancel the standard job and every meta version of this variant
         for candidate_key in [job_key]:
-            if _cancel_single_job(pipeline, pipeline_id, candidate_key, render_lock):
+            if await _cancel_single_job(pipeline, pipeline_id, candidate_key, render_lock):
                 cancelled_keys.append(candidate_key)
         try:
             _int_key = int(job_key)
-            if _cancel_single_job(pipeline, pipeline_id, _int_key, render_lock):
+            if await _cancel_single_job(pipeline, pipeline_id, _int_key, render_lock):
                 cancelled_keys.append(_int_key)
         except (ValueError, TypeError):
             pass
         for suffix in ("_A", "_B", "_C", "_D", "_E"):
             meta_key = f"{job_key}{suffix}"
-            if _cancel_single_job(pipeline, pipeline_id, meta_key, render_lock):
+            if await _cancel_single_job(pipeline, pipeline_id, meta_key, render_lock):
                 cancelled_keys.append(meta_key)
     else:
-        if _cancel_single_job(pipeline, pipeline_id, job_key, render_lock):
+        if await _cancel_single_job(pipeline, pipeline_id, job_key, render_lock):
             cancelled_keys.append(job_key)
 
     with _pipelines_lock:
@@ -4544,7 +4565,12 @@ async def render_variants(
                 continue
 
             existing_job = pipeline["render_jobs"].get(job_key)
-            if existing_job and existing_job.get("status") == "processing":
+            if existing_job and existing_job.get("status") in ("queued", "processing"):
+                if existing_job.get("status") == "queued":
+                    logger.info(
+                        f"Pipeline {pipeline_id}: skipping {job_key} — already queued"
+                    )
+                    continue
                 # Treat as stale (orphan from a crashed/restarted run) when
                 # started_at is older than STALE_PROCESSING_THRESHOLD_SEC and
                 # no completed_at is recorded. Without this, any in-flight job
@@ -4573,12 +4599,12 @@ async def render_variants(
                 )
 
             _init_job: dict = {
-                "status": "processing",
+                "status": "queued",
                 "progress": 0,
-                "current_step": "Initializing render",
+                "current_step": "Queued for render",
                 "final_video_path": None,
                 "error": None,
-                "started_at": datetime.now(timezone.utc).isoformat()
+                "queued_at": datetime.now(timezone.utc).isoformat(),
             }
             if ver_idx is not None:
                 _init_job["visual_version"] = get_version_label(ver_idx)
@@ -4594,8 +4620,15 @@ async def render_variants(
                 clear_variant_cancelled(pipeline_id, str(job_key))
             _render_tasks_to_run.append((vid, ver_idx, job_key))
 
-    # Capture profile_id by value so the closure doesn't hold a mutable reference
+    if _render_tasks_to_run:
+        # Persist the queue state before the response is sent. On restart the
+        # load path turns these process-local reservations into an honest
+        # interrupted state instead of pretending they can resume.
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    # Capture identity by value so background closures don't hold request state.
     _profile_id = profile.profile_id
+    _user_id = profile.user_id
 
     # Define render function for a single variant (or variant+version when meta_multiplication is active)
     async def do_render(vid, version_index=None, job_key=None):
@@ -5126,7 +5159,82 @@ async def render_variants(
             except Exception:
                 pass
 
-    # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
+    # Register every render before returning so queue position is immediately
+    # observable. Meta versions are inserted version-first (all A, then all B)
+    # to preserve the existing cross-version dependency without violating a
+    # user's FIFO order.
+    _queue = get_render_queue()
+    _version_ready_events = {
+        version_index: asyncio.Event()
+        for version_index in range(1, len(META_PROFILES))
+    } if _meta_mul else {}
+    _queue_tickets: Dict[Any, RenderQueueTicket] = {}
+    _queue_registration_order = (
+        sorted(_render_tasks_to_run, key=lambda item: item[1])
+        if _meta_mul else list(_render_tasks_to_run)
+    )
+
+    try:
+        for _vid, _ver_idx, _job_key in _queue_registration_order:
+            _queue_tickets[_job_key] = await _queue.enqueue(
+                user_id=_user_id,
+                job_id=_render_queue_job_id(pipeline_id, _job_key),
+                ready_event=_version_ready_events.get(_ver_idx),
+            )
+    except Exception as queue_error:
+        for registered_key in list(_queue_tickets):
+            await _queue.cancel(_render_queue_job_id(pipeline_id, registered_key))
+        with render_jobs_lock:
+            for _, _, failed_key in _render_tasks_to_run:
+                failed_job = pipeline.get("render_jobs", {}).get(failed_key)
+                if isinstance(failed_job, dict) and failed_job.get("status") == "queued":
+                    failed_job["status"] = "failed"
+                    failed_job["current_step"] = "Failed to enter render queue"
+                    failed_job["error"] = str(queue_error)
+                    failed_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        logger.error("Pipeline %s failed to register render queue jobs: %s", pipeline_id, queue_error)
+        raise HTTPException(status_code=500, detail="Failed to queue render") from queue_error
+
+    async def _run_queued_render(_vid, _ver_idx, _job_key):
+        ticket = _queue_tickets[_job_key]
+        try:
+            async with ticket:
+                queued_job = pipeline.get("render_jobs", {}).get(_job_key)
+                if (
+                    not isinstance(queued_job, dict)
+                    or queued_job.get("status") == "cancelled"
+                    or is_pipeline_cancelled(pipeline_id)
+                    or is_variant_cancelled(pipeline_id, str(_job_key))
+                ):
+                    if isinstance(queued_job, dict) and queued_job.get("status") != "cancelled":
+                        with render_jobs_lock:
+                            queued_job["status"] = "cancelled"
+                            queued_job["progress"] = 0
+                            queued_job["current_step"] = "Cancelled by user"
+                            queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    return
+
+                with render_jobs_lock:
+                    queued_job["status"] = "processing"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Initializing render"
+                    queued_job["started_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await do_render(_vid, version_index=_ver_idx, job_key=_job_key)
+        except RenderQueueCancelled:
+            queued_job = pipeline.get("render_jobs", {}).get(_job_key)
+            if isinstance(queued_job, dict) and queued_job.get("status") not in ("completed", "failed", "cancelled"):
+                with render_jobs_lock:
+                    queued_job["status"] = "cancelled"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Cancelled by user"
+                    queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    # Run all registered variants in the background; the fair queue, and then
+    # the existing FFmpeg semaphore inside each ticket, control actual starts.
     async def _render_all_variants():
         if _meta_mul:
             # Sequential per version (A then B), parallel across variants within each version.
@@ -5135,44 +5243,22 @@ async def render_variants(
             for ver_idx in range(len(META_PROFILES)):
                 ver_tasks = [(v, vi, jk) for v, vi, jk in _render_tasks_to_run if vi == ver_idx]
                 if not ver_tasks:
+                    next_gate = _version_ready_events.get(ver_idx + 1)
+                    if next_gate:
+                        next_gate.set()
+                        await _queue.notify_ready()
                     continue
-                async def _throttled_meta_render(_vid, _ver_idx, _job_key):
-                    # Short-circuit queued cancels BEFORE waiting for the render slot,
-                    # so a user Stop on a not_started card doesn't need to wait for
-                    # a semaphore slot to release before taking effect.
-                    if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, str(_job_key)):
-                        _queued_job = pipeline.get("render_jobs", {}).get(_job_key)
-                        if isinstance(_queued_job, dict) and _queued_job.get("status") != "cancelled":
-                            with render_jobs_lock:
-                                _queued_job["status"] = "cancelled"
-                                _queued_job["progress"] = 0
-                                _queued_job["current_step"] = "Cancelled by user"
-                                _queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
-                            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
-                        return
-                    async with await acquire_render_slot():
-                        await do_render(_vid, version_index=_ver_idx, job_key=_job_key)
-                tasks = [_throttled_meta_render(v, vi, jk) for v, vi, jk in ver_tasks]
+                tasks = [_run_queued_render(v, vi, jk) for v, vi, jk in ver_tasks]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
                         logger.error(f"Render {ver_tasks[i][2]} failed: {result}")
+                next_gate = _version_ready_events.get(ver_idx + 1)
+                if next_gate:
+                    next_gate.set()
+                    await _queue.notify_ready()
         else:
-            # Original flow: parallel across variants
-            async def _throttled_render(vid):
-                if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, str(vid)):
-                    _queued_job = pipeline.get("render_jobs", {}).get(vid)
-                    if isinstance(_queued_job, dict) and _queued_job.get("status") != "cancelled":
-                        with render_jobs_lock:
-                            _queued_job["status"] = "cancelled"
-                            _queued_job["progress"] = 0
-                            _queued_job["current_step"] = "Cancelled by user"
-                            _queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
-                        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
-                    return
-                async with await acquire_render_slot():
-                    await do_render(vid)
-            tasks = [_throttled_render(v) for v, _, _ in _render_tasks_to_run]
+            tasks = [_run_queued_render(v, vi, jk) for v, vi, jk in _render_tasks_to_run]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
@@ -5252,8 +5338,8 @@ async def remake_variant(
 
     # 2. Check variant is not currently processing
     existing_job = pipeline.get("render_jobs", {}).get(job_key)
-    if existing_job and existing_job.get("status") == "processing":
-        raise HTTPException(status_code=409, detail="Variant is currently rendering. Wait or cancel first.")
+    if existing_job and existing_job.get("status") in ("queued", "processing"):
+        raise HTTPException(status_code=409, detail="Variant is already queued or rendering. Wait or cancel first.")
 
     # 3. Read TTS data for reuse
     _tts_previews = pipeline.get("tts_previews", {})
@@ -5371,12 +5457,12 @@ async def remake_variant(
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
         pipeline["render_jobs"][job_key] = {
-            "status": "processing",
+            "status": "queued",
             "progress": 0,
-            "current_step": "Remaking with new segments",
+            "current_step": "Queued for remake",
             "final_video_path": None,
             "error": None,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "queued_at": datetime.now(timezone.utc).isoformat(),
         }
         if normalized_visual_version:
             pipeline["render_jobs"][job_key]["visual_version"] = normalized_visual_version
@@ -5593,17 +5679,65 @@ async def remake_variant(
             except Exception:
                 pass
 
-    # 9. Launch background task with render slot throttling
-    async def _throttled_remake():
-        async with await acquire_render_slot():
-            await do_remake()
+    # 9. Register the remake in the same per-user fair queue as new renders.
+    queue = get_render_queue()
+    try:
+        queue_ticket = await queue.enqueue(
+            user_id=profile.user_id,
+            job_id=_render_queue_job_id(pipeline_id, job_key),
+        )
+    except Exception as queue_error:
+        with render_jobs_lock:
+            queued_job = pipeline["render_jobs"][job_key]
+            queued_job["status"] = "failed"
+            queued_job["current_step"] = "Failed to enter render queue"
+            queued_job["error"] = str(queue_error)
+            queued_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        raise HTTPException(status_code=500, detail="Failed to queue remake") from queue_error
+
+    async def _queued_remake():
+        try:
+            async with queue_ticket:
+                queued_job = pipeline.get("render_jobs", {}).get(job_key)
+                if (
+                    not isinstance(queued_job, dict)
+                    or queued_job.get("status") == "cancelled"
+                    or is_pipeline_cancelled(pipeline_id)
+                    or is_variant_cancelled(pipeline_id, str(job_key))
+                ):
+                    if isinstance(queued_job, dict) and queued_job.get("status") != "cancelled":
+                        with render_jobs_lock:
+                            queued_job["status"] = "cancelled"
+                            queued_job["progress"] = 0
+                            queued_job["current_step"] = "Cancelled by user"
+                            queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    return
+
+                with render_jobs_lock:
+                    queued_job["status"] = "processing"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Remaking with new segments"
+                    queued_job["started_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await do_remake()
+        except RenderQueueCancelled:
+            queued_job = pipeline.get("render_jobs", {}).get(job_key)
+            if isinstance(queued_job, dict) and queued_job.get("status") not in ("completed", "failed", "cancelled"):
+                with render_jobs_lock:
+                    queued_job["status"] = "cancelled"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Cancelled by user"
+                    queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
     with _render_locks_meta_lock:
         _render_locks_timestamps[pipeline_id_str] = _time_mod.monotonic()
-    background_tasks.add_task(_throttled_remake)
+    background_tasks.add_task(_queued_remake)
 
     return {
-        "status": "remaking",
+        "status": "queued",
         "pipeline_id": pipeline_id,
         "variant_index": variant_index,
         "job_key": str(job_key),
@@ -5675,6 +5809,12 @@ async def get_pipeline_status(pipeline_id: str):
 
     # Build variants status list
     variants = []
+    queued_job_ids = {
+        job_key: _render_queue_job_id(pipeline_id, job_key)
+        for job_key, job in pipeline.get("render_jobs", {}).items()
+        if isinstance(job, dict) and job.get("status") == "queued"
+    }
+    queue_snapshots = await get_render_queue().snapshots(list(queued_job_ids.values()))
     # Recovery: collect variant indices that need clip_id lookup
     _clip_id_recovery_needed: list[int] = []
     for idx in range(len(pipeline["scripts"])):
@@ -5689,6 +5829,7 @@ async def get_pipeline_status(pipeline_id: str):
             raw_thumb_path = job.get("thumbnail_path")
             safe_video_path = _safe_relative_path(raw_video_path)
             safe_thumb_path = _safe_relative_path(raw_thumb_path)
+            queue_snapshot = queue_snapshots.get(queued_job_ids.get(idx, ""))
             # Recovery: if completed but no clip_id, try to recover from editai_clips
             clip_id = job.get("clip_id")
             if job["status"] == "completed" and not clip_id:
@@ -5705,7 +5846,9 @@ async def get_pipeline_status(pipeline_id: str):
                 error=sanitized_error,
                 library_saved=job.get("library_saved"),
                 library_error=sanitized_lib_error,
-                render_fingerprint=job.get("render_fingerprint")
+                render_fingerprint=job.get("render_fingerprint"),
+                queue_position=queue_snapshot.position if queue_snapshot else None,
+                eta_seconds=queue_snapshot.eta_seconds if queue_snapshot else None,
             ))
         else:
             # Variant not yet rendered
@@ -5735,6 +5878,7 @@ async def get_pipeline_status(pipeline_id: str):
             raw_thumb_path = job.get("thumbnail_path")
             safe_video_path = _safe_relative_path(raw_video_path)
             safe_thumb_path = _safe_relative_path(raw_thumb_path)
+            queue_snapshot = queue_snapshots.get(queued_job_ids.get(jk, ""))
             meta_variants.append(VariantStatus(
                 variant_index=_meta_vid,
                 status=job["status"],
@@ -5749,6 +5893,8 @@ async def get_pipeline_status(pipeline_id: str):
                 render_fingerprint=job.get("render_fingerprint"),
                 visual_version=job.get("visual_version"),
                 meta_platform=job.get("meta_platform"),
+                queue_position=queue_snapshot.position if queue_snapshot else None,
+                eta_seconds=queue_snapshot.eta_seconds if queue_snapshot else None,
             ))
 
     # Force pair-by-pair order so the Step 4 grid renders A on the left and
