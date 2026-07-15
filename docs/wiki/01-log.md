@@ -1,5 +1,23 @@
 # Engineering Change Log
 
+## 2026-07-15 — Backend suite green: five pre-existing failures fixed
+
+- Aligned the three `TestTTSGenerate` tests with the multi-provider
+  `/tts/generate` contract (`provider`+`voice_id` required; status `processing`).
+- Corrected `test_build_output_basename_uses_human_readable_labels` to the
+  deliberate 6-word script-slug truncation (the expectation was miscounted).
+- Root-caused the `"database is locked"` failure to a leaked SQLite connection:
+  `close_repository()` reset the singleton without closing its connection, so an
+  orphaned handle held the `data.db` write lock (GC-delayed under coverage). Now
+  `close_repository()` closes the backend connection on reset.
+- Local-only env fix: installed `python-magic-bin` in the venv because
+  `import magic` hung on this Windows machine (`requirements.txt` unchanged —
+  prod is Linux/Docker with `libmagic1`). No pytest zombies were present.
+- Full backend suite: **555 passed, 1 skipped, 18 xfailed, 0 failed** (~63 s),
+  run cap-à-queue with no hacks.
+
+See [BlipStudio web remediation](22-blipstudio-web-remediation.md).
+
 ## 2026-07-15 — BlipStudio remediation: post-verification fixes
 
 - Kept the `generate_raw_clips` web-mode guard (a bare `video_path` reads the

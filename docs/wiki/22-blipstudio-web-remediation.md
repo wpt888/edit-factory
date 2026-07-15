@@ -150,3 +150,58 @@ Environment note: the suite cannot complete unless the broken `import magic`
 (python-magic hangs in this environment) is neutralized. `validate_file_mime_type`
 already degrades gracefully when magic is absent, so the run blocked the import;
 this is an environment defect, not a code issue.
+
+## Test-suite green: the five pre-existing failures fixed (2026-07-15)
+
+The five failures above are now resolved. The full backend suite runs
+cap-à-queue with no hacks (no `sitecustomize`, no `-x`) and reports
+**555 passed, 1 skipped, 18 xfailed, 0 failed** in ~63 s (`SUITE_EXIT=0`).
+
+- **FIX 1 — `TestTTSGenerate` (3 tests).** `POST /tts/generate`
+  (`app/api/tts_routes.py`, born in `27ef6e2`) has always required `provider`
+  and `voice_id`; the old text-only route survives as `/tts/generate-legacy`.
+  The requirement is intentional (multi-provider: elevenlabs/edge/coqui/kokoro,
+  where `voice_id` has no universal default), so the stale tests were updated to
+  send `provider=edge` + a valid `voice_id`, and the structure test now asserts
+  the actual `processing` status the endpoint returns (not `pending`).
+- **FIX 2 — `test_build_output_basename_uses_human_readable_labels`.**
+  `build_output_basename` slugifies the script label with an explicit
+  `max_words=6` (deliberate since birth in `08b0cca`). The test's expected
+  string was miscounted at seven words (`…produs_merita`); the truncation is a
+  clean word-boundary cut, so the expectation was corrected, not the code.
+- **FIX 3 — `test_generate_from_segments_skips_ml_when_mute_false`
+  ("database is locked").** Root cause was not the zombies. `close_repository()`
+  nulled the repository singleton without closing the underlying SQLite
+  connection, so an orphaned `SQLiteRepository` kept its `data.db` write lock
+  until GC finalized it. Under coverage across the full suite GC is delayed, so
+  the next `SQLiteRepository()`'s schema init (`executescript`) intermittently
+  failed with `sqlite3.OperationalError: database is locked` — surfacing as a
+  `500` from any endpoint that calls `get_repository()` (this is what made the
+  now-fixed TTS tests fail once they got past `422`). Fix: `close_repository()`
+  now closes the backend connection on reset (`app/repositories/factory.py`),
+  releasing locks deterministically. `sqlite_repo.py` was intentionally left
+  untouched (it carried unrelated uncommitted work), so the close reaches its
+  `_conn` through a guarded `getattr` in the factory.
+
+### Local environment fix — `import magic` (not committed)
+
+On this Windows dev machine `import magic` **hung** (>12 s, never returning), so
+`validate_file_mime_type`'s `except ImportError` graceful-degradation never
+fired and the whole suite stalled. `python-magic 0.4.27` was installed but its
+libmagic loader hangs here.
+
+Fix applied to the local venv only (branch (a) of the runbook):
+`venv/Scripts/pip.exe install python-magic-bin` (0.4.14) — it bundles the
+libmagic DLLs for Windows and its `magic/__init__.py` now satisfies the import.
+After it, `import magic` completes in ~0.045 s and `validate_file_mime_type`
+works end-to-end (allowed PNG passes; PNG-as-video is rejected `400`).
+
+`requirements.txt` / `pyproject.toml` were **not** changed: production runs on
+Linux in Docker where system `libmagic1` is already present, and
+`python-magic-bin` is a Windows-only wheel. The next session should not
+re-diagnose this — if `import magic` ever hangs again locally, either reinstall
+`python-magic-bin` or `pip uninstall python-magic` (the code degrades gracefully
+on `ImportError`).
+
+No stray `pytest`/`python` zombie processes were present when the fixes ran
+(FIX 4 was a no-op), and `data.db` had no leftover `-wal`/`-shm` lock files.
