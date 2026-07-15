@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json as _json
 import logging
+import math
 import ntpath
 import subprocess
 import threading
@@ -43,6 +44,7 @@ from app.services.render_queue import RenderQueueCancelled, RenderQueueTicket, g
 from app.services.studio_metering import (
     MeteringIdentity,
     StudioMeteringBlocked,
+    StudioMeteringClient,
     new_metering_record,
     reserve_metering_record,
     settle_metering_record,
@@ -1092,6 +1094,72 @@ async def _settle_tts_metering(
     return _replace_tts_metering(pipeline_id, variant_index, settled)
 
 
+def _replace_render_metering(pipeline_id: str, job_key: Any, record: dict) -> dict:
+    """Persist one render reservation without changing its terminal job status."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        jobs = pipeline.setdefault("render_jobs", {})
+        job = jobs.get(job_key)
+        if job is None and isinstance(job_key, str):
+            try:
+                job = jobs.get(int(job_key))
+            except (TypeError, ValueError):
+                job = None
+        if not isinstance(job, dict):
+            return {}
+        job["metering"] = dict(record)
+        snapshot = dict(job)
+        _db_update_render_jobs(pipeline_id, dict(jobs))
+    return snapshot
+
+
+async def _settle_render_metering(
+    pipeline_id: str,
+    job_key: Any,
+    user_id: str,
+    *,
+    delivered: bool,
+    result_metadata: Optional[Dict[str, Any]] = None,
+) -> dict:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    jobs = (pipeline or {}).get("render_jobs") or {}
+    job = jobs.get(job_key)
+    if job is None and isinstance(job_key, str):
+        try:
+            job = jobs.get(int(job_key))
+        except (TypeError, ValueError):
+            job = None
+    if not isinstance(job, dict):
+        return {}
+    record = job.get("metering")
+    if not isinstance(record, dict):
+        return job
+    settled = await settle_metering_record(
+        MeteringIdentity(user_id),
+        record,
+        delivered=delivered,
+        result_metadata=result_metadata,
+    )
+    return _replace_render_metering(pipeline_id, job_key, settled)
+
+
+def _render_job_is_stale(job: dict) -> bool:
+    if job.get("status") != "processing":
+        return False
+    started_at = job.get("started_at")
+    if not started_at:
+        return True
+    try:
+        started_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    return (
+        datetime.now(timezone.utc) - started_dt
+    ).total_seconds() > STALE_PROCESSING_THRESHOLD_SEC and not job.get("completed_at")
+
+
 def _db_update_async_jobs(
     pipeline_id: str,
     *,
@@ -1755,6 +1823,13 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 _rj["interrupted"] = True
                 _rj["error"] = "Render did not survive a backend restart. Submit the render again."
                 _rj["failed_at"] = datetime.now(timezone.utc).isoformat()
+                render_metering = _rj.get("metering")
+                if (
+                    isinstance(render_metering, dict)
+                    and render_metering.get("reservation_id")
+                    and render_metering.get("state") not in {"captured", "released", "refunded"}
+                ):
+                    render_metering["state"] = "refund_pending"
                 interrupted_render_jobs = True
                 logger.info(f"Pipeline {pipeline_id}: marked queued/processing render job interrupted")
 
@@ -2400,6 +2475,11 @@ async def cancel_pipeline_render(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     mark_pipeline_cancelled(pipeline_id)
+    metered_job_keys = [
+        job_key
+        for job_key, job in (pipeline.get("render_jobs") or {}).items()
+        if isinstance(job, dict) and job.get("status") in {"queued", "processing"}
+    ]
 
     # Remove waiting items before touching FFmpeg. Running items are left to the
     # existing cancellation flag + process registry path below.
@@ -2433,6 +2513,14 @@ async def cancel_pipeline_render(
 
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
+    for metered_job_key in metered_job_keys:
+        await _settle_render_metering(
+            pipeline_id,
+            metered_job_key,
+            profile.user_id,
+            delivered=False,
+        )
+
     return {"status": "cancelled", "pipeline_id": pipeline_id}
 
 
@@ -2454,6 +2542,8 @@ async def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_l
         except (ValueError, TypeError):
             job = None
     if not job:
+        return False
+    if job.get("status") in {"completed", "failed", "cancelled"}:
         return False
     mark_variant_cancelled(pipeline_id, job_key)
     await get_render_queue().cancel(_render_queue_job_id(pipeline_id, job_key))
@@ -2528,6 +2618,14 @@ async def cancel_variant_render(
             _pipelines[pipeline_id] = pipeline
 
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
+
+    for cancelled_key in cancelled_keys:
+        await _settle_render_metering(
+            pipeline_id,
+            cancelled_key,
+            profile.user_id,
+            delivered=False,
+        )
 
     logger.info(
         f"[Profile {profile.profile_id}] Cancelled pipeline={pipeline_id} "
@@ -4945,7 +5043,8 @@ async def render_variants(
     pipeline_id: str,
     render_request: PipelineRenderRequest,
     background_tasks: BackgroundTasks,
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """
     Start batch rendering of selected variants.
@@ -5042,14 +5141,102 @@ async def render_variants(
         else:
             _render_tasks.append((vid, None, vid))
 
-    # Initialize render jobs for each variant and collect which ones to render
+    # The rate card bills exact started output minutes. In enforced web mode a
+    # durable Step-2 voice-over is therefore required before queue entry; its
+    # measured duration is the final output duration. Desktop remains permissive
+    # and logs a best-effort estimate when users skip Step 2.
+    _metering_desktop = StudioMeteringClient().desktop_mode
+    _render_units_by_variant: Dict[int, int] = {}
+    for vid in set(item[0] for item in _render_tasks):
+        tts_entries = pipeline.get("tts_previews") or {}
+        tts_entry = tts_entries.get(vid) or tts_entries.get(str(vid)) or {}
+        audio_path = tts_entry.get("audio_path") if isinstance(tts_entry, dict) else None
+        try:
+            audio_duration = float((tts_entry or {}).get("audio_duration") or 0)
+        except (TypeError, ValueError):
+            audio_duration = 0
+        try:
+            has_durable_audio = bool(
+                audio_path
+                and audio_duration > 0
+                and Path(str(audio_path)).exists()
+                and Path(str(audio_path)).stat().st_size > 100
+            )
+        except OSError:
+            has_durable_audio = False
+        script_text = pipeline.get("scripts", [])[vid]
+        cleaned_script = strip_product_group_tags(script_text)
+        script_matches = tts_entry.get("script_hash") == _stable_hash(cleaned_script)
+        is_library_audio = bool(tts_entry.get("library_asset_id"))
+        settings_match = is_library_audio or _voice_settings_match(
+            tts_entry.get("voice_settings"), render_request.voice_settings
+        )
+        if not _metering_desktop and not (
+            has_durable_audio and script_matches and settings_match
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Generate a current voice-over for variant {vid + 1} in Step 2 "
+                    "before starting a metered render."
+                ),
+            )
+        if audio_duration <= 0:
+            try:
+                audio_duration = float(pipeline.get("target_script_duration") or 60)
+            except (TypeError, ValueError):
+                audio_duration = 60
+        _render_units_by_variant[vid] = max(1, math.ceil(audio_duration / 60))
+
+    # Reconcile any previous terminal or orphaned attempt before replacing its
+    # durable record with a new idempotency key.
     state_lock = _get_pipeline_state_lock(pipeline_id)
+    _skip_set = set(render_request.skip_variants or [])
+    for vid, _, job_key in _render_tasks:
+        if vid in _skip_set:
+            continue
+        existing_job = pipeline.get("render_jobs", {}).get(job_key)
+        if not isinstance(existing_job, dict):
+            continue
+        existing_metering = existing_job.get("metering")
+        if not isinstance(existing_metering, dict) or not existing_metering.get("reservation_id"):
+            continue
+        if existing_job.get("status") == "completed" or existing_metering.get("output_persisted"):
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                profile.user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": str(job_key),
+                },
+            )
+        elif existing_job.get("status") in {"failed", "cancelled"}:
+            await _settle_render_metering(
+                pipeline_id, job_key, profile.user_id, delivered=False
+            )
+        elif _render_job_is_stale(existing_job):
+            with state_lock:
+                existing_job["status"] = "failed"
+                existing_job["progress"] = 0
+                existing_job["current_step"] = "Render failed (stale)"
+                existing_job["error"] = (
+                    "Render did not survive a backend restart. Submit the render again."
+                )
+                existing_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                existing_metering["state"] = "refund_pending"
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, job_key, profile.user_id, delivered=False
+            )
+
+    # Initialize render jobs for each variant and collect which ones to render.
     _render_tasks_to_run = []
     with state_lock:
         # Store source_video_ids in pipeline state for reference
         if render_request.source_video_ids:
             pipeline["source_video_ids"] = render_request.source_video_ids
-        _skip_set = set(render_request.skip_variants or [])
         for vid, ver_idx, job_key in _render_tasks:
             # Skip variants that user chose to keep from previous render
             if vid in _skip_set:
@@ -5096,6 +5283,14 @@ async def render_variants(
                 "final_video_path": None,
                 "error": None,
                 "queued_at": datetime.now(timezone.utc).isoformat(),
+                "metering": {
+                    **new_metering_record(
+                        "studio.render_output_minute",
+                        _render_units_by_variant[vid],
+                        f"pipeline:{pipeline_id}:render:{job_key}:{uuid.uuid4().hex}",
+                    ),
+                    "supabase_user_id": profile.user_id,
+                },
             }
             if ver_idx is not None:
                 _init_job["visual_version"] = get_version_label(ver_idx)
@@ -5116,6 +5311,51 @@ async def render_variants(
         # load path turns these process-local reservations into an honest
         # interrupted state instead of pretending they can resume.
         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    # Reserve at queue entry, before the fair scheduler sees the jobs. This
+    # prevents a user without credits from occupying queue position or a render
+    # slot, while cancellation can still release the durable reservation.
+    _render_identity = MeteringIdentity(profile.user_id, current_user.email)
+    _reserved_render_keys: List[Any] = []
+    try:
+        for _, _, job_key in _render_tasks_to_run:
+            job = pipeline["render_jobs"][job_key]
+            reserved = await reserve_metering_record(
+                _render_identity,
+                job["metering"],
+            )
+            _replace_render_metering(pipeline_id, job_key, reserved)
+            _reserved_render_keys.append(job_key)
+    except StudioMeteringBlocked as error:
+        for reserved_key in _reserved_render_keys:
+            await _settle_render_metering(
+                pipeline_id,
+                reserved_key,
+                profile.user_id,
+                delivered=False,
+            )
+        with state_lock:
+            for _, _, failed_key in _render_tasks_to_run:
+                failed_job = pipeline["render_jobs"].get(failed_key)
+                if not isinstance(failed_job, dict):
+                    continue
+                failed_job.update(
+                    {
+                        "status": "failed",
+                        "progress": 0,
+                        "current_step": "Blipost credits required",
+                        "error": error.as_http_detail()["message"],
+                        "error_detail": error.as_http_detail(),
+                        "status_code": 402,
+                        "failed_at": _job_timestamp(),
+                    }
+                )
+                failed_metering = failed_job.get("metering")
+                if isinstance(failed_metering, dict) and not failed_metering.get("reservation_id"):
+                    failed_metering["state"] = "denied"
+                    failed_metering["last_error"] = error.as_http_detail()
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        raise _metering_http_exception(error)
 
     # Capture identity by value so background closures don't hold request state.
     _profile_id = profile.profile_id
@@ -5140,11 +5380,33 @@ async def render_variants(
                     f"Pipeline {pipeline_id} variant {vid} skipped: "
                     f"index >= script_count ({_script_count_snapshot})"
                 )
+                invalid_job = pipeline.get("render_jobs", {}).get(job_key)
+                if isinstance(invalid_job, dict):
+                    with render_jobs_lock:
+                        invalid_job["status"] = "failed"
+                        invalid_job["current_step"] = "Render failed"
+                        invalid_job["error"] = "Variant index is no longer valid"
+                        invalid_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # PIP-04: Check cancellation before starting render
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _cancel_scope):
                 logger.info(f"Pipeline {pipeline_id} job {_cancel_scope} skipped: cancelled")
+                skipped_job = pipeline.get("render_jobs", {}).get(job_key)
+                if isinstance(skipped_job, dict):
+                    with render_jobs_lock:
+                        skipped_job["status"] = "cancelled"
+                        skipped_job["current_step"] = "Cancelled by user"
+                        skipped_job["progress"] = 0
+                        skipped_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # ── Render fingerprint: SHA-256 hash of ALL render-affecting parameters ──
@@ -5185,6 +5447,10 @@ async def render_variants(
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
                 logger.info(f"Pipeline {pipeline_id} job {_cancel_scope} cancelled before start")
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # Update progress
@@ -5507,6 +5773,9 @@ async def render_variants(
                         f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                         f"job {_cancel_scope} cancelled during render ({rt_err})"
                     )
+                    await _settle_render_metering(
+                        pipeline_id, job_key, _user_id, delivered=False
+                    )
                     return
                 logger.error(
                     f"[Profile {_profile_id}] Pipeline {pipeline_id} "
@@ -5520,6 +5789,9 @@ async def render_variants(
                     job["failed_at"] = datetime.now(timezone.utc).isoformat()
                 # PIP-06: Persist failure to DB OUTSIDE the lock
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # Success — acquire lock before writing shared render_jobs dict.
@@ -5549,6 +5821,9 @@ async def render_variants(
                         Path(final_video_path).unlink(missing_ok=True)
                 except Exception:
                     pass
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
             with render_jobs_lock:
                 job["status"] = "completed"
@@ -5600,6 +5875,26 @@ async def render_variants(
                 voice_settings=render_request.voice_settings,
             )
 
+            completed_job = pipeline.get("render_jobs", {}).get(job_key)
+            completed_metering = (
+                completed_job.get("metering") if isinstance(completed_job, dict) else None
+            )
+            if isinstance(completed_metering, dict):
+                completed_metering = dict(completed_metering)
+                completed_metering["output_persisted"] = True
+                completed_metering["state"] = "output_persisted"
+                _replace_render_metering(pipeline_id, job_key, completed_metering)
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                _user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": str(job_key),
+                },
+            )
+
         except Exception as e:
             # Safety net for unexpected errors.  If the user cancelled mid-flight
             # we may land here because safe_ffmpeg_run raised after being killed;
@@ -5627,6 +5922,9 @@ async def render_variants(
                         if "cancelled_at" not in _job_for_status:
                             _job_for_status["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
             logger.error(
                 f"[Profile {_profile_id}] Pipeline {pipeline_id} "
@@ -5642,6 +5940,9 @@ async def render_variants(
 
             # PIP-06: Persist failure to DB OUTSIDE the lock
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, job_key, _user_id, delivered=False
+            )
         finally:
             # Clear the per-task job_key so follow-up cleanup (outside do_render)
             # does not inherit a stale association for this task's context.
@@ -5684,6 +5985,13 @@ async def render_variants(
                     failed_job["error"] = str(queue_error)
                     failed_job["failed_at"] = datetime.now(timezone.utc).isoformat()
         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        for _, _, failed_key in _render_tasks_to_run:
+            await _settle_render_metering(
+                pipeline_id,
+                failed_key,
+                _user_id,
+                delivered=False,
+            )
         logger.error("Pipeline %s failed to register render queue jobs: %s", pipeline_id, queue_error)
         raise HTTPException(status_code=500, detail="Failed to queue render") from queue_error
 
@@ -5705,6 +6013,9 @@ async def render_variants(
                             queued_job["current_step"] = "Cancelled by user"
                             queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    await _settle_render_metering(
+                        pipeline_id, _job_key, _user_id, delivered=False
+                    )
                     return
 
                 with render_jobs_lock:
@@ -5712,6 +6023,10 @@ async def render_variants(
                     queued_job["progress"] = 0
                     queued_job["current_step"] = "Initializing render"
                     queued_job["started_at"] = datetime.now(timezone.utc).isoformat()
+                    queued_metering = queued_job.get("metering")
+                    if isinstance(queued_metering, dict):
+                        queued_metering["provider_started"] = True
+                        queued_metering["state"] = "provider_started"
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
                 await do_render(_vid, version_index=_ver_idx, job_key=_job_key)
         except RenderQueueCancelled:
@@ -5723,6 +6038,27 @@ async def render_variants(
                     queued_job["current_step"] = "Cancelled by user"
                     queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, _job_key, _user_id, delivered=False
+            )
+        except Exception as queue_run_error:
+            queued_job = pipeline.get("render_jobs", {}).get(_job_key)
+            if isinstance(queued_job, dict) and queued_job.get("status") not in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                with render_jobs_lock:
+                    queued_job["status"] = "failed"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Render failed"
+                    queued_job["error"] = str(queue_run_error)
+                    queued_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, _job_key, _user_id, delivered=False
+            )
+            raise
 
     # Run all registered variants in the background; the fair queue, and then
     # the existing FFmpeg semaphore inside each ticket, control actual starts.
@@ -5791,6 +6127,7 @@ async def remake_variant(
     background_tasks: BackgroundTasks,
     visual_version: Optional[str] = Query(None),
     profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """Re-render a completed variant with the SAME voiceover but DIFFERENT video segments.
 
@@ -5856,6 +6193,32 @@ async def remake_variant(
             status_code=400,
             detail="No TTS data found for this variant. Please generate TTS in Step 2 first."
         )
+
+    try:
+        remake_units = max(1, math.ceil(float(reuse_audio_duration) / 60))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=409,
+            detail="Voice-over duration is unavailable. Regenerate TTS before remaking.",
+        )
+
+    existing_metering = existing_job.get("metering") if isinstance(existing_job, dict) else None
+    if isinstance(existing_metering, dict) and existing_metering.get("reservation_id"):
+        if existing_job.get("status") == "completed" or existing_metering.get("output_persisted"):
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                profile.user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": str(job_key),
+                },
+            )
+        elif existing_job.get("status") in {"failed", "cancelled"}:
+            await _settle_render_metering(
+                pipeline_id, job_key, profile.user_id, delivered=False
+            )
 
     # 4. Build strong avoid set (current variant's segments + cross-variant + DB usage)
     remake_avoid_ids: set = set()
@@ -5954,6 +6317,14 @@ async def remake_variant(
             "final_video_path": None,
             "error": None,
             "queued_at": datetime.now(timezone.utc).isoformat(),
+            "metering": {
+                **new_metering_record(
+                    "studio.render_output_minute",
+                    remake_units,
+                    f"pipeline:{pipeline_id}:remake:{job_key}:{uuid.uuid4().hex}",
+                ),
+                "supabase_user_id": profile.user_id,
+            },
         }
         if normalized_visual_version:
             pipeline["render_jobs"][job_key]["visual_version"] = normalized_visual_version
@@ -5962,7 +6333,34 @@ async def remake_variant(
 
     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
+    remake_identity = MeteringIdentity(profile.user_id, current_user.email)
+    try:
+        remake_metering = await reserve_metering_record(
+            remake_identity,
+            pipeline["render_jobs"][job_key]["metering"],
+        )
+    except StudioMeteringBlocked as error:
+        with render_jobs_lock:
+            denied_job = pipeline["render_jobs"][job_key]
+            denied_job.update(
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Blipost credits required",
+                    "error": error.as_http_detail()["message"],
+                    "error_detail": error.as_http_detail(),
+                    "status_code": 402,
+                    "failed_at": _job_timestamp(),
+                }
+            )
+            denied_job["metering"]["state"] = "denied"
+            denied_job["metering"]["last_error"] = error.as_http_detail()
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        raise _metering_http_exception(error)
+    _replace_render_metering(pipeline_id, job_key, remake_metering)
+
     _profile_id = profile.profile_id
+    _user_id = profile.user_id
     script_text = scripts[vid]
 
     # Resolve effective subtitle settings for this remake (single variant, no
@@ -5988,6 +6386,9 @@ async def remake_variant(
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # Disk space check
@@ -6092,6 +6493,9 @@ async def remake_variant(
                         Path(final_video_path).unlink(missing_ok=True)
                 except Exception:
                     pass
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
 
             # Success
@@ -6126,6 +6530,26 @@ async def remake_variant(
                 voice_settings=render_request.voice_settings,
             )
 
+            completed_job = pipeline.get("render_jobs", {}).get(job_key)
+            completed_metering = (
+                completed_job.get("metering") if isinstance(completed_job, dict) else None
+            )
+            if isinstance(completed_metering, dict):
+                completed_metering = dict(completed_metering)
+                completed_metering["output_persisted"] = True
+                completed_metering["state"] = "output_persisted"
+                _replace_render_metering(pipeline_id, job_key, completed_metering)
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                _user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": str(job_key),
+                },
+            )
+
             logger.info(
                 f"[Profile {_profile_id}] ═══ REMAKE COMPLETE ═══ "
                 f"pipeline={pipeline_id} variant={vid} output={final_video_path}"
@@ -6151,6 +6575,9 @@ async def remake_variant(
                         if "cancelled_at" not in _remake_job:
                             _remake_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                await _settle_render_metering(
+                    pipeline_id, job_key, _user_id, delivered=False
+                )
                 return
             logger.error(
                 f"[Profile {_profile_id}] Pipeline {pipeline_id} "
@@ -6164,6 +6591,9 @@ async def remake_variant(
                 job["error"] = str(e)
                 job["failed_at"] = datetime.now(timezone.utc).isoformat()
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, job_key, _user_id, delivered=False
+            )
         finally:
             try:
                 _active_job_key_ctx.reset(_ctx_token)
@@ -6185,6 +6615,9 @@ async def remake_variant(
             queued_job["error"] = str(queue_error)
             queued_job["failed_at"] = datetime.now(timezone.utc).isoformat()
         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        await _settle_render_metering(
+            pipeline_id, job_key, _user_id, delivered=False
+        )
         raise HTTPException(status_code=500, detail="Failed to queue remake") from queue_error
 
     async def _queued_remake():
@@ -6204,6 +6637,9 @@ async def remake_variant(
                             queued_job["current_step"] = "Cancelled by user"
                             queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    await _settle_render_metering(
+                        pipeline_id, job_key, _user_id, delivered=False
+                    )
                     return
 
                 with render_jobs_lock:
@@ -6211,6 +6647,10 @@ async def remake_variant(
                     queued_job["progress"] = 0
                     queued_job["current_step"] = "Remaking with new segments"
                     queued_job["started_at"] = datetime.now(timezone.utc).isoformat()
+                    queued_metering = queued_job.get("metering")
+                    if isinstance(queued_metering, dict):
+                        queued_metering["provider_started"] = True
+                        queued_metering["state"] = "provider_started"
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
                 await do_remake()
         except RenderQueueCancelled:
@@ -6222,6 +6662,27 @@ async def remake_variant(
                     queued_job["current_step"] = "Cancelled by user"
                     queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, job_key, _user_id, delivered=False
+            )
+        except Exception as queue_run_error:
+            queued_job = pipeline.get("render_jobs", {}).get(job_key)
+            if isinstance(queued_job, dict) and queued_job.get("status") not in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                with render_jobs_lock:
+                    queued_job["status"] = "failed"
+                    queued_job["progress"] = 0
+                    queued_job["current_step"] = "Remake failed"
+                    queued_job["error"] = str(queue_run_error)
+                    queued_job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            await _settle_render_metering(
+                pipeline_id, job_key, _user_id, delivered=False
+            )
+            raise
 
     with _render_locks_meta_lock:
         _render_locks_timestamps[pipeline_id_str] = _time_mod.monotonic()
@@ -6260,6 +6721,13 @@ def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
             job["current_step"] = "Render failed (stale)"
             job["error"] = "Render did not survive a backend restart. Submit the render again."
             job["failed_at"] = datetime.now(timezone.utc).isoformat()
+            metering = job.get("metering")
+            if (
+                isinstance(metering, dict)
+                and metering.get("reservation_id")
+                and metering.get("state") not in {"captured", "released", "refunded"}
+            ):
+                metering["state"] = "refund_pending"
             changed = True
             logger.warning(f"Pipeline {pipeline_id}: marked stale 'processing' render job as failed")
     if changed:
@@ -6287,6 +6755,34 @@ async def get_pipeline_status(pipeline_id: str):
         raise HTTPException(status_code=404, detail="Pipeline not found")
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
     _mark_stale_render_jobs(pipeline_id, pipeline)
+
+    for job_key, job in list((pipeline.get("render_jobs") or {}).items()):
+        if not isinstance(job, dict):
+            continue
+        metering = job.get("metering")
+        if not isinstance(metering, dict) or not metering.get("reservation_id"):
+            continue
+        metering_user_id = metering.get("supabase_user_id")
+        if not isinstance(metering_user_id, str) or not metering_user_id:
+            continue
+        if job.get("status") == "completed" or metering.get("output_persisted"):
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                metering_user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": str(job_key),
+                },
+            )
+        elif job.get("status") in {"failed", "cancelled"}:
+            await _settle_render_metering(
+                pipeline_id,
+                job_key,
+                metering_user_id,
+                delivered=False,
+            )
 
     # Enforce 30-day TTL
     created_at = pipeline.get("created_at", "")
