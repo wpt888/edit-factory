@@ -27,6 +27,8 @@ class MockSettings:
     port: int = 8000
     redis_url: str = "redis://localhost:6379/0"
     allowed_origins: str = "http://localhost:3000"
+    blipost_platform_base_url: str = "https://blipost.test"
+    studio_service_token: str = "test-studio-service-token"
     # Additional Settings attributes needed by app.main and routes
     sentry_dsn: str = ""
     # NOTE: `data_backend` deliberately NOT defaulted here.
@@ -63,6 +65,29 @@ class MockSettings:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.media_dir.mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _default_route_metering_to_desktop_logging(monkeypatch):
+    """Keep legacy route tests offline without weakening production web mode.
+
+    Route-created clients omit ``desktop_mode`` and therefore use local usage
+    logging in tests. Focused metering tests pass an explicit boolean (or patch
+    the route seam) to exercise both enforced web mode and desktop pass-through.
+    """
+    from app.services.studio_metering import StudioMeteringClient
+
+    original_init = StudioMeteringClient.__init__
+
+    def test_init(self, *args, desktop_mode=None, **kwargs):
+        return original_init(
+            self,
+            *args,
+            desktop_mode=True if desktop_mode is None else desktop_mode,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(StudioMeteringClient, "__init__", test_init)
 
 
 @pytest.fixture

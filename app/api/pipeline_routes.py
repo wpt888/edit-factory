@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 import re as _re
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.auth import ProfileContext, get_profile_context
+from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.utils import normalize_path
@@ -40,6 +40,13 @@ from app.config import get_settings
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
 from app.services.ffmpeg_semaphore import acquire_preview_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
 from app.services.render_queue import RenderQueueCancelled, RenderQueueTicket, get_render_queue
+from app.services.studio_metering import (
+    MeteringIdentity,
+    StudioMeteringBlocked,
+    new_metering_record,
+    reserve_metering_record,
+    settle_metering_record,
+)
 
 
 def _stable_hash(text: str) -> str:
@@ -977,6 +984,114 @@ def _new_async_job(current_step: str = "Queued") -> dict:
     }
 
 
+def _metering_http_exception(error: StudioMeteringBlocked) -> HTTPException:
+    """Expose every web-mode metering denial as the launch-contract HTTP 402."""
+    return HTTPException(status_code=402, detail=error.as_http_detail())
+
+
+def _replace_generation_metering(pipeline_id: str, record: dict) -> dict:
+    """Persist metering even after a generation job becomes terminal."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        job = pipeline.setdefault("generation_job", _new_async_job())
+        job["metering"] = dict(record)
+        job["updated_at"] = _job_timestamp()
+        snapshot = dict(job)
+        _db_update_async_jobs(pipeline_id, generation_job=snapshot)
+    return snapshot
+
+
+def _replace_tts_metering(pipeline_id: str, variant_index: int, record: dict) -> dict:
+    """Persist one TTS settlement without allowing a late status resurrection."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        jobs = pipeline.setdefault("tts_jobs", {})
+        job = jobs.setdefault(variant_index, _new_async_job())
+        job["metering"] = dict(record)
+        job["updated_at"] = _job_timestamp()
+        snapshot = dict(job)
+        _db_update_async_jobs(pipeline_id, tts_jobs=dict(jobs))
+    return snapshot
+
+
+def _replace_regeneration_metering(
+    pipeline_id: str,
+    attempt_id: str,
+    record: dict,
+    **changes: Any,
+) -> dict:
+    """Persist one synchronous script-regeneration attempt in generation_job JSON."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        return {}
+    with _get_pipeline_state_lock(pipeline_id):
+        generation_job = pipeline.setdefault("generation_job", {})
+        attempts = generation_job.setdefault("regenerations", {})
+        attempt = attempts.setdefault(attempt_id, {})
+        attempt.update(changes)
+        attempt["metering"] = dict(record)
+        attempt["updated_at"] = _job_timestamp()
+        # Bound durable history while retaining enough attempts for diagnosis.
+        if len(attempts) > 20:
+            oldest = sorted(
+                attempts,
+                key=lambda key: str((attempts.get(key) or {}).get("created_at") or ""),
+            )[:-20]
+            for key in oldest:
+                attempts.pop(key, None)
+        snapshot = dict(generation_job)
+        _db_update_async_jobs(pipeline_id, generation_job=snapshot)
+    return dict(attempt)
+
+
+async def _settle_generation_metering(
+    pipeline_id: str,
+    user_id: str,
+    *,
+    delivered: bool,
+    result_metadata: Optional[Dict[str, Any]] = None,
+) -> dict:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    job = (pipeline or {}).get("generation_job") or {}
+    record = job.get("metering")
+    if not isinstance(record, dict):
+        return job
+    settled = await settle_metering_record(
+        MeteringIdentity(user_id),
+        record,
+        delivered=delivered,
+        result_metadata=result_metadata,
+    )
+    return _replace_generation_metering(pipeline_id, settled)
+
+
+async def _settle_tts_metering(
+    pipeline_id: str,
+    variant_index: int,
+    user_id: str,
+    *,
+    delivered: bool,
+    result_metadata: Optional[Dict[str, Any]] = None,
+) -> dict:
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    jobs = (pipeline or {}).get("tts_jobs") or {}
+    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    record = job.get("metering")
+    if not isinstance(record, dict):
+        return job
+    settled = await settle_metering_record(
+        MeteringIdentity(user_id),
+        record,
+        delivered=delivered,
+        result_metadata=result_metadata,
+    )
+    return _replace_tts_metering(pipeline_id, variant_index, settled)
+
+
 def _db_update_async_jobs(
     pipeline_id: str,
     *,
@@ -1667,6 +1782,49 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             except (ValueError, TypeError):
                 logger.warning(f"Skipping invalid tts_jobs key: {k}")
 
+        interrupted_async_jobs = False
+        interrupted_at = _job_timestamp()
+        if generation_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            generation_job.update(
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Generation interrupted — try again",
+                    "error": "Generation did not survive a backend restart.",
+                    "completed_at": interrupted_at,
+                    "updated_at": interrupted_at,
+                }
+            )
+            generation_metering = generation_job.get("metering")
+            if (
+                isinstance(generation_metering, dict)
+                and generation_metering.get("reservation_id")
+                and generation_metering.get("state") not in {"captured", "released", "refunded"}
+            ):
+                generation_metering["state"] = "refund_pending"
+            interrupted_async_jobs = True
+        for tts_job in tts_jobs.values():
+            if not isinstance(tts_job, dict) or tts_job.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES:
+                continue
+            tts_job.update(
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Voice-over interrupted — try again",
+                    "error": "Voice-over generation did not survive a backend restart.",
+                    "completed_at": interrupted_at,
+                    "updated_at": interrupted_at,
+                }
+            )
+            tts_metering = tts_job.get("metering")
+            if (
+                isinstance(tts_metering, dict)
+                and tts_metering.get("reservation_id")
+                and tts_metering.get("state") not in {"captured", "released", "refunded"}
+            ):
+                tts_metering["state"] = "refund_pending"
+            interrupted_async_jobs = True
+
         # PIP-14: Load preview_renders from DB. Same meta-multiplication
         # key handling as `previews` above.
         preview_renders = {}
@@ -1737,6 +1895,12 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             _pipelines[pipeline_id] = pipeline
         if interrupted_render_jobs:
             _db_update_render_jobs(pipeline_id, render_jobs)
+        if interrupted_async_jobs:
+            _db_update_async_jobs(
+                pipeline_id,
+                generation_job=generation_job,
+                tts_jobs=tts_jobs,
+            )
         logger.info(f"Pipeline {pipeline_id} loaded from DB")
         return pipeline
 
@@ -2822,7 +2986,8 @@ async def regenerate_script(
     pipeline_id: str,
     variant_index: int,
     body: PipelineRegenerateScriptRequest,
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """
     Regenerate a single script variant using AI.
@@ -2928,7 +3093,54 @@ async def regenerate_script(
             + ". Do NOT introduce any other product names, SKUs, or models.]"
         )
 
+    attempt_id = uuid.uuid4().hex
+    identity = MeteringIdentity(profile.user_id, current_user.email)
+    metering = new_metering_record(
+        "studio.script_pipeline",
+        1,
+        f"pipeline:{pipeline_id}:script-regenerate:{variant_index}:{attempt_id}",
+    )
+    _replace_regeneration_metering(
+        pipeline_id,
+        attempt_id,
+        metering,
+        status="pending",
+        variant_index=variant_index,
+        created_at=_job_timestamp(),
+    )
     try:
+        metering = await reserve_metering_record(identity, metering)
+    except StudioMeteringBlocked as error:
+        denied = {
+            **metering,
+            "state": "denied",
+            "last_error": error.as_http_detail(),
+        }
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            denied,
+            status="failed",
+            status_code=402,
+            error=error.as_http_detail()["message"],
+        )
+        raise _metering_http_exception(error)
+    _replace_regeneration_metering(
+        pipeline_id,
+        attempt_id,
+        metering,
+        status="reserved",
+    )
+
+    try:
+        metering["provider_started"] = True
+        metering["state"] = "provider_started"
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="processing",
+        )
         generator = get_script_generator_for_profile(profile.profile_id)
         new_scripts = await asyncio.to_thread(
             generator.generate_scripts,
@@ -2971,6 +3183,32 @@ async def regenerate_script(
         # Persist to DB
         _db_save_pipeline(pipeline_id, pipeline_snapshot)
 
+        metering["output_persisted"] = True
+        metering["state"] = "output_persisted"
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="settling",
+        )
+        metering = await settle_metering_record(
+            MeteringIdentity(profile.user_id),
+            metering,
+            delivered=True,
+            result_metadata={
+                "studio_job_id": pipeline_id,
+                "output_id": f"script-{variant_index}",
+            },
+        )
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="completed",
+            completed_at=_job_timestamp(),
+            error=None,
+        )
+
         logger.info(
             f"[Profile {profile.profile_id}] Regenerated script {variant_index} "
             f"in pipeline {pipeline_id} using {body.provider}"
@@ -2983,11 +3221,44 @@ async def regenerate_script(
         )
 
     except ValueError as e:
+        metering = await settle_metering_record(
+            MeteringIdentity(profile.user_id), metering, delivered=False
+        )
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="failed",
+            completed_at=_job_timestamp(),
+            error=str(e),
+        )
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
+    except HTTPException as error:
+        metering = await settle_metering_record(
+            MeteringIdentity(profile.user_id), metering, delivered=False
+        )
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="failed",
+            completed_at=_job_timestamp(),
+            error=str(error.detail),
+        )
         raise
     except Exception as e:
         logger.error(f"Script regeneration failed: {e}", exc_info=True)
+        metering = await settle_metering_record(
+            MeteringIdentity(profile.user_id), metering, delivered=False
+        )
+        _replace_regeneration_metering(
+            pipeline_id,
+            attempt_id,
+            metering,
+            status="failed",
+            completed_at=_job_timestamp(),
+            error="Script regeneration service unavailable. Please try again.",
+        )
         raise HTTPException(
             status_code=503,
             detail="Script regeneration service unavailable. Please try again."
@@ -3118,8 +3389,10 @@ async def _run_pipeline_generation_job(
     pipeline_id: str,
     body_data: Dict[str, Any],
     profile_id: str,
+    user_id: Optional[str] = None,
 ) -> None:
     """Generate scripts after the HTTP response and persist every job transition."""
+    user_id = user_id or profile_id
     try:
         body = PipelineGenerateRequest.model_validate(body_data)
         if _generation_job_cancelled(pipeline_id):
@@ -3184,6 +3457,14 @@ async def _run_pipeline_generation_job(
             current_step=f"Generating {body.variant_count} script variants",
         )
 
+        live_pipeline = _get_pipeline_or_load(pipeline_id)
+        generation_job = (live_pipeline.get("generation_job") or {}) if live_pipeline else {}
+        metering = dict(generation_job.get("metering") or {})
+        if metering:
+            metering["provider_started"] = True
+            metering["state"] = "provider_started"
+            _replace_generation_metering(pipeline_id, metering)
+
         generator = get_script_generator_for_profile(profile_id)
         effective_context = _build_effective_pipeline_context(
             body.context,
@@ -3212,7 +3493,6 @@ async def _run_pipeline_generation_job(
         pipeline = _get_pipeline_or_load(pipeline_id)
         if not pipeline:
             raise RuntimeError("Pipeline disappeared while scripts were generating")
-        completed_at = _job_timestamp()
         result = {
             "provider": body.provider,
             "keyword_count": len(unique_keywords),
@@ -3228,21 +3508,41 @@ async def _run_pipeline_generation_job(
             pipeline["variant_count"] = len(scripts)
             pipeline["keyword_count"] = len(unique_keywords)
             generation_job.update({
-                "status": "completed",
-                "progress": 100,
-                "current_step": "Scripts ready",
-                "updated_at": completed_at,
-                "completed_at": completed_at,
+                "status": "processing",
+                "progress": 99,
+                "current_step": "Finalizing Blipost credits",
+                "updated_at": _job_timestamp(),
                 "error": None,
                 "result": result,
             })
+            generation_metering = generation_job.get("metering")
+            if isinstance(generation_metering, dict):
+                generation_metering["output_persisted"] = True
+                generation_metering["state"] = "output_persisted"
             pipeline_snapshot = dict(pipeline)
         _db_save_pipeline(pipeline_id, pipeline_snapshot)
+        await _settle_generation_metering(
+            pipeline_id,
+            user_id,
+            delivered=True,
+            result_metadata={"studio_job_id": pipeline_id},
+        )
+        completed_at = _job_timestamp()
+        _update_generation_job(
+            pipeline_id,
+            status="completed",
+            progress=100,
+            current_step="Scripts ready",
+            completed_at=completed_at,
+            error=None,
+            result=result,
+        )
         logger.info(
             f"[Profile {profile_id}] Background generation completed for "
             f"pipeline {pipeline_id} with {len(scripts)} scripts"
         )
     except ValueError as e:
+        await _settle_generation_metering(pipeline_id, user_id, delivered=False)
         _update_generation_job(
             pipeline_id,
             status="failed",
@@ -3252,6 +3552,7 @@ async def _run_pipeline_generation_job(
         )
     except Exception as e:
         logger.error(f"Pipeline generation failed for {pipeline_id}: {e}", exc_info=True)
+        await _settle_generation_metering(pipeline_id, user_id, delivered=False)
         _update_generation_job(
             pipeline_id,
             status="failed",
@@ -3272,6 +3573,7 @@ async def generate_pipeline(
     body: PipelineGenerateRequest,
     background_tasks: BackgroundTasks,
     profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """Queue script generation and immediately return a persisted pipeline ID."""
     if body.provider not in {"gemini", "claude"}:
@@ -3281,6 +3583,11 @@ async def generate_pipeline(
 
     pipeline_id = str(uuid.uuid4())
     generation_job = _new_async_job("Queued for script generation")
+    generation_job["metering"] = new_metering_record(
+        "studio.script_pipeline",
+        1,
+        f"pipeline:{pipeline_id}:script",
+    )
     pipeline = {
         "pipeline_id": pipeline_id,
         "scripts": [],
@@ -3310,11 +3617,34 @@ async def generate_pipeline(
         _pipelines[pipeline_id] = pipeline
     _db_save_pipeline(pipeline_id, dict(pipeline))
 
+    identity = MeteringIdentity(profile.user_id, current_user.email)
+    try:
+        reserved = await reserve_metering_record(identity, generation_job["metering"])
+    except StudioMeteringBlocked as error:
+        denied = {
+            **generation_job["metering"],
+            "state": "denied",
+            "last_error": error.as_http_detail(),
+        }
+        _update_generation_job(
+            pipeline_id,
+            status="failed",
+            current_step="Blipost credits required",
+            completed_at=_job_timestamp(),
+            status_code=402,
+            error=error.as_http_detail()["message"],
+            error_detail=error.as_http_detail(),
+            metering=denied,
+        )
+        raise _metering_http_exception(error)
+    generation_job = _update_generation_job(pipeline_id, metering=reserved)
+
     background_tasks.add_task(
         _run_pipeline_generation_job,
         pipeline_id,
         body.model_dump(),
         profile.profile_id,
+        profile.user_id,
     )
     return PipelineJobStartResponse(
         pipeline_id=pipeline_id,
@@ -3333,9 +3663,25 @@ async def get_generation_status(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    generation_job = pipeline.get("generation_job") or {}
+    metering = generation_job.get("metering") or {}
+    if isinstance(metering, dict) and metering.get("reservation_id"):
+        if generation_job.get("status") == "completed" or metering.get("output_persisted"):
+            generation_job = await _settle_generation_metering(
+                pipeline_id,
+                profile.user_id,
+                delivered=True,
+                result_metadata={"studio_job_id": pipeline_id},
+            )
+        elif generation_job.get("status") in {"failed", "cancelled"}:
+            generation_job = await _settle_generation_metering(
+                pipeline_id,
+                profile.user_id,
+                delivered=False,
+            )
     return {
         "pipeline_id": pipeline_id,
-        "job": pipeline.get("generation_job") or {},
+        "job": generation_job,
         "scripts": pipeline.get("scripts") or [],
         "script_names": pipeline.get("script_names") or [],
     }
@@ -3352,12 +3698,19 @@ async def cancel_generation_job(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
     job = pipeline.get("generation_job") or {}
-    if job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES:
+    metering = job.get("metering") or {}
+    output_persisted = isinstance(metering, dict) and bool(metering.get("output_persisted"))
+    if job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES and not output_persisted:
         job = _update_generation_job(
             pipeline_id,
             status="cancelled",
             current_step="Generation cancelled",
             completed_at=_job_timestamp(),
+        )
+        job = await _settle_generation_metering(
+            pipeline_id,
+            profile.user_id,
+            delivered=False,
         )
     return {"pipeline_id": pipeline_id, "job": job}
 
@@ -3627,13 +3980,24 @@ async def _generate_variant_tts_work(
         # Store TTS preview result (protected by state lock)
         # Use cleaned_text hash so tag changes don't invalidate audio cache
         state_lock = _get_pipeline_state_lock(pipeline_id)
+        previous_tts_preview = None
+        had_previous_tts_preview = False
         with state_lock:
+            live_job = (pipeline.get("tts_jobs") or {}).get(variant_index) or (
+                pipeline.get("tts_jobs") or {}
+            ).get(str(variant_index)) or {}
+            if live_job.get("status") == "cancelled":
+                return PipelineTtsResponse(status="cancelled", audio_duration=0)
             if "tts_previews" not in pipeline:
                 pipeline["tts_previews"] = {}
 
             # Clean up old TTS audio files before overwriting.
             # ONLY clean temp/ directories — never touch media/tts/ (library storage).
             old_tts = pipeline["tts_previews"].get(variant_index)
+            if old_tts is None:
+                old_tts = pipeline["tts_previews"].get(str(variant_index))
+            had_previous_tts_preview = old_tts is not None
+            previous_tts_preview = dict(old_tts) if isinstance(old_tts, dict) else old_tts
             if old_tts:
                 old_path_str = old_tts.get("audio_path") or ""
                 old_path = Path(old_path_str) if old_path_str else None
@@ -3688,7 +4052,24 @@ async def _generate_variant_tts_work(
                 if _lib_asset_id:
                     pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
 
-        if _tts_job_cancelled(pipeline_id, variant_index):
+        cancelled_after_generation = False
+        with state_lock:
+            live_jobs = pipeline.get("tts_jobs") or {}
+            live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
+            if live_job.get("status") == "cancelled":
+                if had_previous_tts_preview:
+                    pipeline["tts_previews"][variant_index] = previous_tts_preview
+                else:
+                    pipeline["tts_previews"].pop(variant_index, None)
+                    pipeline["tts_previews"].pop(str(variant_index), None)
+                cancelled_after_generation = True
+            else:
+                live_metering = live_job.get("metering")
+                if isinstance(live_metering, dict):
+                    live_metering["output_persisted"] = True
+                    live_metering["state"] = "output_persisted"
+        if cancelled_after_generation:
+            _db_save_pipeline(pipeline_id, pipeline)
             return PipelineTtsResponse(status="cancelled", audio_duration=0)
         _update_tts_job(
             pipeline_id,
@@ -3742,6 +4123,14 @@ async def _run_variant_tts_job(
         error=None,
     )
     try:
+        pipeline = _get_pipeline_or_load(pipeline_id)
+        jobs = (pipeline or {}).get("tts_jobs") or {}
+        job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+        metering = dict(job.get("metering") or {})
+        if metering:
+            metering["provider_started"] = True
+            metering["state"] = "provider_started"
+            _replace_tts_metering(pipeline_id, variant_index, metering)
         result = await _generate_variant_tts_work(
             pipeline_id,
             variant_index,
@@ -3749,7 +4138,23 @@ async def _run_variant_tts_job(
             ProfileContext(profile_id=profile_id, user_id=user_id),
         )
         if result.status == "cancelled" or _tts_job_cancelled(pipeline_id, variant_index):
+            await _settle_tts_metering(
+                pipeline_id,
+                variant_index,
+                user_id,
+                delivered=False,
+            )
             return
+        await _settle_tts_metering(
+            pipeline_id,
+            variant_index,
+            user_id,
+            delivered=True,
+            result_metadata={
+                "studio_job_id": pipeline_id,
+                "output_id": f"variant-{variant_index}",
+            },
+        )
         _update_tts_job(
             pipeline_id,
             variant_index,
@@ -3766,6 +4171,12 @@ async def _run_variant_tts_job(
             message = str(detail.get("message") or detail.get("detail") or "TTS generation failed")
         else:
             message = str(detail)
+        await _settle_tts_metering(
+            pipeline_id,
+            variant_index,
+            user_id,
+            delivered=False,
+        )
         _update_tts_job(
             pipeline_id,
             variant_index,
@@ -3780,6 +4191,12 @@ async def _run_variant_tts_job(
         logger.error(
             f"Background TTS failed for pipeline {pipeline_id} variant {variant_index}: {e}",
             exc_info=True,
+        )
+        await _settle_tts_metering(
+            pipeline_id,
+            variant_index,
+            user_id,
+            delivered=False,
         )
         _update_tts_job(
             pipeline_id,
@@ -3802,6 +4219,7 @@ async def generate_variant_tts(
     request: PipelineTtsRequest,
     background_tasks: BackgroundTasks,
     profile: ProfileContext = Depends(get_profile_context),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """Queue one per-script voice-over without holding the request open."""
     pipeline = _get_pipeline_or_load(pipeline_id)
@@ -3822,9 +4240,37 @@ async def generate_variant_tts(
             )
 
         job = _new_async_job("Queued for voice-over generation")
+        attempt_id = uuid.uuid4().hex
+        job["metering"] = new_metering_record(
+            "studio.tts_variant",
+            1,
+            f"pipeline:{pipeline_id}:tts:{variant_index}:{attempt_id}",
+        )
         jobs[variant_index] = job
         jobs_snapshot = dict(jobs)
         _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+    identity = MeteringIdentity(profile.user_id, current_user.email)
+    try:
+        reserved = await reserve_metering_record(identity, job["metering"])
+    except StudioMeteringBlocked as error:
+        denied = {
+            **job["metering"],
+            "state": "denied",
+            "last_error": error.as_http_detail(),
+        }
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            status="failed",
+            current_step="Blipost credits required",
+            completed_at=_job_timestamp(),
+            status_code=402,
+            error=error.as_http_detail()["message"],
+            error_detail=error.as_http_detail(),
+            metering=denied,
+        )
+        raise _metering_http_exception(error)
+    job = _update_tts_job(pipeline_id, variant_index, metering=reserved)
     background_tasks.add_task(
         _run_variant_tts_job,
         pipeline_id,
@@ -3851,6 +4297,35 @@ async def get_tts_jobs_status(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    for raw_index, job in list((pipeline.get("tts_jobs") or {}).items()):
+        if not isinstance(job, dict):
+            continue
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        metering = job.get("metering") or {}
+        if not isinstance(metering, dict) or not metering.get("reservation_id"):
+            continue
+        if job.get("status") == "completed" or metering.get("output_persisted"):
+            await _settle_tts_metering(
+                pipeline_id,
+                index,
+                profile.user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": f"variant-{index}",
+                },
+            )
+        elif job.get("status") in {"failed", "cancelled"}:
+            await _settle_tts_metering(
+                pipeline_id,
+                index,
+                profile.user_id,
+                delivered=False,
+            )
 
     results: Dict[str, dict] = {}
     for raw_index, value in (pipeline.get("tts_previews") or {}).items():
@@ -3883,6 +4358,7 @@ async def cancel_tts_jobs(
 
     wanted = set(request.variant_indices or [])
     cancelled: List[int] = []
+    refunds: List[int] = []
     with _get_pipeline_state_lock(pipeline_id):
         jobs = pipeline.setdefault("tts_jobs", {})
         for raw_index, job in list(jobs.items()):
@@ -3892,7 +4368,13 @@ async def cancel_tts_jobs(
                 continue
             if wanted and index not in wanted:
                 continue
-            if isinstance(job, dict) and job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            metering = job.get("metering") if isinstance(job, dict) else None
+            output_persisted = isinstance(metering, dict) and bool(metering.get("output_persisted"))
+            if (
+                isinstance(job, dict)
+                and job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES
+                and not output_persisted
+            ):
                 now = _job_timestamp()
                 job.update({
                     "status": "cancelled",
@@ -3901,8 +4383,17 @@ async def cancel_tts_jobs(
                     "completed_at": now,
                 })
                 cancelled.append(index)
+                refunds.append(index)
         jobs_snapshot = dict(jobs)
         _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
+    for index in refunds:
+        await _settle_tts_metering(
+            pipeline_id,
+            index,
+            profile.user_id,
+            delivered=False,
+        )
+    jobs_snapshot = dict((pipeline.get("tts_jobs") or {}))
     return {"pipeline_id": pipeline_id, "cancelled": cancelled, "jobs": jobs_snapshot}
 
 

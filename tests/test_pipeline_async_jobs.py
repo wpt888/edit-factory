@@ -4,9 +4,12 @@ import asyncio
 import copy
 import threading
 
+from fastapi import HTTPException
+
 from app.api import pipeline_routes
 from app.api.auth import ProfileContext
 from app.repositories.models import QueryResult
+from app.services.studio_metering import StudioMeteringBlocked, new_metering_record
 
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
@@ -116,6 +119,8 @@ def test_script_generation_is_acknowledged_and_persisted(sqlite_backend, monkeyp
     assert status.status_code == 200
     assert status.json()["job"]["status"] == "completed"
     assert status.json()["job"]["progress"] == 100
+    assert status.json()["job"]["metering"]["mode"] == "desktop"
+    assert status.json()["job"]["metering"]["state"] == "captured"
     assert status.json()["scripts"] == [
         "First generated script.",
         "Second generated script.",
@@ -132,7 +137,109 @@ def test_script_generation_is_acknowledged_and_persisted(sqlite_backend, monkeyp
     assert len(restored.json()["scripts"]) == 2
 
 
-def test_active_generation_state_survives_memory_eviction(sqlite_backend):
+def test_script_generation_fails_closed_before_provider_when_credits_are_insufficient(
+    sqlite_backend,
+    monkeypatch,
+):
+    client, _repo, _profile_id = sqlite_backend
+    provider_calls = []
+
+    class ForbiddenGenerator:
+        def generate_scripts(self, **_kwargs):
+            provider_calls.append(True)
+            raise AssertionError("provider must not run after a denied reserve")
+
+    async def deny_reserve(*_args, **_kwargs):
+        raise StudioMeteringBlocked(
+            "insufficient_credits",
+            "Insufficient Blipost credits",
+            available_credits=0,
+            upstream_status=402,
+        )
+
+    monkeypatch.setattr(pipeline_routes, "reserve_metering_record", deny_reserve)
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_script_generator_for_profile",
+        lambda _profile_id: ForbiddenGenerator(),
+    )
+
+    response = client.post(
+        "/api/v1/pipeline/generate",
+        headers=HEADERS,
+        json={"idea": "This must not reach Gemini", "variant_count": 1},
+    )
+
+    assert response.status_code == 402
+    assert response.json()["detail"]["code"] == "insufficient_credits"
+    assert response.json()["detail"]["billing_url"] == "https://blipost.com/billing"
+    assert provider_calls == []
+
+
+def test_script_generation_fails_closed_before_provider_when_bridge_is_down(
+    sqlite_backend,
+    monkeypatch,
+):
+    client, _repo, _profile_id = sqlite_backend
+    provider_calls = []
+
+    async def unavailable(*_args, **_kwargs):
+        raise StudioMeteringBlocked("metering_unavailable", "Bridge offline")
+
+    monkeypatch.setattr(pipeline_routes, "reserve_metering_record", unavailable)
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_script_generator_for_profile",
+        lambda _profile_id: provider_calls.append(True),
+    )
+
+    response = client.post(
+        "/api/v1/pipeline/generate",
+        headers=HEADERS,
+        json={"idea": "Fail closed while Blipost is offline", "variant_count": 1},
+    )
+
+    assert response.status_code == 402
+    assert response.json()["detail"]["code"] == "metering_unavailable"
+    assert "not started" in response.json()["detail"]["message"]
+    assert provider_calls == []
+
+
+def test_script_regeneration_has_its_own_metered_attempt(sqlite_backend, monkeypatch):
+    client, repo, _profile_id = sqlite_backend
+    imported = client.post(
+        "/api/v1/pipeline/import",
+        headers=HEADERS,
+        json={
+            "idea": "Regenerate one script",
+            "scripts": ["Original script."],
+            "provider": "gemini",
+        },
+    )
+    pipeline_id = imported.json()["pipeline_id"]
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_script_generator_for_profile",
+        lambda _profile_id: _FakeScriptGenerator(),
+    )
+
+    response = client.post(
+        f"/api/v1/pipeline/regenerate-script/{pipeline_id}/0",
+        headers=HEADERS,
+        json={"provider": "gemini"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["script"] == "First generated script."
+    attempts = repo.get_pipeline(pipeline_id)["generation_job"]["regenerations"]
+    assert len(attempts) == 1
+    attempt = next(iter(attempts.values()))
+    assert attempt["status"] == "completed"
+    assert attempt["metering"]["operation"] == "studio.script_pipeline"
+    assert attempt["metering"]["state"] == "captured"
+
+
+def test_active_generation_state_is_interrupted_after_memory_eviction(sqlite_backend):
     client, repo, profile_id = sqlite_backend
     pipeline_id = "persisted-active-generation"
     repo.upsert_pipeline({
@@ -158,11 +265,11 @@ def test_active_generation_state_survives_memory_eviction(sqlite_backend):
         headers=HEADERS,
     )
     assert restored.status_code == 200
-    assert restored.json()["job"] == {
-        "status": "processing",
-        "progress": 35,
-        "current_step": "Generating 3 script variants",
-    }
+    job = restored.json()["job"]
+    assert job["status"] == "failed"
+    assert job["progress"] == 0
+    assert job["current_step"] == "Generation interrupted — try again"
+    assert "did not survive" in job["error"]
 
 
 def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeypatch):
@@ -221,6 +328,70 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     )
     assert restored.status_code == 200
     assert restored.json()["jobs"]["0"]["status"] == "completed"
+
+
+def test_tts_failure_refunds_reserved_credits(sqlite_backend, monkeypatch):
+    client, _repo, _profile_id = sqlite_backend
+    imported = client.post(
+        "/api/v1/pipeline/import",
+        headers=HEADERS,
+        json={"idea": "Refund failed TTS", "scripts": ["Provider failure."]},
+    )
+    pipeline_id = imported.json()["pipeline_id"]
+
+    async def fail_tts(*_args, **_kwargs):
+        raise HTTPException(status_code=500, detail="Provider failed")
+
+    monkeypatch.setattr(pipeline_routes, "_generate_variant_tts_work", fail_tts)
+    response = client.post(
+        f"/api/v1/pipeline/tts/{pipeline_id}/0",
+        headers=HEADERS,
+        json={},
+    )
+    assert response.status_code == 202
+
+    status = client.get(
+        f"/api/v1/pipeline/tts-status/{pipeline_id}",
+        headers=HEADERS,
+    )
+    job = status.json()["jobs"]["0"]
+    assert job["status"] == "failed"
+    assert job["metering"]["state"] == "released"
+
+
+def test_tts_cancel_refunds_queued_reservation(sqlite_backend):
+    client, _repo, _profile_id = sqlite_backend
+    imported = client.post(
+        "/api/v1/pipeline/import",
+        headers=HEADERS,
+        json={"idea": "Cancel queued TTS", "scripts": ["Cancel this."]},
+    )
+    pipeline_id = imported.json()["pipeline_id"]
+    record = {
+        **new_metering_record(
+            "studio.tts_variant",
+            1,
+            f"pipeline:{pipeline_id}:tts:0:cancel-test",
+        ),
+        "reservation_id": "desktop:test-reservation",
+        "state": "reserved",
+        "mode": "desktop",
+    }
+    pipeline_routes._update_tts_job(
+        pipeline_id,
+        0,
+        status="queued",
+        metering=record,
+    )
+
+    response = client.post(
+        f"/api/v1/pipeline/tts-cancel/{pipeline_id}",
+        headers=HEADERS,
+        json={"variant_indices": [0]},
+    )
+    assert response.status_code == 200
+    assert response.json()["cancelled"] == [0]
+    assert response.json()["jobs"]["0"]["metering"]["state"] == "released"
 
 
 def test_duplicate_active_tts_job_is_rejected(sqlite_backend):
