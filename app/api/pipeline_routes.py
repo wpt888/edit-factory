@@ -10,6 +10,7 @@ Orchestrates end-to-end pipeline:
 This is the glue layer connecting script generation and assembly into a single workflow.
 """
 import asyncio
+import copy
 import hashlib
 import json as _json
 import logging
@@ -4552,7 +4553,8 @@ async def preview_variant(
     ultra_rapid_intro: bool = Body(True, embed=True),
     preset: str = Body("balanced", embed=True),  # F8: scoring preset
     visual_version: Optional[str] = Body(None, embed=True),
-    force_regenerate_tts: bool = Body(False, embed=True)
+    force_regenerate_tts: bool = Body(False, embed=True),
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """
     Preview segment matching for a single variant.
@@ -4595,39 +4597,12 @@ async def preview_variant(
         logger.info(
             f"[Profile {profile.profile_id}] Force TTS regeneration for variant {variant_index}"
         )
-        # Clear in-memory TTS preview so assembly_service doesn't reuse it
-        _tts_previews_dict = pipeline.get("tts_previews", {})
-        _tts_previews_dict.pop(variant_index, None)
-        _tts_previews_dict.pop(str(variant_index), None)
-
-        # Also bust file-based TTS cache (same key format as elevenlabs.py)
-        from app.services.tts_cache import cache_delete
-        from app.services.tts.elevenlabs import ElevenLabsTTSService
-        _tts_svc = ElevenLabsTTSService(
-            output_dir=Path("."), model_id=elevenlabs_model,
-            profile_id=profile.profile_id
-        )
-        _effective_voice = voice_id or _tts_svc._voice_id
-        ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
-        _vs = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
-        _full_vs = {
-            "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
-            "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
-            "style": _vs.get("style", _tts_svc.voice_settings["style"]),
-            "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
-        }
-        _cache_key = {
-            "text": cleaned_text, "voice_id": _effective_voice,
-            "model_id": elevenlabs_model, "provider": "elevenlabs",
-            "type": "with_timestamps",
-            "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
-        }
-        if cache_delete(_cache_key, "elevenlabs"):
-            logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
 
     # Normalize key lookup: prefer int key, fall back to str for legacy entries
     _tts_previews = pipeline.get("tts_previews", {})
-    existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
+    stored_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
+    previous_tts = copy.deepcopy(stored_tts) if isinstance(stored_tts, dict) else None
+    existing_tts = None if force_regenerate_tts else stored_tts
     reuse_audio_path = None
     reuse_audio_duration = None
     reuse_srt_content = None
@@ -4673,7 +4648,131 @@ async def preview_variant(
                     f"audio_path missing or not on disk (path={audio_path_str})"
                 )
 
+    # Preview matching can synthesize TTS when Step 2 audio is missing, stale,
+    # or explicitly regenerated. That is the same billable per-variant
+    # operation as POST /pipeline/tts; persisted Step 2 reuse remains free.
+    preview_tts_metered = reuse_audio_path is None
+    if preview_tts_metered:
+        state_lock = _get_pipeline_state_lock(pipeline_id)
+        with state_lock:
+            jobs = pipeline.setdefault("tts_jobs", {})
+            existing_job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+            if existing_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Voice-over generation is already running for this variant",
+                )
+            attempt_id = uuid.uuid4().hex
+            preview_job = _new_async_job("Queued for preview voice-over generation")
+            preview_job.update(
+                {
+                    "source": "pipeline_preview",
+                    "metering": new_metering_record(
+                        "studio.tts_variant",
+                        1,
+                        f"pipeline:{pipeline_id}:preview-tts:{variant_index}:{attempt_id}",
+                    ),
+                }
+            )
+            jobs[variant_index] = preview_job
+            _db_update_async_jobs(pipeline_id, tts_jobs=dict(jobs))
+
+        identity = MeteringIdentity(
+            profile.user_id,
+            getattr(current_user, "email", None),
+        )
+        try:
+            reserved = await reserve_metering_record(identity, preview_job["metering"])
+        except StudioMeteringBlocked as error:
+            denied = {
+                **preview_job["metering"],
+                "state": "denied",
+                "last_error": error.as_http_detail(),
+            }
+            _update_tts_job(
+                pipeline_id,
+                variant_index,
+                status="failed",
+                current_step="Blipost credits required",
+                completed_at=_job_timestamp(),
+                status_code=402,
+                error=error.as_http_detail()["message"],
+                error_detail=error.as_http_detail(),
+                metering=denied,
+            )
+            raise _metering_http_exception(error)
+        _update_tts_job(
+            pipeline_id,
+            variant_index,
+            status="processing",
+            progress=5,
+            current_step="Starting preview voice-over",
+            started_at=_job_timestamp(),
+            metering=reserved,
+        )
+
+    async def _refund_preview_tts(error_message: str) -> None:
+        if not preview_tts_metered:
+            return
+        await _settle_tts_metering(
+            pipeline_id, variant_index, profile.user_id, delivered=False
+        )
+        if not _tts_job_cancelled(pipeline_id, variant_index):
+            _update_tts_job(
+                pipeline_id,
+                variant_index,
+                status="failed",
+                current_step="Preview voice-over failed",
+                completed_at=_job_timestamp(),
+                error=error_message,
+            )
+        if force_regenerate_tts and previous_tts is not None:
+            with _get_pipeline_state_lock(pipeline_id):
+                pipeline.setdefault("tts_previews", {})[variant_index] = previous_tts
+
     try:
+        if preview_tts_metered and _tts_job_cancelled(pipeline_id, variant_index):
+            raise HTTPException(status_code=409, detail="Voice-over generation was cancelled")
+
+        if preview_tts_metered and force_regenerate_tts:
+            # Reservation is durable; only now invalidate prior state/cache.
+            _tts_previews_dict = pipeline.get("tts_previews", {})
+            _tts_previews_dict.pop(variant_index, None)
+            _tts_previews_dict.pop(str(variant_index), None)
+
+            from app.services.tts_cache import cache_delete
+            from app.services.tts.elevenlabs import ElevenLabsTTSService
+            _tts_svc = ElevenLabsTTSService(
+                output_dir=Path("."), model_id=elevenlabs_model,
+                profile_id=profile.profile_id
+            )
+            _effective_voice = voice_id or _tts_svc._voice_id
+            ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
+            _vs = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
+            _full_vs = {
+                "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
+                "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
+                "style": _vs.get("style", _tts_svc.voice_settings["style"]),
+                "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
+            }
+            _cache_key = {
+                "text": cleaned_text, "voice_id": _effective_voice,
+                "model_id": elevenlabs_model, "provider": "elevenlabs",
+                "type": "with_timestamps",
+                "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
+            }
+            if cache_delete(_cache_key, "elevenlabs"):
+                logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
+
+        if preview_tts_metered:
+            live_pipeline = _get_pipeline_or_load(pipeline_id)
+            live_jobs = (live_pipeline or {}).get("tts_jobs") or {}
+            live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
+            metering = dict(live_job.get("metering") or {})
+            metering["provider_started"] = True
+            metering["state"] = "provider_started"
+            _replace_tts_metering(pipeline_id, variant_index, metering)
+
         assembly_service = get_assembly_service()
 
         # M2: Cross-variant deprioritization: read segment_usage under state lock
@@ -4741,6 +4840,9 @@ async def preview_variant(
             preset=preset,
         )
 
+        if preview_tts_metered and _tts_job_cancelled(pipeline_id, variant_index):
+            raise HTTPException(status_code=409, detail="Voice-over generation was cancelled")
+
         # Track which segments this variant used (for cross-variant deprioritization)
         used_segment_ids = list({
             m["segment_id"] for m in preview_data.get("matches", [])
@@ -4764,6 +4866,8 @@ async def preview_variant(
                 duration=preview_data.get("audio_duration", 0.0),
                 voice_id=voice_id,
             )
+        if preview_tts_metered and not (_persisted_audio_path or _fresh_audio_path):
+            raise RuntimeError("Preview TTS returned no persistent audio output")
 
         # BUG-PR-20: Reuse state_lock from above (already obtained), single acquisition for all writes
         with state_lock:
@@ -4787,9 +4891,9 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index] = {}
             pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
             pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
-            # Also persist audio info from preview_data if tts_previews was empty
-            # (covers the case where Step 2 standalone TTS was skipped entirely)
-            if not pipeline["tts_previews"][variant_index].get("audio_path"):
+            # Freshly billed audio replaces stale/forced audio even when an old
+            # path existed. Reused Step 2 audio remains untouched.
+            if preview_tts_metered:
                 pipeline["tts_previews"][variant_index]["audio_path"] = _persisted_audio_path or _fresh_audio_path
                 pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
                 pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
@@ -4799,6 +4903,37 @@ async def preview_variant(
 
         # Persist to DB (outside lock — DB I/O should not hold the state lock)
         _db_save_pipeline(pipeline_id, pipeline)
+
+        if preview_tts_metered:
+            live_pipeline = _get_pipeline_or_load(pipeline_id)
+            live_jobs = (live_pipeline or {}).get("tts_jobs") or {}
+            live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
+            metering = dict(live_job.get("metering") or {})
+            metering["output_persisted"] = True
+            metering["state"] = "output_persisted"
+            _replace_tts_metering(pipeline_id, variant_index, metering)
+            await _settle_tts_metering(
+                pipeline_id,
+                variant_index,
+                profile.user_id,
+                delivered=True,
+                result_metadata={
+                    "studio_job_id": pipeline_id,
+                    "output_id": f"preview-variant-{variant_index}",
+                },
+            )
+            _update_tts_job(
+                pipeline_id,
+                variant_index,
+                status="completed",
+                progress=100,
+                current_step="Preview voice-over ready",
+                completed_at=_job_timestamp(),
+                error=None,
+                result={"audio_duration": preview_data.get("audio_duration", 0.0)},
+            )
+            # Response shaping below cannot turn delivered audio into a refund.
+            preview_tts_metered = False
 
         # Convert matches to MatchPreview models
         matches = [
@@ -4838,11 +4973,14 @@ async def preview_variant(
         )
 
     except ValueError as e:
+        await _refund_preview_tts(str(e))
         logger.warning(f"[Profile {profile.profile_id}] Preview bad request for variant {variant_index}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
+    except HTTPException as error:
+        await _refund_preview_tts(str(error.detail))
         raise
     except Exception as e:
+        await _refund_preview_tts("Preview voice-over generation failed")
         # Log the full traceback server-side — a bare message masked a NameError
         # here once and surfaced only as an opaque "Preview service unavailable".
         # The traceback (with profile + variant) is the correlation aid; the
