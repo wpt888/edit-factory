@@ -1,10 +1,11 @@
-"""Short-lived, local-only authentication for browser media elements.
+"""Short-lived authentication for native browser media elements.
 
 HTML ``video`` and ``img`` elements cannot attach the Bearer header used by the
-normal API client.  In desktop mode we therefore mint an HttpOnly cookie after
-an authenticated source-video API call.  The cookie contains only a signed
-user/profile claim (never the Supabase access token) and is accepted solely by
-source-video media endpoints on the loopback backend.
+normal API client.  We therefore mint an HttpOnly cookie after an authenticated
+source-video API call.  The cookie contains only a signed user/profile claim
+(never the Supabase access token) and is accepted solely by source-video media
+endpoints.  Desktop cookies remain loopback-only; hosted cookies are Secure and
+scoped to the Studio API origin.
 """
 
 from __future__ import annotations
@@ -169,17 +170,17 @@ async def get_profile_context_with_media_session(
     response: Response,
     profile: ProfileContext = Depends(get_profile_context),
 ) -> ProfileContext:
-    """Refresh the desktop media cookie after a normal authenticated request."""
-    if get_settings().desktop_mode:
-        response.set_cookie(
-            key=SOURCE_MEDIA_COOKIE,
-            value=_encode_media_session(profile),
-            max_age=SOURCE_MEDIA_TTL_SECONDS,
-            httponly=True,
-            secure=request.url.scheme == "https",
-            samesite="lax",
-            path=_SOURCE_MEDIA_COOKIE_PATH,
-        )
+    """Refresh the media cookie after a normal authenticated request."""
+    settings = get_settings()
+    response.set_cookie(
+        key=SOURCE_MEDIA_COOKIE,
+        value=_encode_media_session(profile),
+        max_age=SOURCE_MEDIA_TTL_SECONDS,
+        httponly=True,
+        secure=not settings.desktop_mode or request.url.scheme == "https",
+        samesite="lax",
+        path=_SOURCE_MEDIA_COOKIE_PATH,
+    )
     return profile
 
 
@@ -191,19 +192,19 @@ async def get_source_media_profile_context(
     authorization: Optional[str] = Header(default=None),
     x_profile_id: Optional[str] = Header(default=None, alias="X-Profile-Id"),
 ) -> ProfileContext:
-    """Authenticate a source-video media request via Bearer header or desktop cookie."""
+    """Authenticate a source-video media request via Bearer header or signed cookie."""
     settings = get_settings()
     requested_profile_id = x_profile_id or profile_id
 
-    # API callers and auth-disabled tests keep using the normal authentication
-    # path.  Non-desktop deployments never accept the local media cookie.
-    if credentials or authorization or settings.auth_disabled or not settings.desktop_mode:
+    # API callers and auth-disabled tests keep using the normal authentication path.
+    if credentials or authorization or settings.auth_disabled:
         current_user = await get_current_user(credentials, authorization)
         return await get_profile_context(current_user, requested_profile_id)
 
-    client_host = request.client.host if request.client else ""
-    if client_host not in {"127.0.0.1", "::1", "localhost"}:
-        raise HTTPException(status_code=403, detail="Desktop media is local-only")
+    if settings.desktop_mode:
+        client_host = request.client.host if request.client else ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            raise HTTPException(status_code=403, detail="Desktop media is local-only")
     if not media_session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
