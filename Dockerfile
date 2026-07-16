@@ -43,9 +43,12 @@ RUN pip install --upgrade pip && \
 # Final stage
 FROM base AS final
 
+ARG APP_PORT=8000
+
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH" \
+    PORT="${APP_PORT}"
 
 # Copy application code
 COPY app/ ./app/
@@ -62,11 +65,11 @@ RUN addgroup --system --gid 1001 blipost && \
 USER blipost
 
 # Expose port
-EXPOSE 8000
+EXPOSE ${APP_PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/live || exit 1
+    CMD curl --fail --silent --show-error "http://127.0.0.1:${PORT}/api/v1/health/live" || exit 1
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
