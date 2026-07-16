@@ -13,6 +13,25 @@ const API_URL = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true"
   ? DESKTOP_API_URL
   : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+/**
+ * Keep the desktop frontend and loopback API on the same hostname.
+ *
+ * Browsers treat `localhost` and `127.0.0.1` as different sites. When the
+ * developer opens Next on `localhost` but API/media URLs stay pinned to
+ * `127.0.0.1`, Chromium withholds the HttpOnly source-media cookie from native
+ * `<video>` / `<img>` requests and the preview turns black with a 401.
+ */
+export function getApiUrl() {
+  if (
+    process.env.NEXT_PUBLIC_DESKTOP_MODE === "true"
+    && typeof window !== "undefined"
+    && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ) {
+    return `http://${window.location.hostname}:8000/api/v1`;
+  }
+  return API_URL;
+}
+
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes — video uploads can be large
 
 interface FetchOptions extends RequestInit {
@@ -38,7 +57,7 @@ function activeProfileId() {
 }
 
 function getCacheKey(endpoint: string) {
-  const base = API_URL.replace(/\/+$/, "");
+  const base = getApiUrl().replace(/\/+$/, "");
   const url = endpoint.startsWith("http") ? endpoint : `${base}${endpoint}`;
   return `${activeProfileId()}::${url}`;
 }
@@ -110,7 +129,7 @@ export async function apiFetch(
   };
 
   // Prevent double-slash when API_URL has trailing slash (Bug #154)
-  const base = API_URL.replace(/\/+$/, "");
+  const base = getApiUrl().replace(/\/+$/, "");
   const url = endpoint.startsWith("http") ? endpoint : `${base}${endpoint}`;
 
   // Use caller-provided signal if given, otherwise create a manual timeout via AbortController
