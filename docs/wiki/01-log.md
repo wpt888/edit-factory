@@ -1,5 +1,27 @@
 # Engineering Change Log
 
+## 2026-07-16 - BlipStudio credit metering validated live E2E (Goal D)
+
+- Validated the Studio→web credit metering path end-to-end for the first time
+  against a running local web app and its real Postgres ledger (no mocks on the
+  metering path), using the real `StudioMeteringClient` and a shared test
+  `STUDIO_SERVICE_TOKEN` (local `.env`, uncommitted).
+- Scenario A (with credits): reserve debited exactly the rate-card amount
+  (`studio.script_pipeline`, 2 credits; balance 100→98) and capture persisted
+  the spend (98, `captured`). The local `GEMINI_API_KEY` is invalid, so the
+  intended in-Studio AI step failed and exercised the live reserve→refund
+  fail-closed path (98→100); capture was proven as a separate live transaction.
+- Scenario B (no credits): real `402 insufficient_credits`
+  (`available_credits=0`) before any provider work; the live web-mode frontend
+  rendered the real 402 billing toast with a **Manage credits** action to
+  `https://blipost.com/billing` (screenshot captured).
+- Scenario C (desktop mode): deterministic local `desktop:<uuid5>` reservation,
+  captured, with zero HTTP calls to the web ledger — early access unbilled and
+  unblocked.
+- The prior 307 private-mode blocker is fixed on WEB by `ceb5057`. Updated
+  `docs/wiki/24-blipstudio-credit-metering.md`: replaced the "Live integration
+  blocker" note with the real results. No committed code changed on either repo.
+
 ## 2026-07-15 - BlipStudio credit metering (Goal B2)
 
 - Added a fail-closed Studio-to-web metering client with durable idempotent

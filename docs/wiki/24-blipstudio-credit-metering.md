@@ -1,11 +1,11 @@
 # BlipStudio credit metering
 
-Status on 2026-07-15: the Studio side of Goal B2 is complete and committed
+Status on 2026-07-16: the Studio side of Goal B2 is complete and committed
 locally. No push or deployment was performed. The full Studio backend suite,
 frontend checks, production build, and deterministic Chromium UI scenarios are
-green. The final live two-application credit scenarios remain blocked by Goal
-B1 web routing and local service-token provisioning described in
-[Live integration blocker](#live-integration-blocker).
+green. The final live two-application credit scenarios are now **validated
+end-to-end** (real Studio client → running local web app + real Postgres
+ledger); see [Live integration validation (2026-07-16)](#live-integration-validation-2026-07-16).
 
 ## Billing contract
 
@@ -201,42 +201,65 @@ desktop build retains the full duration list.
   including reserve/capture balance changes, refund, 402, auth, identity,
   ownership, and idempotency.
 
-## Live integration blocker
+## Live integration validation (2026-07-16)
 
-A fresh real POST to the running local web app at
-`/api/internal/studio/metering/reserve` returned HTTP 307 to
-`/login?callbackUrl=%2Fapi%2Finternal%2Fstudio%2Fmetering%2Freserve` before the
-Bearer-authenticated route handler ran.
+The end-to-end Studio→web credit metering path is now **validated live** for the
+first time. The historical 307 blocker (private mode redirecting
+`/api/internal/studio/metering/*` to `/login` before the Bearer route ran) was
+fixed on WEB by commit `ceb5057`, which adds `/api/internal/studio` to
+`PRIVATE_MODE_PUBLIC_PREFIXES`. This run provisioned a shared test
+`STUDIO_SERVICE_TOKEN` on both apps (local `.env`, uncommitted) and drove the
+real `StudioMeteringClient` (real HTTP over `httpx`) against a running local web
+app (`http://localhost:3000`) backed by its real Postgres ledger. No mocks were
+used on the metering path.
 
-The cause is in the web repository: private mode matches every path, while
-`PRIVATE_MODE_PUBLIC_PREFIXES` does not include `/api/internal/studio`.
-Goal B1's verifier invokes `handleStudioMeteringReserve` directly and therefore
-does not cover `proxy.ts`. Since Goal B2 explicitly permits only reading and
-running the web repository, no web code or persistent private-mode setting was
-changed here.
+Rate card in effect: `studio.script_pipeline = 2` credits (the cheapest metered
+operation, used for these scenarios).
 
-The inspected local Studio settings also still use the production-default
-`blipost_platform_base_url` and have no `studio_service_token`; the inspected
-web `.env` has no matching `STUDIO_SERVICE_TOKEN`. No secret value was printed
-or changed. Even with token provisioning, the current 307 remains the first
-blocking boundary because the proxy runs before the route's Bearer check.
+**Scenario A — user with credits, real reserve → capture spend: PASS.**
+The real client reserved `studio.script_pipeline` for a seeded web user whose
+balance was 100. The web ledger debited exactly the rate-card amount
+(`credits=2`, `remaining_credits=98`), and a capture finalized the spend so the
+balance stayed at 98 (`status=captured`, confirmed directly in Postgres:
+`balance=98`, one captured `studio.script_pipeline` reservation). The intended
+in-Studio AI step (`ScriptGenerator.generate_scripts`, provider `gemini`) could
+not complete because the local `GEMINI_API_KEY` is invalid
+(`API_KEY_INVALID`); on that provider failure the harness ran the real
+compensating settlement, which released the reservation and restored the balance
+to 100 — so the fail-closed **reserve → refund** path was also exercised live.
+The persistent capture spend and the compensating refund were verified as
+separate live transactions.
 
-Before launch, Goal B1 must:
+**Scenario B — user without credits, 402 and friendly billing UI: PASS.**
+The real client reserving for a zero-balance web user received a contract-level
+`402 insufficient_credits` with `available_credits=0`, before any provider work.
+The Studio backend translates this into its friendly detail
+(`code=insufficient_credits`, message, `billing_url=https://blipost.com/billing`).
+The live Studio frontend (`create-video` / Seedance generate, web mode)
+rendered the real production 402 toast — title *"You do not have enough Blipost
+credits for this operation. Add credits to continue."*, description *"The
+operation was not started. Add credits to continue."*, and a **Manage credits**
+action linking to `https://blipost.com/billing`. Screenshot evidence captured
+(`phase-e2e-scenario-b.png`).
 
-1. add `/api/internal/studio` to the private-mode public prefixes (the endpoint
-   still performs its own constant-time Bearer authentication);
-2. add a proxy-level regression proving the route is not redirected while an
-   invalid Bearer token still receives 401;
-3. provision the same high-entropy `STUDIO_SERVICE_TOKEN` on WEB and
-   `studio_service_token` plus the local WEB base URL on Studio for the E2E
-   environment;
-4. rerun the three live local scenarios: sufficient credits and exact balance
-   decrease, zero credits and the real UI 402, and desktop pass-through.
+**Scenario C — desktop mode pass-through, no metering calls: PASS.**
+With `desktop_mode=True`, the same reserve+settle produced a deterministic local
+reservation id (`desktop:<uuid5>`, `mode=desktop`, `status=captured`) and made
+**zero** HTTP calls to the web app: the web ledger's reservation count for the
+user was unchanged across the desktop scenario (all reservations were accounted
+for by scenario A). Desktop early access is therefore not billed and not
+blocked, as designed.
 
-The installed in-app Browser skill was also missing its required
-`scripts/browser-client.mjs` runtime. The committed Playwright/Chromium test and
-screenshot provide browser evidence, but an interactive in-app-browser replay
-could not be performed in this environment.
+Environment notes (not integration defects): the local web Postgres was behind
+on migrations `0047`/`0048`, so `supabase_user_id` and the v2 Studio rate card
+were applied before testing; and that local database carried a **stale** copy of
+the `blipost_protect_published_rate_card()` trigger (a pre-fix version ending in
+a bare `RETURN OLD`, which silently discards updates to a draft row and thus
+blocked migration 0048's draft→published step). The web repository's committed
+`0038` migration already contains the corrected function
+(`IF TG_OP = 'DELETE' THEN RETURN OLD; …; RETURN NEW;`); the local function was
+refreshed to match the repo so v2 could publish. No committed code was changed on
+either side to achieve this validation.
 
 ## Implementation commits
 
