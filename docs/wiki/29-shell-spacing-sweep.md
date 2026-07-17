@@ -78,15 +78,21 @@ tokens) to Tailwind's `size-N` shorthand — a scripted, regex-verified
 transform (`\bh-(\d+(\.\d+)?)\s+w-\1\b` and the reversed order), applied
 only where the two values matched so intentionally non-square layout
 boxes (e.g. `h-8 w-20` inputs, `h-6 w-11` switches) were left alone.
-841 matching pairs found; 45 files were mechanically clean and committed.
-13 files (`pipeline/page.tsx`, `segments/page.tsx`, `timeline-editor.tsx`,
-`video-segment-player.tsx`, and 9 others) had a second Claude session
+841 matching pairs found; 45 files were mechanically clean and committed
+first (`c9ac453`). The remaining 13 files (`pipeline/page.tsx`,
+`segments/page.tsx`, `timeline-editor.tsx`, `video-segment-player.tsx`,
+and 9 others) had a second Claude session
 (`session_01CoRd2iQHDvr1waj7c2WPAb`, commit `353fb37`) concurrently
-editing them for an unrelated Context Library rebrand/timeline feature —
-those files' icon-sweep edits were reverted line-for-line (verified
-zero-remnant) rather than committed, to avoid bundling someone else's
-in-flight, uncommitted work into this pass's commits. Their `h-N w-N`
-pairs remain unswept; pick them up in a follow-up once that session lands.
+editing them, so they were completed in a follow-up commit (`7283b40`)
+via surgical staging: the regex was applied to the working tree (their
+in-flight edits preserved, sweep layered on top) while the *staged*
+content was built from each file's HEAD blob plus the same regex
+(`git hash-object -w --no-filters` + `git update-index --cacheinfo`), so
+the commit contains only the icon changes relative to HEAD — verified
+pure (all 249 staged line pairs equal the regex transform, `--numstat`
+symmetric). Gotcha for next time: without `--no-filters`, `hash-object`
+applies CRLF→LF normalization and turns a 55-line change into a
+whole-file diff on CRLF-committed files.
 
 ## 6. `product-video` `CardContent` padding
 
@@ -103,7 +109,9 @@ inset.
   mode) — already flagged deliberate in commit `f4e804c`.
 - Electron `html.desktop` radius handling, subtitle fonts, page logic —
   untouched per the goal's hard constraints.
-- The 13 icon-sweep files skipped for the concurrent-session reason above.
+- `components/timeline/timeline-primitives.tsx` (4 matched pairs) — the
+  concurrent session's *untracked* new file; not in HEAD, so nothing to
+  commit against. Sweep it when that file lands.
 
 ## Commits
 
@@ -119,6 +127,7 @@ inset.
   icons, matched pairs only)
 - `e0268f6` refactor(ui): drop redundant font-heading on CardTitle
   call-sites (signup, login)
+- `7283b40` refactor(ui): complete size-N icon sweep on remaining 13 files
 
 ## Verification
 
