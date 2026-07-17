@@ -307,7 +307,12 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             data-layout={pipelineLayout}
           >
             <div className={`flex flex-wrap items-center justify-between gap-3 ${workspaceLayout ? "min-[1280px]:hidden" : ""}`}>
-              <h2 ref={step2HeaderRef} className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
+              <div>
+                <h2 ref={step2HeaderRef} className="font-heading text-2xl font-semibold">Review Scripts</h2>
+                <p className="text-sm text-muted-foreground">
+                  {scripts.length} {scripts.length === 1 ? "script" : "scripts"}
+                </p>
+              </div>
               {renderStepActions()}
             </div>
 

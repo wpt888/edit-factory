@@ -251,9 +251,12 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           <div className="space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0">
             <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
               {/* "Back to Scripts" lives in the pipeline toolbar; don't repeat it here. */}
-              <h2 className="text-2xl font-semibold">
-                Preview & Select Variants ({previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown)
-              </h2>
+              <div>
+                <h2 className="font-heading text-2xl font-semibold">Preview & Select Variants</h2>
+                <p className="text-sm text-muted-foreground">
+                  {previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown
+                </p>
+              </div>
             </div>
 
             {/*
