@@ -8,6 +8,7 @@ import { TTSAsset, ELEVENLABS_MODELS } from "@/types/video-processing";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -390,10 +391,9 @@ export default function TTSLibraryPage() {
     ELEVENLABS_MODELS.find((m) => m.id === modelId)?.name ?? modelId;
 
   return (
-    <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8">
+    <PageShell width="wide" className="space-y-6">
       {/* Header */}
       <PageHeader
-        className="mb-6"
         title={
           <span className="flex items-center gap-3">
             TTS Library
@@ -791,6 +791,6 @@ export default function TTSLibraryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

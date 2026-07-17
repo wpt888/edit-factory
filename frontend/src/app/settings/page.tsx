@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
+import { PageShell } from "@/components/page-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
@@ -866,17 +867,17 @@ export default function SettingsPage() {
 
   if (profileLoading || initialLoad) {
     return (
-      <div className="container mx-auto p-6">
+      <PageShell>
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      </div>
+      </PageShell>
     )
   }
 
   if (!currentProfile) {
     return (
-      <div className="container mx-auto p-6">
+      <PageShell>
         <Card>
           <CardContent className="pt-6">
             <p className="text-center text-muted-foreground">
@@ -884,12 +885,12 @@ export default function SettingsPage() {
             </p>
           </CardContent>
         </Card>
-      </div>
+      </PageShell>
     )
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <PageShell className="space-y-6">
       <PageHeader
         icon={<SettingsIcon className="h-8 w-8" />}
         title="Settings"
@@ -2105,6 +2106,6 @@ export default function SettingsPage() {
         onConfirm={confirmDialog.onConfirm}
         loading={confirmDialog.loading}
       />
-    </div>
+    </PageShell>
   )
 }

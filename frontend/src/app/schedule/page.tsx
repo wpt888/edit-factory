@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -478,7 +479,7 @@ export default function SchedulePage() {
   }
 
   return (
-    <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8 space-y-8">
+    <PageShell width="wide" className="space-y-8">
       {/* Page header */}
       <PageHeader
         icon={<CalendarClock className="size-7 text-primary" />}
@@ -875,6 +876,6 @@ export default function SchedulePage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   );
 }

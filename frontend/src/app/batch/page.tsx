@@ -8,6 +8,7 @@ import { useProfile } from "@/contexts/profile-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import {
   Card,
   CardContent,
@@ -376,10 +377,9 @@ export default function BatchPage() {
   ).length;
 
   return (
-    <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8">
+    <PageShell width="wide" className="space-y-6">
       {/* Header */}
       <PageHeader
-        className="mb-6"
         icon={<ListChecks className="size-6 text-primary" />}
         title="Batch Pipeline"
         description="Paste ideas, get review-ready videos."
@@ -703,6 +703,6 @@ export default function BatchPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </PageShell>
   );
 }

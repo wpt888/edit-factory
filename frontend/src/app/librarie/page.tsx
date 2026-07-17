@@ -1263,7 +1263,7 @@ function LibrarieContent() {
   if (!profileLoading && !currentProfile) {
     return (
       <div className="min-h-full bg-background">
-        <main className="w-full max-w-[1400px] mx-auto px-6 py-8">
+        <main className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
             <User className="h-16 w-16 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Profile Selected</h3>
@@ -1281,10 +1281,9 @@ function LibrarieContent() {
 
   return (
     <div className="min-h-full bg-background">
-      <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
+      <main className={`w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
         {/* Header */}
         <PageHeader
-          className="mb-6"
           title="Local Exports"
           description="Rendered videos and generated images stored on this computer"
           actions={
@@ -1318,7 +1317,7 @@ function LibrarieContent() {
         />
 
         {/* Tab Switcher */}
-        <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit mb-6">
+        <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
           <Button
             variant={activeTab === "videos" ? "default" : "ghost"}
             size="sm"

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -214,9 +215,9 @@ export default function UsagePage() {
 
   return (
     <div className="min-h-full bg-background text-foreground">
-      <div className="container mx-auto p-6">
+      <PageShell className="space-y-6">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="flex items-center gap-4">
           <Link href="/pipeline">
             <Button variant="ghost" size="icon">
               <ChevronLeft className="h-5 w-5" />
@@ -668,7 +669,7 @@ export default function UsagePage() {
             </CardContent>
           </Card>
         )}
-      </div>
+      </PageShell>
     </div>
   );
 }

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
@@ -160,7 +161,7 @@ export default function WikiPage() {
   }, [current, loadList]);
 
   return (
-    <div className="container mx-auto p-6">
+    <PageShell>
       <PageHeader
         className="mb-4"
         icon={<NotebookPen className="size-6 text-primary" />}
@@ -299,7 +300,7 @@ export default function WikiPage() {
           )}
         </section>
       </div>
-    </div>
+    </PageShell>
   );
 }
 

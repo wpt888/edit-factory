@@ -3,6 +3,7 @@
 import { useProfile } from "@/contexts/profile-context";
 import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 
 export default function CalendarPage() {
   const { isLoading: profileLoading } = useProfile();
@@ -16,9 +17,9 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="max-w-[1400px] mx-auto p-6">
+    <PageShell width="wide">
       <PageHeader className="mb-6" title="Calendar" />
       <PostizMonthlyCalendar />
-    </div>
+    </PageShell>
   );
 }
