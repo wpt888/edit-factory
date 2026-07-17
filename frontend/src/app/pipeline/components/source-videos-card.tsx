@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { API_URL } from "@/lib/api";
+import { useApiUrl } from "@/hooks/use-api-url";
 import {
   Clock,
   Film,
@@ -24,10 +24,11 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { formatDuration } from "../pipeline-utils";
+import { formatDuration, WORKSPACE_CARD_BG } from "../pipeline-utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspace?: boolean }) {
+  const mediaApiUrl = useApiUrl();
   const {
     sourceVideos,
     sourceVideosLoading,
@@ -48,7 +49,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
   return (
     <Card
       className={workspace
-        ? "min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none"
+        ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`
         : "order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2"
       }
       data-testid="source-videos-panel"
@@ -149,7 +150,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
             {sourceVideos[0].thumbnail_path ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={`${API_URL}/segments/source-videos/${encodeURIComponent(sourceVideos[0].id)}/thumbnail`}
+                src={`${mediaApiUrl}/segments/source-videos/${encodeURIComponent(sourceVideos[0].id)}/thumbnail`}
                 alt={`Thumbnail for ${sourceVideos[0].name}`}
                 className="w-20 aspect-video rounded object-cover flex-shrink-0"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -242,7 +243,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                       {video.thumbnail_path ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={`${API_URL}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
+                          src={`${mediaApiUrl}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
                           alt={`Thumbnail for ${video.name}`}
                           className="w-20 aspect-video rounded object-cover flex-shrink-0"
                           onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -302,7 +303,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                         {video.thumbnail_path ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={`${API_URL}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
+                            src={`${mediaApiUrl}/segments/source-videos/${encodeURIComponent(video.id)}/thumbnail`}
                             alt={`Thumbnail for ${video.name}`}
                             className="w-full h-full object-cover"
                             onError={(e) => { (e.target as HTMLImageElement).src = ""; (e.target as HTMLImageElement).style.display = "none"; }}

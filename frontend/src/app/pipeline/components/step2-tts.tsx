@@ -50,6 +50,7 @@ import {
   countWords,
   WORDS_PER_SECOND,
   analyzeGroupTags,
+  WORKSPACE_CARD_BG,
 } from "../pipeline-utils";
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
 import type { Dispatch, SetStateAction } from "react";
@@ -331,7 +332,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
 
             {/* ElevenLabs model selector */}
-            <Card className={`overflow-hidden ${workspaceLayout ? "min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 min-[1280px]:shadow-none" : ""}`}>
+            <Card className={`overflow-hidden ${workspaceLayout ? `min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}` : ""}`}>
               <CardHeader className={`flex flex-row items-center justify-between space-y-0 border-b pb-3 ${workspaceLayout ? "min-[1280px]:px-4" : ""}`}>
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
                 <ElevenCreditsBadge

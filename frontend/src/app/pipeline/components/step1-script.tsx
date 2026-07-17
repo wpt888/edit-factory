@@ -54,7 +54,7 @@ import {
   Pencil,
   Settings2,
 } from "lucide-react";
-import { DebouncedInput, DebouncedTextarea } from "../pipeline-utils";
+import { DebouncedInput, DebouncedTextarea, WORKSPACE_CARD_BG } from "../pipeline-utils";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
@@ -115,6 +115,9 @@ export function Step1Script({ ctx }: { ctx: any }) {
     setTargetScriptDuration,
     provider,
     setProvider,
+    codexModel,
+    setCodexModel,
+    codexAvailable,
     error,
     totalSegmentDuration,
     isGenerating,
@@ -166,7 +169,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
               aria-label="Video idea editor"
               data-testid="step1-idea-canvas"
             >
-            <Card className={workspaceLayout ? "min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none" : undefined}>
+            <Card className={workspaceLayout ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}` : undefined}>
               <CardHeader className={workspaceLayout ? "min-[1280px]:border-b min-[1280px]:px-5 min-[1280px]:pb-4" : undefined}>
                 <CardTitle>Video Idea</CardTitle>
                 <CardDescription>
@@ -325,12 +328,12 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     <div className="mr-auto">
                       <Label htmlFor="context">Reference Context</Label>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Optional product details, brand information, or creative direction
+                        Optional details — products, services, brand info, or creative direction
                       </p>
                     </div>
                     {contextProductCount > 0 && (
                       <Badge variant="secondary" className="text-xs">
-                        {contextProductCount} {contextProductCount === 1 ? "product" : "products"}
+                        {contextProductCount} {contextProductCount === 1 ? "item" : "items"}
                       </Badge>
                     )}
                     {context.trim() && (
@@ -356,7 +359,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       onClick={handleOpenCatalog}
                     >
                       <BookOpen className="h-3.5 w-3.5 mr-1" />
-                      {catalogOpen ? "Close Catalog" : "Browse Catalog"}
+                      {catalogOpen ? "Close Library" : "Browse Library"}
                     </Button>
                   </div>
 
@@ -402,34 +405,39 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         <div className="min-w-[180px] flex-1 relative">
                           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                           <Input
-                            placeholder="Search your products..."
+                            placeholder="Search your library..."
                             value={catalogSearch}
                             onChange={(e) => handleCatalogSearchChange(e.target.value)}
                             className="pl-9 h-9"
                           />
                         </div>
-                        <Select value={catalogBrand} onValueChange={(v) => handleCatalogFilterChange("brand", v)}>
-                          <SelectTrigger className="h-9 min-w-[130px]">
-                            <SelectValue placeholder="Brand" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Brands</SelectItem>
-                            {catalogFilters.brands.map((b) => (
-                              <SelectItem key={b} value={b}>{b}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select value={catalogCategory} onValueChange={(v) => handleCatalogFilterChange("category", v)}>
-                          <SelectTrigger className="h-9 min-w-[130px]">
-                            <SelectValue placeholder="Category" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Categories</SelectItem>
-                            {catalogFilters.categories.map((c) => (
-                              <SelectItem key={c} value={c}>{c}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        {/* Brand/category filters only make sense for e-commerce imports — hidden when the data has none */}
+                        {catalogFilters.brands.length > 0 && (
+                          <Select value={catalogBrand} onValueChange={(v) => handleCatalogFilterChange("brand", v)}>
+                            <SelectTrigger className="h-9 min-w-[130px]">
+                              <SelectValue placeholder="Brand" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">All Brands</SelectItem>
+                              {catalogFilters.brands.map((b) => (
+                                <SelectItem key={b} value={b}>{b}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {catalogFilters.categories.length > 0 && (
+                          <Select value={catalogCategory} onValueChange={(v) => handleCatalogFilterChange("category", v)}>
+                            <SelectTrigger className="h-9 min-w-[130px]">
+                              <SelectValue placeholder="Category" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">All Categories</SelectItem>
+                              {catalogFilters.categories.map((c) => (
+                                <SelectItem key={c} value={c}>{c}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
 
                       {/* Products grid */}
@@ -438,7 +446,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                         </div>
                       ) : catalogProducts.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
+                        <p className="text-sm text-muted-foreground text-center py-4">Nothing found — add items in the Context Library</p>
                       ) : (
                         <div className="grid grid-cols-1 gap-1.5 max-h-[300px] overflow-y-auto">
                           {catalogProducts.map((product) => (
@@ -455,6 +463,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
                               <Checkbox
                                 checked={selectedCatalogIds.has(product.id)}
                                 onCheckedChange={() => toggleCatalogProduct(product.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => event.stopPropagation()}
                                 className="flex-shrink-0"
                               />
                               {product.image_link && (
@@ -491,7 +501,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                             <ArrowLeft className="h-3 w-3" />
                           </Button>
                           <span className="text-xs text-muted-foreground">
-                            Page {catalogPagination.page} of {catalogPagination.total_pages} ({catalogPagination.total} products)
+                            Page {catalogPagination.page} of {catalogPagination.total_pages} ({catalogPagination.total} items)
                           </span>
                           <Button
                             type="button"
@@ -524,7 +534,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 </div>
 
                 {/* Configuration row */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 ${provider === "codex" ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
                   {/* Variant count */}
                   <div className="space-y-2">
                     <Label htmlFor="variant-count">Variants</Label>
@@ -582,9 +592,32 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       <SelectContent>
                         <SelectItem value="gemini">Gemini 2.5 Flash</SelectItem>
                         <SelectItem value="claude">Claude Sonnet 4</SelectItem>
+                        {codexAvailable && (
+                          <SelectItem value="codex">
+                            Codex (ChatGPT subscription)
+                          </SelectItem>
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {provider === "codex" && codexAvailable && (
+                    <div className="space-y-2">
+                      <Label htmlFor="codex-model">Codex Model</Label>
+                      <Input
+                        id="codex-model"
+                        value={codexModel}
+                        onChange={(event) => setCodexModel(event.target.value)}
+                        placeholder="gpt-5.4-mini"
+                        spellCheck={false}
+                        autoCapitalize="none"
+                        className="font-mono"
+                      />
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        Uses this computer&apos;s Codex login in an ephemeral, read-only session.
+                      </p>
+                    </div>
+                  )}
                 </div>
                   </CollapsibleContent>
                 </Collapsible>

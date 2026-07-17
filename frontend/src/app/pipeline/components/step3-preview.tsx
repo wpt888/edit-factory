@@ -62,7 +62,7 @@ import {
   StyleKey,
   PreviewCard,
 } from "../pipeline-types";
-import { formatDuration } from "../pipeline-utils";
+import { formatDuration, WORKSPACE_CARD_BG } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
 import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
@@ -274,7 +274,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               >
             {/* Assembly controls affect clip selection, not final-file rendering. */}
             <Card
-              className="order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none"
+              className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}
               data-testid="step3-assembly-settings"
             >
               <CardHeader className="min-[1280px]:px-4">
@@ -367,7 +367,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             </Card>
 
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
-            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none`}>
+            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}>
               <CardHeader className="pb-4 min-[1280px]:px-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1">
@@ -554,7 +554,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 if (!preview) return null;
 
                 return (
-                  <Card key={card.key} className="overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none">
+                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}>
                     <CardHeader className="min-[1280px]:px-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
