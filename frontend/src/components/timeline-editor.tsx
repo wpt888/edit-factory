@@ -130,6 +130,35 @@ export interface InterstitialSlide {
   productTitle?: string;         // For display in timeline
 }
 
+// Horizontal scale of the multi-track timeline's time axis.
+// ponytail: fixed scale; add a zoom control if long videos make lanes cramped.
+const TIMELINE_PX_PER_SEC = 48;
+
+// Status colors shared by the storyboard strip and the multi-track Video lane.
+function matchStatusStyle(match: MatchPreview, isSelected: boolean) {
+  const isMatched = match.segment_id !== null && match.confidence > 0;
+  const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
+  const isPinned = match.pinned === true;
+  const isLowConfidence = isMatched && !isPinned && match.confidence < 0.5;
+  const border = isMatched
+    ? isLowConfidence
+      ? "border-amber-400"
+      : "border-success"
+    : isAutoFilled
+    ? "border-muted-foreground"
+    : "border-amber-500";
+  const bg = isSelected
+    ? "bg-accent"
+    : isMatched
+    ? isLowConfidence
+      ? "bg-amber-50/60 dark:bg-amber-950/10"
+      : "bg-success/10"
+    : isAutoFilled
+    ? "bg-muted/50"
+    : "bg-amber-50 dark:bg-amber-950/20";
+  return { border, bg, isPinned };
+}
+
 interface TimelineEditorProps {
   matches: MatchPreview[];
   audioDuration: number;
@@ -1150,10 +1179,9 @@ export function TimelineEditor({
     jumpToIndex(previewActiveIndexRef.current + 1);
   }, [jumpToIndex]);
 
-  const handlePreviewSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const seekPreviewToTime = useCallback((time: number) => {
     const audio = previewAudioRef.current;
     if (!audio) return;
-    const time = parseFloat(e.target.value);
     setPreviewCurrentTime(time);
     if (time < introOffsetSec) {
       audio.currentTime = time;
@@ -1200,6 +1228,10 @@ export function TimelineEditor({
     // segment's start (video doesn't track sub-phrase position — same as before).
     seatActiveSlot(newIdx, isPreviewPlayingRef.current);
   }, [findActiveMatch, seatActiveSlot, introOffsetSec, playIntroAt]);
+
+  const handlePreviewSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    seekPreviewToTime(parseFloat(e.target.value));
+  }, [seekPreviewToTime]);
 
   const handleSeekToSegment = useCallback((idx: number) => {
     if (!isPreviewActive) return;
@@ -2385,30 +2417,9 @@ export function TimelineEditor({
                   const widthPercent = totalDuration > 0 ? (groupDuration / totalDuration) * 100 : 10;
 
                   // Use first match for color/status
-                  const isMatched = firstMatch.segment_id !== null && firstMatch.confidence > 0;
-                  const isAutoFilled = firstMatch.is_auto_filled === true && firstMatch.segment_id !== null;
-                  const isPinned = firstMatch.pinned === true;
-                  const isLowConfidence = isMatched && !isPinned && firstMatch.confidence < 0.5;
                   const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
                   const isPreviewHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
-
-                  const borderColor = isMatched
-                    ? isLowConfidence
-                      ? "border-amber-400"
-                      : "border-success"
-                    : isAutoFilled
-                    ? "border-muted-foreground"
-                    : "border-amber-500";
-
-                  const bgColor = isSelected
-                    ? "bg-accent"
-                    : isMatched
-                    ? isLowConfidence
-                      ? "bg-amber-50/60 dark:bg-amber-950/10"
-                      : "bg-success/10"
-                    : isAutoFilled
-                    ? "bg-muted/50"
-                    : "bg-amber-50 dark:bg-amber-950/20";
+                  const { border: borderColor, bg: bgColor, isPinned } = matchStatusStyle(firstMatch, isSelected);
 
                   // Combine texts for tooltip, plus the assembly explanation if present
                   const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
@@ -2501,45 +2512,216 @@ export function TimelineEditor({
             </div>
           </div>
 
-          {attentionTimeline && (
-            <div className="overflow-hidden rounded-md border bg-card text-[10px]" aria-label="Multi-track timeline">
-              {[
-                { label: "Video", content: <div className="absolute inset-y-1 left-0 right-0 rounded bg-slate-500/25" /> },
-                { label: "Attention images", content: attentionTimeline.cues.map(cue => (
+          {attentionTimeline && totalDuration > 0 && (() => {
+            /* ========== MULTI-TRACK TIMELINE ==========
+               One shared time axis (0..totalDuration — the voiceover clock).
+               Every lane positions blocks as a % of that axis, so rows stay
+               aligned by construction; the grid scrolls horizontally as one. */
+            const pct = (sec: number) => `${(Math.min(Math.max(sec, 0), totalDuration) / totalDuration) * 100}%`;
+            const widthPct = (sec: number) => `${(Math.max(sec, 0) / totalDuration) * 100}%`;
+            const laneMinWidth = Math.max(480, Math.round(totalDuration * TIMELINE_PX_PER_SEC));
+            const tickStep = totalDuration > 120 ? 5 : 1;
+            const ticks: number[] = [];
+            for (let s = 0; s <= Math.floor(totalDuration); s += tickStep) ticks.push(s);
+            const sfxCues = attentionTimeline.cues.filter(cue => cue.sfxAssetId || cue.sfxUrl);
+            const playhead = isPreviewActive ? (
+              <div
+                className="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary"
+                style={{ left: pct(previewCurrentTime) }}
+              />
+            ) : null;
+
+            const lanes: { label: string; height: string; attention?: boolean; content: React.ReactNode }[] = [
+              {
+                label: "Video",
+                height: "h-14",
+                content: (
+                  <>
+                    {introOffsetSec > 0 && (
+                      <div
+                        className="absolute inset-y-1 flex items-center overflow-hidden rounded border-2 border-violet-500 bg-violet-500/15 px-1 text-[9px] font-medium text-violet-700 dark:text-violet-300"
+                        style={{ left: 0, width: pct(introOffsetSec) }}
+                        title={`Rapid intro over soundtrack (${introOffsetSec.toFixed(1)}s)`}
+                      >
+                        <span className="truncate">Rapid intro</span>
+                      </div>
+                    )}
+                    {timelineGroups.map(group => {
+                      const firstIdx = group.matchIndices[0];
+                      const lastIdx = group.matchIndices[group.matchIndices.length - 1];
+                      const firstMatch = matches[firstIdx];
+                      const end = matches[lastIdx]?.srt_end ?? firstMatch.srt_end;
+                      const start = Math.max(firstMatch.srt_start, introOffsetSec);
+                      if (end - start <= 0.001) return null;
+                      const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
+                      const isHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
+                      const status = matchStatusStyle(firstMatch, isSelected);
+                      const words = firstMatch.srt_text.trim().split(/\s+/);
+                      const blockLabel = firstMatch.matched_keyword?.trim()
+                        || `${words.slice(0, 3).join(" ")}${words.length > 3 ? "..." : ""}`;
+                      return (
+                        <button
+                          type="button"
+                          key={`lane-${group.groupId}`}
+                          className={`absolute inset-y-1 overflow-hidden rounded border-2 text-left ${status.border} ${status.bg} ${isSelected || isHighlighted ? "ring-1 ring-primary" : ""}`}
+                          style={{ left: pct(start), width: widthPct(end - start) }}
+                          title={group.matchIndices.map(i => matches[i].srt_text).join(" ")}
+                          onClick={() => {
+                            if (isPreviewActive) {
+                              handleSeekToSegment(firstIdx);
+                            } else {
+                              setSelectedBlockIndex(firstIdx === selectedBlockIndex ? null : firstIdx);
+                              setSelectedSlideId(null);
+                            }
+                          }}
+                        >
+                          {firstMatch.thumbnail_path && (
+                            <img
+                              src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path.split("/").pop() ?? "")}`}
+                              alt=""
+                              loading="lazy"
+                              className="absolute inset-0 h-full w-full object-cover opacity-50"
+                            />
+                          )}
+                          <span className="absolute inset-x-1 bottom-0.5 z-10 truncate text-[9px] font-medium text-foreground">
+                            {blockLabel}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                ),
+              },
+              {
+                label: "Attention images",
+                height: "h-9",
+                attention: true,
+                content: (
+                  <>
+                    {attentionTimeline.cues.length === 0 && (
+                      <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/60">
+                        No attention images — insert one with the + buttons in the strip above
+                      </div>
+                    )}
+                    {attentionTimeline.cues.map(cue => (
+                      <button
+                        type="button"
+                        key={cue.id}
+                        className="absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded bg-primary/70 px-1 text-left text-primary-foreground active:cursor-grabbing"
+                        style={{ left: pct(cue.startMs / 1000), width: widthPct(cue.durationMs / 1000) }}
+                        onPointerDown={(event) => beginCueTimingDrag(event, cue, "move")}
+                        onClick={() => setSelectedSlideId(cue.id)}
+                        title="Drag to move. Hold Alt to disable subtitle snapping."
+                      >
+                        {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
+                        <span
+                          className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-black/20"
+                          onPointerDown={(event) => beginCueTimingDrag(event, cue, "resize")}
+                        />
+                      </button>
+                    ))}
+                  </>
+                ),
+              },
+              {
+                label: "Subtitles",
+                height: "h-8",
+                content: matches.map((match, idx) => (
                   <button
                     type="button"
-                    key={cue.id}
-                    className="absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded bg-primary/70 px-1 text-left text-primary-foreground active:cursor-grabbing"
-                    style={{ left: `${cue.startMs / Math.max(1, audioDuration * 1000) * 100}%`, width: `${cue.durationMs / Math.max(1, audioDuration * 1000) * 100}%` }}
-                    onPointerDown={(event) => beginCueTimingDrag(event, cue, "move")}
-                    onClick={() => setSelectedSlideId(cue.id)}
-                    title="Drag to move. Hold Alt to disable subtitle snapping."
+                    key={match.srt_index}
+                    className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1 text-left leading-tight hover:bg-foreground/10"
+                    style={{ left: pct(match.srt_start), width: widthPct(Math.max(0.05, match.srt_end - match.srt_start)) }}
+                    title={match.srt_text}
+                    onClick={() => { if (isPreviewActive) handleSeekToSegment(idx); }}
                   >
-                    {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
-                    <span
-                      className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-black/20"
-                      onPointerDown={(event) => beginCueTimingDrag(event, cue, "resize")}
-                    />
-                  </button>
-                )) },
-                { label: "Subtitles", content: matches.map(match => (
-                  <div key={match.srt_index} className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1"
-                    style={{ left: `${match.srt_start / Math.max(.001, audioDuration) * 100}%`, width: `${(match.srt_end - match.srt_start) / Math.max(.001, audioDuration) * 100}%` }}>
                     {match.srt_text}
+                  </button>
+                )),
+              },
+              {
+                label: "Voiceover",
+                height: "h-7",
+                content: (
+                  <>
+                    <div
+                      className="absolute inset-y-1 left-0 rounded bg-emerald-500/20 bg-[repeating-linear-gradient(90deg,transparent_0_3px,currentColor_3px_4px)] text-emerald-500/30"
+                      style={{ width: pct(audioDuration) }}
+                    />
+                    <span className="absolute left-1 top-1/2 z-10 -translate-y-1/2 text-[9px] font-medium text-emerald-700 dark:text-emerald-300">
+                      TTS voiceover · {formatTime(audioDuration)}
+                    </span>
+                  </>
+                ),
+              },
+              ...(sfxCues.length > 0 ? [{
+                label: "SFX",
+                height: "h-7",
+                content: sfxCues.map(cue => (
+                  <div
+                    key={cue.id}
+                    className="absolute inset-y-1 w-2 rounded bg-amber-500"
+                    style={{ left: pct(cue.startMs / 1000) }}
+                    title="Attention SFX"
+                  />
+                )),
+              }] : []),
+            ];
+
+            return (
+              <div className="overflow-x-auto rounded-md border bg-card text-[10px]" aria-label="Multi-track timeline">
+                <div className="w-max min-w-full">
+                  {/* Time ruler — click to seek while the preview is active */}
+                  <div className="flex">
+                    <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center border-r bg-card px-2 font-medium text-muted-foreground">
+                      Time
+                    </div>
+                    <div
+                      className={`relative h-6 flex-1 ${isPreviewActive ? "cursor-pointer" : ""}`}
+                      style={{ minWidth: laneMinWidth }}
+                      title={isPreviewActive ? "Click to seek" : undefined}
+                      onClick={(event) => {
+                        if (!isPreviewActive) return;
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+                        seekPreviewToTime(ratio * totalDuration);
+                      }}
+                    >
+                      {ticks.map(s => (
+                        <React.Fragment key={s}>
+                          <div
+                            className={`absolute bottom-0 w-px ${s % 5 === 0 ? "h-2.5 bg-foreground/40" : "h-1.5 bg-foreground/20"}`}
+                            style={{ left: pct(s) }}
+                          />
+                          {s % 5 === 0 && totalDuration - s > 0.4 && (
+                            <span className="absolute top-0 pl-0.5 text-[8px] leading-none text-muted-foreground" style={{ left: pct(s) }}>
+                              {s}s
+                            </span>
+                          )}
+                        </React.Fragment>
+                      ))}
+                      {playhead}
+                    </div>
                   </div>
-                )) },
-                { label: "Voiceover", content: <div className="absolute inset-y-1 left-0 right-0 rounded bg-emerald-500/20 bg-[repeating-linear-gradient(90deg,transparent_0_3px,currentColor_3px_4px)] text-emerald-500/30" /> },
-                { label: "SFX", content: attentionTimeline.cues.filter(cue => cue.sfxAssetId || cue.sfxUrl).map(cue => (
-                  <div key={cue.id} className="absolute inset-y-1 w-2 rounded bg-amber-500" style={{ left: `${cue.startMs / Math.max(1, audioDuration * 1000) * 100}%` }} />
-                )) },
-              ].map(track => (
-                <div key={track.label} className="grid grid-cols-[7rem_minmax(0,1fr)] border-t first:border-t-0">
-                  <div className="flex h-7 items-center border-r bg-muted/40 px-2 font-medium">{track.label}</div>
-                  <div className="relative h-7" data-attention-track>{track.content}</div>
+                  {lanes.map(lane => (
+                    <div key={lane.label} className="flex border-t">
+                      <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center border-r bg-card px-2 font-medium">
+                        {lane.label}
+                      </div>
+                      <div
+                        className={`relative flex-1 ${lane.height}`}
+                        style={{ minWidth: laneMinWidth }}
+                        {...(lane.attention ? { "data-attention-track": "" } : {})}
+                      >
+                        {lane.content}
+                        {playhead}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            );
+          })()}
 
           {/* Interstitial slide config panel (shown when a slide block is selected) */}
           {selectedSlideId !== null && (() => {
