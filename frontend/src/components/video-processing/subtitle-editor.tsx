@@ -30,7 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, CheckCircle2, Maximize2, X } from "lucide-react";
+import { Loader2, CheckCircle2, Maximize2, ScanLine, X } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -141,6 +141,7 @@ export function SubtitleEditor({
   const [ffmpegBackgroundUrl, setFfmpegBackgroundUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [showSafeArea, setShowSafeArea] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [fontSearch, setFontSearch] = useState("");
   const [fontAccessError, setFontAccessError] = useState<string | null>(null);
@@ -430,9 +431,23 @@ export function SubtitleEditor({
     <div className="space-y-3">
       <div className="flex justify-between items-center">
         <Label className="text-base font-semibold">Live Preview</Label>
-        {isLoadingVideoInfo && (
-          <span className="text-xs text-muted-foreground">Loading...</span>
-        )}
+        <div className="flex items-center gap-2">
+          {isLoadingVideoInfo && (
+            <span className="text-xs text-muted-foreground">Loading...</span>
+          )}
+          <Button
+            type="button"
+            variant={showSafeArea ? "secondary" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 px-2.5"
+            onClick={() => setShowSafeArea((visible) => !visible)}
+            aria-pressed={showSafeArea}
+            title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
+          >
+            <ScanLine className="h-3.5 w-3.5" />
+            Safe Area
+          </Button>
+        </div>
       </div>
 
       <div className="flex justify-center">
@@ -475,7 +490,9 @@ export function SubtitleEditor({
               <Loader2 className="h-4 w-4 animate-spin text-white/60" />
             </div>
           )}
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+          {showSafeArea && (
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+          )}
           <button
             type="button"
             onClick={() => setFullscreenOpen(true)}
@@ -523,7 +540,9 @@ export function SubtitleEditor({
                 {renderLocalSubtitleOverlay({ height: 900 })}
               </>
             )}
-            <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+            {showSafeArea && (
+              <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+            )}
           </div>
         </DialogContent>
       </Dialog>

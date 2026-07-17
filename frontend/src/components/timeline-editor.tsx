@@ -34,6 +34,7 @@ import {
   Loader2,
   Maximize2,
   Pin,
+  ScanLine,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
@@ -360,6 +361,7 @@ export function TimelineEditor({
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
+  const [showSafeArea, setShowSafeArea] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [isPreviewBuffering, setIsPreviewBuffering] = useState(false);
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
@@ -2107,7 +2109,9 @@ export function TimelineEditor({
 
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
                 {renderAttentionOverlays()}
-                <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+                {showSafeArea && (
+                  <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+                )}
                 {renderPreviewSubtitleOverlay(8, compactPreviewMeasurement.height)}
               </div>
 
@@ -2166,6 +2170,17 @@ export function TimelineEditor({
                       title="Next segment"
                     >
                       <SkipForward className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-7 w-7 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
+                      onClick={() => setShowSafeArea((visible) => !visible)}
+                      aria-pressed={showSafeArea}
+                      aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
+                      title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
+                    >
+                      <ScanLine className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
@@ -2238,7 +2253,9 @@ export function TimelineEditor({
                     )}
 
                     {renderAttentionOverlays()}
-                    <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+                    {showSafeArea && (
+                      <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+                    )}
                     {renderPreviewSubtitleOverlay(10, expandedPreviewMeasurement.height)}
                   </div>
 
@@ -2294,6 +2311,17 @@ export function TimelineEditor({
                           title="Next segment"
                         >
                           <SkipForward className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className={`h-8 w-8 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
+                          onClick={() => setShowSafeArea((visible) => !visible)}
+                          aria-pressed={showSafeArea}
+                          aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
+                          title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
+                        >
+                          <ScanLine className="h-4 w-4" />
                         </Button>
                       </div>
 
