@@ -596,7 +596,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 aria-label="Script and voice-over editor"
                 data-testid="step2-script-canvas"
               >
-                <div className={workspaceLayout ? "hidden min-[1280px]:flex min-[1280px]:h-14 min-[1280px]:shrink-0 min-[1280px]:items-center min-[1280px]:justify-between min-[1280px]:gap-3 min-[1280px]:border-b min-[1280px]:bg-card min-[1280px]:px-4" : "hidden"}>
+                <div className={workspaceLayout ? "hidden min-[1280px]:flex min-[1280px]:h-14 min-[1280px]:shrink-0 min-[1280px]:items-center min-[1280px]:justify-between min-[1280px]:gap-3 min-[1280px]:border-b min-[1280px]:bg-background min-[1280px]:px-4" : "hidden"}>
                   <div className="min-w-0">
                     <h2 className="truncate text-base font-semibold">
                       Review Scripts

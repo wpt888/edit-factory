@@ -538,7 +538,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 data-testid="step3-variant-canvas"
               >
                 <header
-                  className="sticky top-0 z-10 hidden h-10 items-center border-b bg-background px-4 min-[1280px]:flex"
+                  className="sticky top-0 z-10 hidden h-14 items-center border-b bg-background px-4 min-[1280px]:flex"
                   data-testid="step3-variant-header"
                 >
                   <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
