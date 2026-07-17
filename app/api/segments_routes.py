@@ -2610,7 +2610,10 @@ async def extract_segment_frames(
 @router.get("/files/{file_path:path}")
 async def serve_segment_file(
     file_path: str,
-    profile: ProfileContext = Depends(get_profile_context)
+    # Media-session dependency (not plain get_profile_context): thumbnails are
+    # loaded by <img> tags, which cannot attach the Bearer header. On desktop
+    # the signed media cookie authenticates them instead.
+    profile: ProfileContext = Depends(get_source_media_profile_context)
 ):
     """Serve segment files (thumbnails, extracted videos)."""
     settings = get_settings()

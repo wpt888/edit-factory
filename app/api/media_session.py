@@ -38,7 +38,11 @@ logger = logging.getLogger(__name__)
 
 SOURCE_MEDIA_COOKIE = "blipost_source_media"
 SOURCE_MEDIA_TTL_SECONDS = 12 * 60 * 60
-_SOURCE_MEDIA_COOKIE_PATH = "/api/v1/segments/source-videos"
+# Covers both source-video streaming endpoints and /segments/files (segment
+# thumbnails) — all consumed by <video>/<img> elements that cannot send the
+# Bearer header. Only endpoints that opt into get_source_media_profile_context
+# actually accept the cookie; the rest of /segments still requires Bearer.
+_SOURCE_MEDIA_COOKIE_PATH = "/api/v1/segments"
 
 _signing_key: Optional[bytes] = None
 _signing_key_lock = threading.Lock()
