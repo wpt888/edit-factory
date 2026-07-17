@@ -30,9 +30,10 @@
 - Verified: `eslint` + `tsc --noEmit` clean on both repos for the changed
   files. Screenshot `x1-parity-studio-expanded.png` (repo root) against a
   live dev server confirms the rendered result. Collapsed-rail screenshot
-  not captured — every fresh `next dev` restart this session (5 attempts)
-  hit a pre-existing Turbopack workspace-root crash unrelated to this
-  change; verified by code review instead.
+  (`x1-parity-studio-collapsed.png`, repo root) captured 2026-07-18 against
+  the still-live `:3005` dev server (sidebar collapsed via the
+  `blipost.sidebar.collapsed` localStorage key); confirms `pt-4` top
+  padding and the inter-group divider lines in the icon rail.
 
 See [Shell, spacing, and icon-sizing sweep (S2)](29-shell-spacing-sweep.md#follow-up-x1-shell-parity-pack-2026-07-18).
 
