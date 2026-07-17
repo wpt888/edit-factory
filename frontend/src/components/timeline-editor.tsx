@@ -21,13 +21,10 @@ import {
   Clock,
   Plus,
   Minus,
-  List,
-  LayoutPanelLeft,
   Play,
   Pause,
   SkipBack,
   SkipForward,
-  Square,
   ImageIcon,
   Trash2,
   ChevronDown,
@@ -176,6 +173,8 @@ interface TimelineEditorProps {
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
   attentionTimeline?: AttentionTimeline;
   onAttentionTimelineChange?: (timeline: AttentionTimeline) => void;
+  /** Open the server-rendered preview for this exact variant. */
+  onRenderPreview?: () => void;
   // "card" = compact in-card editor; "full" = the maximized modal editor
   // (bigger inline preview, everything else identical — same component reused).
   displayMode?: "card" | "full";
@@ -198,6 +197,7 @@ export function TimelineEditor({
   onInterstitialSlidesChange,
   attentionTimeline,
   onAttentionTimelineChange,
+  onRenderPreview,
   displayMode = "card",
 }: TimelineEditorProps) {
   const cueBoundaryIndex = useCallback((startMs: number) => {
@@ -335,8 +335,8 @@ export function TimelineEditor({
       ? requestedIntroOffsetSec
       : 0;
 
-  // View mode: "timeline" (horizontal) or "list" (vertical)
-  const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
+  // The editor intentionally exposes one canonical view: the timeline.
+  const [viewMode] = useState<"timeline" | "list">("timeline");
 
   // Dialog state (used for both unmatched assignment and swap)
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
@@ -1139,7 +1139,6 @@ export function TimelineEditor({
   const restartPreviewFromZero = useCallback(() => {
     const audio = previewAudioRef.current;
     if (!audio) return;
-    const wasPlaying = isPreviewPlayingRef.current;
     audio.pause();
     for (const video of previewSlotRefs.current) video?.pause();
     audio.currentTime = 0;
@@ -1148,18 +1147,18 @@ export function TimelineEditor({
     previewActiveIndexRef.current = 0;
     preparedNextForIndexRef.current = null;
     const hasIntro = introOffsetSec > 0 && introSegments.length > 0;
+    isPreviewPlayingRef.current = true;
+    setIsPreviewPlaying(true);
     isPreviewIntroRef.current = hasIntro;
     setIsPreviewIntro(hasIntro);
     if (hasIntro) playIntroAt(0);
     else seatActiveSlot(0, false);
-    if (wasPlaying) {
-      audio.play().catch(() => {
-        isPreviewPlayingRef.current = false;
-        setIsPreviewPlaying(false);
-      });
-      if (!hasIntro) seatActiveSlot(0, true);
-      startPreviewRafLoop();
-    }
+    audio.play().catch(() => {
+      isPreviewPlayingRef.current = false;
+      setIsPreviewPlaying(false);
+    });
+    if (!hasIntro) seatActiveSlot(0, true);
+    startPreviewRafLoop();
   }, [introOffsetSec, introSegments.length, playIntroAt, seatActiveSlot, startPreviewRafLoop]);
 
   // Discrete user jump (prev/next, scrub-to-segment, segment click). A single
@@ -1995,55 +1994,6 @@ export function TimelineEditor({
 
   return (
     <>
-      {/* View toggle + Play Preview */}
-      <div className="flex items-center gap-1 mb-3">
-        <Button
-          variant={viewMode === "timeline" ? "default" : "outline"}
-          size="sm"
-          className="h-7 text-xs gap-1.5"
-          onClick={() => setViewMode("timeline")}
-        >
-          <LayoutPanelLeft className="h-3.5 w-3.5" />
-          Timeline
-        </Button>
-        <Button
-          variant={viewMode === "list" ? "default" : "outline"}
-          size="sm"
-          className="h-7 text-xs gap-1.5"
-          onClick={() => setViewMode("list")}
-        >
-          <List className="h-3.5 w-3.5" />
-          List
-        </Button>
-
-        {canPreview && (
-          <div className="ml-auto">
-            {isPreviewActive ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs gap-1.5 border-destructive text-destructive hover:bg-destructive/10"
-                onClick={deactivatePreview}
-              >
-                <Square className="h-3 w-3" />
-                Stop Preview
-              </Button>
-            ) : (
-              <Button
-                variant="default"
-                size="sm"
-                className="h-7 text-xs gap-1.5"
-                onClick={activatePreview}
-                title="Instant composite preview — plays source segments directly, no render"
-              >
-                <Play className="h-3 w-3" />
-                Instant Preview
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* Preload audio as soon as preview is possible — mounted before isPreviewActive
           so it has time to load before user clicks Play Preview */}
       {canPreview && (
@@ -2056,14 +2006,14 @@ export function TimelineEditor({
       )}
 
       {/* Inline continuous preview player */}
-      {isPreviewActive && pipelineId && variantIndex !== undefined && profileId && (
+      {canPreview && pipelineId && variantIndex !== undefined && profileId && (
         <>
           {!isPreviewExpanded && (
             <div className="rounded-lg border bg-card mb-3 overflow-hidden">
               {/* Video display with subtitle overlay */}
               <div
                 ref={compactPreviewMeasurement.ref}
-                className="relative mx-auto bg-black flex items-center justify-center"
+                className="group relative mx-auto bg-black flex items-center justify-center"
                 style={displayMode === "full" ? expandedPreviewFrameStyle : compactPreviewFrameStyle}
               >
                 {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
@@ -2092,6 +2042,38 @@ export function TimelineEditor({
                     }}
                   />
                 ))}
+
+                {!isPreviewActive && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/35">
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className="h-12 w-12 rounded-full shadow-lg"
+                      onClick={activatePreview}
+                      aria-label="Play preview"
+                      title="Play preview"
+                    >
+                      <Play className="h-5 w-5 fill-current" />
+                    </Button>
+                    <span className="text-[11px] text-white/75">Play preview</span>
+                  </div>
+                )}
+
+                {onRenderPreview && (
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    className="pointer-events-none absolute right-2 top-2 z-20 h-8 w-8 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                    onClick={() => {
+                      if (isPreviewActive) deactivatePreview();
+                      onRenderPreview();
+                    }}
+                    aria-label="Open rendered preview"
+                    title="Open rendered preview"
+                  >
+                    <Film className="h-4 w-4" />
+                  </Button>
+                )}
 
                 {/* Buffering indicator */}
                 {isPreviewBuffering && isPreviewPlaying && (
@@ -2125,7 +2107,8 @@ export function TimelineEditor({
                   step={0.1}
                   value={previewCurrentTime}
                   onChange={handlePreviewSeek}
-                  className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
+                  disabled={!isPreviewActive}
+                  className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary disabled:cursor-default disabled:opacity-45"
                 />
 
                 {/* Time + segment info + buttons */}
@@ -2135,7 +2118,14 @@ export function TimelineEditor({
                   </span>
 
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={restartPreviewFromZero} title="Restart from 0" aria-label="Restart from 0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
+                      title="Replay from beginning"
+                      aria-label="Replay from beginning"
+                    >
                       <RefreshCw className="h-3.5 w-3.5" />
                     </Button>
                     <Button
@@ -2143,7 +2133,7 @@ export function TimelineEditor({
                       size="icon"
                       className="h-7 w-7"
                       onClick={previewPrevSegment}
-                      disabled={previewActiveIndex <= 0}
+                      disabled={!isPreviewActive || previewActiveIndex <= 0}
                       title="Previous segment"
                     >
                       <SkipBack className="h-3.5 w-3.5" />
@@ -2152,7 +2142,7 @@ export function TimelineEditor({
                       variant="default"
                       size="icon"
                       className="h-8 w-8"
-                      onClick={togglePreviewPlayPause}
+                      onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
                       title={isPreviewPlaying ? "Pause" : "Play"}
                     >
                       {isPreviewPlaying ? (
@@ -2166,7 +2156,7 @@ export function TimelineEditor({
                       size="icon"
                       className="h-7 w-7"
                       onClick={previewNextSegment}
-                      disabled={previewActiveIndex >= matches.length - 1}
+                      disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
                       title="Next segment"
                     >
                       <SkipForward className="h-3.5 w-3.5" />
@@ -2210,7 +2200,7 @@ export function TimelineEditor({
                 <div className="rounded-lg border bg-card overflow-hidden">
                   <div
                     ref={expandedPreviewMeasurement.ref}
-                    className="relative mx-auto bg-black flex items-center justify-center"
+                    className="group relative mx-auto bg-black flex items-center justify-center"
                     style={expandedPreviewFrameStyle}
                   >
                     {/* Ping-pong double-buffer (expanded view) — same two slots,
@@ -2240,6 +2230,38 @@ export function TimelineEditor({
                       />
                     ))}
 
+                    {!isPreviewActive && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/35">
+                        <Button
+                          variant="secondary"
+                          size="icon"
+                          className="h-14 w-14 rounded-full shadow-lg"
+                          onClick={activatePreview}
+                          aria-label="Play preview"
+                          title="Play preview"
+                        >
+                          <Play className="h-6 w-6 fill-current" />
+                        </Button>
+                        <span className="text-xs text-white/75">Play preview</span>
+                      </div>
+                    )}
+
+                    {onRenderPreview && (
+                      <Button
+                        variant="secondary"
+                        size="icon"
+                        className="pointer-events-none absolute right-3 top-3 z-20 h-9 w-9 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                        onClick={() => {
+                          if (isPreviewActive) deactivatePreview();
+                          onRenderPreview();
+                        }}
+                        aria-label="Open rendered preview"
+                        title="Open rendered preview"
+                      >
+                        <Film className="h-4 w-4" />
+                      </Button>
+                    )}
+
                     {isPreviewBuffering && isPreviewPlaying && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
                         <Loader2 className="h-8 w-8 animate-spin text-white" />
@@ -2267,7 +2289,8 @@ export function TimelineEditor({
                       step={0.1}
                       value={previewCurrentTime}
                       onChange={handlePreviewSeek}
-                      className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
+                      disabled={!isPreviewActive}
+                      className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary disabled:cursor-default disabled:opacity-45"
                     />
 
                     <div className="flex items-center justify-between gap-2">
@@ -2276,7 +2299,14 @@ export function TimelineEditor({
                       </span>
 
                       <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={restartPreviewFromZero} title="Restart from 0" aria-label="Restart from 0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
+                          title="Replay from beginning"
+                          aria-label="Replay from beginning"
+                        >
                           <RefreshCw className="h-4 w-4" />
                         </Button>
                         <Button
@@ -2284,7 +2314,7 @@ export function TimelineEditor({
                           size="icon"
                           className="h-8 w-8"
                           onClick={previewPrevSegment}
-                          disabled={previewActiveIndex <= 0}
+                          disabled={!isPreviewActive || previewActiveIndex <= 0}
                           title="Previous segment"
                         >
                           <SkipBack className="h-4 w-4" />
@@ -2293,7 +2323,7 @@ export function TimelineEditor({
                           variant="default"
                           size="icon"
                           className="h-9 w-9"
-                          onClick={togglePreviewPlayPause}
+                          onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
                           title={isPreviewPlaying ? "Pause" : "Play"}
                         >
                           {isPreviewPlaying ? (
@@ -2307,7 +2337,7 @@ export function TimelineEditor({
                           size="icon"
                           className="h-8 w-8"
                           onClick={previewNextSegment}
-                          disabled={previewActiveIndex >= matches.length - 1}
+                          disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
                           title="Next segment"
                         >
                           <SkipForward className="h-4 w-4" />

@@ -700,6 +700,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
+                        onRenderPreview={() => setPreviewVariant(card.key)}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
@@ -810,6 +811,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
+                        onRenderPreview={() => setPreviewVariant(card.key)}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
