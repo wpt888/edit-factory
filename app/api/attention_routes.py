@@ -23,6 +23,8 @@ class AttentionTemplateBody(BaseModel):
     durationMs: int = Field(default=1200, ge=100, le=600000)
     animation: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "pop"
     layers: int = Field(default=1, ge=1, le=10)
+    size: float = Field(default=0.8, gt=0.0, le=1.0)
+    zone: Literal["behind", "front"] = "behind"
     sfx: Optional[str] = Field(default=None, max_length=500)
     assetPool: list[str] = Field(default_factory=list, max_length=100)
 

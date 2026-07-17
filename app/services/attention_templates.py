@@ -14,6 +14,27 @@ SYSTEM_TEMPLATES: List[Dict[str, Any]] = [
 ]
 
 
+def layout_positions(layer_count: int, size: float) -> List[tuple[float, float]]:
+    """Where each stacked image sits — the template's visual signature.
+
+    Given ``layer_count`` images that each occupy ``size`` x ``size`` of the
+    frame, return the (x, y) top-left fraction (0..1) for each image in spawn
+    order (index 0 = first image in). This is what makes "3 images" read as a
+    diagonal cascade vs. a centered stack vs. a spread across the frame.
+
+    Constraint: keep every image on-frame -> 0 <= x, y and x + size <= 1 and
+    y + size <= 1.
+
+    NOTE: the body below is the original diagonal cascade, kept so nothing
+    breaks. It is the ~3 lines meant to carry your taste — rewrite it to change
+    how a template's stack looks (cascade / centered / spread).
+    """
+    base = (1 - size) / 2          # centered anchor for the first image
+    step = 0.03                    # nudge per subsequent image
+    return [(round(base + i * step, 4), round(base + i * step, 4))
+            for i in range(layer_count)]
+
+
 def distribute_attention_cues(
     *,
     duration_ms: int,
@@ -57,6 +78,9 @@ def distribute_attention_cues(
 
     assets = asset_ids or ["pending:choose-asset"]
     layer_count = max(1, min(10, int(template.get("layers", 1))))
+    size = float(template.get("size", 0.8))
+    zone = template.get("zone", "behind")
+    positions = layout_positions(layer_count, size)
     cues = []
     last_asset = None
     asset_cursor = 0
@@ -69,13 +93,13 @@ def distribute_attention_cues(
             last_asset = asset
             cue_layers.append({
                 "id": f"cue-{cue_index}-layer-{layer_index}", "assetId": asset,
-                "x": .1 + layer_index * .03, "y": .1 + layer_index * .03,
-                "width": .8, "height": .8, "zIndex": layer_index + 1, "fit": "contain",
+                "x": positions[layer_index][0], "y": positions[layer_index][1],
+                "width": size, "height": size, "zIndex": layer_index + 1, "fit": "contain",
                 "animation": {"preset": template.get("animation", "static"), "enterMs": 250,
                               "exitMs": 200, "delayMs": layer_index * 120, "intensity": 1},
             })
         cues.append({"id": f"attention-{cue_index}-{start}", "startMs": start,
-                     "durationMs": cue_duration, "layers": cue_layers,
+                     "durationMs": cue_duration, "layers": cue_layers, "zone": zone,
                      "sfxAssetId": template.get("sfx"), "sfxVolumeDb": 0,
                      "templateId": template.get("id")})
     return cues

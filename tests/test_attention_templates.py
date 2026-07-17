@@ -43,3 +43,14 @@ def test_fade_filter_anchors_to_absolute_timeline():
     tiny = _fade_filter(0.0, 0.1, {"enterMs": 250, "exitMs": 200})
     assert "fade=t=in:st=0.0:d=0.1" in tiny
     assert "t=out" not in tiny
+
+
+def test_template_size_and_zone_thread_into_cues():
+    tmpl = {**SYSTEM_TEMPLATES[2], "size": 0.5, "zone": "front"}
+    cues = distribute_attention_cues(
+        duration_ms=15000, subtitle_boundaries_ms=[3000, 6000, 9000, 12000],
+        template=tmpl, asset_ids=["a", "b", "c"],
+    )
+    assert cues
+    assert cues[0]["zone"] == "front"
+    assert all(l["width"] == 0.5 and l["height"] == 0.5 for l in cues[0]["layers"])
