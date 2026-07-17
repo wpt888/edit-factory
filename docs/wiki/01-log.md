@@ -21,6 +21,28 @@
 
 See [Pipeline toolbar overlap + heading-consistency fix pack](28-pipeline-toolbar-heading-fixes.md).
 
+## 2026-07-18 - Shell, spacing, and icon-sizing sweep (S2)
+
+- Added `PageShell` — one canonical page container (`max-w-7xl`/`max-w-3xl`/
+  `max-w-[1600px]`, shared padding) — and migrated every top-level route
+  onto it, eliminating six ad-hoc width recipes and four padding splits
+  (`container mx-auto`, `max-w-[1400px]`, `p-4 md:p-8` vs the canonical
+  responsive padding, mismatched `create-video`/`create-image` padding).
+- Folded header `mb-6`/`mb-8` into `space-y-6` on the page parent
+  (`librarie`, `products`, `product-library`, `tts-library`, `usage`).
+- Removed `Card`'s default `shadow-sm` and the 7 now-inert
+  `shadow-none` overrides it required on pipeline workspace cards and the
+  login split-card.
+- Swept 841 matching `h-N w-N`/`w-N h-N` icon-sizing pairs to `size-N`
+  across 45 files; skipped 13 files a concurrent session was actively
+  editing (reverted cleanly rather than bundling in-flight work).
+- Dropped the redundant manual `font-heading` on `CardTitle` call sites
+  in `signup`/`login`/`login/reset-password` (the base class already
+  carries it from S1).
+- Unified `product-video`'s four `CardContent` paddings onto one default.
+
+See [Shell, spacing, and icon-sizing sweep](29-shell-spacing-sweep.md).
+
 ## 2026-07-17 - Step 3 "Variant Previews" timeline editor rework
 
 - Fixed the Instant Preview frozen playhead (stuck at 0:00, no segment cuts):
