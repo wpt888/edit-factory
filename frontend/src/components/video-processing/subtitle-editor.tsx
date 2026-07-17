@@ -444,7 +444,7 @@ export function SubtitleEditor({
             aria-pressed={showSafeArea}
             title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
           >
-            <ScanLine className="h-3.5 w-3.5" />
+            <ScanLine className="size-3.5" />
             Safe Area
           </Button>
         </div>
@@ -487,7 +487,7 @@ export function SubtitleEditor({
           )}
           {ffmpegLoading && (
             <div className="absolute top-2 right-2">
-              <Loader2 className="h-4 w-4 animate-spin text-white/60" />
+              <Loader2 className="size-4 animate-spin text-white/60" />
             </div>
           )}
           {showSafeArea && (
@@ -500,7 +500,7 @@ export function SubtitleEditor({
             title="Expand preview"
             aria-label="Expand preview"
           >
-            <Maximize2 className="h-4 w-4" />
+            <Maximize2 className="size-4" />
           </button>
         </div>
       </div>
@@ -555,7 +555,7 @@ export function SubtitleEditor({
         {pipelineId && (
           ffmpegPreviewUrl ? (
             <Badge variant="outline" className="text-[10px] text-success border-success/30">
-              <CheckCircle2 className="h-3 w-3 mr-1" />
+              <CheckCircle2 className="size-3 mr-1" />
               Accurate preview
             </Badge>
           ) : (
@@ -628,7 +628,7 @@ export function SubtitleEditor({
                   </span>
                 </div>
                 <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-0.5"><span className="text-[10px] text-white/80 font-medium">{preset.name}</span></div>
-                {userPreset && onDeleteUserPreset && <span role="button" tabIndex={0} aria-label={`Delete ${preset.name}`} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white hover:bg-destructive" onClick={(event) => { event.stopPropagation(); onDeleteUserPreset(userPreset); }}><X className="h-3 w-3" /></span>}
+                {userPreset && onDeleteUserPreset && <span role="button" tabIndex={0} aria-label={`Delete ${preset.name}`} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white hover:bg-destructive" onClick={(event) => { event.stopPropagation(); onDeleteUserPreset(userPreset); }}><X className="size-3" /></span>}
               </button>
             );
           })}
@@ -1043,7 +1043,7 @@ function ColorPicker({ label, value, onChange }: ColorPickerProps) {
         <PopoverTrigger asChild>
           <Button variant="outline" className="w-full justify-start gap-2">
             <div
-              className="w-5 h-5 rounded border"
+              className="size-5 rounded border"
               style={{ backgroundColor: value }}
             />
             {value}
@@ -1055,7 +1055,7 @@ function ColorPicker({ label, value, onChange }: ColorPickerProps) {
               {COLOR_PRESETS.map((color) => (
                 <button
                   key={color}
-                  className="w-8 h-8 rounded border-2 hover:scale-110 transition-transform"
+                  className="size-8 rounded border-2 hover:scale-110 transition-transform"
                   style={{
                     backgroundColor: color,
                     borderColor: value === color ? "hsl(var(--primary))" : "transparent",

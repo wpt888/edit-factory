@@ -758,7 +758,7 @@ export function PipelineCaptionGenerator({
                     className="h-7"
                     onClick={handleOpenCatalog}
                   >
-                    <BookOpen className="h-3.5 w-3.5 mr-1" />
+                    <BookOpen className="size-3.5 mr-1" />
                     {catalogOpen ? "Close Catalog" : "Add from Catalog"}
                   </Button>
                 </div>
@@ -779,7 +779,7 @@ export function PipelineCaptionGenerator({
                             onClick={() => handleRemoveProduct(idx)}
                             className="flex-shrink-0 hover:bg-primary/20 rounded-full p-0.5 transition-colors"
                           >
-                            <XCircle className="h-3.5 w-3.5" />
+                            <XCircle className="size-3.5" />
                           </button>
                         )}
                       </span>
@@ -793,7 +793,7 @@ export function PipelineCaptionGenerator({
               {/* Search */}
               <div className="flex gap-2">
                 <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                   <Input
                     placeholder="Search products..."
                     value={catalogSearch}
@@ -806,7 +806,7 @@ export function PipelineCaptionGenerator({
               {/* Products grid */}
               {catalogLoading ? (
                 <div className="flex items-center justify-center py-6">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
                 </div>
               ) : catalogProducts.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
@@ -823,14 +823,14 @@ export function PipelineCaptionGenerator({
                       }`}
                     >
                       {p.image_link && (
-                        <img src={p.image_link} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                        <img src={p.image_link} alt="" className="size-10 rounded object-cover flex-shrink-0" />
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="font-medium truncate">{stripHtml(p.title)}</p>
                         {p.brand && <p className="text-muted-foreground truncate">{p.brand}</p>}
                       </div>
                       {selectedCatalogIds.has(p.id) && (
-                        <Check className="h-3.5 w-3.5 text-primary flex-shrink-0 mt-0.5" />
+                        <Check className="size-3.5 text-primary flex-shrink-0 mt-0.5" />
                       )}
                     </div>
                   ))}
@@ -843,11 +843,11 @@ export function PipelineCaptionGenerator({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7"
+                    className="size-7"
                     disabled={catalogPage <= 1}
                     onClick={() => handleCatalogPageChange(catalogPage - 1)}
                   >
-                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <ChevronLeft className="size-3.5" />
                   </Button>
                   <span className="text-xs text-muted-foreground">
                     {catalogPage} / {catalogPagination.total_pages || 1}
@@ -855,11 +855,11 @@ export function PipelineCaptionGenerator({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7"
+                    className="size-7"
                     disabled={catalogPage >= catalogPagination.total_pages}
                     onClick={() => handleCatalogPageChange(catalogPage + 1)}
                   >
-                    <ChevronRight className="h-3.5 w-3.5" />
+                    <ChevronRight className="size-3.5" />
                   </Button>
                 </div>
                 <Button
@@ -867,7 +867,7 @@ export function PipelineCaptionGenerator({
                   disabled={selectedCatalogIds.size === 0}
                   onClick={handleAddCatalogProducts}
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
+                  <Plus className="size-3.5 mr-1" />
                   Add {selectedCatalogIds.size > 0 ? `(${selectedCatalogIds.size})` : ""}
                 </Button>
               </div>
@@ -945,14 +945,14 @@ export function PipelineCaptionGenerator({
                                 <div className="flex items-center gap-1">
                                   {tpl.is_default && <Badge variant="secondary" className="text-xs">Default</Badge>}
                                   {!tpl.is_default && (
-                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleSetDefault(tpl.id)} title="Set as default">
+                                    <Button variant="ghost" size="icon" className="size-7" onClick={() => handleSetDefault(tpl.id)} title="Set as default">
                                       <Check className="size-3" />
                                     </Button>
                                   )}
-                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingTemplate({ ...tpl })} title="Edit">
+                                  <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingTemplate({ ...tpl })} title="Edit">
                                     <Settings2 className="size-3" />
                                   </Button>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteTemplate(tpl.id)} title="Delete">
+                                  <Button variant="ghost" size="icon" className="size-7 text-destructive" onClick={() => handleDeleteTemplate(tpl.id)} title="Delete">
                                     <Trash2 className="size-3" />
                                   </Button>
                                 </div>
@@ -1101,7 +1101,7 @@ export function PipelineCaptionGenerator({
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-7 w-7 shrink-0"
+                                className="size-7 shrink-0"
                                 onClick={(e) => { e.stopPropagation(); copyCaption(caption); }}
                               >
                                 <Copy className="size-3" />

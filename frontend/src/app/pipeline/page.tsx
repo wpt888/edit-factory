@@ -101,7 +101,7 @@ const isActiveAsyncJob = (job?: Partial<AsyncJobState> | null) =>
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
-      <Suspense fallback={<div className="flex items-center justify-center min-h-full"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
+      <Suspense fallback={<div className="flex items-center justify-center min-h-full"><Loader2 className="size-8 animate-spin" /></div>}>
         <PipelinePage />
       </Suspense>
     </PipelineErrorBoundary>

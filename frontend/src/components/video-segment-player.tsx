@@ -1193,7 +1193,7 @@ export function VideoSegmentPlayer({
         {isMarking && (
           <div className="absolute left-3 top-3 z-20">
             <Badge variant="destructive" className="animate-pulse gap-1 text-xs shadow-lg">
-              <Scissors className="h-3 w-3" />
+              <Scissors className="size-3" />
               Marking segment · C to finish
             </Badge>
           </div>
@@ -1208,42 +1208,42 @@ export function VideoSegmentPlayer({
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
+            className="size-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomFit(); }}
             title="Fit video (0)"
           >
-            <Locate className="h-3.5 w-3.5" />
+            <Locate className="size-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
+            className="size-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomIn(); }}
             title="Zoom video in (+)"
           >
-            <ZoomIn className="h-3.5 w-3.5" />
+            <ZoomIn className="size-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
+            className="size-7 bg-black/55 text-white hover:bg-black/80 hover:text-white"
             onClick={(e) => { e.stopPropagation(); videoZoomOut(); }}
             title="Zoom video out (-)"
           >
-            <ZoomOut className="h-3.5 w-3.5" />
+            <ZoomOut className="size-3.5" />
           </Button>
         </div>
 
         <div data-player-controls className="z-20 flex h-10 w-full flex-shrink-0 items-center gap-2 border-t border-white/10 bg-black px-3 text-white">
-          <button type="button" onClick={togglePlay} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isPlaying ? "Pause" : "Play"}>
-            {isPlaying ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
+          <button type="button" onClick={togglePlay} className="grid size-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isPlaying ? "Pause" : "Play"}>
+            {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
           </button>
           <span className="min-w-[92px] whitespace-nowrap font-mono text-[11px] text-white/80">
             {formatTime(currentTime)} / {formatTime(duration)}
           </span>
           <div className="flex-1" />
-          <button type="button" onClick={() => setIsMuted(!isMuted)} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isMuted ? "Unmute" : "Mute"}>
-            {isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          <button type="button" onClick={() => setIsMuted(!isMuted)} className="grid size-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isMuted ? "Unmute" : "Mute"}>
+            {isMuted || volume === 0 ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
           </button>
           <Slider
             value={[isMuted ? 0 : volume * 100]}
@@ -1262,8 +1262,8 @@ export function VideoSegmentPlayer({
             <option value="1.5">1.5x</option>
             <option value="2">2x</option>
           </select>
-          <button type="button" onClick={toggleFullscreen} className="grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
-            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          <button type="button" onClick={toggleFullscreen} className="grid size-7 place-items-center rounded-sm transition-colors hover:bg-white/15" aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+            {isFullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
           </button>
         </div>
       </div>
@@ -1467,7 +1467,7 @@ export function VideoSegmentPlayer({
           }}
         >
           <div
-            className="absolute -left-1.5 -top-0.5 h-3 w-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
+            className="absolute -left-1.5 -top-0.5 size-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
             style={{ pointerEvents: 'auto' }}
             onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
           />
@@ -1499,45 +1499,45 @@ export function VideoSegmentPlayer({
       {/* Secondary editing controls stay quiet under the visual timeline. */}
       <div className="flex min-h-8 flex-shrink-0 flex-wrap items-center gap-1 border-t border-border/60 px-1 pt-1">
         <div className="mr-2 flex items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
-          <span className="h-2.5 w-2.5 rounded-[3px] bg-primary" />
+          <span className="size-2.5 rounded-[3px] bg-primary" />
           Saved segment
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goToBeginning} title="Go to beginning (Home)">
-          <ChevronsLeft className="h-4 w-4" />
+        <Button variant="ghost" size="icon" className="size-7" onClick={goToBeginning} title="Go to beginning (Home)">
+          <ChevronsLeft className="size-4" />
         </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7"
+        <Button variant="ghost" size="icon" className="size-7"
           onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)} title="5 seconds back">
-          <SkipBack className="h-3.5 w-3.5" />
+          <SkipBack className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7"
+        <Button variant="ghost" size="icon" className="size-7"
           onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)} title="5 seconds forward">
-          <SkipForward className="h-3.5 w-3.5" />
+          <SkipForward className="size-3.5" />
         </Button>
         <div className="mx-1 h-4 w-px bg-border" />
         <Button
           variant={showWaveform ? "default" : "ghost"}
           size="icon"
-          className="h-7 w-7"
+          className="size-7"
           onClick={() => setShowWaveform(!showWaveform)}
           disabled={waveformData.length === 0 && !waveformLoading}
           title="Waveform"
         >
-          {waveformLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
+          {waveformLoading ? <Loader2 className="size-3 animate-spin" /> : <AudioLines className="size-3.5" />}
         </Button>
         <Button
           variant={showVoiceOverlay ? "default" : "ghost"}
           size="icon"
-          className="h-7 w-7"
+          className="size-7"
           onClick={() => setShowVoiceOverlay(!showVoiceOverlay)}
           disabled={!sourceVideoId}
           title="Voice detection"
         >
-          {voiceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mic className="h-3.5 w-3.5" />}
+          {voiceLoading ? <Loader2 className="size-3 animate-spin" /> : <Mic className="size-3.5" />}
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="size-7"
           onClick={() => {
             const nextZoom = Math.max(1, zoomLevel / 1.25);
             setZoomLevel(nextZoom);
@@ -1546,17 +1546,17 @@ export function VideoSegmentPlayer({
           disabled={zoomLevel <= 1}
           title="Zoom timeline out"
         >
-          <ZoomOut className="h-3.5 w-3.5" />
+          <ZoomOut className="size-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="size-7"
           onClick={() => setZoomLevel((level) => Math.min(20, level * 1.25))}
           disabled={zoomLevel >= 20}
           title="Zoom timeline in"
         >
-          <ZoomIn className="h-3.5 w-3.5" />
+          <ZoomIn className="size-3.5" />
         </Button>
         <div className="flex-1" />
         <Button
@@ -1565,7 +1565,7 @@ export function VideoSegmentPlayer({
           onClick={toggleMark}
           className="h-7 gap-1 px-2 text-xs"
         >
-          <Scissors className="h-3 w-3" />
+          <Scissors className="size-3" />
           {isMarking ? "End (C)" : "Mark (C)"}
         </Button>
         {onGroupCreate && (
@@ -1575,7 +1575,7 @@ export function VideoSegmentPlayer({
             onClick={toggleGroupMark}
             className="h-7 gap-1 px-2 text-xs"
           >
-            <Layers className="h-3 w-3" />
+            <Layers className="size-3" />
             {isGroupMarking ? "End (G)" : "Group (G)"}
           </Button>
         )}
@@ -1583,8 +1583,8 @@ export function VideoSegmentPlayer({
         {/* Keyboard shortcuts - popover */}
         <Popover>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7" title="Keyboard shortcuts (?)">
-              <HelpCircle className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="size-7" title="Keyboard shortcuts (?)">
+              <HelpCircle className="size-3.5" />
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-80 text-xs" side="top" align="end">

@@ -59,10 +59,10 @@ export function InlineVideoPlayer({
           <Button
             variant="ghost"
             size="icon"
-            className="absolute top-2 right-2 z-10 text-white hover:bg-white/20 h-8 w-8"
+            className="absolute top-2 right-2 z-10 text-white hover:bg-white/20 size-8"
             onClick={() => onOpenChange(false)}
           >
-            <X className="h-4 w-4" />
+            <X className="size-4" />
           </Button>
           {title && (
             <div className="absolute top-2 left-3 z-10 text-white text-sm font-medium truncate max-w-[300px] bg-black/50 px-2 py-1 rounded">
@@ -86,7 +86,7 @@ export function InlineVideoPlayer({
                   <Checkbox
                     checked={qcVerified || false}
                     onCheckedChange={() => onToggleQc()}
-                    className="h-5 w-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+                    className="size-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                   />
                   <label
                     className={`text-sm cursor-pointer select-none flex items-center gap-1.5 ${
@@ -94,7 +94,7 @@ export function InlineVideoPlayer({
                     }`}
                     onClick={() => onToggleQc()}
                   >
-                    <ShieldCheck className="h-4 w-4" />
+                    <ShieldCheck className="size-4" />
                     {qcVerified ? "Verificat QC ✓" : "Verificare QC"}
                   </label>
                 </div>
@@ -108,9 +108,9 @@ export function InlineVideoPlayer({
                   disabled={regeneratingVoiceover}
                 >
                   {regeneratingVoiceover ? (
-                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    <Loader2 className="size-3 mr-1.5 animate-spin" />
                   ) : (
-                    <RefreshCw className="h-3 w-3 mr-1.5" />
+                    <RefreshCw className="size-3 mr-1.5" />
                   )}
                   {regeneratingVoiceover ? "Regenerating..." : "Regenerate voice-over"}
                 </Button>

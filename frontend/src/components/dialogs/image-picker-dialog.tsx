@@ -136,7 +136,7 @@ export function ImagePickerDialog({
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Images className="h-5 w-5 shrink-0" />
+            <Images className="size-5 shrink-0" />
             <span className="truncate">{dialogTitle}</span>
           </DialogTitle>
         </DialogHeader>
@@ -145,12 +145,12 @@ export function ImagePickerDialog({
         <ScrollArea className="flex-1 min-h-0">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Loader2 className="size-8 animate-spin text-muted-foreground" />
             </div>
           ) : images.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-12">
-              <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
-                <Images className="h-6 w-6" />
+              <div className="size-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
+                <Images className="size-6" />
               </div>
               <p className="text-lg font-medium text-muted-foreground">
                 No images available
@@ -185,8 +185,8 @@ export function ImagePickerDialog({
                     />
                     {/* Checkmark overlay when selected */}
                     {isSelected && (
-                      <div className="absolute top-1 right-1 h-5 w-5 rounded-full bg-primary flex items-center justify-center shadow-sm">
-                        <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />
+                      <div className="absolute top-1 right-1 size-5 rounded-full bg-primary flex items-center justify-center shadow-sm">
+                        <Check className="size-3 text-primary-foreground" strokeWidth={3} />
                       </div>
                     )}
                   </div>
@@ -213,7 +213,7 @@ export function ImagePickerDialog({
               <Button onClick={handleSave} disabled={saving || loading}>
                 {saving ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <Loader2 className="size-4 mr-2 animate-spin" />
                     Saving...
                   </>
                 ) : (

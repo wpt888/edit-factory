@@ -95,7 +95,7 @@ export function ThumbnailPicker({
 
         {currentThumbnail && !currentThumbnail.isAutoSelected && (
           <Button variant="ghost" size="sm" className="w-fit" onClick={onResetAuto}>
-            <RotateCcw className="h-3 w-3 mr-1" />
+            <RotateCcw className="size-3 mr-1" />
             Reset to auto
           </Button>
         )}
@@ -141,9 +141,9 @@ export function ThumbnailPicker({
                       onClick={() => handleLoadMoreFrames(segId)}
                     >
                       {loadingFrames === segId ? (
-                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        <Loader2 className="size-3 animate-spin mr-1" />
                       ) : (
-                        <ChevronDown className={`h-3 w-3 mr-1 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                        <ChevronDown className={`size-3 mr-1 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                       )}
                       More frames
                     </Button>

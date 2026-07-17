@@ -1896,7 +1896,7 @@ export function TimelineEditor({
   if (matches.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
-        <Film className="h-4 w-4 mr-2" />
+        <Film className="size-4 mr-2" />
         No SRT phrases to display.
       </div>
     );
@@ -2071,12 +2071,12 @@ export function TimelineEditor({
                     <Button
                       variant="secondary"
                       size="icon"
-                      className="h-12 w-12 rounded-full shadow-lg"
+                      className="size-12 rounded-full shadow-lg"
                       onClick={activatePreview}
                       aria-label="Play preview"
                       title="Play preview"
                     >
-                      <Play className="h-5 w-5 fill-current" />
+                      <Play className="size-5 fill-current" />
                     </Button>
                     <span className="text-[11px] text-white/75">Play preview</span>
                   </div>
@@ -2086,7 +2086,7 @@ export function TimelineEditor({
                   <Button
                     variant="secondary"
                     size="icon"
-                    className="pointer-events-none absolute right-2 top-2 z-20 h-8 w-8 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                    className="pointer-events-none absolute right-2 top-2 z-20 size-8 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
                     onClick={() => {
                       if (isPreviewActive) deactivatePreview();
                       onRenderPreview();
@@ -2094,14 +2094,14 @@ export function TimelineEditor({
                     aria-label="Open rendered preview"
                     title="Open rendered preview"
                   >
-                    <Film className="h-4 w-4" />
+                    <Film className="size-4" />
                   </Button>
                 )}
 
                 {/* Buffering indicator */}
                 {isPreviewBuffering && isPreviewPlaying && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
-                    <Loader2 className="h-6 w-6 animate-spin text-white" />
+                    <Loader2 className="size-6 animate-spin text-white" />
                   </div>
                 )}
 
@@ -2144,65 +2144,65 @@ export function TimelineEditor({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="size-7"
                       onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
                       title="Replay from beginning"
                       aria-label="Replay from beginning"
                     >
-                      <RefreshCw className="h-3.5 w-3.5" />
+                      <RefreshCw className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="size-7"
                       onClick={previewPrevSegment}
                       disabled={!isPreviewActive || previewActiveIndex <= 0}
                       title="Previous segment"
                     >
-                      <SkipBack className="h-3.5 w-3.5" />
+                      <SkipBack className="size-3.5" />
                     </Button>
                     <Button
                       variant="default"
                       size="icon"
-                      className="h-8 w-8"
+                      className="size-8"
                       onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
                       title={isPreviewPlaying ? "Pause" : "Play"}
                     >
                       {isPreviewPlaying ? (
-                        <Pause className="h-4 w-4" />
+                        <Pause className="size-4" />
                       ) : (
-                        <Play className="h-4 w-4" />
+                        <Play className="size-4" />
                       )}
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="size-7"
                       onClick={previewNextSegment}
                       disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
                       title="Next segment"
                     >
-                      <SkipForward className="h-3.5 w-3.5" />
+                      <SkipForward className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className={`h-7 w-7 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
+                      className={`size-7 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
                       onClick={() => setShowSafeArea((visible) => !visible)}
                       aria-pressed={showSafeArea}
                       aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
                       title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
                     >
-                      <ScanLine className="h-3.5 w-3.5" />
+                      <ScanLine className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="size-7"
                       onClick={() => setIsPreviewExpanded(true)}
                       title="Expand preview"
                     >
-                      <Maximize2 className="h-3.5 w-3.5" />
+                      <Maximize2 className="size-3.5" />
                     </Button>
                   </div>
 
@@ -2258,12 +2258,12 @@ export function TimelineEditor({
                         <Button
                           variant="secondary"
                           size="icon"
-                          className="h-14 w-14 rounded-full shadow-lg"
+                          className="size-14 rounded-full shadow-lg"
                           onClick={activatePreview}
                           aria-label="Play preview"
                           title="Play preview"
                         >
-                          <Play className="h-6 w-6 fill-current" />
+                          <Play className="size-6 fill-current" />
                         </Button>
                         <span className="text-xs text-white/75">Play preview</span>
                       </div>
@@ -2273,7 +2273,7 @@ export function TimelineEditor({
                       <Button
                         variant="secondary"
                         size="icon"
-                        className="pointer-events-none absolute right-3 top-3 z-20 h-9 w-9 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                        className="pointer-events-none absolute right-3 top-3 z-20 size-9 opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
                         onClick={() => {
                           if (isPreviewActive) deactivatePreview();
                           onRenderPreview();
@@ -2281,13 +2281,13 @@ export function TimelineEditor({
                         aria-label="Open rendered preview"
                         title="Open rendered preview"
                       >
-                        <Film className="h-4 w-4" />
+                        <Film className="size-4" />
                       </Button>
                     )}
 
                     {isPreviewBuffering && isPreviewPlaying && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
-                        <Loader2 className="h-8 w-8 animate-spin text-white" />
+                        <Loader2 className="size-8 animate-spin text-white" />
                       </div>
                     )}
 
@@ -2325,56 +2325,56 @@ export function TimelineEditor({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8"
+                          className="size-8"
                           onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
                           title="Replay from beginning"
                           aria-label="Replay from beginning"
                         >
-                          <RefreshCw className="h-4 w-4" />
+                          <RefreshCw className="size-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8"
+                          className="size-8"
                           onClick={previewPrevSegment}
                           disabled={!isPreviewActive || previewActiveIndex <= 0}
                           title="Previous segment"
                         >
-                          <SkipBack className="h-4 w-4" />
+                          <SkipBack className="size-4" />
                         </Button>
                         <Button
                           variant="default"
                           size="icon"
-                          className="h-9 w-9"
+                          className="size-9"
                           onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
                           title={isPreviewPlaying ? "Pause" : "Play"}
                         >
                           {isPreviewPlaying ? (
-                            <Pause className="h-4 w-4" />
+                            <Pause className="size-4" />
                           ) : (
-                            <Play className="h-4 w-4" />
+                            <Play className="size-4" />
                           )}
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8"
+                          className="size-8"
                           onClick={previewNextSegment}
                           disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
                           title="Next segment"
                         >
-                          <SkipForward className="h-4 w-4" />
+                          <SkipForward className="size-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className={`h-8 w-8 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
+                          className={`size-8 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
                           onClick={() => setShowSafeArea((visible) => !visible)}
                           aria-pressed={showSafeArea}
                           aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
                           title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
                         >
-                          <ScanLine className="h-4 w-4" />
+                          <ScanLine className="size-4" />
                         </Button>
                       </div>
 
@@ -2479,7 +2479,7 @@ export function TimelineEditor({
                               className="absolute right-0.5 top-0.5 z-20 text-primary transition-colors hover:text-muted-foreground"
                               title="Pinned — manually assigned, click to unpin"
                             >
-                              <Pin className="h-3 w-3 fill-current" />
+                              <Pin className="size-3 fill-current" />
                             </button>
                           )}
                           <span className="absolute inset-x-1 bottom-0.5 z-10 truncate text-[9px] font-medium text-foreground">
@@ -2503,7 +2503,7 @@ export function TimelineEditor({
                     title="Add attention image (drag it on the lane to position)"
                     aria-label="Add attention image"
                   >
-                    <Plus className="h-3 w-3" />
+                    <Plus className="size-3" />
                   </button>
                 ) : null,
                 content: (
@@ -2659,7 +2659,7 @@ export function TimelineEditor({
               <div className="rounded-md border border-primary/25 bg-primary/10 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <ImageIcon className="h-4 w-4 text-primary" />
+                    <ImageIcon className="size-4 text-primary" />
                     Image Slide Config
                   </div>
                   <Button
@@ -2668,14 +2668,14 @@ export function TimelineEditor({
                     className="h-7 text-xs gap-1 text-destructive hover:bg-destructive/10"
                     onClick={() => handleRemoveSlide(slide.id)}
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="size-3" />
                     Remove
                   </Button>
                 </div>
 
                 <div className="flex items-start gap-4">
                   {/* Image preview */}
-                  <div className="flex-shrink-0 w-20 h-20 rounded border overflow-hidden bg-muted flex items-center justify-center">
+                  <div className="flex-shrink-0 size-20 rounded border overflow-hidden bg-muted flex items-center justify-center">
                     {slide.imageUrl ? (
                       <img
                         src={slide.imageUrl}
@@ -2684,7 +2684,7 @@ export function TimelineEditor({
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                       />
                     ) : (
-                      <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                      <ImageIcon className="size-6 text-muted-foreground" />
                     )}
                   </div>
 
@@ -2736,10 +2736,10 @@ export function TimelineEditor({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => handleUpdateSlide(slide.id, { duration: Math.max(0.5, slide.duration - 0.5) })}
                         >
-                          <Minus className="h-3 w-3" />
+                          <Minus className="size-3" />
                         </Button>
                         <span className="w-12 text-center text-xs font-mono tabular-nums">
                           {slide.duration.toFixed(1)}s
@@ -2747,10 +2747,10 @@ export function TimelineEditor({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => handleUpdateSlide(slide.id, { duration: Math.min(5.0, slide.duration + 0.5) })}
                         >
-                          <Plus className="h-3 w-3" />
+                          <Plus className="size-3" />
                         </Button>
                         <input
                           type="range"
@@ -2802,7 +2802,7 @@ export function TimelineEditor({
                             <option value="pan-left">Pan Left</option>
                             <option value="pan-right">Pan Right</option>
                           </select>
-                          <ChevronDown className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                          <ChevronDown className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
                         </div>
                       </div>
                     )}
@@ -2828,7 +2828,7 @@ export function TimelineEditor({
                   </div>
                 ) : (
                   <div className="flex-shrink-0 w-48 h-28 rounded bg-muted flex items-center justify-center">
-                    <Film className="h-6 w-6 text-muted-foreground" />
+                    <Film className="size-6 text-muted-foreground" />
                   </div>
                 )}
 
@@ -2847,21 +2847,21 @@ export function TimelineEditor({
                       variant="secondary"
                       className="text-xs bg-success/10 text-success border-success/20"
                     >
-                      <CheckCircle className="h-3 w-3 mr-1" />
+                      <CheckCircle className="size-3 mr-1" />
                       {selectedMatch.matched_keyword}
                     </Badge>
                   )}
 
                   {/* Duration controls */}
                   <div className="flex items-center gap-1 text-xs">
-                    <Clock className="h-3 w-3 text-muted-foreground" />
+                    <Clock className="size-3 text-muted-foreground" />
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-5 w-5"
+                      className="size-5"
                       onClick={() => adjustDuration(selectedBlockIndex, -0.5)}
                     >
-                      <Minus className="h-3 w-3" />
+                      <Minus className="size-3" />
                     </Button>
                     <span className="w-10 text-center font-mono tabular-nums">
                       {(selectedMatch.duration_override ?? (selectedMatch.srt_end - selectedMatch.srt_start)).toFixed(1)}s
@@ -2869,10 +2869,10 @@ export function TimelineEditor({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-5 w-5"
+                      className="size-5"
                       onClick={() => adjustDuration(selectedBlockIndex, 0.5)}
                     >
-                      <Plus className="h-3 w-3" />
+                      <Plus className="size-3" />
                     </Button>
                   </div>
 
@@ -2886,18 +2886,18 @@ export function TimelineEditor({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => adjustTrim(selectedBlockIndex, "in", -0.5)}
                         >
-                          <Minus className="h-3 w-3" />
+                          <Minus className="size-3" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => adjustTrim(selectedBlockIndex, "in", 0.5)}
                         >
-                          <Plus className="h-3 w-3" />
+                          <Plus className="size-3" />
                         </Button>
                         <span className="font-mono tabular-nums">
                           {(selectedMatch.segment_start_time ?? 0).toFixed(1)}s
@@ -2908,18 +2908,18 @@ export function TimelineEditor({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => adjustTrim(selectedBlockIndex, "out", -0.5)}
                         >
-                          <Minus className="h-3 w-3" />
+                          <Minus className="size-3" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-5 w-5"
+                          className="size-5"
                           onClick={() => adjustTrim(selectedBlockIndex, "out", 0.5)}
                         >
-                          <Plus className="h-3 w-3" />
+                          <Plus className="size-3" />
                         </Button>
                         <span className="font-mono tabular-nums">
                           {(selectedMatch.segment_end_time ?? 0).toFixed(1)}s
@@ -2939,7 +2939,7 @@ export function TimelineEditor({
                     onClick={() => handleOpenDialog(selectedBlockIndex)}
                     disabled={availableSegments.length === 0}
                   >
-                    <RefreshCw className="h-3 w-3" />
+                    <RefreshCw className="size-3" />
                     {selectedMatch.segment_id ? "Swap Segment" : "Assign Segment"}
                   </Button>
                 </div>
@@ -2958,7 +2958,7 @@ export function TimelineEditor({
                   onClick={() => handleInsertSlide(-1)}
                   className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                 >
-                  <Plus className="h-3 w-3" />
+                  <Plus className="size-3" />
                   <span>Insert slide before</span>
                 </button>
               </div>
@@ -2971,11 +2971,11 @@ export function TimelineEditor({
                   key={`list-slide-${slide.id}`}
                   className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-primary bg-primary/10"
                 >
-                  <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
+                  <div className="flex-shrink-0 size-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
                     {slide.imageUrl ? (
                       <img src={slide.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
                     ) : (
-                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                      <ImageIcon className="size-4 text-muted-foreground" />
                     )}
                   </div>
                   <div className="flex-1 min-w-0 text-sm text-foreground">
@@ -2985,11 +2985,11 @@ export function TimelineEditor({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
+                    className="size-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
                     onClick={() => handleRemoveSlide(slide.id)}
                     title="Remove slide"
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="size-3" />
                   </Button>
                 </div>
               ))}
@@ -3051,7 +3051,7 @@ export function TimelineEditor({
                     className="flex-shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors"
                     title="Drag to swap segment assignment"
                   >
-                    <GripVertical className="h-4 w-4" />
+                    <GripVertical className="size-4" />
                   </div>
 
                   {/* Left: Index + time range */}
@@ -3085,16 +3085,16 @@ export function TimelineEditor({
                         </span>
                       ) : null}
                       <span title="Subtitle duration">
-                        <Clock className="h-3 w-3 text-muted-foreground" />
+                        <Clock className="size-3 text-muted-foreground" />
                       </span>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-5 w-5"
+                        className="size-5"
                         onClick={() => adjustDuration(idx, -0.5)}
                         title="Decrease duration by 0.5s"
                       >
-                        <Minus className="h-3 w-3" />
+                        <Minus className="size-3" />
                       </Button>
                       <span
                         className={`w-10 text-center font-mono tabular-nums ${
@@ -3113,11 +3113,11 @@ export function TimelineEditor({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-5 w-5"
+                        className="size-5"
                         onClick={() => adjustDuration(idx, 0.5)}
                         title="Increase duration by 0.5s"
                       >
-                        <Plus className="h-3 w-3" />
+                        <Plus className="size-3" />
                       </Button>
                     </div>
 
@@ -3132,7 +3132,7 @@ export function TimelineEditor({
                               className="text-primary hover:text-muted-foreground transition-colors flex-shrink-0"
                               title="Pinned — manually assigned, click to unpin"
                             >
-                              <Pin className="h-3 w-3 fill-current" />
+                              <Pin className="size-3 fill-current" />
                             </button>
                           )}
                           <Badge
@@ -3140,7 +3140,7 @@ export function TimelineEditor({
                             className="text-xs bg-success/10 text-success border-success/20 max-w-[90px]"
                             title={match.explanation}
                           >
-                            <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
+                            <CheckCircle className="size-3 mr-1 flex-shrink-0" />
                             <span className="truncate">{match.matched_keyword}</span>
                           </Badge>
                           <span
@@ -3161,12 +3161,12 @@ export function TimelineEditor({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={() => handleOpenDialog(idx)}
                             disabled={availableSegments.length === 0}
                             title="Swap segment"
                           >
-                            <RefreshCw className="h-3 w-3" />
+                            <RefreshCw className="size-3" />
                           </Button>
                         </>
                       ) : isAutoFilled ? (
@@ -3178,7 +3178,7 @@ export function TimelineEditor({
                               className="text-primary hover:text-muted-foreground transition-colors flex-shrink-0"
                               title="Pinned — manually assigned, click to unpin"
                             >
-                              <Pin className="h-3 w-3 fill-current" />
+                              <Pin className="size-3 fill-current" />
                             </button>
                           )}
                           <Badge
@@ -3186,7 +3186,7 @@ export function TimelineEditor({
                             className="text-xs border-primary/25 bg-primary/10 text-foreground max-w-[90px]"
                             title={match.explanation}
                           >
-                            <Film className="h-3 w-3 mr-1 flex-shrink-0" />
+                            <Film className="size-3 mr-1 flex-shrink-0" />
                             <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
                           </Badge>
                           <span
@@ -3198,12 +3198,12 @@ export function TimelineEditor({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={() => handleOpenDialog(idx)}
                             disabled={availableSegments.length === 0}
                             title="Swap segment"
                           >
-                            <RefreshCw className="h-3 w-3" />
+                            <RefreshCw className="size-3" />
                           </Button>
                         </>
                       ) : (
@@ -3212,7 +3212,7 @@ export function TimelineEditor({
                             variant="outline"
                             className="text-xs border-amber-400 text-amber-700 dark:text-amber-300"
                           >
-                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            <AlertTriangle className="size-3 mr-1" />
                             Unmatched
                           </Badge>
                           <Button
@@ -3235,11 +3235,11 @@ export function TimelineEditor({
                     key={`list-slide-${slide.id}`}
                     className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-primary bg-primary/10"
                   >
-                    <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
+                    <div className="flex-shrink-0 size-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
                       {slide.imageUrl ? (
                         <img src={slide.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
                       ) : (
-                        <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                        <ImageIcon className="size-4 text-muted-foreground" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0 text-sm text-foreground">
@@ -3249,11 +3249,11 @@ export function TimelineEditor({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
+                      className="size-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
                       onClick={() => handleRemoveSlide(slide.id)}
                       title="Remove slide"
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="size-3" />
                     </Button>
                   </div>
                 ))}
@@ -3264,7 +3264,7 @@ export function TimelineEditor({
                       onClick={() => handleInsertSlide(idx)}
                       className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                     >
-                      <Plus className="h-3 w-3" />
+                      <Plus className="size-3" />
                       <span>Insert slide after</span>
                     </button>
                   </div>
@@ -3310,13 +3310,13 @@ export function TimelineEditor({
                   setAiGenOpen(true);
                 }}
               >
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="size-3.5" />
                 Generate with AI
               </Button>
 
               {/* Search */}
               <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
                 <Input
                   placeholder="Search segments by keyword..."
                   value={searchQuery}
@@ -3369,7 +3369,7 @@ export function TimelineEditor({
                         className="w-full flex items-start gap-3 px-3 py-2.5 text-left hover:bg-accent transition-colors"
                         onClick={() => handleSelectSegment(seg)}
                       >
-                        <Film className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                        <Film className="size-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap gap-1">
                             {seg.keywords.slice(0, 5).map((kw) => (

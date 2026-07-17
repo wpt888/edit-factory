@@ -337,7 +337,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
           {/* Loading state */}
           {status === "processing" && (
             <div className="flex flex-col items-center gap-3 px-4">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <Loader2 className="size-8 animate-spin text-primary" />
               <div className="text-center">
                 <p className="text-sm text-white font-medium">
                   Rendering preview...
@@ -378,7 +378,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             <>
               {!videoReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <Loader2 className="size-6 animate-spin text-primary" />
                   <p className="text-xs text-muted-foreground">Buffering video...</p>
                 </div>
               )}

@@ -591,7 +591,7 @@ export function PublishDialog({
       <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Share2 className="h-5 w-5" />
+            <Share2 className="size-5" />
             Publish to Social Media
           </DialogTitle>
           <DialogDescription>
@@ -605,7 +605,7 @@ export function PublishDialog({
             {/* Product context info */}
             {contextText && (
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-muted/50 border border-border">
-                <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <Info className="size-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div className="text-sm">
                   <span className="font-medium text-muted-foreground">Product:</span>{" "}
                   <span className="text-muted-foreground">
@@ -639,7 +639,7 @@ export function PublishDialog({
                 </div>
                 {loadingPlatforms ? (
                   <div className="flex items-center justify-center py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <Loader2 className="size-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : platforms.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-2">
@@ -665,10 +665,10 @@ export function PublishDialog({
                             <img
                               src={platform.picture}
                               alt=""
-                              className="h-6 w-6 rounded-full object-cover"
+                              className="size-6 rounded-full object-cover"
                             />
                           ) : (
-                            <div className="h-6 w-6 rounded-full bg-muted-foreground/20 flex items-center justify-center text-xs font-bold">
+                            <div className="size-6 rounded-full bg-muted-foreground/20 flex items-center justify-center text-xs font-bold">
                               {(PLATFORM_NAMES[platform.platformType] || platform.platformType)[0]?.toUpperCase()}
                             </div>
                           )}
@@ -711,9 +711,9 @@ export function PublishDialog({
                       className="h-7 text-xs gap-1.5"
                     >
                       {generatingCaption ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Loader2 className="size-3 animate-spin" />
                       ) : (
-                        <Sparkles className="h-3 w-3" />
+                        <Sparkles className="size-3" />
                       )}
                       {generatingCaption ? "Generating..." : "Generate with AI"}
                     </Button>
@@ -757,7 +757,7 @@ export function PublishDialog({
                 </div>
                 {charWarnings.length > 0 && (
                   <div className="flex items-start gap-2 text-xs text-yellow-600">
-                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
                     <span>
                       Caption will be automatically truncated on:{" "}
                       {charWarnings
@@ -802,7 +802,7 @@ export function PublishDialog({
                       : "border-transparent bg-muted hover:bg-accent/50"
                   }`}
                 >
-                  <Share2 className="h-4 w-4" />
+                  <Share2 className="size-4" />
                   <span className="font-medium">Publish now</span>
                 </button>
                 <button
@@ -814,7 +814,7 @@ export function PublishDialog({
                       : "border-transparent bg-muted hover:bg-accent/50"
                   }`}
                 >
-                  <Calendar className="h-4 w-4" />
+                  <Calendar className="size-4" />
                   <span className="font-medium">Schedule</span>
                 </button>
                 {showDraftUpload && (
@@ -828,7 +828,7 @@ export function PublishDialog({
                           : "border-transparent bg-muted hover:bg-accent/50"
                       }`}
                     >
-                      <FileEdit className="h-4 w-4" />
+                      <FileEdit className="size-4" />
                       <span className="font-medium">Draft</span>
                     </button>
                     <button
@@ -840,7 +840,7 @@ export function PublishDialog({
                           : "border-transparent bg-muted hover:bg-accent/50"
                       }`}
                     >
-                      <Upload className="h-4 w-4" />
+                      <Upload className="size-4" />
                       <span className="font-medium">Upload</span>
                     </button>
                   </>
@@ -876,7 +876,7 @@ export function PublishDialog({
         {(dialogState === "publishing" || dialogState === "uploading") && (
           <div className="space-y-4 py-6">
             <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              <Loader2 className="size-10 animate-spin text-primary" />
               <p className="text-sm font-medium">{progressStep}</p>
             </div>
             <Progress value={progressPercent} className="w-full" />
@@ -889,7 +889,7 @@ export function PublishDialog({
         {/* Success state */}
         {dialogState === "success" && (
           <div className="flex flex-col items-center gap-4 py-8">
-            <CheckCircle2 className="h-14 w-14 text-success" />
+            <CheckCircle2 className="size-14 text-success" />
             <div className="text-center">
               <p className="text-lg font-semibold">
                 {publishMode === "upload"
@@ -910,7 +910,7 @@ export function PublishDialog({
         {/* Error state */}
         {dialogState === "error" && (
           <div className="flex flex-col items-center gap-4 py-8">
-            <XCircle className="h-14 w-14 text-red-500" />
+            <XCircle className="size-14 text-red-500" />
             <div className="text-center max-w-lg">
               <p className="text-lg font-semibold">Publishing failed</p>
               <div className="mt-2 space-y-1">
@@ -937,13 +937,13 @@ export function PublishDialog({
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {publishMode === "upload" ? (
-                  <Upload className="h-4 w-4 mr-2" />
+                  <Upload className="size-4 mr-2" />
                 ) : publishMode === "schedule" ? (
-                  <Calendar className="h-4 w-4 mr-2" />
+                  <Calendar className="size-4 mr-2" />
                 ) : publishMode === "draft" ? (
-                  <FileEdit className="h-4 w-4 mr-2" />
+                  <FileEdit className="size-4 mr-2" />
                 ) : (
-                  <Share2 className="h-4 w-4 mr-2" />
+                  <Share2 className="size-4 mr-2" />
                 )}
                 {publishMode === "upload"
                   ? "Upload to Postiz"
@@ -957,7 +957,7 @@ export function PublishDialog({
           )}
           {(dialogState === "publishing" || dialogState === "uploading") && (
             <Button variant="outline" disabled>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Loader2 className="size-4 mr-2 animate-spin" />
               {dialogState === "uploading" ? "Uploading..." : "Publishing..."}
             </Button>
           )}

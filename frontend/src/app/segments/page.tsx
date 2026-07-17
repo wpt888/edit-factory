@@ -1686,7 +1686,7 @@ export default function SegmentsPage() {
       {isDraggingOver && (
         <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
           <div className="text-center">
-            <Upload className="h-8 w-8 text-primary mx-auto mb-2" />
+            <Upload className="size-8 text-primary mx-auto mb-2" />
             <p className="text-sm font-medium text-primary">Drop video here</p>
           </div>
         </div>
@@ -1697,7 +1697,7 @@ export default function SegmentsPage() {
           <TabsTrigger value="videos" className="text-xs h-7">Videos</TabsTrigger>
           <TabsTrigger value="transform" className="text-xs h-7">
             Transform
-            {selectedSegment && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary inline-block" />}
+            {selectedSegment && <span className="ml-1 size-1.5 rounded-full bg-primary inline-block" />}
           </TabsTrigger>
           <TabsTrigger value="global" className="text-xs h-7">
             Global
@@ -1716,7 +1716,7 @@ export default function SegmentsPage() {
                   disabled={browsing || addingLocal}
                   onClick={handlePickLocalVideos}
                 >
-                  <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                  <FolderOpen className="size-3.5 mr-1" />
                   {browsing ? "Selecting..." : addingLocal ? "Adding..." : "Add Local"}
                 </Button>
 
@@ -1772,7 +1772,7 @@ export default function SegmentsPage() {
                     </div>
                     {localError && (
                       <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-                        <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                        <AlertTriangle className="size-4 mt-0.5 flex-shrink-0" />
                         <span>{localError}</span>
                       </div>
                     )}
@@ -1807,7 +1807,7 @@ export default function SegmentsPage() {
                   className={DESKTOP_MODE ? "h-7 text-xs px-2" : "h-8 w-full text-xs"}
                   title={DESKTOP_MODE ? "Upload video (copies file)" : "Upload a source video"}
                 >
-                  <Upload className={`h-3.5 w-3.5 ${DESKTOP_MODE ? "" : "mr-1"}`} />
+                  <Upload className={`size-3.5 ${DESKTOP_MODE ? "" : "mr-1"}`} />
                   {!DESKTOP_MODE && "Upload Video"}
                 </Button>
               </DialogTrigger>
@@ -1865,19 +1865,19 @@ export default function SegmentsPage() {
                       />
                       {uploadFile ? (
                         <div className="flex items-center justify-center gap-2">
-                          <Video className="h-5 w-5 text-primary" />
+                          <Video className="size-5 text-primary" />
                           <span className="text-sm font-medium truncate max-w-[200px]">{uploadFile.name}</span>
                           <button
                             type="button"
                             className="ml-1 p-0.5 rounded hover:bg-muted"
                             onClick={(e) => { e.stopPropagation(); setUploadFile(null); }}
                           >
-                            <X className="h-3.5 w-3.5 text-muted-foreground" />
+                            <X className="size-3.5 text-muted-foreground" />
                           </button>
                         </div>
                       ) : (
                         <>
-                          <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                          <Upload className="size-6 text-muted-foreground mx-auto mb-2" />
                           <p className="text-sm text-muted-foreground">
                             Drag & drop or <span className="text-primary font-medium">click to browse</span>
                           </p>
@@ -1889,7 +1889,7 @@ export default function SegmentsPage() {
                 </div>
                 {uploadError && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-                    <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <AlertTriangle className="size-4 mt-0.5 flex-shrink-0" />
                     <span>{uploadError}</span>
                   </div>
                 )}
@@ -1919,7 +1919,7 @@ export default function SegmentsPage() {
 
           {/* Video search */}
           <div className="relative px-2 py-1.5 border-b border-border">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
             <Input
               placeholder="Search videos..."
               value={videoSearchQuery}
@@ -1938,7 +1938,7 @@ export default function SegmentsPage() {
             <div className="space-y-1 p-2">
               {filteredSourceVideos.length === 0 ? (
                 <div className="text-center py-8 px-4">
-                  <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                  <Upload className="size-6 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground">
                     {videoSearchQuery ? "No matching videos" : "No videos uploaded yet"}
                   </p>
@@ -1964,7 +1964,7 @@ export default function SegmentsPage() {
                         show a broken-image placeholder. Served by-id so the URL is
                         portable across base_dir changes (dev ↔ desktop). */}
                     <div className="relative w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
-                      <Video className="h-4 w-4 text-muted-foreground" />
+                      <Video className="size-4 text-muted-foreground" />
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={`${API_URL}/segments/source-videos/${video.id}/thumbnail`}
@@ -2007,12 +2007,12 @@ export default function SegmentsPage() {
                       )}
                       {video.status === "processing" ? (
                         <div className="flex items-center gap-1 text-[10px] text-amber-500">
-                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <RefreshCw className="size-3 animate-spin" />
                           <span>Processing...</span>
                         </div>
                       ) : video.status === "error" ? (
                         <div className="flex items-center gap-1 text-[10px] text-red-500">
-                          <AlertTriangle className="h-3 w-3" />
+                          <AlertTriangle className="size-3" />
                           <span>Error</span>
                         </div>
                       ) : (
@@ -2026,14 +2026,14 @@ export default function SegmentsPage() {
 
                     {/* Segment indicator */}
                     {video.segments_count > 0 && (
-                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 flex-shrink-0" />
+                      <span className="size-2.5 rounded-full bg-green-500 flex-shrink-0" />
                     )}
 
                     {/* Delete button */}
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 flex-shrink-0 text-destructive opacity-80 hover:opacity-100 hover:text-destructive"
+                      className="size-7 flex-shrink-0 text-destructive opacity-80 hover:opacity-100 hover:text-destructive"
                       title={`Delete ${video.name}`}
                       aria-label={`Delete ${video.name}`}
                       onClick={(e) => {
@@ -2041,7 +2041,7 @@ export default function SegmentsPage() {
                         requestDeleteVideo(video);
                       }}
                     >
-                      <Trash2 className="h-3 w-3 text-destructive" />
+                      <Trash2 className="size-3 text-destructive" />
                     </Button>
                   </div>
                 ))
@@ -2061,11 +2061,11 @@ export default function SegmentsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6"
+                  className="size-6"
                   onClick={() => { setSelectedSegment(null); setLeftTab("videos"); }}
                   title="Close (Esc)"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="size-3.5" />
                 </Button>
               </div>
               <SegmentTransformPanel
@@ -2119,7 +2119,7 @@ export default function SegmentsPage() {
       {/* Header with count */}
       <div className="px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2">
-          <Tag className="h-4 w-4" />
+          <Tag className="size-4" />
           <span className="text-sm font-medium">Segments</span>
           {filteredSegments.length > 0 && (
             <Badge variant="secondary" className="text-xs">{filteredSegments.length}</Badge>
@@ -2149,7 +2149,7 @@ export default function SegmentsPage() {
 
       {/* Search bar */}
       <div className="relative p-2 border-b border-border">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
         <Input
           placeholder="Search..."
           value={searchQuery}
@@ -2166,7 +2166,7 @@ export default function SegmentsPage() {
           className="h-6 text-xs gap-1"
           onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
         >
-          <Star className="h-3 w-3" />
+          <Star className="size-3" />
           Fav
         </Button>
         {selectedKeywordFilter && (
@@ -2176,7 +2176,7 @@ export default function SegmentsPage() {
             onClick={() => setSelectedKeywordFilter(null)}
           >
             {selectedKeywordFilter}
-            <X className="h-3 w-3" />
+            <X className="size-3" />
           </Badge>
         )}
       </div>
@@ -2208,7 +2208,7 @@ export default function SegmentsPage() {
         <div className="px-2 py-1.5 border-b border-border">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
-              <Layers className="h-3 w-3" />
+              <Layers className="size-3" />
               Product Groups
               {productGroups.length > 0 && (
                 <Badge variant="secondary" className="text-[9px] h-4 px-1">{productGroups.length}</Badge>
@@ -2242,7 +2242,7 @@ export default function SegmentsPage() {
                       handleDeleteGroup(group.id);
                     }}
                   >
-                    <X className="h-2.5 w-2.5" />
+                    <X className="size-2.5" />
                   </button>
                 </div>
               ))}
@@ -2260,7 +2260,7 @@ export default function SegmentsPage() {
             </p>
           ) : filteredSegments.length === 0 ? (
             <EmptyState
-              icon={<Scissors className="h-6 w-6" />}
+              icon={<Scissors className="size-6" />}
               title="No segments"
               description={
                 viewMode === "current" && !selectedVideo
@@ -2284,14 +2284,14 @@ export default function SegmentsPage() {
                 {/* Source video name (in All Videos mode) */}
                 {viewMode === "all" && segment.source_video_name && (
                   <p className="text-[10px] text-muted-foreground truncate mb-0.5">
-                    <Video className="h-3 w-3 inline mr-0.5" />
+                    <Video className="size-3 inline mr-0.5" />
                     {segment.source_video_name}
                   </p>
                 )}
 
                 {/* Row 1: Time range + duration + favorite */}
                 <div className="flex items-center gap-1.5">
-                  <Clock className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                  <Clock className="size-3 text-muted-foreground flex-shrink-0" />
                   <span className="font-mono text-xs">
                     {formatTime(segment.start_time)}-{formatTime(segment.end_time)}
                   </span>
@@ -2313,22 +2313,22 @@ export default function SegmentsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-5 w-5 flex-shrink-0"
+                    className="size-5 flex-shrink-0"
                     title={segment.single_use ? "Used only once (active)" : "Click to use only once"}
                     onClick={(e) => { e.stopPropagation(); handleToggleSingleUse(segment.id); }}
                   >
-                    <Repeat1 className={`h-3 w-3 ${segment.single_use ? "text-orange-500" : "text-muted-foreground"}`} />
+                    <Repeat1 className={`size-3 ${segment.single_use ? "text-orange-500" : "text-muted-foreground"}`} />
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-5 w-5 flex-shrink-0"
+                    className="size-5 flex-shrink-0"
                     onClick={(e) => { e.stopPropagation(); handleToggleFavorite(segment.id); }}
                   >
                     {segment.is_favorite ? (
-                      <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+                      <Star className="size-3 text-yellow-500 fill-yellow-500" />
                     ) : (
-                      <StarOff className="h-3 w-3 text-muted-foreground" />
+                      <StarOff className="size-3 text-muted-foreground" />
                     )}
                   </Button>
                 </div>
@@ -2353,7 +2353,7 @@ export default function SegmentsPage() {
                         <img
                           src={associations[segment.id].product_image!}
                           alt=""
-                          className="w-5 h-5 rounded object-cover flex-shrink-0"
+                          className="size-5 rounded object-cover flex-shrink-0"
                         />
                       )}
                       <span className="text-[10px] truncate" title={associations[segment.id].product_title || ""}>
@@ -2362,20 +2362,20 @@ export default function SegmentsPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-4 w-4 flex-shrink-0"
+                        className="size-4 flex-shrink-0"
                         title="Select images"
                         onClick={(e) => { e.stopPropagation(); setImagePickerAssoc(associations[segment.id]); }}
                       >
-                        <Images className="h-2.5 w-2.5" />
+                        <Images className="size-2.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-4 w-4 flex-shrink-0 text-destructive"
+                        className="size-4 flex-shrink-0 text-destructive"
                         title="Remove product"
                         onClick={(e) => { e.stopPropagation(); handleRemoveAssociation(segment.id); }}
                       >
-                        <X className="h-2.5 w-2.5" />
+                        <X className="size-2.5" />
                       </Button>
                     </>
                   ) : (
@@ -2385,7 +2385,7 @@ export default function SegmentsPage() {
                       className="h-5 text-[10px] px-1.5 text-muted-foreground"
                       onClick={(e) => { e.stopPropagation(); setPickerSegmentId(segment.id); }}
                     >
-                      <Package className="h-3 w-3 mr-0.5" />
+                      <Package className="size-3 mr-0.5" />
                       Product
                     </Button>
                   )}
@@ -2397,20 +2397,20 @@ export default function SegmentsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-5 w-5 flex-shrink-0"
+                    className="size-5 flex-shrink-0"
                     title="Edit segment"
                     onClick={(e) => { e.stopPropagation(); setEditingSegment(segment); }}
                   >
-                    <Edit className="h-3 w-3" />
+                    <Edit className="size-3" />
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-5 w-5 flex-shrink-0 text-destructive hover:text-destructive"
+                    className="size-5 flex-shrink-0 text-destructive hover:text-destructive"
                     title="Delete segment"
                     onClick={(e) => { e.stopPropagation(); requestDeleteSegment(segment); }}
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="size-3" />
                   </Button>
                 </div>
 
@@ -2423,7 +2423,7 @@ export default function SegmentsPage() {
                       className="h-4 text-[10px] w-full justify-start px-1"
                       onClick={(e) => { e.stopPropagation(); setPipExpandedSegId(prev => prev === segment.id ? null : segment.id); }}
                     >
-                      <Layers className="h-3 w-3 mr-0.5" />
+                      <Layers className="size-3 mr-0.5" />
                       PiP {associations[segment.id].pip_config?.enabled ? "✓" : ""}
                     </Button>
                     {pipExpandedSegId === segment.id && (
@@ -2467,7 +2467,7 @@ export default function SegmentsPage() {
         )}
         <div className="flex-1" />
         <Button onClick={fetchSourceVideos} variant="outline" size="sm" className="h-7 text-xs">
-          <RefreshCw className="h-3.5 w-3.5 mr-1" />
+          <RefreshCw className="size-3.5 mr-1" />
           Refresh
         </Button>
     </>
@@ -2499,7 +2499,7 @@ export default function SegmentsPage() {
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">
             <div className="text-center text-muted-foreground">
-              <Video className="h-16 w-16 mx-auto mb-4 opacity-50" />
+              <Video className="size-16 mx-auto mb-4 opacity-50" />
               <p className="text-lg">Select a video from the sidebar</p>
               <p className="text-sm">or upload a new one</p>
             </div>
@@ -2517,7 +2517,7 @@ export default function SegmentsPage() {
         leftPanelTitle="Source Videos"
         centerPanelTitle={(
           <span className="flex items-center gap-1.5 whitespace-nowrap">
-            <Scissors className="h-4 w-4 shrink-0" />
+            <Scissors className="size-4 shrink-0" />
             Source Video
           </span>
         )}
@@ -2640,7 +2640,7 @@ export default function SegmentsPage() {
               {/* Header */}
               <div className="p-6 pb-4">
                 <div className="flex items-center gap-2 text-lg font-semibold text-destructive">
-                  <Trash2 className="h-5 w-5" />
+                  <Trash2 className="size-5" />
                   Confirm Delete
                 </div>
                 <p className="text-sm text-muted-foreground mt-2">
@@ -2662,7 +2662,7 @@ export default function SegmentsPage() {
                   onClick={() => setDeleteConfirm(null)}
                   className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="size-4" />
                 </button>
               </div>
 
@@ -2672,7 +2672,7 @@ export default function SegmentsPage() {
                   Cancel
                 </Button>
                 <Button variant="destructive" onClick={handleConfirmDelete}>
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="size-4 mr-2" />
                   Delete
                 </Button>
               </div>
@@ -2694,7 +2694,7 @@ export default function SegmentsPage() {
               {/* Header */}
               <div className="p-6 pb-4">
                 <div className="flex items-center gap-2 text-lg font-semibold text-yellow-500">
-                  <AlertTriangle className="h-5 w-5" />
+                  <AlertTriangle className="size-5" />
                   Overlapping segments detected
                 </div>
                 <p className="text-sm text-muted-foreground mt-2">
@@ -2709,7 +2709,7 @@ export default function SegmentsPage() {
                       key={seg.id}
                       className="flex items-center gap-2 p-2 bg-muted rounded-md text-sm"
                     >
-                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      <Clock className="size-4 text-muted-foreground" />
                       <span className="font-mono">
                         {formatTimeDetailed(seg.start_time)} → {formatTimeDetailed(seg.end_time)}
                       </span>
@@ -2729,7 +2729,7 @@ export default function SegmentsPage() {
                 {/* Show merged result preview */}
                 <div className="mt-4 p-3 border border-primary/50 rounded-md bg-primary/5">
                   <p className="text-sm font-medium text-primary flex items-center gap-2">
-                    <Merge className="h-4 w-4" />
+                    <Merge className="size-4" />
                     If you merge, the new segment will be:
                   </p>
                   <p className="text-sm font-mono mt-1">
@@ -2748,7 +2748,7 @@ export default function SegmentsPage() {
                   onClick={() => setOverlapInfo(null)}
                   className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="size-4" />
                 </button>
               </div>
 
@@ -2762,7 +2762,7 @@ export default function SegmentsPage() {
                     Create separately
                   </Button>
                   <Button onClick={handleMergeSegments}>
-                    <Merge className="h-4 w-4 mr-2" />
+                    <Merge className="size-4 mr-2" />
                     Merge segments
                   </Button>
                 </div>

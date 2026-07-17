@@ -248,7 +248,7 @@ export function ProductPickerDialog({
         <div className="flex flex-wrap items-center gap-2 pt-1 pb-2">
           {/* Search */}
           <div className="relative flex-1 min-w-[180px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
               placeholder="Search products..."
               value={search}
@@ -292,11 +292,11 @@ export function ProductPickerDialog({
         <ScrollArea className="flex-1 min-h-0">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Loader2 className="size-8 animate-spin text-muted-foreground" />
             </div>
           ) : products.length === 0 ? (
             <EmptyState
-              icon={<Package className="h-6 w-6" />}
+              icon={<Package className="size-6" />}
               title="No products found"
               description="Try adjusting your search or filters."
             />
@@ -339,7 +339,7 @@ export function ProductPickerDialog({
                     {/* Loading overlay for this card */}
                     {selectingId === product.id && (
                       <div className="absolute inset-0 bg-background/70 flex items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin" />
+                        <Loader2 className="size-6 animate-spin" />
                       </div>
                     )}
                   </div>
@@ -393,7 +393,7 @@ export function ProductPickerDialog({
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1}
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="size-4" />
               Prev
             </Button>
             <span className="text-sm font-medium">
@@ -406,7 +406,7 @@ export function ProductPickerDialog({
               disabled={page >= pagination.total_pages}
             >
               Next
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="size-4" />
             </Button>
           </div>
         )}

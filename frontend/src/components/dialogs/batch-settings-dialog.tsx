@@ -281,9 +281,9 @@ export function BatchSettingsDialog({
               disabled={loading}
             >
               {filtersExpanded ? (
-                <ChevronUp className="h-4 w-4" />
+                <ChevronUp className="size-4" />
               ) : (
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDown className="size-4" />
               )}
               Video Filters (optional)
             </button>
@@ -338,12 +338,12 @@ export function BatchSettingsDialog({
           <Button onClick={handleConfirm} disabled={loading}>
             {loading ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="size-4 mr-2 animate-spin" />
                 Generating...
               </>
             ) : (
               <>
-                <Film className="h-4 w-4 mr-2" />
+                <Film className="size-4 mr-2" />
                 Generate {productCount} Videos
               </>
             )}
