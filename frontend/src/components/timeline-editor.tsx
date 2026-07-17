@@ -2493,6 +2493,15 @@ export function TimelineEditor({
               }] : []),
             ];
 
+            // Lane order = visual stacking order, top lane = topmost layer
+            // (Premiere semantics): Subtitles > Attention images > Video, then
+            // the audio lanes. This matches the preview z-index (subtitles z-50 >
+            // attention z-10+ > video z-0/1) and the backend burn-in order.
+            const laneOrder = ["Subtitles", "Attention images", "Video", "Voiceover", "SFX"];
+            const orderedLanes = [...lanes].sort(
+              (a, b) => laneOrder.indexOf(a.label) - laneOrder.indexOf(b.label)
+            );
+
             return (
               <div className="overflow-x-auto rounded-md border bg-card text-[10px]" aria-label="Multi-track timeline">
                 <div className="w-max min-w-full">
@@ -2528,7 +2537,7 @@ export function TimelineEditor({
                       {playhead}
                     </div>
                   </div>
-                  {lanes.map(lane => (
+                  {orderedLanes.map(lane => (
                     <div key={lane.label} className="flex border-t">
                       <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center justify-between gap-1 border-r bg-card px-2 font-medium">
                         <span className="truncate">{lane.label}</span>
