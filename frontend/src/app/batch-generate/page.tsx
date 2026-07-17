@@ -35,28 +35,28 @@ function getStatusBadge(status: ProductJobStatus["status"]) {
     case "queued":
       return (
         <Badge variant="outline" className="text-muted-foreground">
-          <Clock className="h-3 w-3 mr-1" />
+          <Clock className="size-3 mr-1" />
           Queued
         </Badge>
       );
     case "processing":
       return (
         <Badge variant="secondary" className="text-amber-500">
-          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          <Loader2 className="size-3 mr-1 animate-spin" />
           Processing
         </Badge>
       );
     case "completed":
       return (
         <Badge className="bg-success/10 text-success border border-success/20 hover:bg-success/10">
-          <CheckCircle2 className="h-3 w-3 mr-1" />
+          <CheckCircle2 className="size-3 mr-1" />
           Completed
         </Badge>
       );
     case "failed":
       return (
         <Badge variant="destructive">
-          <XCircle className="h-3 w-3 mr-1" />
+          <XCircle className="size-3 mr-1" />
           Failed
         </Badge>
       );
@@ -220,7 +220,7 @@ function BatchGenerateContent() {
     return (
       <div className="min-h-full bg-background flex items-center justify-center">
         <EmptyState
-          icon={<Layers className="h-6 w-6" />}
+          icon={<Layers className="size-6" />}
           title="No batch generation"
           description="Select items and configure a batch generation."
           action={{ label: "Back to Library", onClick: () => { router.push("/product-library"); } }}
@@ -254,12 +254,12 @@ function BatchGenerateContent() {
         <div className="mb-8">
           <Link href="/product-library">
             <Button variant="ghost" size="sm" className="mb-4 -ml-2">
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="size-4 mr-2" />
               Back to Library
             </Button>
           </Link>
           <PageHeader
-            icon={<Film className="h-8 w-8 text-primary" />}
+            icon={<Film className="size-8 text-primary" />}
             title="Batch Generation"
             description={<span className="text-sm font-mono">Batch ID: {batchId}</span>}
           />
@@ -294,7 +294,7 @@ function BatchGenerateContent() {
             {isPolling && !isDone && (
               <div className="pt-2">
                 <Button variant="destructive" size="sm" onClick={handleCancelBatch}>
-                  <X className="h-4 w-4 mr-2" />
+                  <X className="size-4 mr-2" />
                   Stop Batch
                 </Button>
               </div>
@@ -305,7 +305,7 @@ function BatchGenerateContent() {
               <div className="pt-2 flex gap-3">
                 <Link href="/librarie">
                   <Button>
-                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    <CheckCircle2 className="size-4 mr-2" />
                     View in Library
                   </Button>
                 </Link>
@@ -318,13 +318,13 @@ function BatchGenerateContent() {
                   variant="destructive"
                   onClick={handleRetryFailed}
                 >
-                  <RefreshCw className="h-4 w-4 mr-2" />
+                  <RefreshCw className="size-4 mr-2" />
                   Retry {failedCount} Failed
                 </Button>
                 {completedCount > 0 && (
                   <Link href="/librarie">
                     <Button variant="outline">
-                      <CheckCircle2 className="h-4 w-4 mr-2" />
+                      <CheckCircle2 className="size-4 mr-2" />
                       View {completedCount} in Library
                     </Button>
                   </Link>
@@ -338,7 +338,7 @@ function BatchGenerateContent() {
         {!batchStatus && (
           <div className="flex items-center justify-center py-20">
             <div className="text-center space-y-3">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto" />
+              <Loader2 className="size-8 animate-spin text-muted-foreground mx-auto" />
               <p className="text-muted-foreground">Loading batch status...</p>
             </div>
           </div>
@@ -363,7 +363,7 @@ export default function BatchGeneratePage() {
     <Suspense
       fallback={
         <div className="min-h-full bg-background flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <Loader2 className="size-8 animate-spin text-muted-foreground" />
         </div>
       }
     >

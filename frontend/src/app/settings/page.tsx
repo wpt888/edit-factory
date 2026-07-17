@@ -869,7 +869,7 @@ export default function SettingsPage() {
     return (
       <PageShell>
         <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <Loader2 className="size-8 animate-spin text-muted-foreground" />
         </div>
       </PageShell>
     )
@@ -892,7 +892,7 @@ export default function SettingsPage() {
   return (
     <PageShell className="space-y-6">
       <PageHeader
-        icon={<SettingsIcon className="h-8 w-8" />}
+        icon={<SettingsIcon className="size-8" />}
         title="Settings"
         description={`Configure TTS settings for ${currentProfile.name}`}
       />
@@ -900,7 +900,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Sun className="h-5 w-5" />
+            <Sun className="size-5" />
             Appearance
           </CardTitle>
           <CardDescription>Theme for the app interface</CardDescription>
@@ -911,14 +911,14 @@ export default function SettingsPage() {
               variant={theme === "dark" ? "default" : "outline"}
               onClick={() => setTheme("dark")}
             >
-              <Moon className="h-4 w-4" />
+              <Moon className="size-4" />
               Dark
             </Button>
             <Button
               variant={theme === "light" ? "default" : "outline"}
               onClick={() => setTheme("light")}
             >
-              <Sun className="h-4 w-4" />
+              <Sun className="size-4" />
               Light
             </Button>
           </div>
@@ -946,7 +946,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5" />
+            <BarChart3 className="size-5" />
             Profile Activity
           </CardTitle>
           <CardDescription>
@@ -956,7 +956,7 @@ export default function SettingsPage() {
         <CardContent>
           {dashboardLoading ? (
             <div className="flex items-center justify-center h-24">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
           ) : dashboard ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -1046,7 +1046,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" />
+            <Key className="size-5" />
             ElevenLabs API Keys
           </CardTitle>
           <CardDescription>
@@ -1056,7 +1056,7 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           {elAccountsLoading ? (
             <div className="flex items-center justify-center h-16">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : elAccounts.length === 0 ? (
             <div className="p-4 bg-muted rounded-lg text-center">
@@ -1149,9 +1149,9 @@ export default function SettingsPage() {
                         disabled={accountActionLoading === account.id}
                       >
                         {accountActionLoading === account.id ? (
-                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          <Loader2 className="mr-1 size-3 animate-spin" />
                         ) : (
-                          <Star className="mr-1 h-3 w-3" />
+                          <Star className="mr-1 size-3" />
                         )}
                         Use
                       </Button>
@@ -1159,43 +1159,43 @@ export default function SettingsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8"
+                      className="size-8"
                       onClick={() => handleToggleElSecret(account.id)}
                       disabled={elSecretLoading === account.id}
                       title={visibleElSecrets[account.id] ? "Hide key" : "Show key"}
                     >
                       {elSecretLoading === account.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="size-4 animate-spin" />
                       ) : visibleElSecrets[account.id] ? (
-                        <EyeOff className="h-4 w-4" />
+                        <EyeOff className="size-4" />
                       ) : (
-                        <Eye className="h-4 w-4" />
+                        <Eye className="size-4" />
                       )}
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8"
+                      className="size-8"
                       onClick={() => handleRefreshAccount(account.id)}
                       disabled={accountActionLoading === account.id}
                       title="Refresh subscription info"
                     >
                       {accountActionLoading === account.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="size-4 animate-spin" />
                       ) : (
-                        <RefreshCw className="h-4 w-4" />
+                        <RefreshCw className="size-4" />
                       )}
                     </Button>
                     {!account.is_env_default && (
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-red-500 hover:text-red-600"
+                        className="size-8 text-red-500 hover:text-red-600"
                         onClick={() => handleDeleteAccount(account.id)}
                         disabled={accountActionLoading === account.id}
                         title="Delete account"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="size-4" />
                       </Button>
                     )}
                   </div>
@@ -1208,7 +1208,7 @@ export default function SettingsPage() {
           {elAccounts.filter(a => !a.is_env_default).length < 3 && (
             <div className="pt-3 border-t space-y-3">
               <h4 className="text-sm font-medium flex items-center gap-2">
-                <Plus className="h-4 w-4" />
+                <Plus className="size-4" />
                 Add Account
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1236,10 +1236,10 @@ export default function SettingsPage() {
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9"
+                      className="size-9"
                       onClick={() => setShowNewAccountKey(!showNewAccountKey)}
                     >
-                      {showNewAccountKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {showNewAccountKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </Button>
                   </div>
                 </div>
@@ -1251,12 +1251,12 @@ export default function SettingsPage() {
               >
                 {addingAccount ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="mr-2 size-4 animate-spin" />
                     Validating...
                   </>
                 ) : (
                   <>
-                    <Plus className="mr-2 h-4 w-4" />
+                    <Plus className="mr-2 size-4" />
                     Test & Add Account
                   </>
                 )}
@@ -1274,7 +1274,7 @@ export default function SettingsPage() {
       <Card key={`elevenlabs-accounts-${currentProfile.id}`}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" />
+            <Key className="size-5" />
             API Keys
           </CardTitle>
           <CardDescription>
@@ -1294,7 +1294,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5 text-muted-foreground" />
+            <Cloud className="size-5 text-muted-foreground" />
             Blipost Account
           </CardTitle>
           <CardDescription>
@@ -1307,7 +1307,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-success" />
+                    <div className="size-2 rounded-full bg-success" />
                     <span className="text-sm font-medium truncate">
                       {blipostMe.email || "Connected"}
                     </span>
@@ -1321,24 +1321,24 @@ export default function SettingsPage() {
                     <p className="text-xs text-red-500 mt-1">{blipostMe.error}</p>
                   ) : (
                     <div className="flex items-center gap-1.5 mt-1 text-sm">
-                      <Wallet className="h-4 w-4 text-muted-foreground" />
+                      <Wallet className="size-4 text-muted-foreground" />
                       <span className="font-semibold">{blipostMe.balance ?? 0}</span>
                       <span className="text-muted-foreground">credits</span>
                     </div>
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={loadBlipostMe} title="Refresh balance">
-                    <RefreshCw className="h-4 w-4" />
+                  <Button variant="ghost" size="icon" className="size-8" onClick={loadBlipostMe} title="Refresh balance">
+                    <RefreshCw className="size-4" />
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-red-500 hover:text-red-600"
+                    className="size-8 text-red-500 hover:text-red-600"
                     onClick={handleBlipostDisconnect}
                     title="Disconnect"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="size-4" />
                   </Button>
                 </div>
               </div>
@@ -1364,12 +1364,12 @@ export default function SettingsPage() {
                   aria-label={showBlipostToken ? "Hide platform token" : "Show platform token"}
                   title={showBlipostToken ? "Hide platform token" : "Show platform token"}
                 >
-                  {showBlipostToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  {showBlipostToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </Button>
                 <Button onClick={handleBlipostConnect} disabled={blipostConnecting || !blipostToken.trim()}>
                   {blipostConnecting ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="mr-2 size-4 animate-spin" />
                       Connecting...
                     </>
                   ) : (
@@ -1392,7 +1392,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5 text-muted-foreground" />
+            <Cloud className="size-5 text-muted-foreground" />
             Render for Blipost
             {renderStatus?.nvenc && (
               <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-success/10 text-success">
@@ -1410,7 +1410,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${renderStatus.running ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
+                    <div className={`size-2 rounded-full ${renderStatus.running ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
                     <span className="text-sm font-medium">Accept render jobs</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 capitalize">
@@ -1438,11 +1438,11 @@ export default function SettingsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-red-500 hover:text-red-600"
+                    className="size-8 text-red-500 hover:text-red-600"
                     onClick={handleRenderUnpair}
                     title="Unpair this device"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="size-4" />
                   </Button>
                 </div>
               </div>
@@ -1479,7 +1479,7 @@ export default function SettingsPage() {
                 <Button onClick={handleRenderPair} disabled={pairing || !pairCode.trim()}>
                   {pairing ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="mr-2 size-4 animate-spin" />
                       Pairing...
                     </>
                   ) : (
@@ -1544,7 +1544,7 @@ export default function SettingsPage() {
                 size="icon"
                 onClick={() => setShowPostizKey(!showPostizKey)}
               >
-                {showPostizKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showPostizKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -1560,7 +1560,7 @@ export default function SettingsPage() {
             >
               {testingConnection ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 size-4 animate-spin" />
                   Testing...
                 </>
               ) : (
@@ -1573,12 +1573,12 @@ export default function SettingsPage() {
             >
               {saving ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 size-4 animate-spin" />
                   Saving...
                 </>
               ) : (
                 <>
-                  <Save className="mr-2 h-4 w-4" />
+                  <Save className="mr-2 size-4" />
                   Save
                 </>
               )}
@@ -1615,7 +1615,7 @@ export default function SettingsPage() {
             }
             return (
               <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
-                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <div className={`size-2 rounded-full ${dotClass}`} />
                 <span className="text-sm">{label}</span>
               </div>
             )
@@ -1642,8 +1642,8 @@ export default function SettingsPage() {
               disabled={integrationsLoading || !postizSavedConfigured}
             >
               {integrationsLoading
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <RefreshCw className="h-4 w-4" />}
+                ? <Loader2 className="size-4 animate-spin" />
+                : <RefreshCw className="size-4" />}
               <span className="ml-2">Refresh</span>
             </Button>
           </div>
@@ -1657,7 +1657,7 @@ export default function SettingsPage() {
             <p className="text-sm text-red-600">Could not load integrations: {integrationsError}</p>
           ) : integrationsLoading && integrations.length === 0 ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading integrations…
+              <Loader2 className="size-4 animate-spin" /> Loading integrations…
             </div>
           ) : integrations.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -1691,10 +1691,10 @@ export default function SettingsPage() {
                       <img
                         src={integration.picture}
                         alt={integration.name}
-                        className="h-11 w-11 rounded-full object-cover border shrink-0"
+                        className="size-11 rounded-full object-cover border shrink-0"
                       />
                     ) : (
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
+                      <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
                         {integration.name.charAt(0).toUpperCase()}
                       </div>
                     )}
@@ -1749,7 +1749,7 @@ export default function SettingsPage() {
                 size="icon"
                 onClick={() => setShowBufferKey(!showBufferKey)}
               >
-                {showBufferKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showBufferKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -1778,7 +1778,7 @@ export default function SettingsPage() {
             >
               {bufferTestingConnection ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 size-4 animate-spin" />
                   Testing...
                 </>
               ) : (
@@ -1791,12 +1791,12 @@ export default function SettingsPage() {
             >
               {saving ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 size-4 animate-spin" />
                   Saving...
                 </>
               ) : (
                 <>
-                  <Save className="mr-2 h-4 w-4" />
+                  <Save className="mr-2 size-4" />
                   Save
                 </>
               )}
@@ -1829,7 +1829,7 @@ export default function SettingsPage() {
             }
             return (
               <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
-                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <div className={`size-2 rounded-full ${dotClass}`} />
                 <span className="text-sm">{label}</span>
               </div>
             )
@@ -1855,8 +1855,8 @@ export default function SettingsPage() {
               disabled={bufferChannelsLoading || !bufferSavedConfigured}
             >
               {bufferChannelsLoading
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <RefreshCw className="h-4 w-4" />}
+                ? <Loader2 className="size-4 animate-spin" />
+                : <RefreshCw className="size-4" />}
               <span className="ml-2">Refresh</span>
             </Button>
           </div>
@@ -1870,7 +1870,7 @@ export default function SettingsPage() {
             <p className="text-sm text-red-600">Could not load channels: {bufferChannelsError}</p>
           ) : bufferChannelsLoading && bufferChannels.length === 0 ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading channels…
+              <Loader2 className="size-4 animate-spin" /> Loading channels…
             </div>
           ) : bufferChannels.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -1891,10 +1891,10 @@ export default function SettingsPage() {
                       <img
                         src={channel.avatar}
                         alt={channel.name}
-                        className="h-11 w-11 rounded-full object-cover border shrink-0"
+                        className="size-11 rounded-full object-cover border shrink-0"
                       />
                     ) : (
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
+                      <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
                         {channel.name.charAt(0).toUpperCase()}
                       </div>
                     )}
@@ -2028,12 +2028,12 @@ export default function SettingsPage() {
         >
           {saving ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="mr-2 size-4 animate-spin" />
               Saving...
             </>
           ) : (
             <>
-              <Save className="mr-2 h-4 w-4" />
+              <Save className="mr-2 size-4" />
               Save Settings
             </>
           )}
@@ -2044,7 +2044,7 @@ export default function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5" />
+              <Shield className="size-5" />
               Crash Reporting
             </CardTitle>
             <CardDescription>

@@ -123,7 +123,7 @@ function LoginContent() {
   return (
     <div className="relative flex min-h-full items-center justify-center overflow-hidden bg-background p-4 text-foreground sm:p-8">
       <div className="pointer-events-none absolute inset-0 bg-noise" />
-      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-primary/10 blur-[110px]" />
       <div className="relative grid w-full max-w-5xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl lg:grid-cols-[1.15fr_0.85fr]">
         <section className="relative hidden min-h-[620px] overflow-hidden border-r border-border bg-sidebar p-10 lg:flex lg:flex-col lg:justify-between">
           <div className="pointer-events-none absolute -left-24 top-20 size-72 rounded-full bg-primary/10 blur-[100px]" />
@@ -166,13 +166,13 @@ function LoginContent() {
             <CardContent className="space-y-4">
               {error && (
                 <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
-                  <AlertCircle className="h-4 w-4" />
+                  <AlertCircle className="size-4" />
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
               {resetSent ? (
                 <Alert className="border-primary/30 bg-primary/10">
-                  <CheckCircle2 className="h-4 w-4" />
+                  <CheckCircle2 className="size-4" />
                   <AlertDescription>
                     Check your email for a password reset link
                   </AlertDescription>
@@ -198,7 +198,7 @@ function LoginContent() {
                 <Button type="submit" variant="cta" className="w-full" disabled={loading}>
                   {loading ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="mr-2 size-4 animate-spin" />
                       Sending...
                     </>
                   ) : (
@@ -220,7 +220,7 @@ function LoginContent() {
             <CardContent className="space-y-4">
               {error && (
                 <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
-                  <AlertCircle className="h-4 w-4" />
+                  <AlertCircle className="size-4" />
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
@@ -284,7 +284,7 @@ function LoginContent() {
               <Button type="submit" variant="cta" className="w-full" disabled={loading}>
                 {loading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="mr-2 size-4 animate-spin" />
                     Signing in...
                   </>
                 ) : (

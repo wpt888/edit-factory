@@ -138,7 +138,7 @@ export function SegmentTransformPanel({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Move className="h-4 w-4" />
+          <Move className="size-4" />
           <span className="text-sm font-medium">Transforms</span>
           {isOverride && (
             <Badge variant="secondary" className="text-[10px]">
@@ -153,7 +153,7 @@ export function SegmentTransformPanel({
             className="h-6 text-xs"
             onClick={handleReset}
           >
-            <RotateCcw className="h-3 w-3 mr-1" />
+            <RotateCcw className="size-3 mr-1" />
             Reset
           </Button>
         )}
@@ -163,7 +163,7 @@ export function SegmentTransformPanel({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <Label className="text-xs flex items-center gap-1">
-            <RotateCw className="h-3 w-3" />
+            <RotateCw className="size-3" />
             Rotation
           </Label>
           <EditableValue
@@ -201,7 +201,7 @@ export function SegmentTransformPanel({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <Label className="text-xs flex items-center gap-1">
-            <ZoomIn className="h-3 w-3" />
+            <ZoomIn className="size-3" />
             Scale
           </Label>
           <EditableValue
@@ -226,7 +226,7 @@ export function SegmentTransformPanel({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <Label className="text-xs flex items-center gap-1">
-            <Gauge className="h-3 w-3" />
+            <Gauge className="size-3" />
             Speed
           </Label>
           <EditableValue
@@ -344,7 +344,7 @@ export function SegmentTransformPanel({
             onCheckedChange={(v) => update({ flip_h: v })}
           />
           <Label className="text-xs flex items-center gap-1">
-            <FlipHorizontal className="h-3 w-3" />
+            <FlipHorizontal className="size-3" />
             Flip H
           </Label>
         </div>
@@ -354,7 +354,7 @@ export function SegmentTransformPanel({
             onCheckedChange={(v) => update({ flip_v: v })}
           />
           <Label className="text-xs flex items-center gap-1">
-            <FlipVertical className="h-3 w-3" />
+            <FlipVertical className="size-3" />
             Flip V
           </Label>
         </div>
@@ -363,7 +363,7 @@ export function SegmentTransformPanel({
       {/* Color */}
       <div className="space-y-3 border-t border-border pt-3">
         <div className="flex items-center gap-1">
-          <Palette className="h-3 w-3" />
+          <Palette className="size-3" />
           <span className="text-xs font-medium">Color</span>
         </div>
 

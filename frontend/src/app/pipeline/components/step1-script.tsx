@@ -345,9 +345,9 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         onClick={() => setContextExpanded(!contextExpanded)}
                       >
                         {contextExpanded ? (
-                          <><ChevronUp className="h-3.5 w-3.5 mr-1" />Collapse</>
+                          <><ChevronUp className="size-3.5 mr-1" />Collapse</>
                         ) : (
-                          <><ChevronDown className="h-3.5 w-3.5 mr-1" />Expand</>
+                          <><ChevronDown className="size-3.5 mr-1" />Expand</>
                         )}
                       </Button>
                     )}
@@ -358,7 +358,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       className="h-7"
                       onClick={handleOpenCatalog}
                     >
-                      <BookOpen className="h-3.5 w-3.5 mr-1" />
+                      <BookOpen className="size-3.5 mr-1" />
                       {catalogOpen ? "Close Library" : "Browse Library"}
                     </Button>
                   </div>
@@ -378,7 +378,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                             onClick={() => setContextProducts(prev => prev.filter((_, i) => i !== idx))}
                             className="flex-shrink-0 hover:bg-primary/20 rounded-full p-0.5 transition-colors"
                           >
-                            <XCircle className="h-3.5 w-3.5" />
+                            <XCircle className="size-3.5" />
                           </button>
                         </span>
                       ))}
@@ -403,7 +403,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       {/* Filters row */}
                       <div className="flex flex-wrap gap-2">
                         <div className="min-w-[180px] flex-1 relative">
-                          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
                           <Input
                             placeholder="Search your library..."
                             value={catalogSearch}
@@ -443,7 +443,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       {/* Products grid */}
                       {catalogLoading ? (
                         <div className="flex items-center justify-center py-6">
-                          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          <Loader2 className="size-5 animate-spin text-muted-foreground" />
                         </div>
                       ) : catalogProducts.length === 0 ? (
                         <p className="text-sm text-muted-foreground text-center py-4">Nothing found — add items in the Context Library</p>
@@ -472,7 +472,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                                 <img
                                   src={product.image_link}
                                   alt=""
-                                  className="w-10 h-10 object-cover rounded flex-shrink-0"
+                                  className="size-10 object-cover rounded flex-shrink-0"
                                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                                 />
                               )}
@@ -498,7 +498,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                             disabled={catalogPage <= 1}
                             onClick={() => handleCatalogPageChange(catalogPage - 1)}
                           >
-                            <ArrowLeft className="h-3 w-3" />
+                            <ArrowLeft className="size-3" />
                           </Button>
                           <span className="text-xs text-muted-foreground">
                             Page {catalogPagination.page} of {catalogPagination.total_pages} ({catalogPagination.total} items)
@@ -510,7 +510,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                             disabled={catalogPage >= catalogPagination.total_pages}
                             onClick={() => handleCatalogPageChange(catalogPage + 1)}
                           >
-                            <ArrowRight className="h-3 w-3" />
+                            <ArrowRight className="size-3" />
                           </Button>
                         </div>
                         {selectedCatalogIds.size > 0 && (
@@ -625,7 +625,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 {/* Error display */}
                 {error && (
                   <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
+                    <AlertCircle className="size-4" />
                     <AlertDescription>{error}</AlertDescription>
                   </Alert>
                 )}
@@ -633,7 +633,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 {/* Segment duration info */}
                 {totalSegmentDuration > 0 && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Info className="h-4 w-4" />
+                    <Info className="size-4" />
                     <span>{Math.round(totalSegmentDuration)}s material video disponibil (brut)</span>
                   </div>
                 )}
@@ -659,14 +659,14 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       disabled
                       className="w-full sm:w-auto sm:min-w-48"
                     >
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                       Generating...
                     </Button>
                     <Button
                       variant="destructive"
                       onClick={handleCancelGenerate}
                     >
-                      <X className="h-4 w-4 mr-1" />
+                      <X className="size-4 mr-1" />
                       Stop
                     </Button>
                   </div>
@@ -678,7 +678,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       className="w-full sm:w-auto sm:min-w-48"
                       title="Skip AI generation — create blank script slots to fill in yourself"
                     >
-                      <Pencil className="h-4 w-4 mr-2" />
+                      <Pencil className="size-4 mr-2" />
                       Create Script Manually
                     </Button>
                     <Button
@@ -691,7 +691,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         : undefined
                       }
                     >
-                      <Sparkles className="h-4 w-4 mr-2" />
+                      <Sparkles className="size-4 mr-2" />
                       Generate Scripts
                     </Button>
                   </div>

@@ -17,9 +17,9 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
       <body className="bg-background text-foreground min-h-screen flex items-center justify-center p-4" style={{ background: "#0a0a0a", color: "#fafafa", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
         <div className="max-w-lg w-full text-center space-y-6">
           <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center border border-destructive/30">
+            <div className="size-16 rounded-full bg-destructive/10 flex items-center justify-center border border-destructive/30">
               <svg
-                className="w-8 h-8 text-destructive"
+                className="size-8 text-destructive"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"

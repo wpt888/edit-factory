@@ -66,9 +66,9 @@ export function ProfileSwitcher() {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" className="w-full justify-start gap-2">
-            <User className="h-4 w-4" />
+            <User className="size-4" />
             <span className="truncate">{currentProfile?.name || "Select Workspace"}</span>
-            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
+            <ChevronDown className="ml-auto size-4 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
 
@@ -101,7 +101,7 @@ export function ProfileSwitcher() {
           <DropdownMenuSeparator />
 
           <DropdownMenuItem onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="h-4 w-4" />
+            <Plus className="size-4" />
             Create New Workspace
           </DropdownMenuItem>
         </DropdownMenuContent>

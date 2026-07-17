@@ -154,9 +154,9 @@ export const ScriptCard = memo(function ScriptCard({
               disabled={isRegenerating || regeneratingAllScripts}
             >
               {isRegenerating ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                <Loader2 className="size-3.5 mr-1 animate-spin" />
               ) : (
-                <Sparkles className="h-3.5 w-3.5 mr-1" />
+                <Sparkles className="size-3.5 mr-1" />
               )}
               {isRegenerating ? "Regenerating..." : "Regenerate"}
             </Button>
@@ -164,11 +164,11 @@ export const ScriptCard = memo(function ScriptCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                className="size-7 text-muted-foreground hover:text-destructive"
                 title="Delete script"
                 onClick={() => onDelete(index)}
               >
-                <X className="h-4 w-4" />
+                <X className="size-4" />
               </Button>
             )}
           </div>
@@ -177,7 +177,7 @@ export const ScriptCard = memo(function ScriptCard({
       {totalSegmentDuration > 0 && estimatedDuration > totalSegmentDuration && (
         <div className="px-6 pb-2">
           <Alert className="border-muted-foreground/50 bg-muted/50">
-            <Info className="h-4 w-4 text-muted-foreground" />
+            <Info className="size-4 text-muted-foreground" />
             <AlertDescription className="text-muted-foreground text-sm">
               Script exceeds available video material ({Math.round(totalSegmentDuration)}s) by ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segments will be repeated to cover the difference.
             </AlertDescription>
@@ -204,7 +204,7 @@ export const ScriptCard = memo(function ScriptCard({
             <div className="space-y-1.5">
               {productGroups.length > 4 && (
                 <div className="relative w-48">
-                  <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Search className="absolute left-2 top-2 size-3.5 text-muted-foreground" />
                   <Input
                     placeholder="Filter groups..."
                     value={groupTagSearch}
@@ -233,13 +233,13 @@ export const ScriptCard = memo(function ScriptCard({
                     >
                       {g.color && (
                         <span
-                          className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          className="inline-block size-2.5 rounded-full flex-shrink-0"
                           style={{ backgroundColor: g.color }}
                         />
                       )}
                       {g.label}
                       <span className="text-muted-foreground">({g.segments_count})</span>
-                      {isPaired && <CheckCircle className="h-3 w-3 text-success flex-shrink-0" />}
+                      {isPaired && <CheckCircle className="size-3 text-success flex-shrink-0" />}
                       {isOpen && <span className="text-amber-600 font-bold flex-shrink-0">…</span>}
                     </button>
                   );
@@ -247,8 +247,8 @@ export const ScriptCard = memo(function ScriptCard({
               </div>
               {tagStates.length > 0 && (
                 <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Open</span>
-                  <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-success" /> Paired</span>
+                  <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-amber-400 inline-block" /> Open</span>
+                  <span className="inline-flex items-center gap-1"><CheckCircle className="size-2.5 text-success" /> Paired</span>
                 </div>
               )}
             </div>
@@ -259,7 +259,7 @@ export const ScriptCard = memo(function ScriptCard({
         <div className="flex flex-wrap items-center gap-2">
           {ttsResult?.generating ? (
             <Button variant="outline" size="sm" disabled>
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
               Generating...
             </Button>
           ) : ttsResult && !ttsResult.stale ? (
@@ -270,9 +270,9 @@ export const ScriptCard = memo(function ScriptCard({
                 onClick={() => onPlayTts(index)}
               >
                 {playingTtsVariant === index ? (
-                  <><Pause className="h-3.5 w-3.5 mr-1.5" />Pause</>
+                  <><Pause className="size-3.5 mr-1.5" />Pause</>
                 ) : (
-                  <><Play className="h-3.5 w-3.5 mr-1.5" />Play</>
+                  <><Play className="size-3.5 mr-1.5" />Play</>
                 )}
               </Button>
               {playingTtsVariant === index && ttsAudioDuration > 0 && (
@@ -305,7 +305,7 @@ export const ScriptCard = memo(function ScriptCard({
                     />
                   </div>
                   <div
-                    className="absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-primary shadow-sm border-2 border-background"
+                    className="absolute top-1/2 -translate-y-1/2 size-3 rounded-full bg-primary shadow-sm border-2 border-background"
                     style={{ left: `calc(${(ttsAudioProgress / ttsAudioDuration) * 100}% - 6px)` }}
                   />
                   <span className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
@@ -322,7 +322,7 @@ export const ScriptCard = memo(function ScriptCard({
                 onClick={() => onGenerateTts(index)}
                 title="Regenerate voice-over with current settings"
               >
-                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                <RefreshCw className="size-3.5 mr-1.5" />
                 Regenerate
               </Button>
             </>
@@ -332,7 +332,7 @@ export const ScriptCard = memo(function ScriptCard({
               size="sm"
               onClick={() => onGenerateTts(index)}
             >
-              <Volume2 className="h-3.5 w-3.5 mr-1.5" />
+              <Volume2 className="size-3.5 mr-1.5" />
               {ttsResult?.stale ? "Regenerate Voice-over" : "Generate Voice-over"}
             </Button>
           )}
@@ -348,7 +348,7 @@ export const ScriptCard = memo(function ScriptCard({
               className="text-xs text-muted-foreground border-muted-foreground/30 hover:bg-muted"
               onClick={() => onUseLibraryTts(index)}
             >
-              <Library className="h-3.5 w-3.5 mr-1.5" />
+              <Library className="size-3.5 mr-1.5" />
               Use Library Audio ({formatDuration(libraryMatch.audio_duration)})
             </Button>
           )}
@@ -358,7 +358,7 @@ export const ScriptCard = memo(function ScriptCard({
                 id={`approve-script-${index}`}
                 checked={isApproved}
                 onCheckedChange={(checked) => onApprove(index, checked === true)}
-                className="h-4.5 w-4.5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
+                className="size-4.5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
               />
               <Label
                 htmlFor={`approve-script-${index}`}
@@ -377,14 +377,14 @@ export const ScriptCard = memo(function ScriptCard({
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => onToggleSrtPreview(index)}
             >
-              {srtPreviewOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {srtPreviewOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
               Subtitle Preview
               <span className="text-muted-foreground">
                 — Script: {ttsResult.script_word_count} words | SRT: {ttsResult.srt_word_count} words
               </span>
               {ttsResult.script_word_count != null && ttsResult.srt_word_count != null && ttsResult.script_word_count! > ttsResult.srt_word_count! && (
                 <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 ml-1">
-                  <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
+                  <AlertTriangle className="size-2.5 mr-0.5" />
                   {ttsResult.script_word_count! - ttsResult.srt_word_count!} words missing
                 </Badge>
               )}

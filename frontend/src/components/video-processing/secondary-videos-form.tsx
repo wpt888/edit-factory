@@ -68,7 +68,7 @@ export function SecondaryVideosForm({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Video className="h-4 w-4 text-muted-foreground" />
+          <Video className="size-4 text-muted-foreground" />
           <Label className="font-medium">Secondary Videos (Multi-Video)</Label>
         </div>
         {configuredCount > 0 && (
@@ -96,7 +96,7 @@ export function SecondaryVideosForm({
                     onClick={() => clearVideo(index)}
                     disabled={disabled}
                   >
-                    <X className="h-4 w-4" />
+                    <X className="size-4" />
                   </Button>
                 )}
               </div>
@@ -116,7 +116,7 @@ export function SecondaryVideosForm({
 
                 {video.file ? (
                   <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
-                    <Video className="h-4 w-4 text-primary" />
+                    <Video className="size-4 text-primary" />
                     <span className="text-sm truncate flex-1">{video.file.name}</span>
                     <Badge variant="outline" className="text-xs">
                       {(video.file.size / (1024 * 1024)).toFixed(1)} MB
@@ -129,7 +129,7 @@ export function SecondaryVideosForm({
                     onClick={() => fileInputRefs.current[index]?.click()}
                     disabled={disabled}
                   >
-                    <Upload className="h-4 w-4" />
+                    <Upload className="size-4" />
                     Select Video
                   </Button>
                 )}
@@ -138,7 +138,7 @@ export function SecondaryVideosForm({
               {/* Keywords input */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Tag className="h-3 w-3 text-muted-foreground" />
+                  <Tag className="size-3 text-muted-foreground" />
                   <Label className="text-xs">Keywords (comma-separated)</Label>
                 </div>
                 <Input

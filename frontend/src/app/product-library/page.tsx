@@ -300,21 +300,21 @@ export default function ProductLibraryPage() {
       <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
-          icon={<BookOpen className="h-8 w-8 text-primary" />}
+          icon={<BookOpen className="size-8 text-primary" />}
           title="Context Library"
           description="Products, services, offers — anything you promote, used as context for video generation"
           actions={
             <div className="flex gap-2">
               {selectedIds.size >= 2 && (
                 <Button onClick={() => setBatchOpen(true)}>
-                  <Film className="h-4 w-4 mr-2" /> Generate {selectedIds.size}
+                  <Film className="size-4 mr-2" /> Generate {selectedIds.size}
                 </Button>
               )}
               <Button variant="outline" onClick={() => setImportOpen(true)}>
-                <Upload className="h-4 w-4 mr-2" /> Import
+                <Upload className="size-4 mr-2" /> Import
               </Button>
               <Button onClick={openAdd} data-testid="add-product">
-                <PlusCircle className="h-4 w-4 mr-2" /> Add Item
+                <PlusCircle className="size-4 mr-2" /> Add Item
               </Button>
             </div>
           }
@@ -350,11 +350,11 @@ export default function ProductLibraryPage() {
         {/* Grid */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Loader2 className="size-8 animate-spin text-muted-foreground" />
           </div>
         ) : products.length === 0 ? (
           <EmptyState
-            icon={<BookOpen className="h-6 w-6" />}
+            icon={<BookOpen className="size-6" />}
             title="Nothing here yet"
             description="Add your first item — a product, a service, an offer: a title, a few photos, and an optional description. It stays on this computer."
             action={{ label: "Add Item", onClick: openAdd }}
@@ -408,11 +408,11 @@ export default function ProductLibraryPage() {
                       className="flex-1 text-xs h-7"
                       onClick={() => handleGenerateVideo(product)}
                     >
-                      <Film className="h-3 w-3 mr-1" />
+                      <Film className="size-3 mr-1" />
                       Video
                     </Button>
                     <Button variant="outline" size="sm" className="h-7 px-2" onClick={() => openEdit(product)}>
-                      <Pencil className="h-3 w-3" />
+                      <Pencil className="size-3" />
                     </Button>
                     <Button
                       variant="outline"
@@ -420,7 +420,7 @@ export default function ProductLibraryPage() {
                       className="h-7 px-2 text-destructive hover:text-destructive"
                       onClick={() => handleDelete(product)}
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="size-3" />
                     </Button>
                   </div>
                 </CardContent>
@@ -488,7 +488,7 @@ export default function ProductLibraryPage() {
                   dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
                 }`}
               >
-                <Upload className="h-5 w-5 text-muted-foreground" />
+                <Upload className="size-5 text-muted-foreground" />
                 <p className="text-xs text-muted-foreground">
                   Drag & drop images here, or click to browse
                 </p>
@@ -517,14 +517,14 @@ export default function ProductLibraryPage() {
                           <img
                             src={imageUrl(editing, idx)}
                             alt=""
-                            className="w-16 h-16 object-cover rounded-md border"
+                            className="size-16 object-cover rounded-md border"
                           />
                           <button
                             type="button"
                             onClick={() => setKeptPaths((prev) => prev.filter((p) => p !== rel))}
                             className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5"
                           >
-                            <X className="h-3 w-3" />
+                            <X className="size-3" />
                           </button>
                         </div>
                       );
@@ -535,14 +535,14 @@ export default function ProductLibraryPage() {
                       <img
                         src={URL.createObjectURL(file)}
                         alt=""
-                        className="w-16 h-16 object-cover rounded-md border"
+                        className="size-16 object-cover rounded-md border"
                       />
                       <button
                         type="button"
                         onClick={() => setNewFiles((prev) => prev.filter((_, j) => j !== i))}
                         className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5"
                       >
-                        <X className="h-3 w-3" />
+                        <X className="size-3" />
                       </button>
                     </div>
                   ))}
@@ -564,9 +564,9 @@ export default function ProductLibraryPage() {
                   data-testid="generate-description"
                 >
                   {generating ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    <Loader2 className="size-3.5 mr-1 animate-spin" />
                   ) : (
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    <Sparkles className="size-3.5 mr-1" />
                   )}
                   Generate with AI
                 </Button>
@@ -586,7 +586,7 @@ export default function ProductLibraryPage() {
               Cancel
             </Button>
             <Button onClick={handleSave} disabled={saving} data-testid="save-product">
-              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {saving && <Loader2 className="size-4 mr-2 animate-spin" />}
               {editing === "new" ? "Add Item" : "Save Changes"}
             </Button>
           </DialogFooter>

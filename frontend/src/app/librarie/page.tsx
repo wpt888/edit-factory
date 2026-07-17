@@ -731,13 +731,13 @@ function LibrarieContent() {
         return {
           color: "bg-success text-white",
           label: "Sent",
-          icon: <CheckCircle2 className="h-3 w-3 mr-1" />,
+          icon: <CheckCircle2 className="size-3 mr-1" />,
         };
       case "scheduled":
         return {
           color: "bg-amber-500 text-white",
           label: "Scheduled",
-          icon: <Clock className="h-3 w-3 mr-1" />,
+          icon: <Clock className="size-3 mr-1" />,
         };
       default:
         return {
@@ -1265,7 +1265,7 @@ function LibrarieContent() {
       <div className="min-h-full bg-background">
         <main className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-            <User className="h-16 w-16 text-muted-foreground mb-4" />
+            <User className="size-16 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Profile Selected</h3>
             <p className="text-muted-foreground mb-4 max-w-md">
               Create a profile to get started. Use the profile dropdown in the navbar to create your first profile.
@@ -1303,11 +1303,11 @@ function LibrarieContent() {
                     size="sm"
                     onClick={() => { handleViewModeChange("trash"); fetchTrash(); }}
                   >
-                    <Trash2 className="h-4 w-4 mr-1" />
+                    <Trash2 className="size-4 mr-1" />
                     Trash
                   </Button>
                   <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
-                    <RefreshCw className="h-4 w-4 mr-2" />
+                    <RefreshCw className="size-4 mr-2" />
                     Refresh
                   </Button>
                 </>
@@ -1342,14 +1342,14 @@ function LibrarieContent() {
                 {postizStatus.connected ? (
                   <div className="flex items-center gap-2 text-sm">
                     <Badge variant="outline" className="border-success/20 text-success gap-1">
-                      <Link className="h-3 w-3" />
+                      <Link className="size-3" />
                       {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} - {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
                     </Badge>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-sm">
                     <Badge variant="destructive" className="gap-1">
-                      <AlertCircle className="h-3 w-3" />
+                      <AlertCircle className="size-3" />
                       Postiz not configured
                     </Badge>
                     <a href="/settings" className="text-xs text-muted-foreground hover:underline">
@@ -1365,7 +1365,7 @@ function LibrarieContent() {
                 {generatedImages.length} generated images
               </p>
               <Button onClick={fetchImages} variant="outline" size="sm">
-                <RefreshCw className="h-4 w-4 mr-2" />
+                <RefreshCw className="size-4 mr-2" />
                 Refresh
               </Button>
             </div>
@@ -1375,7 +1375,7 @@ function LibrarieContent() {
                 <CardContent className="py-3">
                   <div className="flex items-center justify-between flex-wrap gap-3">
                     <div className="flex items-center gap-3">
-                      <CheckSquare className="h-5 w-5 text-primary" />
+                      <CheckSquare className="size-5 text-primary" />
                       <span className="font-medium">
                         {selectedImageIds.size} {selectedImageIds.size === 1 ? "image selected" : "images selected"}
                       </span>
@@ -1387,11 +1387,11 @@ function LibrarieContent() {
                         onClick={selectAllImages}
                         disabled={selectedImageIds.size === generatedImages.length}
                       >
-                        <CheckSquare className="h-4 w-4 mr-2" />
+                        <CheckSquare className="size-4 mr-2" />
                         Select all ({generatedImages.length})
                       </Button>
                       <Button variant="outline" size="sm" onClick={clearImageSelection}>
-                        <XCircle className="h-4 w-4 mr-2" />
+                        <XCircle className="size-4 mr-2" />
                         Deselect
                       </Button>
                       <Button
@@ -1400,7 +1400,7 @@ function LibrarieContent() {
                         onClick={() => setBulkImageDialogOpen(true)}
                         disabled={bulkDeletingImages || !postizStatus?.connected}
                       >
-                        <Share2 className="h-4 w-4 mr-2" />
+                        <Share2 className="size-4 mr-2" />
                         Send to Social
                       </Button>
                       <Button
@@ -1410,7 +1410,7 @@ function LibrarieContent() {
                         onClick={() => setBulkImageDialogOpen(true)}
                         disabled={bulkDeletingImages || !postizStatus?.connected}
                       >
-                        <CalendarClock className="h-4 w-4 mr-2" />
+                        <CalendarClock className="size-4 mr-2" />
                         Schedule
                       </Button>
                       <Button
@@ -1420,9 +1420,9 @@ function LibrarieContent() {
                         disabled={bulkDeletingImages}
                       >
                         {bulkDeletingImages ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <Loader2 className="size-4 mr-2 animate-spin" />
                         ) : (
-                          <Trash2 className="h-4 w-4 mr-2" />
+                          <Trash2 className="size-4 mr-2" />
                         )}
                         Delete selected
                       </Button>
@@ -1438,7 +1438,7 @@ function LibrarieContent() {
               </div>
             ) : generatedImages.length === 0 ? (
               <EmptyState
-                icon={<ImageIcon className="h-6 w-6" />}
+                icon={<ImageIcon className="size-6" />}
                 title="No images yet"
                 description="Generated images will appear here. Use the Image Generator to create images."
               />
@@ -1463,7 +1463,7 @@ function LibrarieContent() {
                         <Checkbox
                           checked={selectedImageIds.has(img.id)}
                           onCheckedChange={() => toggleImageSelection(img.id)}
-                          className="h-5 w-5 bg-background/80 border-2"
+                          className="size-5 bg-background/80 border-2"
                           aria-label={`Select image ${img.id.slice(0, 8)}`}
                         />
                       </div>
@@ -1479,7 +1479,7 @@ function LibrarieContent() {
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                          <ImageIcon className="h-12 w-12 text-muted-foreground" />
+                          <ImageIcon className="size-12 text-muted-foreground" />
                         </div>
                       )}
 
@@ -1496,11 +1496,11 @@ function LibrarieContent() {
                         }`}
                       >
                         {img.status === "completed" ? (
-                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          <CheckCircle2 className="size-3 mr-1" />
                         ) : img.status === "failed" ? (
-                          <XCircle className="h-3 w-3 mr-1" />
+                          <XCircle className="size-3 mr-1" />
                         ) : img.status === "processing" ? (
-                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          <Loader2 className="size-3 mr-1 animate-spin" />
                         ) : null}
                         {img.status}
                       </Badge>
@@ -1508,7 +1508,7 @@ function LibrarieContent() {
                       {/* Approved badge */}
                       {img.is_approved && (
                         <Badge className="absolute bottom-2 left-2 text-xs bg-success text-white">
-                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          <CheckCircle2 className="size-3 mr-1" />
                           Aprobat
                         </Badge>
                       )}
@@ -1529,7 +1529,7 @@ function LibrarieContent() {
                               }}
                               title="Download"
                             >
-                              <Download className="h-4 w-4" />
+                              <Download className="size-4" />
                             </Button>
                             <Button
                               size="sm"
@@ -1541,7 +1541,7 @@ function LibrarieContent() {
                               }}
                               title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured"}
                             >
-                              <Share2 className="h-4 w-4" />
+                              <Share2 className="size-4" />
                             </Button>
                           </>
                         )}
@@ -1556,9 +1556,9 @@ function LibrarieContent() {
                           title="Delete image"
                         >
                           {deletingImageId === img.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="size-3 animate-spin" />
                           ) : (
-                            <Trash2 className="h-3 w-3" />
+                            <Trash2 className="size-3" />
                           )}
                         </Button>
                       </div>
@@ -1617,7 +1617,7 @@ function LibrarieContent() {
                               >
                                 {integ.picture && (
                                   /* eslint-disable-next-line @next/next/no-img-element */
-                                  <img src={integ.picture} alt="" className="h-4 w-4 rounded-full" />
+                                  <img src={integ.picture} alt="" className="size-4 rounded-full" />
                                 )}
                                 {integ.name}
                               </button>
@@ -1643,7 +1643,7 @@ function LibrarieContent() {
                               onCheckedChange={(checked) => setImagePublishSchedule(!!checked)}
                             />
                             <label htmlFor={`schedule-${img.id}`} className="text-xs cursor-pointer flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
+                              <Calendar className="size-3" />
                               Schedule
                             </label>
                           </div>
@@ -1665,9 +1665,9 @@ function LibrarieContent() {
                               onClick={publishImage}
                             >
                               {imagePublishing ? (
-                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                <Loader2 className="size-3 mr-1 animate-spin" />
                               ) : (
-                                <Send className="h-3 w-3 mr-1" />
+                                <Send className="size-3 mr-1" />
                               )}
                               Publish
                             </Button>
@@ -1677,7 +1677,7 @@ function LibrarieContent() {
                               className="text-xs"
                               onClick={() => setImagePublishId(null)}
                             >
-                              <X className="h-3 w-3" />
+                              <X className="size-3" />
                             </Button>
                           </div>
                         </div>
@@ -1714,9 +1714,9 @@ function LibrarieContent() {
                   onClick={emptyAllTrash}
                 >
                   {emptyingTrash ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                    <Loader2 className="size-4 animate-spin mr-1" />
                   ) : (
-                    <Trash2 className="h-4 w-4 mr-1" />
+                    <Trash2 className="size-4 mr-1" />
                   )}
                   Empty Trash
                 </Button>
@@ -1724,11 +1724,11 @@ function LibrarieContent() {
             </div>
             {loadingTrash ? (
               <div className="flex items-center justify-center py-20">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" role="status" aria-label="Loading"></div>
+                <div className="animate-spin rounded-full size-8 border-b-2 border-primary" role="status" aria-label="Loading"></div>
               </div>
             ) : trashClips.length === 0 ? (
               <EmptyState
-                icon={<Trash2 className="h-6 w-6" />}
+                icon={<Trash2 className="size-6" />}
                 title="Trash is empty"
                 description="Deleted clips will appear here for 30 days before being permanently removed."
               />
@@ -1747,7 +1747,7 @@ function LibrarieContent() {
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center opacity-60">
-                          <Film className="h-12 w-12 text-muted-foreground" />
+                          <Film className="size-12 text-muted-foreground" />
                         </div>
                       )}
                       {/* Days remaining badge */}
@@ -1782,9 +1782,9 @@ function LibrarieContent() {
                           title="Restore clip"
                         >
                           {restoringClipId === clip.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="size-3 animate-spin" />
                           ) : (
-                            <Undo2 className="h-3 w-3" />
+                            <Undo2 className="size-3" />
                           )}
                         </Button>
                         <Button
@@ -1796,9 +1796,9 @@ function LibrarieContent() {
                           title="Permanently delete"
                         >
                           {permanentlyDeletingClipId === clip.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="size-3 animate-spin" />
                           ) : (
-                            <Trash2 className="h-3 w-3" />
+                            <Trash2 className="size-3" />
                           )}
                         </Button>
                       </div>
@@ -1816,14 +1816,14 @@ function LibrarieContent() {
             {postizStatus.connected ? (
               <div className="flex items-center gap-2 text-sm">
                 <Badge variant="outline" className="border-success/20 text-success gap-1">
-                  <Link className="h-3 w-3" />
+                  <Link className="size-3" />
                   {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} — {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
                 </Badge>
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm">
                 <Badge variant="destructive" className="gap-1">
-                  <AlertCircle className="h-3 w-3" />
+                  <AlertCircle className="size-3" />
                   Postiz not configured
                 </Badge>
                 <a href="/settings" className="text-xs text-muted-foreground hover:underline">
@@ -1844,7 +1844,7 @@ function LibrarieContent() {
                   Search
                 </Label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                   <Input
                     placeholder="Search by project or variant..."
                     value={searchQuery}
@@ -1857,7 +1857,7 @@ function LibrarieContent() {
               {/* Subtitles filter */}
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  <Subtitles className="h-3 w-3 inline mr-1" />
+                  <Subtitles className="size-3 inline mr-1" />
                   Subtitles
                 </Label>
                 <Select value={filterSubtitles} onValueChange={handleSubtitlesFilter}>
@@ -1875,7 +1875,7 @@ function LibrarieContent() {
               {/* Voiceover filter */}
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  <Mic className="h-3 w-3 inline mr-1" />
+                  <Mic className="size-3 inline mr-1" />
                   Voiceover
                 </Label>
                 <Select value={filterVoiceover} onValueChange={handleVoiceoverFilter}>
@@ -1893,7 +1893,7 @@ function LibrarieContent() {
               {/* Postiz status filter */}
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  <Share2 className="h-3 w-3 inline mr-1" />
+                  <Share2 className="size-3 inline mr-1" />
                   Postiz Status
                 </Label>
                 <Select value={filterPostiz} onValueChange={handlePostizFilter}>
@@ -1952,7 +1952,7 @@ function LibrarieContent() {
               {/* Tag filter */}
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  <TagIcon className="h-3 w-3 inline mr-1" />
+                  <TagIcon className="size-3 inline mr-1" />
                   Tag
                 </Label>
                 <Select value={filterTag || "all"} onValueChange={handleTagFilter}>
@@ -1976,7 +1976,7 @@ function LibrarieContent() {
               <div className="mt-3 flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Filtered by tag:</span>
                 <Badge variant="secondary" className="text-xs gap-1">
-                  <TagIcon className="h-3 w-3" />
+                  <TagIcon className="size-3" />
                   {filterTag}
                   <button
                     type="button"
@@ -1984,7 +1984,7 @@ function LibrarieContent() {
                     onClick={() => handleTagFilter("all")}
                     aria-label="Clear tag filter"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="size-3" />
                   </button>
                 </Badge>
               </div>
@@ -2003,7 +2003,7 @@ function LibrarieContent() {
             <CardContent className="py-3">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-3">
-                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <CheckSquare className="size-5 text-primary" />
                   <span className="font-medium">
                     {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selected" : "clips selected"}
                   </span>
@@ -2015,7 +2015,7 @@ function LibrarieContent() {
                     onClick={selectAllVisible}
                     disabled={selectedClipIds.size === filteredClips.length}
                   >
-                    <CheckSquare className="h-4 w-4 mr-2" />
+                    <CheckSquare className="size-4 mr-2" />
                     Select all ({filteredClips.length})
                   </Button>
                   <Button
@@ -2023,7 +2023,7 @@ function LibrarieContent() {
                     size="sm"
                     onClick={clearSelection}
                   >
-                    <XCircle className="h-4 w-4 mr-2" />
+                    <XCircle className="size-4 mr-2" />
                     Deselect
                   </Button>
                   <div className="w-px h-6 bg-border mx-2" />
@@ -2034,9 +2034,9 @@ function LibrarieContent() {
                     disabled={bulkDeleting || bulkUploading}
                   >
                     {bulkDeleting ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <Trash2 className="h-4 w-4 mr-2" />
+                      <Trash2 className="size-4 mr-2" />
                     )}
                     Delete selected
                   </Button>
@@ -2048,9 +2048,9 @@ function LibrarieContent() {
                     title={postizStatus?.connected ? `Send to ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz not configured — configure in Settings"}
                   >
                     {bulkUploading ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <Share2 className="h-4 w-4 mr-2" />
+                      <Share2 className="size-4 mr-2" />
                     )}
                     Send to Postiz
                   </Button>
@@ -2062,7 +2062,7 @@ function LibrarieContent() {
                     disabled={bulkDeleting || bulkUploading}
                     title="Schedule selected clips in cascade (1 post/day)"
                   >
-                    <CalendarClock className="h-4 w-4 mr-2" />
+                    <CalendarClock className="size-4 mr-2" />
                     Schedule
                   </Button>
                 </div>
@@ -2074,11 +2074,11 @@ function LibrarieContent() {
         {/* Clips grid - library mode only */}
         {viewMode === "library" && ((profileLoading || loading) ? (
           <div className="flex items-center justify-center py-20">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            <div className="animate-spin rounded-full size-8 border-b-2 border-primary"></div>
           </div>
         ) : filteredClips.length === 0 ? (
           <EmptyState
-            icon={<Film className="h-6 w-6" />}
+            icon={<Film className="size-6" />}
             title="No edits yet"
             description={
               clips.length === 0
@@ -2114,7 +2114,7 @@ function LibrarieContent() {
                     {/* Film icon for clips without thumbnail */}
                     {!clip.thumbnail_path && (
                       <div className="absolute inset-0 flex items-center justify-center">
-                        <Film className="h-12 w-12 text-muted-foreground" />
+                        <Film className="size-12 text-muted-foreground" />
                       </div>
                     )}
 
@@ -2128,7 +2128,7 @@ function LibrarieContent() {
                       <Checkbox
                         checked={selectedClipIds.has(clip.id)}
                         onCheckedChange={() => toggleClipSelection(clip.id)}
-                        className="h-5 w-5 bg-background/80 border-2"
+                        className="size-5 bg-background/80 border-2"
                         aria-label={`Select clip ${clip.variant_name || clip.id.slice(0, 8)}`}
                       />
                     </div>
@@ -2160,7 +2160,7 @@ function LibrarieContent() {
                     {/* QC verified badge */}
                     {clip.qc_verified && !(clip.is_downloaded_posted || clip.postiz_status === "sent") && (
                       <Badge className="absolute bottom-2 left-2 bg-primary text-primary-foreground text-[10px] px-1.5 py-0 z-10">
-                        <ShieldCheck className="h-3 w-3 mr-0.5" />
+                        <ShieldCheck className="size-3 mr-0.5" />
                         QC
                       </Badge>
                     )}
@@ -2169,12 +2169,12 @@ function LibrarieContent() {
                     <div className="absolute top-10 left-2 flex flex-col gap-1">
                       {clip.has_subtitles && (
                         <Badge variant="secondary" className="text-xs">
-                          <Subtitles className="h-3 w-3" />
+                          <Subtitles className="size-3" />
                         </Badge>
                       )}
                       {clip.has_voiceover && (
                         <Badge variant="secondary" className="text-xs">
-                          <Mic className="h-3 w-3" />
+                          <Mic className="size-3" />
                         </Badge>
                       )}
                     </div>
@@ -2195,7 +2195,7 @@ function LibrarieContent() {
                             setPlayingClip(clip);
                           }}
                         >
-                          <Play className="h-4 w-4" />
+                          <Play className="size-4" />
                         </Button>
                         <Button
                           size="sm"
@@ -2209,7 +2209,7 @@ function LibrarieContent() {
                             );
                           }}
                         >
-                          <Download className="h-4 w-4" />
+                          <Download className="size-4" />
                         </Button>
                         {clip.has_subtitles && (
                           <Button
@@ -2221,7 +2221,7 @@ function LibrarieContent() {
                             }}
                             title="Download SRT subtitles"
                           >
-                            <FileText className="h-4 w-4" />
+                            <FileText className="size-4" />
                           </Button>
                         )}
                         {clip.has_voiceover && (
@@ -2234,7 +2234,7 @@ function LibrarieContent() {
                             }}
                             title="Download TTS audio"
                           >
-                            <Mic className="h-4 w-4" />
+                            <Mic className="size-4" />
                           </Button>
                         )}
                         {clip.has_voiceover && (
@@ -2249,9 +2249,9 @@ function LibrarieContent() {
                             title="Regenerate voice-over"
                           >
                             {regeneratingVoiceoverId === clip.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Loader2 className="size-4 animate-spin" />
                             ) : (
-                              <RefreshCw className="h-4 w-4" />
+                              <RefreshCw className="size-4" />
                             )}
                           </Button>
                         )}
@@ -2265,7 +2265,7 @@ function LibrarieContent() {
                           }}
                           title={canPublish ? "Publish to Social Media" : "Connect Postiz or Blipost in Settings to publish"}
                         >
-                          <Share2 className="h-4 w-4" />
+                          <Share2 className="size-4" />
                         </Button>
                       </div>
                       {/* Remove audio button */}
@@ -2281,17 +2281,17 @@ function LibrarieContent() {
                       >
                         {removingAudioClipId === clip.id ? (
                           <>
-                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            <Loader2 className="size-3 mr-1 animate-spin" />
                             Processing...
                           </>
                         ) : clip.has_audio === false ? (
                           <>
-                            <VolumeX className="h-3 w-3 mr-1" />
+                            <VolumeX className="size-3 mr-1" />
                             No audio
                           </>
                         ) : (
                           <>
-                            <VolumeX className="h-3 w-3 mr-1" />
+                            <VolumeX className="size-3 mr-1" />
                             Remove audio
                           </>
                         )}
@@ -2309,9 +2309,9 @@ function LibrarieContent() {
                         title="Delete clip permanently"
                       >
                         {deletingClipId === clip.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <Loader2 className="size-3 animate-spin" />
                         ) : (
-                          <Trash2 className="h-3 w-3" />
+                          <Trash2 className="size-3" />
                         )}
                       </Button>
                     </div>
@@ -2337,18 +2337,18 @@ function LibrarieContent() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-6 w-6 shrink-0"
+                          className="size-6 shrink-0"
                           onClick={() => renameClip(clip.id, renameValue)}
                         >
-                          <Check className="h-3 w-3 text-success" />
+                          <Check className="size-3 text-success" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-6 w-6 shrink-0"
+                          className="size-6 shrink-0"
                           onClick={() => setRenameClipId(null)}
                         >
-                          <X className="h-3 w-3 text-red-500" />
+                          <X className="size-3 text-red-500" />
                         </Button>
                       </div>
                     ) : (
@@ -2359,7 +2359,7 @@ function LibrarieContent() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-5 w-5 shrink-0 opacity-60 hover:opacity-100"
+                          className="size-5 shrink-0 opacity-60 hover:opacity-100"
                           onClick={(e) => {
                             e.stopPropagation();
                             setRenameClipId(clip.id);
@@ -2367,7 +2367,7 @@ function LibrarieContent() {
                           }}
                           title="Rename"
                         >
-                          <Pencil className="h-3 w-3" />
+                          <Pencil className="size-3" />
                         </Button>
                       </div>
                     )}
@@ -2396,7 +2396,7 @@ function LibrarieContent() {
                           id={`postiz-${clip.id}`}
                           checked={clip.postiz_status === "scheduled" || clip.postiz_status === "sent"}
                           disabled
-                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary disabled:opacity-100"
+                          className="size-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary disabled:opacity-100"
                         />
                         <label
                           className={`text-xs select-none ${
@@ -2414,7 +2414,7 @@ function LibrarieContent() {
                           id={`tiktok_posted-${clip.id}`}
                           checked={clip.tiktok_posted || false}
                           onCheckedChange={() => toggleTiktokPosted(clip.id)}
-                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+                          className="size-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                         />
                         <label
                           htmlFor={`tiktok_posted-${clip.id}`}
@@ -2437,7 +2437,7 @@ function LibrarieContent() {
                           id={`qc-verified-${clip.id}`}
                           checked={clip.qc_verified || false}
                           onCheckedChange={() => toggleQcVerified(clip.id)}
-                          className="h-5 w-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+                          className="size-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                         />
                         <label
                           htmlFor={`qc-verified-${clip.id}`}
@@ -2454,7 +2454,7 @@ function LibrarieContent() {
                           id={`downloaded-posted-${clip.id}`}
                           checked={clip.is_downloaded_posted || false}
                           onCheckedChange={() => toggleDownloadedPosted(clip.id)}
-                          className="h-5 w-5 border-2 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
+                          className="size-5 border-2 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
                         />
                         <label
                           htmlFor={`downloaded-posted-${clip.id}`}
@@ -2478,9 +2478,9 @@ function LibrarieContent() {
                           disabled={loadingScriptId === clip.id}
                         >
                           {loadingScriptId === clip.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="size-3 animate-spin" />
                           ) : (
-                            <FileText className="h-3 w-3" />
+                            <FileText className="size-3" />
                           )}
                           {loadingScriptId === clip.id ? "Loading script..." : "Show script"}
                         </button>
@@ -2498,9 +2498,9 @@ function LibrarieContent() {
                           disabled={loadingScriptId === clip.id}
                         >
                           {loadingScriptId === clip.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="size-3 animate-spin" />
                           ) : (
-                            <FileText className="h-3 w-3" />
+                            <FileText className="size-3" />
                           )}
                           {loadingScriptId === clip.id ? "Loading caption..." : "Show caption"}
                         </button>
@@ -2517,7 +2517,7 @@ function LibrarieContent() {
           <>
             {loadingMore && (
               <div className="flex items-center justify-center py-6">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Loader2 className="size-6 animate-spin text-muted-foreground" />
                 <span className="ml-2 text-sm text-muted-foreground">Loading more clips...</span>
               </div>
             )}
@@ -2590,7 +2590,7 @@ function LibrarieContent() {
           <DialogContent className="max-w-lg max-h-[80vh]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-primary" />
+                <FileText className="size-5 text-primary" />
                 Script — {scriptDialogClip?.variant_name || `Variant ${(scriptDialogClip?.variant_index ?? 0) + 1}`}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">{scriptDialogClip?.project_name}</p>
@@ -2609,7 +2609,7 @@ function LibrarieContent() {
                   toast.success("Script copied to clipboard");
                 }}
               >
-                <Copy className="h-4 w-4 mr-2" />
+                <Copy className="size-4 mr-2" />
                 Copy script
               </Button>
             )}
@@ -2621,7 +2621,7 @@ function LibrarieContent() {
           <DialogContent className="max-w-lg max-h-[80vh]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-muted-foreground" />
+                <FileText className="size-5 text-muted-foreground" />
                 Caption — {captionDialogClip?.variant_name || `Variant ${(captionDialogClip?.variant_index ?? 0) + 1}`}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">{captionDialogClip?.project_name}</p>
@@ -2643,7 +2643,7 @@ function LibrarieContent() {
                   toast.success("Caption copied to clipboard");
                 }}
               >
-                <Copy className="h-4 w-4 mr-2" />
+                <Copy className="size-4 mr-2" />
                 Copy caption
               </Button>
             )}
@@ -2677,7 +2677,7 @@ function LibrarieContent() {
             <div className="container mx-auto px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <CheckSquare className="size-5 text-primary" />
                   <span className="font-medium">
                     {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selected" : "clips selected"}
                   </span>
@@ -2686,7 +2686,7 @@ function LibrarieContent() {
                     size="sm"
                     onClick={clearSelection}
                   >
-                    <XCircle className="h-4 w-4 mr-1" />
+                    <XCircle className="size-4 mr-1" />
                     Deselect
                   </Button>
                 </div>
@@ -2697,7 +2697,7 @@ function LibrarieContent() {
                     onClick={selectAllVisible}
                     disabled={selectedClipIds.size === filteredClips.length}
                   >
-                    <CheckSquare className="h-4 w-4 mr-2" />
+                    <CheckSquare className="size-4 mr-2" />
                     Select all ({filteredClips.length})
                   </Button>
                   <Button
@@ -2708,9 +2708,9 @@ function LibrarieContent() {
                     title={postizStatus?.connected ? `Send to ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz not configured — configure in Settings"}
                   >
                     {bulkUploading ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <Share2 className="h-4 w-4 mr-2" />
+                      <Share2 className="size-4 mr-2" />
                     )}
                     Send to Postiz
                   </Button>
@@ -2722,7 +2722,7 @@ function LibrarieContent() {
                     disabled={bulkDeleting || bulkUploading}
                     title="Schedule selected clips in cascade (1 post/day)"
                   >
-                    <CalendarClock className="h-4 w-4 mr-2" />
+                    <CalendarClock className="size-4 mr-2" />
                     Schedule
                   </Button>
                   <Button
@@ -2732,9 +2732,9 @@ function LibrarieContent() {
                     disabled={bulkDeleting || bulkUploading}
                   >
                     {bulkDeleting ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <Trash2 className="h-4 w-4 mr-2" />
+                      <Trash2 className="size-4 mr-2" />
                     )}
                     Delete selected
                   </Button>
@@ -2749,12 +2749,12 @@ function LibrarieContent() {
             <div className="container mx-auto px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <CheckSquare className="size-5 text-primary" />
                   <span className="font-medium">
                     {selectedImageIds.size} {selectedImageIds.size === 1 ? "image selected" : "images selected"}
                   </span>
                   <Button variant="ghost" size="sm" onClick={clearImageSelection}>
-                    <XCircle className="h-4 w-4 mr-1" />
+                    <XCircle className="size-4 mr-1" />
                     Deselect
                   </Button>
                 </div>
@@ -2765,7 +2765,7 @@ function LibrarieContent() {
                     onClick={selectAllImages}
                     disabled={selectedImageIds.size === generatedImages.length}
                   >
-                    <CheckSquare className="h-4 w-4 mr-2" />
+                    <CheckSquare className="size-4 mr-2" />
                     Select all ({generatedImages.length})
                   </Button>
                   <Button
@@ -2774,7 +2774,7 @@ function LibrarieContent() {
                     onClick={() => setBulkImageDialogOpen(true)}
                     disabled={bulkDeletingImages || !postizStatus?.connected}
                   >
-                    <Share2 className="h-4 w-4 mr-2" />
+                    <Share2 className="size-4 mr-2" />
                     Send to Social
                   </Button>
                   <Button
@@ -2784,7 +2784,7 @@ function LibrarieContent() {
                     onClick={() => setBulkImageDialogOpen(true)}
                     disabled={bulkDeletingImages || !postizStatus?.connected}
                   >
-                    <CalendarClock className="h-4 w-4 mr-2" />
+                    <CalendarClock className="size-4 mr-2" />
                     Schedule
                   </Button>
                   <Button
@@ -2794,9 +2794,9 @@ function LibrarieContent() {
                     disabled={bulkDeletingImages}
                   >
                     {bulkDeletingImages ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <Trash2 className="h-4 w-4 mr-2" />
+                      <Trash2 className="size-4 mr-2" />
                     )}
                     Delete selected
                   </Button>
@@ -2824,7 +2824,7 @@ export default function LibrariePage() {
   return (
     <Suspense fallback={
       <div className="min-h-full bg-background flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="animate-spin rounded-full size-8 border-b-2 border-primary"></div>
       </div>
     }>
       <LibrarieContent />

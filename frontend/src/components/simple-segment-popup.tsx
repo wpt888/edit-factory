@@ -122,7 +122,7 @@ export function SimpleSegmentPopup({
         {/* Header */}
         <div className="p-6 pb-4">
           <div className="flex items-center gap-2 text-lg font-semibold">
-            <Tag className="h-5 w-5" />
+            <Tag className="size-5" />
             {isEditing ? "Edit Segment" : "New Segment"}
           </div>
           <p className="text-sm text-muted-foreground mt-1">
@@ -134,7 +134,7 @@ export function SimpleSegmentPopup({
             onClick={onClose}
             className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100"
           >
-            <X className="h-4 w-4" />
+            <X className="size-4" />
           </button>
         </div>
 
@@ -161,7 +161,7 @@ export function SimpleSegmentPopup({
                 onClick={addKeyword}
                 disabled={!newKeyword.trim()}
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="size-4" />
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -184,7 +184,7 @@ export function SimpleSegmentPopup({
                     onClick={() => removeKeyword(keyword)}
                     className="ml-1 hover:bg-destructive/20 rounded-full p-0.5"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="size-3" />
                   </button>
                 </Badge>
               ))}
@@ -213,7 +213,7 @@ export function SimpleSegmentPopup({
             />
             <div className="grid gap-0.5 leading-none">
               <Label htmlFor="single-use" className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
-                <Repeat1 className="h-3.5 w-3.5 text-orange-500" />
+                <Repeat1 className="size-3.5 text-orange-500" />
                 Use only once
               </Label>
               <p className="text-xs text-muted-foreground">

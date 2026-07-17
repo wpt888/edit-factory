@@ -82,11 +82,11 @@ export default function SignupPage() {
       <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
         <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
         <div className="pointer-events-none absolute inset-0 bg-noise" />
-        <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
+        <div className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-primary/10 blur-[110px]" />
         <Card className="relative w-full max-w-md">
           <CardHeader className="space-y-1 text-center">
             <div className="flex justify-center mb-4">
-              <CheckCircle2 className="h-16 w-16 text-success" />
+              <CheckCircle2 className="size-16 text-success" />
             </div>
             <CardTitle className="font-heading text-2xl font-bold tracking-tight">Check your email</CardTitle>
             <CardDescription>
@@ -112,7 +112,7 @@ export default function SignupPage() {
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
       <div className="pointer-events-none absolute inset-0 bg-noise" />
-      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-primary/10 blur-[110px]" />
       <Card className="relative w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
@@ -127,7 +127,7 @@ export default function SignupPage() {
           <CardContent className="space-y-4">
             {error && (
               <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
-                <AlertCircle className="h-4 w-4" />
+                <AlertCircle className="size-4" />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
@@ -178,7 +178,7 @@ export default function SignupPage() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 size-4 animate-spin" />
                   Creating account...
                 </>
               ) : (

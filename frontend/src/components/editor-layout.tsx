@@ -238,12 +238,12 @@ export function EditorLayout({
     const isOnLeft = panelPosition(panelId) === 0;
     if (isOnLeft) {
       return collapsed
-        ? <PanelLeftOpen className="h-4 w-4" />
-        : <PanelLeftClose className="h-4 w-4" />;
+        ? <PanelLeftOpen className="size-4" />
+        : <PanelLeftClose className="size-4" />;
     }
     return collapsed
-      ? <PanelRightOpen className="h-4 w-4" />
-      : <PanelRightClose className="h-4 w-4" />;
+      ? <PanelRightOpen className="size-4" />
+      : <PanelRightClose className="size-4" />;
   };
 
   const panelHeader = (
@@ -284,7 +284,7 @@ export function EditorLayout({
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto h-7 w-7 shrink-0"
+            className="ml-auto size-7 shrink-0"
             onClick={options.onToggle}
             title={collapsed ? "Expand panel" : "Collapse panel"}
           >

@@ -105,7 +105,7 @@ export function RenderSettingsPanel({
     <Card className="border-muted" data-testid="step3-render-settings">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="size-4" />
           Render Settings
         </CardTitle>
         <CardDescription>
@@ -233,7 +233,7 @@ export function RenderSettingsPanel({
                   Color correction {adjustments.enableColor ? "on" : "off"}
                 </span>
               </span>
-              <ChevronDown className={`h-4 w-4 transition-transform ${showVideoAdjustments ? "rotate-180" : ""}`} />
+              <ChevronDown className={`size-4 transition-transform ${showVideoAdjustments ? "rotate-180" : ""}`} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="border-t">
@@ -301,7 +301,7 @@ export function RenderSettingsPanel({
                   Volume {Math.round(adjustments.voiceVolume * 100)}% · {fadeSummary}
                 </span>
               </span>
-              <ChevronDown className={`h-4 w-4 transition-transform ${showAudioAdjustments ? "rotate-180" : ""}`} />
+              <ChevronDown className={`size-4 transition-transform ${showAudioAdjustments ? "rotate-180" : ""}`} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="border-t">
@@ -364,7 +364,7 @@ export function RenderSettingsPanel({
               className="h-9 w-full justify-between rounded-lg px-3 text-xs text-muted-foreground"
             >
               Advanced encoding
-              <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+              <ChevronDown className={`size-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="border-t">

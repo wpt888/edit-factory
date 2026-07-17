@@ -140,14 +140,14 @@ export function VariantTriage({
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-muted">
-                    <Play className="h-12 w-12 text-white/50" />
+                    <Play className="size-12 text-white/50" />
                   </div>
                 )}
 
                 {/* Selection indicator */}
                 {variant.selected && (
                   <div className="absolute top-2 right-2 bg-primary text-primary-foreground rounded-full p-1">
-                    <Check className="h-4 w-4" />
+                    <Check className="size-4" />
                   </div>
                 )}
 
@@ -161,7 +161,7 @@ export function VariantTriage({
                       onPreview(variant);
                     }}
                   >
-                    <ExternalLink className="h-4 w-4 mr-1" />
+                    <ExternalLink className="size-4 mr-1" />
                     Preview
                   </Button>
                   <Button
@@ -172,7 +172,7 @@ export function VariantTriage({
                       onDownload(variant);
                     }}
                   >
-                    <Download className="h-4 w-4 mr-1" />
+                    <Download className="size-4 mr-1" />
                     Download
                   </Button>
                 </div>
@@ -202,12 +202,12 @@ export function VariantTriage({
           >
             {isAddingTts ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="size-4 mr-2 animate-spin" />
                 {ttsStatus || "Adding voice-over..."}
               </>
             ) : (
               <>
-                <Volume2 className="h-4 w-4 mr-2" />
+                <Volume2 className="size-4 mr-2" />
                 Add Voice-over ({selectedCount} variants)
               </>
             )}

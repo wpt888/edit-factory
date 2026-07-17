@@ -459,7 +459,7 @@ export default function ProductsPage() {
       <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
-          icon={<Package className="h-8 w-8 text-primary" />}
+          icon={<Package className="size-8 text-primary" />}
           title="Products"
           description="Browse and filter synced product catalog"
         />
@@ -475,7 +475,7 @@ export default function ProductsPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <BookOpen className="h-4 w-4" />
+              <BookOpen className="size-4" />
               Catalog
             </button>
           )}
@@ -487,7 +487,7 @@ export default function ProductsPage() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            <Tag className="h-4 w-4" />
+            <Tag className="size-4" />
             Feed
           </button>
         </div>
@@ -496,7 +496,7 @@ export default function ProductsPage() {
         {activeTab === "feed" && (
           <div className="flex flex-wrap items-center gap-3 mb-4 p-4 bg-card border rounded-lg">
             <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-              <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Tag className="size-4 text-muted-foreground shrink-0" />
               <Select
                 value={selectedFeedId || ""}
                 onValueChange={handleFeedChange}
@@ -521,7 +521,7 @@ export default function ProductsPage() {
                   className={getSyncBadgeClass(selectedFeed.sync_status)}
                 >
                   {selectedFeed.sync_status === "syncing" && (
-                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    <Loader2 className="size-3 mr-1 animate-spin" />
                   )}
                   {selectedFeed.sync_status}
                 </Badge>
@@ -537,7 +537,7 @@ export default function ProductsPage() {
                   disabled={selectedFeed.sync_status === "syncing"}
                 >
                   <RefreshCw
-                    className={`h-4 w-4 mr-1 ${
+                    className={`size-4 mr-1 ${
                       selectedFeed.sync_status === "syncing"
                         ? "animate-spin"
                         : ""
@@ -554,7 +554,7 @@ export default function ProductsPage() {
                 variant="outline"
                 onClick={() => setCreateFeedOpen(true)}
               >
-                <PlusCircle className="h-4 w-4 mr-1" />
+                <PlusCircle className="size-4 mr-1" />
                 New Feed
               </Button>
             )}
@@ -565,7 +565,7 @@ export default function ProductsPage() {
                 variant="outline"
                 onClick={() => setCreateFeedOpen(true)}
               >
-                <PlusCircle className="h-4 w-4 mr-1" />
+                <PlusCircle className="size-4 mr-1" />
                 Add Your First Feed
               </Button>
             )}
@@ -576,7 +576,7 @@ export default function ProductsPage() {
         <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-card border rounded-lg">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
               placeholder="Search products..."
               value={search}
@@ -631,18 +631,18 @@ export default function ProductsPage() {
         {/* Product card grid */}
         {!showProducts ? (
           <EmptyState
-            icon={<Package className="h-6 w-6" />}
+            icon={<Package className="size-6" />}
             title="No products"
             description="Import products from a feed or add manually."
             action={{ label: "Add Feed", onClick: () => setCreateFeedOpen(true) }}
           />
         ) : loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Loader2 className="size-8 animate-spin text-muted-foreground" />
           </div>
         ) : products.length === 0 ? (
           <EmptyState
-            icon={<Package className="h-6 w-6" />}
+            icon={<Package className="size-6" />}
             title="No products"
             description={activeTab === "catalog"
               ? "The catalog contains no products matching your filters."
@@ -730,7 +730,7 @@ export default function ProductsPage() {
                     className="w-full mt-2 text-xs h-7"
                     onClick={() => handleGenerateVideo(product)}
                   >
-                    <Film className="h-3 w-3 mr-1" />
+                    <Film className="size-3 mr-1" />
                     Generate Video
                   </Button>
                 </CardContent>
@@ -749,7 +749,7 @@ export default function ProductsPage() {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="size-4" />
                 Prev
               </Button>
 
@@ -766,7 +766,7 @@ export default function ProductsPage() {
                 disabled={page >= pagination.total_pages}
               >
                 Next
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="size-4" />
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -807,9 +807,9 @@ export default function ProductsPage() {
             </div>
             <Button onClick={() => setBatchDialogOpen(true)} disabled={batchLoading}>
               {batchLoading ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="size-4 mr-2 animate-spin" />
               ) : (
-                <Film className="h-4 w-4 mr-2" />
+                <Film className="size-4 mr-2" />
               )}
               Generate {selectedProductIds.size} Videos
             </Button>

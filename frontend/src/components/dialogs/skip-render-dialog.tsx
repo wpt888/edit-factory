@@ -93,7 +93,7 @@ export function SkipRenderDialog({
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <SkipForward className="h-5 w-5" />
+            <SkipForward className="size-5" />
             Existing videos detected
           </DialogTitle>
           <DialogDescription>
@@ -116,7 +116,7 @@ export function SkipRenderDialog({
                     onCheckedChange={() => toggleSkip(result.variant_index)}
                   />
                 ) : (
-                  <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                  <RefreshCw className="size-4 text-muted-foreground" />
                 )}
                 <span className="font-medium">
                   Variant {result.variant_index + 1}
@@ -125,12 +125,12 @@ export function SkipRenderDialog({
               <div className="flex items-center gap-2">
                 {result.can_skip && result.reason === "fingerprint_match" ? (
                   <Badge variant="outline" className="bg-success/10 text-success border-success/20">
-                    <CheckCircle className="h-3 w-3 mr-1" />
+                    <CheckCircle className="size-3 mr-1" />
                     Identical
                   </Badge>
                 ) : result.can_skip && result.reason === "render_exists_unverified" ? (
                   <Badge variant="default" className="bg-yellow-600 hover:bg-yellow-700">
-                    <CheckCircle className="h-3 w-3 mr-1" />
+                    <CheckCircle className="size-3 mr-1" />
                     Existing
                   </Badge>
                 ) : (
@@ -148,11 +148,11 @@ export function SkipRenderDialog({
             Cancel
           </Button>
           <Button variant="secondary" onClick={handleRenderAll}>
-            <RefreshCw className="h-4 w-4 mr-2" />
+            <RefreshCw className="size-4 mr-2" />
             Render all again
           </Button>
           <Button onClick={handleConfirm}>
-            <SkipForward className="h-4 w-4 mr-2" />
+            <SkipForward className="size-4 mr-2" />
             Continue with existing ({skipSet.size} skipped)
           </Button>
         </DialogFooter>

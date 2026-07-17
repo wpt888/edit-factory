@@ -987,7 +987,7 @@ export default function CreateImagePage() {
                       <SelectItem key={p.id} value={p.id}>
                         <span className="flex items-center gap-1.5">
                           {productsWithApprovedImages.has(p.id) && (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />
+                            <CheckCircle2 className="size-3.5 text-success shrink-0" />
                           )}
                           {p.title} {p.brand ? `(${p.brand})` : ""}
                         </span>
@@ -1613,7 +1613,7 @@ export default function CreateImagePage() {
                         </div>
                         {loadingIntegrations ? (
                           <div className="flex items-center justify-center py-3">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            <Loader2 className="size-4 animate-spin text-muted-foreground" />
                           </div>
                         ) : integrations.length === 0 ? (
                           <p className="text-xs text-muted-foreground py-2">
@@ -1639,10 +1639,10 @@ export default function CreateImagePage() {
                                     <img
                                       src={integration.picture}
                                       alt=""
-                                      className="h-5 w-5 rounded-full object-cover"
+                                      className="size-5 rounded-full object-cover"
                                     />
                                   ) : (
-                                    <div className="h-5 w-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-[10px] font-bold">
+                                    <div className="size-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-[10px] font-bold">
                                       {(PLATFORM_NAMES[integration.type] || integration.type)[0]?.toUpperCase()}
                                     </div>
                                   )}
@@ -1681,7 +1681,7 @@ export default function CreateImagePage() {
 
                       {charWarnings.length > 0 && (
                         <div className="flex items-start gap-2 text-xs text-yellow-600">
-                          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
                           <span>
                             Caption va fi trunchiat automat pe:{" "}
                             {charWarnings.map((w) => `${w.platform} (max ${w.limit})`).join(", ")}
@@ -1734,7 +1734,7 @@ export default function CreateImagePage() {
                   {publishState === "publishing" && (
                     <div className="space-y-3 py-4">
                       <div className="flex flex-col items-center gap-2">
-                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                        <Loader2 className="size-8 animate-spin text-primary" />
                         <p className="text-sm font-medium">{publishProgress.step}</p>
                       </div>
                       <Progress value={publishProgress.percentage} className="w-full" />
@@ -1747,7 +1747,7 @@ export default function CreateImagePage() {
                   {/* Success */}
                   {publishState === "success" && (
                     <div className="flex flex-col items-center gap-3 py-4">
-                      <CheckCircle2 className="h-10 w-10 text-success" />
+                      <CheckCircle2 className="size-10 text-success" />
                       <p className="text-sm font-semibold">
                         {scheduleEnabled ? "Post scheduled!" : "Published successfully!"}
                       </p>
@@ -1767,7 +1767,7 @@ export default function CreateImagePage() {
                   {/* Error */}
                   {publishState === "error" && (
                     <div className="flex flex-col items-center gap-3 py-4">
-                      <XCircle className="h-10 w-10 text-red-500" />
+                      <XCircle className="size-10 text-red-500" />
                       <div className="text-center">
                         <p className="text-sm font-semibold">Publishing failed</p>
                         <p className="text-xs text-muted-foreground mt-1">{publishError}</p>

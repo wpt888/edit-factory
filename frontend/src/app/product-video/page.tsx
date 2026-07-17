@@ -254,19 +254,19 @@ function ProductVideoContent() {
             href={source === "local" ? "/product-library" : "/products"}
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="size-4" />
             Back to Library
           </Link>
         </div>
 
         {/* Page title */}
-        <PageHeader className="mb-6" icon={<Video className="h-7 w-7 text-primary" />} title="Generate Video" />
+        <PageHeader className="mb-6" icon={<Video className="size-7 text-primary" />} title="Generate Video" />
 
         {/* Empty state when no product is selected */}
         {!productId && (
           <div className="flex flex-col items-center justify-center py-20">
             <EmptyState
-              icon={<Video className="h-6 w-6" />}
+              icon={<Video className="size-6" />}
               title="Select an item first"
               description="Pick an item from your Context Library to generate a video."
               action={{ label: "Open Context Library", onClick: () => router.push("/product-library") }}
@@ -284,7 +284,7 @@ function ProductVideoContent() {
                   <img
                     src={image}
                     alt={title}
-                    className="w-24 h-24 object-cover rounded-md flex-shrink-0"
+                    className="size-24 object-cover rounded-md flex-shrink-0"
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = "none";
                     }}
@@ -310,7 +310,7 @@ function ProductVideoContent() {
             <Card className="mb-6 border-primary/40">
               <CardContent>
                 <div className="flex items-start gap-3">
-                  <Film className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                  <Film className="size-5 text-primary flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0 space-y-3">
                     <div>
                       <p className="text-sm font-semibold">
@@ -353,7 +353,7 @@ function ProductVideoContent() {
             <Card className="mb-6">
               <CardContent>
                 <div className="flex items-start gap-3">
-                  <Images className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                  <Images className="size-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold">Slideshow mode</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -559,9 +559,9 @@ function ProductVideoContent() {
                 disabled={isFormDisabled}
               >
                 {filtersExpanded ? (
-                  <ChevronUp className="h-4 w-4" />
+                  <ChevronUp className="size-4" />
                 ) : (
-                  <ChevronDown className="h-4 w-4" />
+                  <ChevronDown className="size-4" />
                 )}
                 Video Filters (optional)
               </button>
@@ -617,12 +617,12 @@ function ProductVideoContent() {
           >
             {isPolling || isGenerating ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="size-4 mr-2 animate-spin" />
                 Generating...
               </>
             ) : (
               <>
-                <Video className="h-4 w-4 mr-2" />
+                <Video className="size-4 mr-2" />
                 Generate Video
               </>
             )}
@@ -633,7 +633,7 @@ function ProductVideoContent() {
               variant="destructive"
               onClick={handleCancelGeneration}
             >
-              <X className="h-4 w-4 mr-1" />
+              <X className="size-4 mr-1" />
               Stop
             </Button>
           )}
@@ -662,7 +662,7 @@ function ProductVideoContent() {
               {isComplete && (
                 <div className="flex flex-col items-center gap-4 py-4">
                   <div className="flex items-center gap-2 text-success">
-                    <CheckCircle2 className="h-6 w-6" />
+                    <CheckCircle2 className="size-6" />
                     <span className="font-semibold text-lg">Video Generated!</span>
                   </div>
                   <p className="text-sm text-muted-foreground text-center">
@@ -670,7 +670,7 @@ function ProductVideoContent() {
                   </p>
                   <Button asChild size="lg">
                     <Link href="/librarie">
-                      <ExternalLink className="h-4 w-4 mr-2" />
+                      <ExternalLink className="size-4 mr-2" />
                       View in Library
                     </Link>
                   </Button>
@@ -680,7 +680,7 @@ function ProductVideoContent() {
               {/* Error state */}
               {hasError && !isPolling && !isComplete && (
                 <div className="flex items-center gap-3 p-3 rounded-md bg-destructive/10 text-destructive">
-                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                  <AlertCircle className="size-5 flex-shrink-0" />
                   <div>
                     <p className="font-medium text-sm">Generation failed</p>
                     <p className="text-xs mt-0.5">
@@ -703,7 +703,7 @@ export default function ProductVideoPage() {
     <Suspense
       fallback={
         <div className="min-h-full bg-background flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <Loader2 className="size-8 animate-spin text-muted-foreground" />
         </div>
       }
     >

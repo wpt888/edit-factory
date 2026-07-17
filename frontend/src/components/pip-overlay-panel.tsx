@@ -70,7 +70,7 @@ export function PipOverlayPanel({
           htmlFor="pip-enabled"
           className="text-xs flex items-center gap-1 cursor-pointer"
         >
-          <Layers className="h-3 w-3" />
+          <Layers className="size-3" />
           PiP Overlay
         </Label>
       </div>
@@ -139,7 +139,7 @@ export function PipOverlayPanel({
         onClick={() => onSave(config)}
         disabled={saveDisabled}
       >
-        <Save className="h-3 w-3 mr-1" />
+        <Save className="size-3 mr-1" />
         {isSaving ? "Saving..." : "Save Overlay"}
       </Button>
     </div>

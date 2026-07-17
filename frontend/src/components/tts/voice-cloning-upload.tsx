@@ -184,7 +184,7 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
             <p className="text-sm text-muted-foreground">
               Duration: {duration.toFixed(1)} seconds
               {duration >= 6 && duration <= 20 && (
-                <CheckCircle2 className="inline ml-2 h-4 w-4 text-success" />
+                <CheckCircle2 className="inline ml-2 size-4 text-success" />
               )}
             </p>
           )}
@@ -192,14 +192,14 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
 
         {error && (
           <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
+            <AlertCircle className="size-4" />
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
         {success && (
           <Alert>
-            <CheckCircle2 className="h-4 w-4 text-success" />
+            <CheckCircle2 className="size-4 text-success" />
             <AlertDescription>{success}</AlertDescription>
           </Alert>
         )}
@@ -211,12 +211,12 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
         >
           {uploading ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="mr-2 size-4 animate-spin" />
               Cloning Voice...
             </>
           ) : (
             <>
-              <Upload className="mr-2 h-4 w-4" />
+              <Upload className="mr-2 size-4" />
               Clone Voice
             </>
           )}

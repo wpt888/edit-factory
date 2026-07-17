@@ -63,7 +63,7 @@ export function ClipTagEditor({ clipId: _clipId, tags, onTagsChange }: ClipTagEd
       className="flex flex-wrap items-center gap-1 min-h-[28px] cursor-text"
       onClick={() => inputRef.current?.focus()}
     >
-      <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+      <Tag className="size-3 text-muted-foreground shrink-0" />
       {tags.map((tag) => (
         <Badge
           key={tag}
@@ -80,7 +80,7 @@ export function ClipTagEditor({ clipId: _clipId, tags, onTagsChange }: ClipTagEd
             }}
             aria-label={`Remove tag ${tag}`}
           >
-            <X className="h-2.5 w-2.5" />
+            <X className="size-2.5" />
           </button>
         </Badge>
       ))}

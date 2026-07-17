@@ -220,7 +220,7 @@ export default function UsagePage() {
         <div className="flex items-center gap-4">
           <Link href="/pipeline">
             <Button variant="ghost" size="icon">
-              <ChevronLeft className="h-5 w-5" />
+              <ChevronLeft className="size-5" />
             </Button>
           </Link>
           <PageHeader
@@ -229,7 +229,7 @@ export default function UsagePage() {
             description="Monitor API usage and spending"
             actions={
               <Button onClick={fetchData} variant="outline">
-                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`size-4 mr-2 ${loading ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
             }
@@ -240,7 +240,7 @@ export default function UsagePage() {
         {error && (
           <Card className="bg-destructive/10 border-destructive/30 mb-8">
             <CardContent className="flex items-center gap-3 py-4">
-              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
+              <AlertCircle className="size-5 text-destructive flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-destructive font-medium">{error}</p>
               </div>
@@ -250,7 +250,7 @@ export default function UsagePage() {
                 onClick={fetchData}
                 className="border-destructive/30 text-destructive hover:bg-destructive/10"
               >
-                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`size-4 mr-2 ${loading ? "animate-spin" : ""}`} />
                 Retry
               </Button>
             </CardContent>
@@ -263,7 +263,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border col-span-2">
             <CardHeader className="pb-2">
               <CardTitle className="text-foreground flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-success" />
+                <DollarSign className="size-5 text-success" />
                 Budget Overview
               </CardTitle>
             </CardHeader>
@@ -308,7 +308,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader className="pb-2">
               <CardTitle className="text-foreground text-lg flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-yellow-500" />
+                <TrendingUp className="size-4 text-yellow-500" />
                 Today
               </CardTitle>
             </CardHeader>
@@ -333,7 +333,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader className="pb-2">
               <CardTitle className="text-foreground text-lg flex items-center gap-2">
-                <Video className="h-4 w-4 text-muted-foreground" />
+                <Video className="size-4 text-muted-foreground" />
                 Total Jobs
               </CardTitle>
             </CardHeader>
@@ -354,7 +354,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader>
               <CardTitle className="text-foreground flex items-center gap-2">
-                <Mic className="h-5 w-5 text-primary" />
+                <Mic className="size-5 text-primary" />
                 ElevenLabs TTS
               </CardTitle>
               <CardDescription className="text-muted-foreground">
@@ -452,7 +452,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader>
               <CardTitle className="text-foreground flex items-center gap-2">
-                <Video className="h-5 w-5 text-muted-foreground" />
+                <Video className="size-5 text-muted-foreground" />
                 Gemini Vision
               </CardTitle>
               <CardDescription className="text-muted-foreground">
@@ -482,22 +482,22 @@ export default function UsagePage() {
                     <span className="text-sm text-muted-foreground">Status:</span>
                     {testingGemini ? (
                       <Badge variant="outline" className="border-yellow-500 text-yellow-500">
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        <Loader2 className="size-3 mr-1 animate-spin" />
                         Testing...
                       </Badge>
                     ) : geminiStatus?.connected ? (
                       <Badge variant="outline" className="border-success/20 text-success">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        <CheckCircle2 className="size-3 mr-1" />
                         Connected
                       </Badge>
                     ) : geminiStatus?.configured ? (
                       <Badge variant="outline" className="border-yellow-500 text-yellow-500">
-                        <AlertCircle className="h-3 w-3 mr-1" />
+                        <AlertCircle className="size-3 mr-1" />
                         {geminiStatus.error || "Not connected"}
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="border-destructive text-destructive">
-                        <XCircle className="h-3 w-3 mr-1" />
+                        <XCircle className="size-3 mr-1" />
                         Not configured
                       </Badge>
                     )}
@@ -518,9 +518,9 @@ export default function UsagePage() {
                     disabled={testingGemini}
                   >
                     {testingGemini ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                      <RefreshCw className="h-4 w-4 mr-2" />
+                      <RefreshCw className="size-4 mr-2" />
                     )}
                     Test Connection
                   </Button>
@@ -539,7 +539,7 @@ export default function UsagePage() {
                       className="flex-1"
                     >
                       <Button variant="outline" size="sm" className="w-full text-xs">
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink className="size-3 mr-1" />
                         AI Studio
                       </Button>
                     </a>
@@ -550,7 +550,7 @@ export default function UsagePage() {
                       className="flex-1"
                     >
                       <Button variant="outline" size="sm" className="w-full text-xs">
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink className="size-3 mr-1" />
                         Cloud Billing
                       </Button>
                     </a>
@@ -612,9 +612,9 @@ export default function UsagePage() {
                           }
                         >
                           {entry.service === "elevenlabs" ? (
-                            <Mic className="h-3 w-3 mr-1" />
+                            <Mic className="size-3 mr-1" />
                           ) : (
-                            <Video className="h-3 w-3 mr-1" />
+                            <Video className="size-3 mr-1" />
                           )}
                           {entry.service}
                         </Badge>
@@ -637,7 +637,7 @@ export default function UsagePage() {
                     <TableRow>
                       <TableCell colSpan={6} className="py-4">
                         <EmptyState
-                          icon={<BarChart3 className="h-6 w-6" />}
+                          icon={<BarChart3 className="size-6" />}
                           title="No usage yet"
                           description="API costs will be recorded here."
                         />
@@ -654,7 +654,7 @@ export default function UsagePage() {
           <Card className="bg-destructive/10 border-destructive/30 mt-4">
             <CardHeader>
               <CardTitle className="text-destructive flex items-center gap-2">
-                <AlertCircle className="h-5 w-5" />
+                <AlertCircle className="size-5" />
                 API Errors
               </CardTitle>
             </CardHeader>

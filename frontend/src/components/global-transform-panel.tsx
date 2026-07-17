@@ -177,7 +177,7 @@ export function GlobalTransformPanel({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Layers className="h-4 w-4" />
+          <Layers className="size-4" />
           <div className="flex flex-col">
             <span className="text-sm font-medium">Global Transforms</span>
             <span className="text-[10px] text-muted-foreground truncate max-w-[160px]">
@@ -195,7 +195,7 @@ export function GlobalTransformPanel({
             className="h-6 text-xs"
             onClick={handleReset}
           >
-            <RotateCcw className="h-3 w-3 mr-1" />
+            <RotateCcw className="size-3 mr-1" />
             Reset
           </Button>
         )}
@@ -203,7 +203,7 @@ export function GlobalTransformPanel({
 
       {loading ? (
         <div className="flex items-center justify-center py-4 gap-2">
-          <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
+          <RefreshCw className="size-3 animate-spin text-muted-foreground" />
           <p className="text-xs text-muted-foreground">Loading segments...</p>
         </div>
       ) : segmentCount === 0 ? (
@@ -216,7 +216,7 @@ export function GlobalTransformPanel({
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <Label className="text-xs flex items-center gap-1">
-                <RotateCw className="h-3 w-3" />
+                <RotateCw className="size-3" />
                 Rotation
               </Label>
               <EditableValue
@@ -254,7 +254,7 @@ export function GlobalTransformPanel({
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <Label className="text-xs flex items-center gap-1">
-                <ZoomIn className="h-3 w-3" />
+                <ZoomIn className="size-3" />
                 Scale
               </Label>
               <EditableValue
@@ -279,7 +279,7 @@ export function GlobalTransformPanel({
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <Label className="text-xs flex items-center gap-1">
-                <Gauge className="h-3 w-3" />
+                <Gauge className="size-3" />
                 Speed
               </Label>
               <EditableValue
@@ -397,7 +397,7 @@ export function GlobalTransformPanel({
                 onCheckedChange={(v) => update({ flip_h: v })}
               />
               <Label className="text-xs flex items-center gap-1">
-                <FlipHorizontal className="h-3 w-3" />
+                <FlipHorizontal className="size-3" />
                 Flip H
               </Label>
             </div>
@@ -407,7 +407,7 @@ export function GlobalTransformPanel({
                 onCheckedChange={(v) => update({ flip_v: v })}
               />
               <Label className="text-xs flex items-center gap-1">
-                <FlipVertical className="h-3 w-3" />
+                <FlipVertical className="size-3" />
                 Flip V
               </Label>
             </div>
@@ -416,7 +416,7 @@ export function GlobalTransformPanel({
           {/* Color */}
           <div className="space-y-3 border-t border-border pt-3">
             <div className="flex items-center gap-1">
-              <Palette className="h-3 w-3" />
+              <Palette className="size-3" />
               <span className="text-xs font-medium">Color</span>
             </div>
 
@@ -498,7 +498,7 @@ export function GlobalTransformPanel({
             onClick={handleApplyClick}
             disabled={isIdentity || applying || loading || segmentCount === 0}
           >
-            <Layers className="h-3 w-3 mr-1" />
+            <Layers className="size-3 mr-1" />
             {applying ? "Applying..." : `Apply to ${segmentCount} segments${!scopeLabel ? " (all videos)" : ""}`}
           </Button>
         </>
@@ -521,7 +521,7 @@ export function GlobalTransformPanel({
               onClick={() => handleModeSelect("set")}
             >
               <div className="flex items-center gap-2">
-                <Replace className="h-4 w-4" />
+                <Replace className="size-4" />
                 <span className="font-medium">Overwrite</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">
@@ -534,7 +534,7 @@ export function GlobalTransformPanel({
               onClick={() => handleModeSelect("add")}
             >
               <div className="flex items-center gap-2">
-                <Plus className="h-4 w-4" />
+                <Plus className="size-4" />
                 <span className="font-medium">Add (offset)</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">

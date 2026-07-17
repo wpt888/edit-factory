@@ -26,7 +26,7 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
   if (loading && !credits) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <Loader2 className="size-3.5 animate-spin" />
         Loading credits...
       </div>
     );
@@ -37,8 +37,8 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
         <span className="text-xs text-muted-foreground">
           {error || "No ElevenLabs allowance"}
         </span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onRefresh} title="Retry">
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+        <Button variant="ghost" size="icon" className="size-6" onClick={onRefresh} title="Retry">
+          <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
     );
@@ -79,11 +79,11 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6"
+        className="size-6"
         onClick={onRefresh}
         title="Refresh your monthly credit allowance"
       >
-        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+        <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
       </Button>
     </div>
   );

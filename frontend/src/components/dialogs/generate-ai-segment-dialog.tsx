@@ -181,13 +181,13 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5" /> Generate segment with AI
+            <Sparkles className="size-5" /> Generate segment with AI
           </DialogTitle>
         </DialogHeader>
 
         {connected === false ? (
           <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <AlertTriangle className="h-8 w-8 text-yellow-500" />
+            <AlertTriangle className="size-8 text-yellow-500" />
             <p className="text-sm font-medium">Blipost account not connected</p>
             <p className="text-xs text-muted-foreground max-w-xs">
               Connect your Blipost account in Settings to generate AI video on platform credits.
@@ -198,7 +198,7 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
             {/* Balance */}
             <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm">
               <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Coins className="h-4 w-4" /> Credit balance
+                <Coins className="size-4" /> Credit balance
               </span>
               <span className="font-semibold tabular-nums">
                 {connected === null ? "…" : balance ?? "—"}
@@ -257,14 +257,14 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
 
             {phase === "generating" && (
               <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-sm">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
                 <span>Generating… this can take a minute.</span>
               </div>
             )}
 
             {phase === "failed" && error && (
               <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <XCircle className="size-4 mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
@@ -275,9 +275,9 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
               disabled={busy || !prompt.trim() || connected === null}
             >
               {busy ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {phase === "submitting" ? "Submitting…" : "Generating…"}</>
+                <><Loader2 className="size-4 mr-2 animate-spin" /> {phase === "submitting" ? "Submitting…" : "Generating…"}</>
               ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate ({estCost} credits)</>
+                <><Sparkles className="size-4 mr-2" /> Generate ({estCost} credits)</>
               )}
             </Button>
           </div>

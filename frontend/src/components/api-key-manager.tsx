@@ -152,7 +152,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="inline-flex items-center gap-2 rounded-md border border-border bg-muted px-2.5 py-1">
-            <Key className="h-4 w-4 text-muted-foreground" />
+            <Key className="size-4 text-muted-foreground" />
             <h3 className="text-sm font-semibold tracking-wide text-foreground">
               {label}
             </h3>
@@ -173,7 +173,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
 
       {loading ? (
         <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Loader2 className="size-4 animate-spin" />
           Loading...
         </div>
       ) : keys.length === 0 ? (
@@ -227,17 +227,17 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="size-8"
                   onClick={() => handleToggleSecret(key.id)}
                   disabled={secretLoading === key.id}
                   title={visibleSecrets[key.id] ? "Hide key" : "Show key"}
                 >
                   {secretLoading === key.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="size-4 animate-spin" />
                   ) : visibleSecrets[key.id] ? (
-                    <EyeOff className="h-4 w-4" />
+                    <EyeOff className="size-4" />
                   ) : (
-                    <Eye className="h-4 w-4" />
+                    <Eye className="size-4" />
                   )}
                 </Button>
                 {!key.is_primary && key.is_active && (
@@ -249,9 +249,9 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                     disabled={actionLoading === key.id}
                   >
                     {actionLoading === key.id ? (
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      <Loader2 className="mr-1 size-3 animate-spin" />
                     ) : (
-                      <Star className="mr-1 h-3 w-3" />
+                      <Star className="mr-1 size-3" />
                     )}
                     Use
                   </Button>
@@ -260,12 +260,12 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-red-500 hover:text-red-600"
+                    className="size-8 text-red-500 hover:text-red-600"
                     onClick={() => handleDelete(key.id)}
                     disabled={actionLoading === key.id}
                     title="Delete key"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="size-4" />
                   </Button>
                 )}
               </div>
@@ -295,10 +295,10 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
               <Button
                 variant="ghost"
                 size="icon"
-                className="absolute right-0 top-0 h-9 w-9"
+                className="absolute right-0 top-0 size-9"
                 onClick={() => setShowNewKey(!showNewKey)}
               >
-                {showNewKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {showNewKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               </Button>
             </div>
           </div>
@@ -309,21 +309,21 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
             disabled={adding || !newLabel.trim() || !newKey.trim()}
           >
             {adding ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="mr-2 size-4 animate-spin" />
             ) : (
-              <Plus className="mr-2 h-4 w-4" />
+              <Plus className="mr-2 size-4" />
             )}
             {adding ? "Validating…" : `Test & Add ${label} Key`}
           </Button>
           {testStatus === "success" && (
             <div className="flex items-center gap-2 p-2 bg-success/10 rounded-md border border-success/20">
-              <div className="w-2 h-2 rounded-full bg-success" />
+              <div className="size-2 rounded-full bg-success" />
               <span className="text-xs text-success">Key validated and added</span>
             </div>
           )}
           {testStatus === "error" && (
             <div className="flex items-center gap-2 p-2 bg-red-500/10 rounded-md border border-red-500/30">
-              <div className="w-2 h-2 rounded-full bg-red-500" />
+              <div className="size-2 rounded-full bg-red-500" />
               <span className="text-xs text-red-600 dark:text-red-400">Validation failed — key not saved</span>
             </div>
           )}

@@ -99,7 +99,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                 data-testid="pipeline-history-header"
               >
                   <CardTitle className="flex items-center gap-2 text-sm">
-                    <Clock className="h-4 w-4" />
+                    <Clock className="size-4" />
                     Script History
                   </CardTitle>
               </CardHeader>
@@ -108,7 +108,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
               }`}>
                 {historyLoading ? (
                   <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <Loader2 className="size-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : historyPipelines.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">No pipelines yet</p>
@@ -197,10 +197,10 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                               className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
                               title="Delete pipeline"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <Trash2 className="size-3.5" />
                             </span>
                             <ChevronRight
-                              className={`h-4 w-4 transition-transform cursor-pointer ${
+                              className={`size-4 transition-transform cursor-pointer ${
                                 selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
                               }`}
                               onClick={() => fetchHistoryScripts(item.pipeline_id)}
@@ -234,7 +234,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                         <div className="ml-2 pl-3 border-l border-border space-y-2">
                           {historyScriptsLoading ? (
                             <div className="flex items-center justify-center py-4">
-                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                              <Loader2 className="size-4 animate-spin text-muted-foreground" />
                             </div>
                           ) : (
                             <>
@@ -275,7 +275,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                   }}
                                 >
                                   {historyImporting ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    <Loader2 className="size-3 animate-spin" />
                                   ) : (
                                     "Load All"
                                   )}
@@ -324,9 +324,9 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                         title={isPlaying ? "Pause audio" : "Play audio preview"}
                                       >
                                         {isPlaying ? (
-                                          <Pause className="h-3 w-3" />
+                                          <Pause className="size-3" />
                                         ) : (
-                                          <Volume2 className="h-3 w-3" />
+                                          <Volume2 className="size-3" />
                                         )}
                                         <span>{previewInf.audio_duration.toFixed(1)}s</span>
                                       </button>

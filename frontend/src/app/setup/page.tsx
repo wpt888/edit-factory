@@ -234,7 +234,7 @@ function SetupPageContent() {
       <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
         <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
         <div className="pointer-events-none absolute inset-0 bg-noise" />
-        <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
+        <div className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-primary/10 blur-[110px]" />
         <Card className="relative w-full max-w-md">
           <CardContent className="pt-6 text-center">
             <div className="mb-4 flex justify-center">
@@ -252,7 +252,7 @@ function SetupPageContent() {
   if (checkingLicense) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
       </div>
     )
   }
@@ -261,7 +261,7 @@ function SetupPageContent() {
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
       <div className="pointer-events-none absolute inset-0 bg-noise" />
-      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-primary/10 blur-[110px]" />
       <div className="relative w-full max-w-lg space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
@@ -311,14 +311,14 @@ function SetupPageContent() {
 
               {licenseError && (
                 <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
-                  <AlertCircle className="h-4 w-4" />
+                  <AlertCircle className="size-4" />
                   <AlertDescription>{licenseError}</AlertDescription>
                 </Alert>
               )}
 
               {licenseValid && (
                 <Alert className="border-primary/30 bg-primary/10">
-                  <CheckCircle className="h-4 w-4 text-success" />
+                  <CheckCircle className="size-4 text-success" />
                   <AlertDescription>License activated successfully!</AlertDescription>
                 </Alert>
               )}
@@ -328,14 +328,14 @@ function SetupPageContent() {
                 {!licenseValid ? (
                   <Button onClick={handleActivate} disabled={activating}>
                     {activating ? (
-                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Activating...</>
+                      <><Loader2 className="mr-2 size-4 animate-spin" />Activating...</>
                     ) : (
                       "Activate License"
                     )}
                   </Button>
                 ) : (
                   <Button onClick={() => setCurrentStep(2)}>
-                    Next <ChevronRight className="ml-1 h-4 w-4" />
+                    Next <ChevronRight className="ml-1 size-4" />
                   </Button>
                 )}
               </div>
@@ -368,18 +368,18 @@ function SetupPageContent() {
                   setElevenlabsStatus("ok")
                 }}
               >
-                <Volume2 className={`h-5 w-5 flex-shrink-0 ${useFreeTts ? "text-primary" : "text-muted-foreground"}`} />
+                <Volume2 className={`size-5 flex-shrink-0 ${useFreeTts ? "text-primary" : "text-muted-foreground"}`} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">Use Free TTS (Edge TTS)</p>
                   <p className="text-xs text-muted-foreground">No API key needed — use Microsoft&apos;s free text-to-speech engine</p>
                 </div>
-                {useFreeTts && <CheckCircle className="h-5 w-5 text-primary flex-shrink-0" />}
+                {useFreeTts && <CheckCircle className="size-5 text-primary flex-shrink-0" />}
               </div>
 
               {supabaseSeeded ? (
                 /* Wave 1.1: creds already seeded — no Supabase ask for the user */
                 <div className="flex items-center gap-3 p-3 border border-success/20 bg-success/10 rounded-lg">
-                  <CheckCircle className="h-5 w-5 text-success flex-shrink-0" />
+                  <CheckCircle className="size-5 text-success flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium">Connected to the cloud</p>
                     <p className="text-xs text-muted-foreground">The database is already set up — nothing to enter.</p>
@@ -425,9 +425,9 @@ function SetupPageContent() {
                         onClick={() => testConnection("supabase")}
                         disabled={supabaseStatus === "testing" || !supabaseUrl.trim() || !supabaseKey.trim()}
                       >
-                        {supabaseStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
-                         supabaseStatus === "ok" ? <CheckCircle className="h-4 w-4 text-success" /> :
-                         supabaseStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
+                        {supabaseStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> :
+                         supabaseStatus === "ok" ? <CheckCircle className="size-4 text-success" /> :
+                         supabaseStatus === "error" ? <AlertCircle className="size-4 text-red-500" /> :
                          "Test"}
                       </Button>
                     </div>
@@ -459,9 +459,9 @@ function SetupPageContent() {
                     onClick={() => testConnection("gemini")}
                     disabled={geminiStatus === "testing" || !geminiKey.trim()}
                   >
-                    {geminiStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
-                     geminiStatus === "ok" ? <CheckCircle className="h-4 w-4 text-success" /> :
-                     geminiStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
+                    {geminiStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> :
+                     geminiStatus === "ok" ? <CheckCircle className="size-4 text-success" /> :
+                     geminiStatus === "error" ? <AlertCircle className="size-4 text-red-500" /> :
                      "Test"}
                   </Button>
                 </div>
@@ -477,7 +477,7 @@ function SetupPageContent() {
               {useFreeTts ? (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-success">
-                    <CheckCircle className="h-4 w-4" />
+                    <CheckCircle className="size-4" />
                     <span>Edge TTS selected — no API key needed</span>
                   </div>
                   <button
@@ -488,7 +488,7 @@ function SetupPageContent() {
                       setElevenlabsStatus("idle")
                     }}
                   >
-                    <ChevronDown className="h-3 w-3" />
+                    <ChevronDown className="size-3" />
                     Or enter ElevenLabs key instead
                   </button>
                 </div>
@@ -516,9 +516,9 @@ function SetupPageContent() {
                       onClick={() => testConnection("elevenlabs")}
                       disabled={elevenlabsStatus === "testing" || !elevenlabsKey.trim()}
                     >
-                      {elevenlabsStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
-                       elevenlabsStatus === "ok" ? <CheckCircle className="h-4 w-4 text-success" /> :
-                       elevenlabsStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
+                      {elevenlabsStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> :
+                       elevenlabsStatus === "ok" ? <CheckCircle className="size-4 text-success" /> :
+                       elevenlabsStatus === "error" ? <AlertCircle className="size-4 text-red-500" /> :
                        "Test"}
                     </Button>
                   </div>
@@ -533,13 +533,13 @@ function SetupPageContent() {
 
               <div className="flex justify-between pt-2">
                 <Button variant="ghost" onClick={() => setCurrentStep(1)} disabled={isEditMode}>
-                  <ChevronLeft className="mr-1 h-4 w-4" /> Back
+                  <ChevronLeft className="mr-1 size-4" /> Back
                 </Button>
                 <Button
                   onClick={() => setCurrentStep(3)}
                   disabled={supabaseStatus !== "ok" && !supabaseHint}
                 >
-                  Next <ChevronRight className="ml-1 h-4 w-4" />
+                  Next <ChevronRight className="ml-1 size-4" />
                 </Button>
               </div>
             </CardContent>
@@ -576,13 +576,13 @@ function SetupPageContent() {
 
               <div className="flex justify-between pt-2">
                 <Button variant="ghost" onClick={() => setCurrentStep(2)}>
-                  <ChevronLeft className="mr-1 h-4 w-4" /> Back
+                  <ChevronLeft className="mr-1 size-4" /> Back
                 </Button>
                 <Button onClick={handleFinish} disabled={finishing}>
                   {finishing ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>
+                    <><Loader2 className="mr-2 size-4 animate-spin" />Saving...</>
                   ) : (
-                    <>{isEditMode ? "Save Changes" : "Finish Setup"} <ArrowRight className="ml-1 h-4 w-4" /></>
+                    <>{isEditMode ? "Save Changes" : "Finish Setup"} <ArrowRight className="ml-1 size-4" /></>
                   )}
                 </Button>
               </div>
@@ -598,7 +598,7 @@ export default function SetupPage() {
   return (
     <Suspense fallback={
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
       </div>
     }>
       <SetupPageContent />

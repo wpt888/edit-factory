@@ -180,7 +180,7 @@ export function MLBundleInstaller() {
       <CardContent className="space-y-4">
         {state.kind === "idle" && (
           <Button onClick={handleInstall} disabled={buttonDisabled} data-testid="ml-install-button">
-            <Download className="mr-2 h-4 w-4" />
+            <Download className="mr-2 size-4" />
             Install
           </Button>
         )}
@@ -198,26 +198,26 @@ export function MLBundleInstaller() {
         )}
         {state.kind === "verifying" && (
           <div className="flex items-center gap-2" data-testid="ml-installer-verifying">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
             <span className="text-sm text-muted-foreground">Verifying SHA256...</span>
           </div>
         )}
         {state.kind === "unpacking" && (
           <div className="flex items-center gap-2" data-testid="ml-installer-unpacking">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
             <span className="text-sm text-muted-foreground">Installing files...</span>
           </div>
         )}
         {state.kind === "installed" && (
           <div className="flex items-center gap-2 text-success" data-testid="ml-installer-installed">
-            <CheckCircle2 className="h-5 w-5" />
+            <CheckCircle2 className="size-5" />
             <span className="font-medium">Installed (v{state.version})</span>
           </div>
         )}
         {state.kind === "error" && (
           <div className="space-y-3" data-testid="ml-installer-error">
             <div className="flex items-start gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5 mt-0.5" />
+              <AlertTriangle className="size-5 mt-0.5" />
               <span className="text-sm">{state.message}</span>
             </div>
             <Button onClick={handleInstall} variant="outline" data-testid="ml-retry-button">

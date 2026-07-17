@@ -401,9 +401,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1">
                     <CardTitle className="flex items-center gap-2 text-sm">
-                      <Type className="h-4 w-4" />
+                      <Type className="size-4" />
                       Subtitle Style
-                      {!subtitleSettingsLoaded && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {!subtitleSettingsLoaded && <Loader2 className="size-3 animate-spin" />}
                     </CardTitle>
                     <InlineInfo label="About subtitle styles">
                       {metaMultiplication
@@ -414,19 +414,19 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
                   {subtitleSaveState === "saving" && (
                     <>
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <Loader2 className="size-3 animate-spin" />
                       <span>Saving…</span>
                     </>
                   )}
                   {subtitleSaveState === "saved" && (
                     <>
-                      <CheckCircle className="h-3 w-3 text-success" />
+                      <CheckCircle className="size-3 text-success" />
                       <span>Saved</span>
                     </>
                   )}
                   {subtitleSaveState === "error" && (
                     <>
-                      <AlertCircle className="h-3 w-3 text-red-600" />
+                      <AlertCircle className="size-3 text-red-600" />
                       <span className="text-red-600">Save failed</span>
                     </>
                   )}
@@ -571,7 +571,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   data-testid="step3-variant-header"
                 >
                   <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
-                    <Film className="h-4 w-4" />
+                    <Film className="size-4" />
                     Variant Previews
                   </h2>
                 </header>
@@ -604,37 +604,37 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="size-8"
                             onClick={() => pipelineId && handlePlayAudio(pipelineId, card.baseIndex)}
                             title={playingAudio === `${pipelineId}-${card.baseIndex}` ? "Stop audio" : "Play voiceover"}
                           >
                             {playingAudio === `${pipelineId}-${card.baseIndex}` ? (
-                              <Pause className="h-4 w-4" />
+                              <Pause className="size-4" />
                             ) : (
-                              <Volume2 className="h-4 w-4" />
+                              <Volume2 className="size-4" />
                             )}
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="size-8"
                             onClick={() => setMaximizedKey(card.key)}
                             title="Maximize editor — full-screen timeline for this variant"
                           >
-                            <Maximize2 className="h-4 w-4" />
+                            <Maximize2 className="size-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="size-8"
                             onClick={() => handleRegenerateVariantAudio(card.baseIndex, card.key, card.visualVersion)}
                             disabled={regeneratingVariantAudio[card.baseIndex]}
                             title="Regenerate voiceover"
                           >
                             {regeneratingVariantAudio[card.baseIndex] ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Loader2 className="size-4 animate-spin" />
                             ) : (
-                              <RefreshCw className="h-4 w-4" />
+                              <RefreshCw className="size-4" />
                             )}
                           </Button>
                           <Badge variant="secondary">
@@ -646,7 +646,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     <CardContent className="space-y-3 min-[1280px]:px-4">
                       {preview.variety_warning && (
                         <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
-                          <AlertCircle className="h-4 w-4 text-amber-600" />
+                          <AlertCircle className="size-4 text-amber-600" />
                           <AlertDescription>{preview.variety_warning.message}</AlertDescription>
                         </Alert>
                       )}
@@ -673,7 +673,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                                 onClick={() => setThumbnailPickerKey(card.key)}
                                 className="w-[54px] h-[96px] rounded bg-muted border-2 border-dashed border-muted-foreground/30 flex items-center justify-center cursor-pointer hover:border-muted-foreground/50 flex-shrink-0"
                               >
-                                <Film className="h-4 w-4 text-muted-foreground" />
+                                <Film className="size-4 text-muted-foreground" />
                               </div>
                             )}
                             <div className="flex flex-col gap-1">
@@ -812,7 +812,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     <DialogHeader className="shrink-0 border-b px-4 py-3 text-left">
                       <div className="flex items-center justify-between gap-2">
                         <DialogTitle className="flex items-center gap-2 text-sm">
-                          <Film className="h-4 w-4" />
+                          <Film className="size-4" />
                           <span>{card.label} — Full Editor</span>
                           {card.metaPlatform && (
                             <Badge variant="outline" className="text-xs">
@@ -823,11 +823,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 shrink-0"
+                          className="size-8 shrink-0"
                           onClick={() => setMaximizedKey(null)}
                           title="Minimize editor — back to the variant cards"
                         >
-                          <Minimize2 className="h-4 w-4" />
+                          <Minimize2 className="size-4" />
                           <span className="sr-only">Minimize editor</span>
                         </Button>
                       </div>
@@ -898,7 +898,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </div>
                   {savePresetError && (
                     <Alert variant="destructive">
-                      <AlertCircle className="h-4 w-4" />
+                      <AlertCircle className="size-4" />
                       <AlertDescription>{savePresetError}</AlertDescription>
                     </Alert>
                   )}
@@ -915,7 +915,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     onClick={handleSubmitSavePreset}
                     disabled={savePresetSubmitting || !savePresetName.trim()}
                   >
-                    {savePresetSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {savePresetSubmitting && <Loader2 className="size-4 mr-2 animate-spin" />}
                     Save preset
                   </Button>
                 </DialogFooter>
@@ -925,7 +925,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             {/* Error display */}
             {previewError && (
               <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
+                <AlertCircle className="size-4" />
                 <AlertDescription>{previewError}</AlertDescription>
               </Alert>
             )}
@@ -988,7 +988,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 className="w-full"
                 size="lg"
               >
-                <ArrowRight className="h-4 w-4 mr-2" />
+                <ArrowRight className="size-4 mr-2" />
                 Continue to Render Results (already rendered)
               </Button>
             )}
@@ -1002,9 +1002,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               size="lg"
             >
               {isCheckingRender ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="size-4 mr-2 animate-spin" />
               ) : (
-                <Play className="h-4 w-4 mr-2" />
+                <Play className="size-4 mr-2" />
               )}
               {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size}${metaMultiplication ? ` × 2 = ${selectedVariants.size * 2}` : ""})`}
             </Button>

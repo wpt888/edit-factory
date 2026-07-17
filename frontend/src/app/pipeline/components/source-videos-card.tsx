@@ -58,7 +58,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="text-lg flex items-center gap-2">
-              <Film className="h-4 w-4" />
+              <Film className="size-4" />
               Source Videos
             </CardTitle>
             <CardDescription>
@@ -92,7 +92,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
       <CardContent className={workspace ? "min-[1280px]:px-4 min-[1280px]:pb-4" : undefined}>
         {sourceVideosLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
             Loading source videos...
           </div>
         ) : sourceVideos.length === 0 ? (
@@ -157,7 +157,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               />
             ) : (
               <div className="w-20 aspect-video rounded bg-muted flex items-center justify-center flex-shrink-0">
-                <Film className="h-5 w-5 text-muted-foreground" />
+                <Film className="size-5 text-muted-foreground" />
               </div>
             )}
             <div className="flex-1 min-w-0">
@@ -165,7 +165,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
             </div>
             {sourceVideos[0].duration && (
               <Badge variant="outline" className="text-xs flex-shrink-0">
-                <Clock className="h-3 w-3 mr-1" />
+                <Clock className="size-3 mr-1" />
                 {formatDuration(sourceVideos[0].duration)}
               </Badge>
             )}
@@ -177,7 +177,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
               title={`Edit segments for ${sourceVideos[0].name}`}
             >
-              <Scissors className="h-3.5 w-3.5" />
+              <Scissors className="size-3.5" />
               Edit segments
             </Link>
           </div>
@@ -186,7 +186,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
             <div className="flex items-center gap-2">
               {sourceVideos.length > 3 && (
                 <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
                   <Input
                     placeholder="Search videos by name..."
                     value={sourceVideoSearch}
@@ -198,7 +198,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                       onClick={() => setSourceVideoSearch("")}
                       className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
                     >
-                      <X className="h-4 w-4" />
+                      <X className="size-4" />
                     </button>
                   )}
                 </div>
@@ -209,14 +209,14 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                   className={`p-2 transition-colors ${sourceVideoViewMode === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   title="List view"
                 >
-                  <List className="h-4 w-4" />
+                  <List className="size-4" />
                 </button>
                 <button
                   onClick={() => setSourceVideoViewMode("grid")}
                   className={`p-2 transition-colors ${sourceVideoViewMode === "grid" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   title="Grid view"
                 >
-                  <LayoutGrid className="h-4 w-4" />
+                  <LayoutGrid className="size-4" />
                 </button>
               </div>
             </div>
@@ -250,7 +250,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                         />
                       ) : (
                         <div className="w-20 aspect-video rounded bg-muted flex items-center justify-center flex-shrink-0">
-                          <Film className="h-5 w-5 text-muted-foreground" />
+                          <Film className="size-5 text-muted-foreground" />
                         </div>
                       )}
                       <div className="flex-1 min-w-0">
@@ -258,7 +258,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                       </div>
                       {video.duration && (
                         <Badge variant="outline" className="text-xs flex-shrink-0">
-                          <Clock className="h-3 w-3 mr-1" />
+                          <Clock className="size-3 mr-1" />
                           {formatDuration(video.duration)}
                         </Badge>
                       )}
@@ -271,7 +271,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                         title={`Edit segments for ${video.name}`}
                         onClick={(event) => event.stopPropagation()}
                       >
-                        <Scissors className="h-3.5 w-3.5" />
+                        <Scissors className="size-3.5" />
                         Edit
                       </Link>
                     </div>
@@ -310,7 +310,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center">
-                            <Film className="h-6 w-6 text-muted-foreground" />
+                            <Film className="size-6 text-muted-foreground" />
                           </div>
                         )}
                       </div>
@@ -330,7 +330,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                           title={`Edit segments for ${video.name}`}
                           onClick={(event) => event.stopPropagation()}
                         >
-                          <Scissors className="h-3 w-3" />
+                          <Scissors className="size-3" />
                           Edit
                         </Link>
                       </div>

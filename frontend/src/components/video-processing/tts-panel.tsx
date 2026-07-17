@@ -45,7 +45,7 @@ export function TTSPanel({
     <div className={`space-y-4 ${className}`}>
       {/* Header with badge */}
       <div className="flex items-center gap-2">
-        <Mic className="h-4 w-4 text-muted-foreground" />
+        <Mic className="size-4 text-muted-foreground" />
         <Label className="font-medium">Text-to-Speech (ElevenLabs)</Label>
         <Badge variant="secondary" className="text-xs">
           Premium
@@ -72,7 +72,7 @@ export function TTSPanel({
       {/* Generate audio toggle */}
       <div className="flex items-center justify-between py-2 px-3 bg-muted/50 rounded-lg">
         <div className="flex items-center gap-2">
-          <Volume2 className="h-4 w-4 text-muted-foreground" />
+          <Volume2 className="size-4 text-muted-foreground" />
           <div>
             <Label htmlFor="generate-audio" className="cursor-pointer">
               Generate audio automatically
@@ -94,7 +94,7 @@ export function TTSPanel({
       {showAdvanced && (
         <div className="flex items-center justify-between py-2 px-3 bg-muted/50 rounded-lg">
           <div className="flex items-center gap-2">
-            <VolumeX className="h-4 w-4 text-muted-foreground" />
+            <VolumeX className="size-4 text-muted-foreground" />
             <div>
               <Label htmlFor="mute-source" className="cursor-pointer">
                 Remove source voice

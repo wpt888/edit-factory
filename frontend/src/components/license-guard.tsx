@@ -107,7 +107,7 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
   if (!licenseChecked) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -119,7 +119,7 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
         {children}
         <div className="fixed inset-0 z-50 bg-background flex items-center justify-center">
           <div className="max-w-md text-center space-y-6 p-8">
-            <ShieldX className="h-16 w-16 mx-auto text-destructive" />
+            <ShieldX className="size-16 mx-auto text-destructive" />
             <h1 className="text-2xl font-bold">License Expired</h1>
             <p className="text-muted-foreground">
               Your license could not be validated. Please check your internet
@@ -132,9 +132,9 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
                 disabled={retrying}
               >
                 {retrying ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Loader2 className="size-4 mr-2 animate-spin" />
                 ) : (
-                  <RefreshCw className="h-4 w-4 mr-2" />
+                  <RefreshCw className="size-4 mr-2" />
                 )}
                 Retry Validation
               </Button>

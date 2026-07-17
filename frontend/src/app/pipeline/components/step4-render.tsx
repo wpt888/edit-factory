@@ -98,7 +98,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
               <div className="flex gap-2">
                 {isRendering && (
                   <Button variant="destructive" onClick={handleCancelRender}>
-                    <X className="h-4 w-4 mr-2" />
+                    <X className="size-4 mr-2" />
                     Stop Render
                   </Button>
                 )}
@@ -120,7 +120,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                     resetPipeline();
                   }
                 }}>
-                  <Sparkles className="h-4 w-4 mr-2" />
+                  <Sparkles className="size-4 mr-2" />
                   Start New Pipeline
                 </Button>
               </div>
@@ -129,7 +129,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
             {/* Variant status grid */}
             {variantStatuses.length === 0 ? (
               <EmptyState
-                icon={<Workflow className="h-6 w-6" />}
+                icon={<Workflow className="size-6" />}
                 title="No pipeline"
                 description="Configure a pipeline to generate videos."
               />
@@ -154,7 +154,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                       <div className="flex items-center gap-2">
                         {status.current_step === "Existing render used" ? (
                           <Badge variant="default" className="bg-primary text-primary-foreground hover:bg-primary/80">
-                            <CheckCircle className="h-3 w-3 mr-1" />
+                            <CheckCircle className="size-3 mr-1" />
                             Cached
                           </Badge>
                         ) : (
@@ -234,7 +234,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                               }
                             }}
                           >
-                            <X className="h-3 w-3 mr-1" />
+                            <X className="size-3 mr-1" />
                             Stop
                           </Button>
                         )}
@@ -242,18 +242,18 @@ export function Step4Render({ ctx }: { ctx: any }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            className="size-7 text-muted-foreground hover:text-primary"
                             title="Remake with different segments"
                             onClick={() => handleRemakeVariant(status.variant_index, status.visual_version)}
                           >
-                            <RefreshCw className="h-4 w-4" />
+                            <RefreshCw className="size-4" />
                           </Button>
                         )}
                         {(status.status === "completed" || status.status === "failed" || status.status === "cancelled") && (
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            className="size-7 text-muted-foreground hover:text-destructive"
                             onClick={() => {
                               setConfirmDialog({
                                 open: true,
@@ -283,7 +283,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                               });
                             }}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="size-4" />
                           </Button>
                         )}
                       </div>
@@ -296,7 +296,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                         className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-3"
                         data-testid={`render-queue-status-${renderStatusKey(status)}`}
                       >
-                        <Clock3 className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" />
+                        <Clock3 className="size-5 shrink-0 text-amber-600 dark:text-amber-300" />
                         <div>
                           <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
                             Queued — position {status.queue_position ?? "…"}
@@ -363,7 +363,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                               )}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}&download=true`}
                               download
                             >
-                              <Download className="h-4 w-4 mr-2" />
+                              <Download className="size-4 mr-2" />
                               Download Video
                             </a>
                           </Button>
@@ -373,7 +373,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                               className="flex-1 border-primary/70 bg-transparent text-primary hover:bg-primary/10 hover:text-primary"
                               onClick={() => setPublishVariant(status)}
                             >
-                              <Share2 className="h-4 w-4 mr-2" />
+                              <Share2 className="size-4 mr-2" />
                               Publish to Social Media
                             </Button>
                           )}
@@ -384,7 +384,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                     {/* Library save warning */}
                     {status.status === "completed" && status.library_saved === false && (
                       <Alert className="border-yellow-500/50 bg-yellow-500/10">
-                        <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                        <AlertTriangle className="size-4 text-yellow-500" />
                         <AlertDescription className="text-yellow-700 dark:text-yellow-400">
                           Video rendered successfully, but was not saved to the library.
                           {status.library_error && <span className="block text-xs mt-1 opacity-75">{status.library_error}</span>}
@@ -418,7 +418,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                     {/* Error message */}
                     {status.status === "failed" && status.error && (
                       <Alert variant="destructive">
-                        <AlertCircle className="h-4 w-4" />
+                        <AlertCircle className="size-4" />
                         <AlertDescription>{status.error}</AlertDescription>
                       </Alert>
                     )}

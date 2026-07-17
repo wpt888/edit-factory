@@ -200,7 +200,7 @@ export function ImageBulkPublishDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Share2 className="h-5 w-5" />
+            <Share2 className="size-5" />
             Publish Images
           </DialogTitle>
           <DialogDescription>
@@ -228,7 +228,7 @@ export function ImageBulkPublishDialog({
               <Label>Platforms</Label>
               {loadingPlatforms ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                   Loading integrations...
                 </div>
               ) : integrations.length === 0 ? (
@@ -248,7 +248,7 @@ export function ImageBulkPublishDialog({
                     >
                       {integration.picture && (
                         /* eslint-disable-next-line @next/next/no-img-element */
-                        <img src={integration.picture} alt="" className="h-4 w-4 rounded-full" />
+                        <img src={integration.picture} alt="" className="size-4 rounded-full" />
                       )}
                       {integration.name}
                     </button>
@@ -275,7 +275,7 @@ export function ImageBulkPublishDialog({
                   onCheckedChange={(checked) => setScheduleEnabled(checked === true)}
                 />
                 <Label htmlFor="bulk-image-schedule" className="flex items-center gap-2">
-                  <CalendarClock className="h-4 w-4" />
+                  <CalendarClock className="size-4" />
                   Schedule selected images
                 </Label>
               </div>
@@ -310,7 +310,7 @@ export function ImageBulkPublishDialog({
         {dialogState === "publishing" && (
           <div className="space-y-4 py-4">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="size-4 animate-spin" />
               Publishing images...
             </div>
             <Progress value={progressPercent} className="w-full" />
@@ -321,7 +321,7 @@ export function ImageBulkPublishDialog({
         {dialogState === "success" && (
           <div className="space-y-3 py-4">
             <div className="flex items-center gap-2 text-success">
-              <CheckCircle2 className="h-5 w-5" />
+              <CheckCircle2 className="size-5" />
               <span className="font-medium">Image batch sent successfully.</span>
             </div>
             <p className="text-sm text-muted-foreground">
@@ -333,7 +333,7 @@ export function ImageBulkPublishDialog({
         {dialogState === "error" && (
           <div className="space-y-3 py-4">
             <div className="flex items-center gap-2 text-destructive">
-              <XCircle className="h-5 w-5" />
+              <XCircle className="size-5" />
               <span className="font-medium">Bulk image publish failed.</span>
             </div>
             <p className="text-sm text-muted-foreground">{errorMessage}</p>
@@ -350,7 +350,7 @@ export function ImageBulkPublishDialog({
                 onClick={handleSubmit}
                 disabled={submitting || loadingPlatforms || integrations.length === 0 || selectedIntegrationIds.size === 0}
               >
-                {scheduleEnabled ? <CalendarClock className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                {scheduleEnabled ? <CalendarClock className="size-4 mr-2" /> : <Send className="size-4 mr-2" />}
                 {scheduleEnabled ? "Schedule Images" : "Publish Images"}
               </Button>
             </>

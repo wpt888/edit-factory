@@ -40,35 +40,35 @@ export function ProgressTracker({
     switch (status) {
       case "pending":
         return {
-          icon: <Loader2 className="h-4 w-4 animate-spin" />,
+          icon: <Loader2 className="size-4 animate-spin" />,
           variant: "secondary" as const,
           label: "Pending",
           color: "text-yellow-600",
         };
       case "processing":
         return {
-          icon: <Loader2 className="h-4 w-4 animate-spin" />,
+          icon: <Loader2 className="size-4 animate-spin" />,
           variant: "default" as const,
           label: "Processing",
           color: "text-amber-600",
         };
       case "completed":
         return {
-          icon: <CheckCircle2 className="h-4 w-4" />,
+          icon: <CheckCircle2 className="size-4" />,
           variant: "default" as const,
           label: "Completed",
           color: "text-success",
         };
       case "failed":
         return {
-          icon: <AlertCircle className="h-4 w-4" />,
+          icon: <AlertCircle className="size-4" />,
           variant: "destructive" as const,
           label: "Failed",
           color: "text-red-600",
         };
       default:
         return {
-          icon: <Loader2 className="h-4 w-4" />,
+          icon: <Loader2 className="size-4" />,
           variant: "secondary" as const,
           label: status,
           color: "text-muted-foreground",
@@ -99,7 +99,7 @@ export function ProgressTracker({
             onClick={onCancel}
             className="h-8 px-2"
           >
-            <X className="h-4 w-4 mr-1" />
+            <X className="size-4 mr-1" />
             Cancel
           </Button>
         )}
@@ -115,7 +115,7 @@ export function ProgressTracker({
 
           {elapsedTime > 0 && (
             <div className="flex items-center gap-1">
-              <Clock className="h-3 w-3" />
+              <Clock className="size-3" />
               <span>{formatElapsedTime(elapsedTime)}</span>
             </div>
           )}
