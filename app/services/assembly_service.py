@@ -103,6 +103,43 @@ class MatchResult:
     pinned: bool = False               # F6: user-locked assignment
 
 
+# --- Timeline transitions V1 (P0) ------------------------------------------
+# The transition "into" a clip (boundary between the previous clip and this one).
+# Absent/None = hard cut. Only these two kinds exist in V1 (no-overlap fades);
+# duration is stored as an int millisecond value, never the UI label.
+TRANSITION_KINDS = frozenset({"dip_black", "flash_white"})
+TRANSITION_MS_MIN = 150
+TRANSITION_MS_MAX = 600
+
+
+def normalize_transition_in(value, *, clip_kind: Optional[str] = None) -> Optional[dict]:
+    """Validate a raw transitionIn dict from the client into a clean spec.
+
+    Trust boundary: raw user strings must never reach an ffmpeg filtergraph.
+    Returns ``{"kind", "durationMs"}`` or ``None`` (hard cut). Raises
+    ``ValueError`` on an unknown kind or a non-numeric duration (→ 422 upstream);
+    an out-of-range duration is clamped to [150, 600]; a transition on an intro
+    clip is stripped (intro micro-clips never take a transition).
+    """
+    if value is None:
+        return None
+    if clip_kind == "intro":
+        return None  # intro clips never carry a transition — strip silently
+    if not isinstance(value, dict):
+        raise ValueError("transitionIn must be an object")
+    kind = value.get("kind")
+    if kind not in TRANSITION_KINDS:
+        raise ValueError(f"Unknown transition kind: {kind!r}")
+    try:
+        ms = float(value.get("durationMs"))
+    except (TypeError, ValueError):
+        raise ValueError("transition durationMs must be numeric")
+    if not math.isfinite(ms):
+        raise ValueError("transition durationMs must be numeric")
+    ms = int(max(TRANSITION_MS_MIN, min(TRANSITION_MS_MAX, round(ms))))
+    return {"kind": kind, "durationMs": ms}
+
+
 @dataclass
 class TimelineEntry:
     """Entry in the video timeline."""
@@ -113,6 +150,7 @@ class TimelineEntry:
     timeline_duration: float
     transforms: Optional[dict] = None  # Per-segment visual transforms
     pinned: bool = False  # F6: originates from a pinned match — never absorbed/swapped
+    transition_in: Optional[dict] = None  # P0: {"kind","durationMs"} or None (hard cut)
 
 
 @dataclass(frozen=True)
@@ -151,6 +189,29 @@ def _segment_extraction_timing(
 def _source_duration_for_timeline(timeline_duration: float, transforms: Optional[dict]) -> float:
     """Return how much source media a transformed timeline slot consumes."""
     return max(0.0, timeline_duration) * SegmentTransform.from_dict(transforms).speed
+
+
+def resolve_fade_spec(timeline: List["TimelineEntry"], i: int) -> Optional[dict]:
+    """Resolve the fade ingredients for one timeline slot (P0 — cache key only).
+
+    The no-overlap transition family means slot ``i`` fades IN if clip ``i`` has a
+    transition (and isn't the first clip), and fades OUT if the NEXT clip ``i+1``
+    has one. Returns ``{"in"?: {kind, ms}, "out"?: {kind, ms}}`` or ``None`` when
+    the slot sits on no transition boundary — so legacy cache keys stay identical.
+
+    P1 renders the actual ``fade=`` filters from exactly this spec (half the
+    durationMs on each side of the boundary).
+    """
+    fade: dict = {}
+    if i > 0:
+        this_t = getattr(timeline[i], "transition_in", None)
+        if this_t:
+            fade["in"] = {"kind": this_t["kind"], "ms": this_t["durationMs"]}
+    if i + 1 < len(timeline):
+        next_t = getattr(timeline[i + 1], "transition_in", None)
+        if next_t:
+            fade["out"] = {"kind": next_t["kind"], "ms": next_t["durationMs"]}
+    return fade or None
 
 
 def _segment_filter_chain(transform: SegmentTransform, width: int, height: int) -> List[str]:
@@ -337,6 +398,12 @@ def _timeline_from_composition(
                 f"Composition clip {original_index + 1} has an invalid output duration"
             )
 
+        # Last guard before the filtergraph: re-validate the transition even
+        # though ingress already did — intro clips get it stripped here too.
+        transition_in = normalize_transition_in(
+            raw.get("transitionIn"),
+            clip_kind=raw.get("kind"),
+        )
         timeline.append(TimelineEntry(
             source_video_path=str(segment["source_video_path"]),
             start_time=source_start,
@@ -345,6 +412,7 @@ def _timeline_from_composition(
             timeline_duration=timeline_duration,
             transforms=raw.get("transforms") if isinstance(raw.get("transforms"), dict) else segment.get("transforms"),
             pinned=bool(raw.get("pinned", False)),
+            transition_in=transition_in,
         ))
         cursor += timeline_duration
 
@@ -363,6 +431,7 @@ def _timeline_from_composition(
             timeline_duration=last.timeline_duration + (required_duration - cursor),
             transforms=last.transforms,
             pinned=last.pinned,
+            transition_in=last.transition_in,
         )
 
     return timeline
@@ -2171,6 +2240,7 @@ class AssemblyService:
                     transform_filters=transform_filters,
                     codec_params=_codec_params,
                     fps=TARGET_FPS,
+                    fade=resolve_fade_spec(timeline, i),
                 )
                 if cache_key and await asyncio.to_thread(segment_cache.lookup, cache_key, segment_file):
                     results[i] = segment_file
