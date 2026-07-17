@@ -247,6 +247,27 @@ async def generate_interstitial_clip(
             return None
 
 
+def _fade_filter(start: float, end: float, animation: dict) -> str:
+    """Alpha fade in/out anchored to the ABSOLUTE timeline, matching the overlay
+    enable window; returns a leading-comma filter fragment or '' if there's no room.
+
+    The previous code anchored fade-in to ``st=0`` *after* ``setpts`` had already
+    shifted the looped still to ``start`` seconds, so for any cue past t=0 the
+    in-fade was a silent no-op and there was never an out-fade at all.
+    """
+    avail = end - start
+    if avail <= 0:
+        return ""
+    enter = min(float(animation.get("enterMs", 0)) / 1000, avail)
+    leave = min(float(animation.get("exitMs", 0)) / 1000, max(0.0, avail - enter))
+    parts = []
+    if enter > .001:
+        parts.append(f"fade=t=in:st={start}:d={enter}:alpha=1")
+    if leave > .001:
+        parts.append(f"fade=t=out:st={end - leave}:d={leave}:alpha=1")
+    return ("," + ",".join(parts)) if parts else ""
+
+
 async def apply_attention_timeline(
     video_path: Path,
     timeline: dict,
@@ -254,6 +275,7 @@ async def apply_attention_timeline(
     width: int,
     height: int,
     duration: float,
+    keep_audio: bool = False,
 ) -> Path:
     """Overlay timeline images without changing the base video's timestamps.
 
@@ -299,8 +321,7 @@ async def apply_attention_timeline(
                 sizing = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
             else:
                 sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
-            enter = min((float(layer.get("animation", {}).get("enterMs", 0)) / 1000), end - start)
-            fade = f",fade=t=in:st=0:d={enter}:alpha=1" if enter > .001 else ""
+            fade = _fade_filter(start, end, layer.get("animation", {}))
             filters.append(f"[{index}:v]{sizing},format=rgba,setpts=PTS-STARTPTS+{start}/TB{fade}[att{index}]")
             output = f"vatt{index}"
             filters.append(
@@ -308,8 +329,9 @@ async def apply_attention_timeline(
             )
             previous = output
         filters.append(f"[{previous}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")
+        audio_args = ["-map", "0:a?", "-c:a", "copy"] if keep_audio else ["-an"]
         cmd.extend([
-            "-filter_complex", ";".join(filters), "-map", "[vout]", "-an",
+            "-filter_complex", ";".join(filters), "-map", "[vout]", *audio_args,
             "-t", str(duration), *get_prep_codec_params(include_audio=False),
             "-pix_fmt", "yuv420p", str(output_path),
         ])

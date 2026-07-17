@@ -35,6 +35,8 @@ export type AttentionCue = {
   sfxUrl?: string;
   sfxVolumeDb: number;
   templateId?: string;
+  /** Composite behind (default) or in front of the burned-in subtitles. */
+  zone?: "behind" | "front";
 };
 
 export type AttentionTimeline = {

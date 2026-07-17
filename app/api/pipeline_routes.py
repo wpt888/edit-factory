@@ -3271,6 +3271,7 @@ class AttentionCue(BaseModel):
     sfxUrl: Optional[str] = Field(default=None, max_length=4096)
     sfxVolumeDb: float = Field(default=0.0, ge=-60.0, le=12.0)
     templateId: Optional[str] = Field(default=None, max_length=100)
+    zone: Literal["behind", "front"] = "behind"
 
 
 class AttentionTimelineRequest(BaseModel):

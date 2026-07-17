@@ -2415,11 +2415,15 @@ class AssemblyService:
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
 
-        if attention_timeline and attention_timeline.get("cues"):
+        behind_cues = [
+            cue for cue in (attention_timeline or {}).get("cues", [])
+            if cue.get("zone", "behind") != "front"
+        ]
+        if behind_cues:
             from app.services.video_effects.overlay_renderer import apply_attention_timeline
             assembled_path = await apply_attention_timeline(
                 assembled_path,
-                attention_timeline,
+                {"cues": behind_cues},
                 temp_dir / "assembled_attention.mp4",
                 target_w,
                 target_h,
@@ -3018,6 +3022,28 @@ class AssemblyService:
                     if on_progress else None
                 ),
             )
+
+            front_cues = [
+                cue for cue in (attention_timeline or {}).get("cues", [])
+                if cue.get("zone") == "front"
+            ]
+            if front_cues:
+                from app.services.video_effects.overlay_renderer import apply_attention_timeline
+                front_output = temp_dir / "final_with_front_attention.mp4"
+                # ponytail: front images are sized to the preset's final dims (the
+                # render target); behind images predate this and use the pre-scale
+                # assembly dims. Good enough — coords are fractional either way.
+                fronted = await apply_attention_timeline(
+                    final_output_path,
+                    {"cues": front_cues},
+                    front_output,
+                    int(preset_data["width"]),
+                    int(preset_data["height"]),
+                    sum(entry.timeline_duration for entry in timeline),
+                    keep_audio=True,
+                )
+                if fronted != final_output_path and fronted.exists():
+                    _shutil.move(str(fronted), str(final_output_path))
 
             if attention_timeline and any(
                 cue.get("sfxUrl") or cue.get("sfxAssetId")

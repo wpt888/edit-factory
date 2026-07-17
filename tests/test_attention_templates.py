@@ -28,3 +28,18 @@ def test_tornado_creates_delayed_multiple_layers():
     assert cues
     assert len(cues[0]["layers"]) == 3
     assert [layer["animation"]["delayMs"] for layer in cues[0]["layers"]] == [0, 120, 240]
+
+
+def test_fade_filter_anchors_to_absolute_timeline():
+    from app.services.video_effects.overlay_renderer import _fade_filter
+    # Cue at 3.0s, 1.2s long, 250ms in / 200ms out -> fades sit on the real timeline
+    f = _fade_filter(3.0, 4.2, {"enterMs": 250, "exitMs": 200})
+    assert f.startswith(",")
+    assert "fade=t=in:st=3.0:d=0.25:alpha=1" in f
+    assert "fade=t=out:st=" in f and ":d=0.2:alpha=1" in f
+    # Collapsed window -> nothing
+    assert _fade_filter(3.0, 3.0, {"enterMs": 250, "exitMs": 200}) == ""
+    # Tiny window: in-fade is clamped to the window, out-fade gets no room left
+    tiny = _fade_filter(0.0, 0.1, {"enterMs": 250, "exitMs": 200})
+    assert "fade=t=in:st=0.0:d=0.1" in tiny
+    assert "t=out" not in tiny
