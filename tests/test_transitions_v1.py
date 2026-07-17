@@ -71,7 +71,7 @@ def test_normalize_valid_passthrough():
 # resolve_fade_spec — adjacency: a boundary edit touches only its two slots     #
 # --------------------------------------------------------------------------- #
 
-def _entry(transition_in=None):
+def _entry(transition_in=None, duration=1.0):
     from app.services.assembly_service import TimelineEntry
 
     return TimelineEntry(
@@ -79,7 +79,7 @@ def _entry(transition_in=None):
         start_time=0.0,
         end_time=1.0,
         timeline_start=0.0,
-        timeline_duration=1.0,
+        timeline_duration=duration,
         transition_in=transition_in,
     )
 
@@ -98,6 +98,65 @@ def test_resolve_fade_spec_adjacency():
     # First clip's own transition_in is ignored: slot 0 gets no fade-in, and with
     # no transition on clip[1] there is no fade-out either.
     assert resolve_fade_spec([_entry(t), _entry()], 0) is None
+
+
+def test_resolve_fade_spec_strips_short_boundary():
+    from app.services.assembly_service import resolve_fade_spec
+
+    t = {"kind": "dip_black", "durationMs": 400}  # needs both sides >= 0.8s
+    # Previous clip too short -> whole boundary stripped (both in and out).
+    timeline = [_entry(duration=0.5), _entry(t, duration=2.0)]
+    assert resolve_fade_spec(timeline, 0) is None
+    assert resolve_fade_spec(timeline, 1) is None
+    # This clip too short -> stripped too.
+    timeline = [_entry(duration=2.0), _entry(t, duration=0.5)]
+    assert resolve_fade_spec(timeline, 0) is None
+    assert resolve_fade_spec(timeline, 1) is None
+    # Both sides long enough -> effective.
+    timeline = [_entry(duration=2.0), _entry(t, duration=2.0)]
+    assert resolve_fade_spec(timeline, 0) == {"out": {"kind": "dip_black", "ms": 400}}
+    assert resolve_fade_spec(timeline, 1) == {"in": {"kind": "dip_black", "ms": 400}}
+
+
+# --------------------------------------------------------------------------- #
+# _fade_filters — filter strings built only from the enum + clamped int         #
+# --------------------------------------------------------------------------- #
+
+def test_fade_filters_strings():
+    from app.services.assembly_service import _fade_filters
+
+    spec = {
+        "in": {"kind": "dip_black", "ms": 300},
+        "out": {"kind": "flash_white", "ms": 200},
+    }
+    assert _fade_filters(spec, needed_duration=2.0) == [
+        "fade=t=in:st=0:d=0.150:color=black",
+        "fade=t=out:st=1.900:d=0.100:color=white",
+    ]
+    assert _fade_filters(None, needed_duration=2.0) == []
+    assert _fade_filters({}, needed_duration=2.0) == []
+
+
+def test_fade_filters_reject_unknown_kind():
+    # The color dict is the last allowlist: an un-validated kind can never be
+    # interpolated into the -vf argument — it raises instead.
+    from app.services.assembly_service import _fade_filters
+
+    with pytest.raises(KeyError):
+        _fade_filters({"in": {"kind": "evil:string", "ms": 300}}, needed_duration=2.0)
+
+
+def test_zero_transition_vf_chain_is_byte_identical():
+    # No transitions anywhere -> _fade_filters contributes nothing, so the -vf
+    # chain (and thus the ffmpeg command) is identical to the legacy pipeline.
+    from app.services.assembly_service import _fade_filters, resolve_fade_spec
+
+    timeline = [_entry(), _entry(), _entry()]
+    for i in range(len(timeline)):
+        spec = resolve_fade_spec(timeline, i)
+        assert spec is None
+        base = ["scale=1080:1920", "crop=1080:1920"]
+        assert base + _fade_filters(spec, 1.0) == base
 
 
 # --------------------------------------------------------------------------- #

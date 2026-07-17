@@ -191,27 +191,80 @@ def _source_duration_for_timeline(timeline_duration: float, transforms: Optional
     return max(0.0, timeline_duration) * SegmentTransform.from_dict(transforms).speed
 
 
+def _boundary_transition(timeline: List["TimelineEntry"], boundary_idx: int) -> Optional[dict]:
+    """Effective transition INTO clip ``boundary_idx``, or None.
+
+    Applies the boundary guards: no transition into the first clip, and none on a
+    boundary where EITHER side's output duration is shorter than 2x the transition
+    duration (the fades would eat the whole clip).
+    """
+    if boundary_idx <= 0 or boundary_idx >= len(timeline):
+        return None
+    t = getattr(timeline[boundary_idx], "transition_in", None)
+    if not t:
+        return None
+    min_len = 2.0 * t["durationMs"] / 1000.0
+    if (
+        timeline[boundary_idx - 1].timeline_duration < min_len
+        or timeline[boundary_idx].timeline_duration < min_len
+    ):
+        return None
+    return t
+
+
 def resolve_fade_spec(timeline: List["TimelineEntry"], i: int) -> Optional[dict]:
-    """Resolve the fade ingredients for one timeline slot (P0 — cache key only).
+    """Resolve the fade ingredients for one timeline slot.
 
-    The no-overlap transition family means slot ``i`` fades IN if clip ``i`` has a
-    transition (and isn't the first clip), and fades OUT if the NEXT clip ``i+1``
-    has one. Returns ``{"in"?: {kind, ms}, "out"?: {kind, ms}}`` or ``None`` when
-    the slot sits on no transition boundary — so legacy cache keys stay identical.
+    The no-overlap transition family means slot ``i`` fades IN if clip ``i`` has an
+    effective boundary transition, and fades OUT if the NEXT clip ``i+1`` has one.
+    Returns ``{"in"?: {kind, ms}, "out"?: {kind, ms}}`` or ``None`` when the slot
+    sits on no transition boundary — so legacy cache keys stay identical.
 
-    P1 renders the actual ``fade=`` filters from exactly this spec (half the
-    durationMs on each side of the boundary).
+    Guards (first clip, too-short sides) live in ``_boundary_transition``, so the
+    cache key and the rendered filters can never disagree. Interstitial slides are
+    inserted into the concat list AFTER extraction, so these composition indices
+    can never misalign with slide positions.
     """
     fade: dict = {}
-    if i > 0:
-        this_t = getattr(timeline[i], "transition_in", None)
-        if this_t:
-            fade["in"] = {"kind": this_t["kind"], "ms": this_t["durationMs"]}
-    if i + 1 < len(timeline):
-        next_t = getattr(timeline[i + 1], "transition_in", None)
-        if next_t:
-            fade["out"] = {"kind": next_t["kind"], "ms": next_t["durationMs"]}
+    this_t = _boundary_transition(timeline, i)
+    if this_t:
+        fade["in"] = {"kind": this_t["kind"], "ms": this_t["durationMs"]}
+    next_t = _boundary_transition(timeline, i + 1)
+    if next_t:
+        fade["out"] = {"kind": next_t["kind"], "ms": next_t["durationMs"]}
     return fade or None
+
+
+# Colors keyed by the validated transition enum. The dict lookup is the last
+# allowlist: an unexpected kind raises KeyError instead of reaching the -vf arg,
+# so a fade filter string can only ever be built from this enum + a clamped int.
+_TRANSITION_COLOR = {"dip_black": "black", "flash_white": "white"}
+
+
+def _fade_filters(fade_spec: Optional[dict], needed_duration: float) -> List[str]:
+    """Build ``fade=`` -vf entries for one extracted segment.
+
+    Appended AFTER the transform chain (which contains any setpts speed remap),
+    so ``st``/``d`` are on the output clock. Each side of a boundary gets half
+    the transition duration.
+    """
+    if not fade_spec:
+        return []
+    filters: List[str] = []
+    fade_in = fade_spec.get("in")
+    if fade_in:
+        d = fade_in["ms"] / 2000.0
+        filters.append(
+            f"fade=t=in:st=0:d={d:.3f}:color={_TRANSITION_COLOR[fade_in['kind']]}"
+        )
+    fade_out = fade_spec.get("out")
+    if fade_out:
+        d = fade_out["ms"] / 2000.0
+        st = max(0.0, needed_duration - d)
+        filters.append(
+            f"fade=t=out:st={st:.3f}:d={d:.3f}:color={_TRANSITION_COLOR[fade_out['kind']]}"
+        )
+    return filters
 
 
 def _segment_filter_chain(transform: SegmentTransform, width: int, height: int) -> List[str]:
@@ -2189,6 +2242,11 @@ class AssemblyService:
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
             transform_filters = _segment_filter_chain(transform, target_w, target_h)
+            # Transitions V1: no-overlap fades on this slot's boundaries. Resolved
+            # from the composition timeline (before slide insertion) and appended
+            # after the transform chain so st/d run on the output clock.
+            fade_spec = resolve_fade_spec(timeline, i)
+            vf_filters = transform_filters + _fade_filters(fade_spec, needed_duration)
             extraction_timing = _segment_extraction_timing(
                 segment_duration=segment_duration,
                 needed_duration=needed_duration,
@@ -2240,7 +2298,7 @@ class AssemblyService:
                     transform_filters=transform_filters,
                     codec_params=_codec_params,
                     fps=TARGET_FPS,
-                    fade=resolve_fade_spec(timeline, i),
+                    fade=fade_spec,
                 )
                 if cache_key and await asyncio.to_thread(segment_cache.lookup, cache_key, segment_file):
                     results[i] = segment_file
@@ -2280,7 +2338,7 @@ class AssemblyService:
                         cmd.extend([
                             "-stream_loop", str(extraction_timing.loop_count - 1),
                             "-i", str(segment_raw),
-                            "-vf", ",".join(transform_filters),
+                            "-vf", ",".join(vf_filters),
                         ])
                     else:
                         # Without loop, -ss before -i enables fast seeking
@@ -2289,7 +2347,7 @@ class AssemblyService:
                             "-ss", str(entry.start_time),
                             "-t", str(extraction_timing.source_window_duration),
                             "-i", entry.source_video_path,
-                            "-vf", ",".join(transform_filters),
+                            "-vf", ",".join(vf_filters),
                         ])
 
                     cmd.extend([
