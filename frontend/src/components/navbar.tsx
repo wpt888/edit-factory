@@ -29,15 +29,15 @@ import {
   BarChart3,
   Music,
   ImageIcon,
+  Images,
   CalendarClock,
   Calendar,
   NotebookPen,
   LogOut,
-  Wallet,
+  Zap,
   ChevronLeft,
   ChevronRight,
   Workflow,
-  Cloud,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -56,14 +56,14 @@ const allNavGroups = [
       { label: "Footage & Segments", href: "/segments", icon: ListVideo },
       { label: "Clipping", href: "/clipping", icon: Scissors },
       { label: "AI Image", href: "/create-image", icon: ImageIcon },
-      { label: "AI Video", href: "/create-video", icon: Clapperboard },
+      { label: "AI Video", href: "/create-video", icon: Film },
     ],
   },
   {
     label: "Library",
     items: [
       { label: "Local Exports", href: "/librarie", icon: Film },
-      { label: "Media Library", href: "/media-library", icon: Cloud },
+      { label: "Media Library", href: "/media-library", icon: Images },
       { label: "TTS", href: "/tts-library", icon: Music },
       { label: "Schedule", href: "/schedule", icon: CalendarClock },
     ],
@@ -74,7 +74,7 @@ const allNavGroups = [
       // D1: local context library is the default source; the Gomag catalog is
       // gated off (see /products page + CATALOG_GOMAG_ENABLED backend flag).
       { label: "Context Library", href: "/product-library", icon: BookOpen },
-      { label: "Generate", href: "/product-video", icon: Video },
+      { label: "Context Video", href: "/product-video", icon: Video },
       { label: "Batch Generate", href: "/batch-generate", icon: ListChecks },
     ],
   },
@@ -126,7 +126,7 @@ function NavLink({
         collapsed ? "justify-center py-2" : "px-3 py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-lime",
+          : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
       )}
     >
       <item.icon className="size-4" />
@@ -154,28 +154,33 @@ function AppNav({
       </nav>
     );
   }
-  // Icon-only rail: drop the group headers and keep just the icons.
+  // Icon-only rail: drop the group headers, keep dividers between groups.
   if (collapsed) {
     return (
-      <nav className="flex flex-col gap-1">
-        {navGroups.flatMap((group) =>
-          group.items.map((item) => (
-            <NavLink
-              key={item.href}
-              item={item}
-              pathname={pathname}
-              collapsed
-            />
-          )),
-        )}
+      <nav className="flex flex-col gap-0.5">
+        {navGroups.map((group, index) => (
+          <React.Fragment key={group.label}>
+            {index > 0 && (
+              <div className="mx-2 my-1.5 border-t border-sidebar-border" />
+            )}
+            {group.items.map((item) => (
+              <NavLink
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                collapsed
+              />
+            ))}
+          </React.Fragment>
+        ))}
       </nav>
     );
   }
   return (
-    <nav className="flex flex-col gap-1">
+    <nav className="flex flex-col gap-0.5">
       {navGroups.map((group) => (
         <React.Fragment key={group.label}>
-          <p className="px-3 pt-3 pb-1 text-[11px] font-medium tracking-wider text-sidebar-foreground/40 uppercase first:pt-0">
+          <p className="px-3 pt-4 pb-1 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/35 uppercase">
             {group.label}
           </p>
           {group.items.map((item) => (
@@ -217,12 +222,14 @@ function CreditBalance() {
   return (
     <Link
       href="/settings"
-      className="flex items-center gap-2 rounded-xl border border-sidebar-border bg-sidebar-accent/50 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
+      className="group rounded-lg border border-sidebar-border bg-sidebar-accent/50 p-3 transition-colors hover:border-lime/30"
       title="Blipost credit balance"
     >
-      <Wallet className="size-4 text-sidebar-foreground/70" />
-      <span className="font-semibold">{balance.toLocaleString()}</span>
-      <span className="text-sidebar-foreground/60">credits</span>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-sidebar-foreground/60">AI Credits Remaining</span>
+        <Zap className="size-3.5 text-lime" />
+      </div>
+      <p className="mt-1.5 font-mono text-sm font-semibold">{balance.toLocaleString()}</p>
     </Link>
   );
 }
@@ -312,7 +319,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* desktop sidebar — icon-only rail when collapsed, full panel otherwise */}
       {collapsed ? (
         <aside className="hidden h-full w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-          <div className="flex justify-center px-2 pt-6 pb-2">
+          <div className="flex justify-center px-2 pt-4 pb-2">
             <button
               type="button"
               onClick={toggleSidebar}
@@ -357,7 +364,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="px-5 pt-6 pb-4">
             <div className="flex items-start justify-between">
               <Link href="/pipeline" className="flex items-center">
-                <Wordmark className="h-8" />
+                <Wordmark className="h-11" />
               </Link>
               <button
                 type="button"
@@ -379,7 +386,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
             <CreditBalance />
             <ProfileSwitcher />
-            <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
+            <div className="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-sidebar-accent/50 p-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
                 {initial}
               </span>

@@ -14,7 +14,7 @@ const PRODUCTS = [
   {
     id: "creative" as const,
     name: "BlipCreative",
-    description: "Create, schedule and publish content",
+    description: "Generate images, video & voice",
     href: CREATIVE_URL,
     icon: Megaphone,
     iconClassName: "bg-orange-500/15 text-orange-500",
@@ -23,7 +23,7 @@ const PRODUCTS = [
   {
     id: "studio" as const,
     name: "BlipStudio",
-    description: "Turn ideas and footage into videos",
+    description: "Turn scripts and footage into videos, in bulk",
     href: "/pipeline",
     icon: Clapperboard,
     iconClassName: "bg-lime/15 text-lime",
@@ -77,7 +77,7 @@ export function ProductSwitcher({
           "flex items-center border border-sidebar-border bg-sidebar-accent/45 text-left text-sidebar-foreground transition-colors hover:bg-sidebar-accent",
           compact
             ? "size-9 justify-center rounded-lg"
-            : "w-full gap-2.5 rounded-xl px-3 py-2.5",
+            : "w-full gap-2.5 rounded-lg px-3 py-2.5",
         )}
       >
         <span
