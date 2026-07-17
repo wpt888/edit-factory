@@ -2327,198 +2327,6 @@ export function TimelineEditor({
       {viewMode === "timeline" ? (
         /* ========== TIMELINE VIEW ========== */
         <div className="space-y-3">
-          {/* Horizontal scrollable strip — grouped by merge_group */}
-          <div className="overflow-x-auto rounded-md border bg-muted/30 p-2">
-            <div className="flex items-stretch gap-0.5" style={{ minWidth: "100%" }}>
-              {(() => {
-                const groups = timelineGroups;
-
-                const elements: React.ReactNode[] = [];
-
-                // Helper: render a "+" insertion button
-                const renderInsertButton = (afterMatchIndex: number) => {
-                  if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return null;
-                  return (
-                    <button
-                      key={`insert-${afterMatchIndex}`}
-                      onClick={() => handleInsertSlide(afterMatchIndex)}
-                      className="flex-shrink-0 flex items-center justify-center w-5 h-[80px] rounded border border-dashed border-primary/50 text-primary/50 hover:bg-primary/10 hover:text-primary transition-colors"
-                      title={`Insert image slide ${afterMatchIndex === -1 ? "before first block" : "here"}`}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                  );
-                };
-
-                // Helper: render an interstitial slide block
-                const renderSlideBlock = (slide: InterstitialSlide) => {
-                  const slideWidthPercent = totalDuration > 0 ? (slide.duration / totalDuration) * 100 : 5;
-                  const isSlideSelected = selectedSlideId === slide.id;
-                  return (
-                    <div
-                      key={`slide-${slide.id}`}
-                      onClick={() => {
-                        setSelectedSlideId(slide.id === selectedSlideId ? null : slide.id);
-                        setSelectedBlockIndex(null);
-                      }}
-                      className={`
-                        relative flex-shrink-0 rounded-md border-2 cursor-pointer
-                        transition-all select-none overflow-hidden
-                        border-primary bg-primary/10
-                        ${isSlideSelected ? "ring-2 ring-primary ring-offset-1" : ""}
-                      `}
-                      style={{
-                        width: `max(50px, ${slideWidthPercent}%)`,
-                        height: "80px",
-                      }}
-                      title={slide.productTitle || "Image slide"}
-                    >
-                      {/* Background image thumbnail */}
-                      {slide.imageUrl && (
-                        <img
-                          src={slide.imageUrl}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-cover opacity-40"
-                          loading="lazy"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
-                      )}
-                      <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
-                        <ImageIcon className="h-3 w-3 text-primary mb-0.5" />
-                        <span className="text-[10px] font-medium leading-tight text-foreground">
-                          {slide.duration.toFixed(1)}s
-                        </span>
-                        {slide.animation === "kenburns" && (
-                          <span className="text-[9px] text-primary leading-none mt-0.5">KB</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                };
-
-                if (introOffsetSec > 0) {
-                  const introWidthPercent = totalDuration > 0 ? (introOffsetSec / totalDuration) * 100 : 10;
-                  elements.push(<div key="rapid-intro" className="flex-shrink-0 rounded-md border-2 border-violet-500 bg-violet-500/15 px-2 flex items-center justify-center text-[10px] font-medium text-violet-700 dark:text-violet-300" style={{ width: `max(60px, ${introWidthPercent}%)`, height: "80px" }} title={`Rapid intro over soundtrack (${introOffsetSec.toFixed(1)}s)`}>Rapid intro</div>);
-                }
-
-                // Insert "before first" button
-                elements.push(renderInsertButton(-1));
-
-                // Slides before the first group (afterMatchIndex === -1)
-                interstitialSlides
-                  .filter((s) => s.afterMatchIndex === -1)
-                  .forEach((s) => elements.push(renderSlideBlock(s)));
-
-                groups.forEach((group) => {
-                  const firstIdx = group.matchIndices[0];
-                  const lastIdx = group.matchIndices[group.matchIndices.length - 1];
-                  const firstMatch = matches[firstIdx];
-                  const isMulti = group.matchIndices.length > 1;
-                  const groupEndTime = matches[lastIdx]?.srt_end ?? firstMatch.srt_end;
-                  const coveredByIntro = Math.max(
-                    0,
-                    Math.min(groupEndTime, introOffsetSec) - firstMatch.srt_start,
-                  );
-                  const groupDuration = Math.max(0, group.groupDuration - coveredByIntro);
-                  if (groupDuration <= 0.001) return;
-                  const widthPercent = totalDuration > 0 ? (groupDuration / totalDuration) * 100 : 10;
-
-                  // Use first match for color/status
-                  const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
-                  const isPreviewHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
-                  const { border: borderColor, bg: bgColor, isPinned } = matchStatusStyle(firstMatch, isSelected);
-
-                  // Combine texts for tooltip, plus the assembly explanation if present
-                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
-                  const phraseRange = isMulti
-                    ? `#${firstMatch.srt_index + 1}-${matches[lastIdx].srt_index + 1}`
-                    : `#${firstMatch.srt_index + 1}`;
-                  const firstPhraseWords = firstMatch.srt_text.trim().split(/\s+/);
-                  const primaryLabel = firstMatch.matched_keyword?.trim()
-                    || `${firstPhraseWords.slice(0, 3).join(" ")}${firstPhraseWords.length > 3 ? "..." : ""}`;
-                  const cardTitle = `Phrases ${phraseRange}\n${groupTexts}`
-                    + (firstMatch.explanation ? `\n\n${firstMatch.explanation}` : "");
-
-                  elements.push(
-                    <div
-                      key={`g-${group.groupId}`}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, firstIdx)}
-                      onDragOver={(e) => handleDragOver(e, firstIdx)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, firstIdx)}
-                      onDragEnd={handleDragEnd}
-                      onClick={() => {
-                        if (isPreviewActive) {
-                          handleSeekToSegment(firstIdx);
-                        } else {
-                          setSelectedBlockIndex(firstIdx === selectedBlockIndex ? null : firstIdx);
-                          setSelectedSlideId(null);
-                        }
-                      }}
-                      className={`
-                        relative flex-shrink-0 rounded-md border-2 cursor-pointer
-                        transition-all select-none overflow-hidden
-                        ${borderColor} ${bgColor}
-                        ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
-                        ${isPreviewHighlighted ? "ring-2 ring-primary ring-offset-1 brightness-110" : ""}
-                      `}
-                      style={{
-                        width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,
-                        height: "80px",
-                      }}
-                      title={cardTitle}
-                    >
-                      {/* Thumbnail background */}
-                      {firstMatch.thumbnail_path && (
-                        <img
-                          src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path.split('/').pop() ?? '')}`}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-cover opacity-40"
-                          loading="lazy"
-                        />
-                      )}
-                      {/* Pin indicator — manually assigned, click to unpin */}
-                      {isPinned && (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleTogglePin(firstIdx); }}
-                          className="absolute top-0.5 right-0.5 z-20 text-primary hover:text-muted-foreground transition-colors"
-                          title="Pinned — manually assigned, click to unpin"
-                        >
-                          <Pin className="h-3 w-3 fill-current" />
-                        </button>
-                      )}
-                      {/* Content overlay */}
-                      <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
-                        {(
-                          <>
-                            <span className="max-w-full truncate text-[10px] font-medium leading-tight text-foreground">
-                              {primaryLabel}
-                            </span>
-                            <span className="mt-0.5 text-[9px] leading-tight text-muted-foreground">
-                              {groupDuration.toFixed(1)}s
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-
-                  // "+" button after this group
-                  elements.push(renderInsertButton(lastIdx));
-
-                  // Interstitial slides after this group
-                  interstitialSlides
-                    .filter((s) => s.afterMatchIndex === lastIdx)
-                    .forEach((s) => elements.push(renderSlideBlock(s)));
-                });
-
-                return elements;
-              })()}
-            </div>
-          </div>
-
           {attentionTimeline && totalDuration > 0 && (() => {
             /* ========== MULTI-TRACK TIMELINE ==========
                One shared time axis (0..totalDuration — the voiceover clock).
@@ -2538,7 +2346,8 @@ export function TimelineEditor({
               />
             ) : null;
 
-            const lanes: { label: string; height: string; attention?: boolean; content: React.ReactNode }[] = [
+            const canInsertSlide = !!(onInterstitialSlidesChange || onAttentionTimelineChange);
+            const lanes: { label: string; height: string; attention?: boolean; action?: React.ReactNode; content: React.ReactNode }[] = [
               {
                 label: "Video",
                 height: "h-14",
@@ -2603,11 +2412,22 @@ export function TimelineEditor({
                 label: "Attention images",
                 height: "h-9",
                 attention: true,
+                action: canInsertSlide ? (
+                  <button
+                    type="button"
+                    onClick={() => handleInsertSlide(selectedBlockIndex ?? -1)}
+                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
+                    title="Add attention image (drag it on the lane to position)"
+                    aria-label="Add attention image"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                ) : null,
                 content: (
                   <>
                     {attentionTimeline.cues.length === 0 && (
                       <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/60">
-                        No attention images — insert one with the + buttons in the strip above
+                        No attention images — use the + on this lane to add one, then drag to position
                       </div>
                     )}
                     {attentionTimeline.cues.map(cue => (
@@ -2712,8 +2532,9 @@ export function TimelineEditor({
                   </div>
                   {lanes.map(lane => (
                     <div key={lane.label} className="flex border-t">
-                      <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center border-r bg-card px-2 font-medium">
-                        {lane.label}
+                      <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center justify-between gap-1 border-r bg-card px-2 font-medium">
+                        <span className="truncate">{lane.label}</span>
+                        {lane.action}
                       </div>
                       <div
                         className={`relative flex-1 ${lane.height}`}
