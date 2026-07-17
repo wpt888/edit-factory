@@ -28,19 +28,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { apiGet, apiPost, apiDelete, API_URL } from "@/lib/api";
+import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { useApiUrl } from "@/hooks/use-api-url";
+import { segmentFileUrl } from "@/lib/media-url";
 import {
   Loader2,
   AlertCircle,
   CheckCircle,
-  XCircle,
   Play,
-  ArrowLeft,
   ArrowRight,
   Type,
   Volume2,
   Pause,
-  Eye,
   RefreshCw,
   Film,
   Info,
@@ -50,6 +49,7 @@ import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
+import type { CompositionClip } from "@/types/composition-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
@@ -87,6 +87,7 @@ type Step3Ctx = {
   setVariantThumbnails: Dispatch<SetStateAction<Record<PreviewKey, ThumbnailSelection>>>;
   selectedSourceIdsArray: string[];
   getMatchesChangeHandler: (previewKey: string) => (matches: MatchPreview[]) => void;
+  getVideoTimelineChangeHandler: (previewKey: string) => (timeline: CompositionClip[]) => void;
   getInterstitialSlidesChangeHandler: (previewKey: string) => (slides: InterstitialSlide[]) => void;
   attentionTimelines: Record<PreviewKey, AttentionTimeline>;
   getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
@@ -105,11 +106,11 @@ type Step3Ctx = {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function Step3Preview({ ctx }: { ctx: any }) {
+  const mediaApiUrl = useApiUrl();
   const {
     previewCards,
     selectedVariants,
     setStep,
-    setPreviewError,
     presetName,
     setPresetName,
     subtitleSettingsLoaded,
@@ -153,6 +154,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getInterstitialSlidesChangeHandler,
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
+    getVideoTimelineChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
@@ -219,6 +221,17 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     return () => controller.abort();
   }, [currentProfile?.id, previewProxySourceIdsKey]);
 
+  const openRenderedPreview = (previewKey: PreviewKey) => {
+    // The FFmpeg preview owns its rendered audio track. Stop the standalone
+    // voice-over first so two variants cannot play over each other.
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setPlayingAudio(null);
+    setPreviewVariant(previewKey);
+  };
+
   const activeSubtitleStyleKey: StyleKey = metaMultiplication
     ? activeStyleKey === "B" ? "B" : "A"
     : "default";
@@ -237,13 +250,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   return (
           <div className="space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0">
             <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
+              {/* "Back to Scripts" lives in the pipeline toolbar; don't repeat it here. */}
               <h2 className="text-2xl font-semibold">
                 Preview & Select Variants ({previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown)
               </h2>
-              <Button variant="outline" onClick={() => { setStep(2); setPreviewError(null); }}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Scripts
-              </Button>
             </div>
 
             {/*
@@ -588,23 +598,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => {
-                              // Stop any playing audio before opening preview player
-                              if (audioRef.current) {
-                                audioRef.current.pause();
-                                audioRef.current = null;
-                              }
-                              setPlayingAudio(null);
-                              setPreviewVariant(card.key);
-                            }}
-                            title="High-fidelity preview (FFmpeg render — slower; use the instant player in the timeline below for editing)"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
                             onClick={() => handleRegenerateVariantAudio(card.baseIndex, card.key, card.visualVersion)}
                             disabled={regeneratingVariantAudio[card.baseIndex]}
                             title="Regenerate voiceover"
@@ -628,28 +621,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           <AlertDescription>{preview.variety_warning.message}</AlertDescription>
                         </Alert>
                       )}
-                      {/* Match summary counts */}
-                      <div className="flex items-center gap-4 text-sm">
-                        <div className="flex items-center gap-1 text-success">
-                          <CheckCircle className="h-4 w-4" />
-                          <span className="font-semibold">{preview.matched_count}</span>
-                          <span className="text-muted-foreground">matched</span>
-                        </div>
-                        <div className="flex items-center gap-1 text-red-600">
-                          <XCircle className="h-4 w-4" />
-                          <span className="font-semibold">{preview.unmatched_count}</span>
-                          <span className="text-muted-foreground">unmatched</span>
-                        </div>
-                        <span className="text-xs text-muted-foreground ml-auto">
-                          {preview.total_phrases} phrases total
-                        </span>
-                      </div>
-
                       {/* Thumbnail selector (becomes first frame of rendered video) */}
                       {(() => {
                         const thumb = variantThumbnails[card.key];
                         const thumbUrl = thumb
-                          ? `${API_URL}/segments/files/${encodeURIComponent(thumb.imageUrl.split("/").pop() || thumb.imageUrl)}`
+                          ? segmentFileUrl(mediaApiUrl, thumb.imageUrl)
                           : null;
                         return (
                           <div className="flex items-center gap-3 pb-2 border-b">
@@ -695,18 +671,20 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         audioDuration={preview.audio_duration}
                         introOffsetSec={preview.intro_offset_sec ?? 0}
                         introSegments={preview.intro_segments ?? []}
+                        videoTimeline={preview.video_timeline ?? []}
                         sourceVideoIds={selectedSourceIdsArray}
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
-                        onRenderPreview={() => setPreviewVariant(card.key)}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                         attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
                         onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
+                        onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
+                        onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </CardContent>
                   </Card>
@@ -753,6 +731,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   open={true}
                   onOpenChange={handlePreviewPlayerClose}
                   matches={previews[previewVariant]?.matches ?? []}
+                  videoTimeline={previews[previewVariant]?.video_timeline ?? []}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
                   visualVersion={activeCard.visualVersion}
@@ -778,20 +757,26 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               );
             })()}
 
-            {/* Maximized full-screen editor for one variant. Reuses the same
-                TimelineEditor (displayMode="full") bound to this variant's shared
-                handlers, so edits made here and in the card stay in sync. */}
+            {/* The full editor must be a real modal surface. Keeping it inside
+                the right workspace panel leaves the two card editors painted
+                underneath it; their sticky lane headers use z-30 and can rise
+                above a panel-local overlay. Dialog portals the active editor
+                above the whole application and also owns focus, Escape, and
+                scroll locking while the variant is maximized. */}
             {maximizedKey !== null && (() => {
               const card = previewCards.find((c) => c.key === maximizedKey);
               const preview = card ? previews[card.key] : null;
               if (!card || !preview) return null;
               return (
                 <Dialog open onOpenChange={(open) => { if (!open) setMaximizedKey(null); }}>
-                  <DialogContent className="flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[1600px] flex-col gap-0 overflow-hidden p-0">
-                    <DialogHeader className="shrink-0 border-b px-6 py-3">
-                      <DialogTitle className="flex items-center gap-2 text-base">
+                  <DialogContent
+                    className="inset-0 left-0 top-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
+                    data-testid="step3-full-editor"
+                  >
+                    <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12 text-left">
+                      <DialogTitle className="flex items-center gap-2 text-sm">
                         <Film className="h-4 w-4" />
-                        {card.label} — Full Editor
+                        <span>{card.label} — Full Editor</span>
                         {card.metaPlatform && (
                           <Badge variant="outline" className="text-xs">
                             {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
@@ -799,25 +784,27 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         )}
                       </DialogTitle>
                     </DialogHeader>
-                    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                    <div className="min-h-0 flex-1 overflow-hidden">
                       <TimelineEditor
                         displayMode="full"
                         matches={preview.matches}
                         audioDuration={preview.audio_duration}
                         introOffsetSec={preview.intro_offset_sec ?? 0}
                         introSegments={preview.intro_segments ?? []}
+                        videoTimeline={preview.video_timeline ?? []}
                         sourceVideoIds={selectedSourceIdsArray}
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
-                        onRenderPreview={() => setPreviewVariant(card.key)}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                         attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
                         onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
+                        onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
+                        onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </div>
                   </DialogContent>
