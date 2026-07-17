@@ -44,6 +44,7 @@ import {
   Film,
   Info,
   Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -193,6 +194,31 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
   // Which variant's full-screen editor modal is open (card.key), or null.
   const [maximizedKey, setMaximizedKey] = useState<string | null>(null);
+
+  // Confine the maximized editor to the app work area (below the workspace
+  // titlebar, right of the settings sidebar) instead of the whole screen.
+  // Measuring <main> handles every mode for free — desktop titlebar or not,
+  // sidebar collapsed/expanded, mobile — since <main> already starts past both.
+  const [maximizedBounds, setMaximizedBounds] = useState<{
+    top: number; left: number; width: number; height: number;
+  } | null>(null);
+  useEffect(() => {
+    if (maximizedKey === null) return;
+    const main = document.querySelector("main");
+    if (!main) return;
+    const measure = () => {
+      const r = main.getBoundingClientRect();
+      setMaximizedBounds({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(main);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [maximizedKey]);
 
   const previewProxySourceIdsKey = useMemo(() => Array.from(new Set(
     previewCards.flatMap((card) =>
@@ -701,6 +727,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               onOpenChange={(open) => { if (!open) setThumbnailPickerKey(null); }}
               currentThumbnail={thumbnailPickerKey ? variantThumbnails[thumbnailPickerKey] ?? null : null}
               matchedSegments={thumbnailPickerKey ? (previews[thumbnailPickerKey]?.matches ?? []) : []}
+              usedImageUrls={new Set(
+                Object.entries(variantThumbnails)
+                  .filter(([key]) => key !== thumbnailPickerKey)
+                  .map(([, sel]) => sel.imageUrl)
+              )}
               onSelect={(segmentId, imageUrl) => {
                 if (!thumbnailPickerKey) return;
                 setVariantThumbnails(prev => ({
@@ -773,19 +804,33 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               return (
                 <Dialog open onOpenChange={(open) => { if (!open) setMaximizedKey(null); }}>
                   <DialogContent
-                    className="inset-0 left-0 top-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
+                    showCloseButton={false}
+                    style={maximizedBounds ?? undefined}
+                    className="flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
                     data-testid="step3-full-editor"
                   >
-                    <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12 text-left">
-                      <DialogTitle className="flex items-center gap-2 text-sm">
-                        <Film className="h-4 w-4" />
-                        <span>{card.label} — Full Editor</span>
-                        {card.metaPlatform && (
-                          <Badge variant="outline" className="text-xs">
-                            {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
-                          </Badge>
-                        )}
-                      </DialogTitle>
+                    <DialogHeader className="shrink-0 border-b px-4 py-3 text-left">
+                      <div className="flex items-center justify-between gap-2">
+                        <DialogTitle className="flex items-center gap-2 text-sm">
+                          <Film className="h-4 w-4" />
+                          <span>{card.label} — Full Editor</span>
+                          {card.metaPlatform && (
+                            <Badge variant="outline" className="text-xs">
+                              {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
+                            </Badge>
+                          )}
+                        </DialogTitle>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => setMaximizedKey(null)}
+                          title="Minimize editor — back to the variant cards"
+                        >
+                          <Minimize2 className="h-4 w-4" />
+                          <span className="sr-only">Minimize editor</span>
+                        </Button>
+                      </div>
                     </DialogHeader>
                     <div className="min-h-0 flex-1 overflow-hidden">
                       <TimelineEditor
