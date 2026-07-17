@@ -133,7 +133,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/85"
       data-testid="pipeline-toolbar"
     >
-      <div className="z-10 flex min-w-0 items-center gap-2.5" data-testid="pipeline-toolbar-context">
+      <div className="flex min-w-0 shrink-0 items-center gap-2.5" data-testid="pipeline-toolbar-context">
         <Film className="size-5 shrink-0 text-primary" />
         <span className="truncate text-sm font-semibold min-[1500px]:text-base">
           Multi-Variant Pipeline
@@ -147,10 +147,11 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       </div>
 
       <div
-        className="absolute left-1/2 hidden -translate-x-1/2 items-center min-[1100px]:flex min-[1100px]:w-[28rem] min-[1200px]:w-[30rem] min-[1400px]:w-[34rem] min-[1600px]:w-[38rem] min-[1800px]:w-[42rem]"
+        className="hidden min-w-0 flex-1 items-center justify-center min-[1100px]:flex"
         aria-label="Pipeline progress"
         data-testid="pipeline-progress"
       >
+      <div className="flex w-full max-w-2xl min-w-0 items-center">
         {PIPELINE_STEPS.map((item, index) => {
           const isComplete = item.num < step;
           const isActive = item.num === step;
@@ -198,8 +199,9 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
           );
         })}
       </div>
+      </div>
 
-      <div className="z-10 ml-auto flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
+      <div className="flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
         {step === 3 && (
           <Button
             variant="ghost"
