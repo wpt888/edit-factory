@@ -1,5 +1,41 @@
 # Engineering Change Log
 
+## 2026-07-18 - Shell parity pack — X1 (web ↔ desktop)
+
+- Cross-repo follow-up to S2 (`social-scheduler/goals/design-x1-parity.md`),
+  source of truth = web. Made on `feat/timeline-transitions-v1`, touching
+  only `navbar.tsx`/`product-switcher.tsx`/`ui/button.tsx` (unrelated
+  uncommitted attention-image work on that branch left untouched).
+- Media Library icon `Cloud` → `Images`; product-switcher `PRODUCTS`
+  descriptions made identical to web's copy (name/description only —
+  href/icon stay per-app).
+- Nav hover token on inactive items `hover:text-lime` →
+  `hover:text-sidebar-accent-foreground` (lime isn't an approved hover
+  accent).
+- Group-label class copied verbatim from web's `app-nav.tsx`; nav list
+  `gap-1` → `gap-0.5`; collapsed rail `pt-6` → `pt-4` and gained
+  inter-group dividers (previously none).
+- Footer radius `rounded-xl` → `rounded-lg` (switcher trigger, credit
+  pill, user card); sidebar wordmark `h-8` → `h-11`.
+- Credit widget restyled to match web: `Wallet` → `Zap` in lime + "AI
+  Credits Remaining" label, no quota bar (`/platform/me` doesn't return
+  one here).
+- Icon collision fix: `AI Video` `Clapperboard` → `Film` (new residual
+  collision with `Local Exports`'s `Film`, logged in the parity skill
+  watchlist, not fixed this pass); `Generate` renamed `Context Video`
+  (was colliding with web `/create`'s "Generate").
+- `ui/button.tsx` base + sm/lg size radius `rounded-md` → `rounded-lg`.
+- Web counterpart in the same session: `app-nav.tsx` active-route match
+  made boundary-safe; `ui/button.tsx` default `h-8` → `h-9`.
+- Verified: `eslint` + `tsc --noEmit` clean on both repos for the changed
+  files. Screenshot `x1-parity-studio-expanded.png` (repo root) against a
+  live dev server confirms the rendered result. Collapsed-rail screenshot
+  not captured — every fresh `next dev` restart this session (5 attempts)
+  hit a pre-existing Turbopack workspace-root crash unrelated to this
+  change; verified by code review instead.
+
+See [Shell, spacing, and icon-sizing sweep (S2)](29-shell-spacing-sweep.md#follow-up-x1-shell-parity-pack-2026-07-18).
+
 ## 2026-07-18 - Pipeline toolbar overlap + heading-consistency fix pack (S1)
 
 - Rebuilt `PipelineStepper`'s toolbar as a plain flex row (context | step

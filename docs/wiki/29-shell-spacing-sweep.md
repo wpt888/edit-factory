@@ -148,3 +148,55 @@ redirected client-side to `/librarie` in this no-backend/no-profile
 environment before a screenshot could be captured (pre-existing app
 behavior, unrelated to this pass — `usage` uses the same `PageShell`
 component so its container is structurally identical either way).
+
+## Follow-up: X1 shell parity pack (2026-07-18)
+
+Cross-app follow-up (`social-scheduler/goals/design-x1-parity.md`), source
+of truth = web, contract recorded in `.claude/skills/blipost-parity/SKILL.md`.
+Aligned `frontend/src/components/navbar.tsx`, `product-switcher.tsx`,
+`ui/button.tsx` with the equivalent web files:
+
+- Media Library icon `Cloud` → `Images`.
+- Product-switcher `PRODUCTS` descriptions now match web's copy verbatim
+  (`name`/`description` only — `href`/`external`/`icon` stay per-app).
+- Nav hover token on inactive items: `hover:text-lime` →
+  `hover:text-sidebar-accent-foreground` (lime isn't an approved hover
+  accent).
+- Group-label class string copied verbatim from web's `app-nav.tsx`; nav
+  lists `gap-1` → `gap-0.5`; collapsed rail top padding `pt-6` → `pt-4`
+  plus inter-group dividers (mirrors web's collapsed-rail divider logic,
+  previously desktop's collapsed rail had none).
+- Footer radius `rounded-xl` → `rounded-lg` on the switcher trigger, credit
+  pill, and user card; sidebar wordmark `h-8` → `h-11` (matches web's
+  `BrandLogo h-11`).
+- Credit widget restyled to match web: neutral `Wallet` icon → `Zap` in
+  lime + "AI Credits Remaining" label; no quota bar (desktop's
+  `/platform/me` doesn't return a quota, only `balance`).
+- Icon-collision fix: `AI Video` (`/create-video`) `Clapperboard` → `Film`
+  (residual: `Local Exports` already used `Film` — new collision noted in
+  the parity skill watchlist, not fixed this pass). `Generate`
+  (`/product-video`) renamed `Context Video` to stop colliding with web
+  `/create`'s "Generate".
+- `ui/button.tsx`: base + `sm`/`lg` size radius `rounded-md` → `rounded-lg`.
+  Height unchanged (`h-9` default) — desktop was already on the h-9
+  decision that web adopted this same pass.
+
+Web-side counterpart: `app-nav.tsx` active-route check made boundary-safe
+(`pathname === href || startsWith(href + "/")`, matching desktop's
+existing `isActive`); `ui/button.tsx` default size `h-8` → `h-9`.
+
+Verification: `eslint` and `tsc --noEmit` clean on both repos for the
+changed files. Screenshot `x1-parity-studio-expanded.png` (repo root)
+captured against the same already-running dev server referenced above
+(port 3005) — confirms the Images icon, group-label styling, renamed nav
+items and tightened item spacing render live. A collapsed-rail screenshot
+could not be captured this pass: every fresh `next dev` restart attempted
+during this session (ports 3200–3204, `npx` and `npm run dev`, with and
+without a `.next-dev` cache clear) crashed within seconds on a Turbopack
+workspace-root inference error (`Next.js inferred your workspace root...`)
+despite `turbopack.root` already being pinned in `next.config.ts` —
+environment-level flakiness unrelated to this pass's code, not reproduced
+on the one instance that stayed up long enough for the expanded
+screenshot. Collapsed-rail changes (dividers, `pt-4`) were verified by
+code review against web's already-screenshotted collapsed rail
+(`x1-parity-web-collapsed.png` in the web repo) instead.
