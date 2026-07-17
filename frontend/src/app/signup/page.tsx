@@ -88,7 +88,7 @@ export default function SignupPage() {
             <div className="flex justify-center mb-4">
               <CheckCircle2 className="size-16 text-success" />
             </div>
-            <CardTitle className="font-heading text-2xl font-bold tracking-tight">Check your email</CardTitle>
+            <CardTitle className="text-2xl font-bold tracking-tight">Check your email</CardTitle>
             <CardDescription>
               We sent a confirmation link to <strong>{email}</strong>.
               Please check your email and click the link to activate your account.
@@ -118,7 +118,7 @@ export default function SignupPage() {
           <div className="flex justify-center mb-4">
             <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
           </div>
-          <CardTitle className="font-heading text-2xl font-bold tracking-tight">Create an account</CardTitle>
+          <CardTitle className="text-2xl font-bold tracking-tight">Create an account</CardTitle>
           <CardDescription>
             Sign up to start using the platform
           </CardDescription>

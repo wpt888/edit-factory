@@ -78,7 +78,7 @@ export default function ResetPasswordPage() {
           <div className="flex justify-center mb-4">
             <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
           </div>
-          <CardTitle className="font-heading text-2xl font-bold tracking-tight">Set New Password</CardTitle>
+          <CardTitle className="text-2xl font-bold tracking-tight">Set New Password</CardTitle>
           <CardDescription>
             Enter your new password below
           </CardDescription>
