@@ -7,6 +7,7 @@ import { useProfile } from "@/contexts/profile-context";
 import { TTSAsset, ELEVENLABS_MODELS } from "@/types/video-processing";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -391,11 +392,15 @@ export default function TTSLibraryPage() {
   return (
     <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold">TTS Library</h1>
-          <Badge variant="outline">{assets.length} assets</Badge>
-        </div>
+      <PageHeader
+        className="mb-6"
+        title={
+          <span className="flex items-center gap-3">
+            TTS Library
+            <Badge variant="outline" className="align-middle text-sm font-normal">{assets.length} assets</Badge>
+          </span>
+        }
+        actions={
         <div className="flex items-center gap-2">
           {failedAssets.length > 0 && (
             <Button
@@ -428,7 +433,8 @@ export default function TTSLibraryPage() {
             New TTS
           </Button>
         </div>
-      </div>
+        }
+      />
 
       {/* Loading */}
       {loading && (

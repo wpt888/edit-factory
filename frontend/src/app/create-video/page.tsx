@@ -6,6 +6,7 @@ import { Clapperboard, FileVideo, Loader2, Sparkles, Video } from "lucide-react"
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -84,8 +85,10 @@ export default function CreateVideoPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 text-primary"><Sparkles className="size-5" /> Seedance 2.0</div>
-          <h1 className="text-3xl font-bold tracking-tight">AI Video Generator</h1>
-          <p className="mt-2 text-muted-foreground">Create a local, editable video asset from a prompt.</p>
+          <PageHeader
+            title="AI Video Generator"
+            description="Create a local, editable video asset from a prompt."
+          />
         </div>
         <Clapperboard className="size-10 text-primary/70" />
       </div>

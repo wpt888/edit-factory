@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -402,6 +403,7 @@ export default function ProductsPage() {
         if (settings.cta_text !== "Comanda acum!") settingsParams.set("cta", settings.cta_text);
         if (settings.voice_id) settingsParams.set("voice", settings.voice_id);
         if (settings.ai_provider !== "gemini") settingsParams.set("ai", settings.ai_provider);
+        if (settings.codex_model) settingsParams.set("cm", settings.codex_model);
         if (settings.enable_denoise) settingsParams.set("denoise", "1");
         if (settings.enable_sharpen) settingsParams.set("sharpen", "1");
         if (settings.enable_color_correction) settingsParams.set("cc", "1");
@@ -455,17 +457,12 @@ export default function ProductsPage() {
     <div className="min-h-full bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <Package className="h-8 w-8 text-primary" />
-              Products
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Browse and filter synced product catalog
-            </p>
-          </div>
-        </div>
+        <PageHeader
+          className="mb-6"
+          icon={<Package className="h-8 w-8 text-primary" />}
+          title="Products"
+          description="Browse and filter synced product catalog"
+        />
 
         {/* Tab switcher */}
         <div className="flex gap-1 mb-4 p-1 bg-muted rounded-lg w-fit">

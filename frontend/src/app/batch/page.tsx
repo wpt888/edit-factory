@@ -7,6 +7,7 @@ import { BLIPOST_BILLING_URL } from "@/lib/api-error";
 import { useProfile } from "@/contexts/profile-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import {
   Card,
   CardContent,
@@ -17,6 +18,19 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SCRIPT_AI_PROVIDER,
+  DESKTOP_CODEX_AVAILABLE,
+  type ScriptAiProvider,
+} from "@/lib/script-ai";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -131,6 +145,10 @@ export default function BatchPage() {
   const [ideasText, setIdeasText] = useState("");
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState("2");
   const [targetDuration, setTargetDuration] = useState("");
+  const [provider, setProvider] = useState<ScriptAiProvider>(
+    DEFAULT_SCRIPT_AI_PROVIDER,
+  );
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [starting, setStarting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -224,7 +242,8 @@ export default function BatchPage() {
 
     const words = Math.min(6, Math.max(1, parseInt(wordsPerSubtitle, 10) || 2));
     const settings: Record<string, unknown> = {
-      provider: "gemini",
+      provider,
+      codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
       words_per_subtitle: words,
     };
     const target = parseFloat(targetDuration);
@@ -359,15 +378,12 @@ export default function BatchPage() {
   return (
     <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8">
       {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-3">
-          <ListChecks className="size-6 text-primary" />
-          <h1 className="text-2xl font-bold">Batch Pipeline</h1>
-        </div>
-        <p className="text-sm text-muted-foreground mt-1">
-          Paste ideas, get review-ready videos.
-        </p>
-      </div>
+      <PageHeader
+        className="mb-6"
+        icon={<ListChecks className="size-6 text-primary" />}
+        title="Batch Pipeline"
+        description="Paste ideas, get review-ready videos."
+      />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
@@ -417,11 +433,41 @@ export default function BatchPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Provider</Label>
-                  <Badge variant="outline" className="h-9 px-3">
-                    gemini
-                  </Badge>
+                  <Label htmlFor="batch-provider">Provider</Label>
+                  <Select
+                    value={provider}
+                    onValueChange={(value) => setProvider(value as ScriptAiProvider)}
+                    disabled={starting}
+                  >
+                    <SelectTrigger id="batch-provider" className="w-56">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="gemini">Gemini 2.5 Flash</SelectItem>
+                      <SelectItem value="claude">Claude Sonnet 4</SelectItem>
+                      {DESKTOP_CODEX_AVAILABLE && (
+                        <SelectItem value="codex">
+                          Codex (ChatGPT subscription)
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
+                {provider === "codex" && DESKTOP_CODEX_AVAILABLE && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="batch-codex-model">Codex Model</Label>
+                    <Input
+                      id="batch-codex-model"
+                      value={codexModel}
+                      onChange={(event) => setCodexModel(event.target.value)}
+                      className="w-44 font-mono"
+                      placeholder="gpt-5.4-mini"
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      disabled={starting}
+                    />
+                  </div>
+                )}
                 <div className="ml-auto flex items-center gap-3">
                   {ideaCount > 0 && (
                     <span className="text-xs text-muted-foreground">

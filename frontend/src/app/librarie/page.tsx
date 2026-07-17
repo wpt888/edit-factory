@@ -51,6 +51,7 @@ import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiErro
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { ImageBulkPublishDialog } from "@/components/dialogs/image-bulk-publish-dialog";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
@@ -1282,40 +1283,39 @@ function LibrarieContent() {
     <div className="min-h-full bg-background">
       <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold">Local Exports</h1>
-            <p className="text-muted-foreground">
-              Rendered videos and generated images stored on this computer
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {activeTab === "videos" && (
-              <>
-                {/* Library/Trash toggle */}
-                <Button
-                  variant={viewMode === "library" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handleViewModeChange("library")}
-                >
-                  Library
-                </Button>
-                <Button
-                  variant={viewMode === "trash" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => { handleViewModeChange("trash"); fetchTrash(); }}
-                >
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  Trash
-                </Button>
-                <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Refresh
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          className="mb-6"
+          title="Local Exports"
+          description="Rendered videos and generated images stored on this computer"
+          actions={
+            <div className="flex items-center gap-2">
+              {activeTab === "videos" && (
+                <>
+                  {/* Library/Trash toggle */}
+                  <Button
+                    variant={viewMode === "library" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handleViewModeChange("library")}
+                  >
+                    Library
+                  </Button>
+                  <Button
+                    variant={viewMode === "trash" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => { handleViewModeChange("trash"); fetchTrash(); }}
+                  >
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Trash
+                  </Button>
+                  <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh
+                  </Button>
+                </>
+              )}
+            </div>
+          }
+        />
 
         {/* Tab Switcher */}
         <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit mb-6">

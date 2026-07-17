@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * Product Library — local, per-user product store (Phase D1).
+ * Context Library — local, per-user store of context items (Phase D1).
+ * An item is anything the user promotes: a product, a service, an offer.
  * Title + images + description (optionally AI-generated from image+title via
- * Gemini Vision). Products live in SQLite in userData; images on disk.
- * Replaces the hardcoded Gomag catalog as the default product source.
+ * Gemini Vision). Items live in SQLite in userData; images on disk.
+ * Replaces the hardcoded Gomag catalog as the default context source.
+ * Routes/tables keep the historical "product" naming — UI copy is generic.
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,8 +29,8 @@ import { apiGetWithRetry, apiDelete, apiUpload, apiPost, apiFetch, API_URL, hand
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import {
+  BookOpen,
   Loader2,
-  Package,
   Pencil,
   PlusCircle,
   Sparkles,
@@ -110,7 +113,7 @@ export default function ProductLibraryPage() {
       setTotal(data.pagination?.total || 0);
       setTotalPages(data.pagination?.total_pages || 1);
     } catch {
-      toast.error("Failed to load product library");
+      toast.error("Failed to load context library");
     } finally {
       setLoading(false);
     }
@@ -146,7 +149,7 @@ export default function ProductLibraryPage() {
     try {
       const response = await apiPost(`/product-library/sources/${source.id}/sync`);
       const data = await response.json();
-      toast.success(`Synced ${data.imported} products${data.skipped ? `; skipped ${data.skipped}` : ""}`);
+      toast.success(`Synced ${data.imported} items${data.skipped ? `; skipped ${data.skipped}` : ""}`);
       refreshImportedData();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Source sync failed");
@@ -229,7 +232,7 @@ export default function ProductLibraryPage() {
         const res = await apiUpload("/product-library", fd);
         const created = await res.json();
         setProducts((prev) => [created, ...prev]);
-        toast.success("Product added");
+        toast.success("Item added");
       } else if (editing) {
         const removed = editing.image_paths.filter((p) => !keptPaths.includes(p));
         if (removed.length > 0) fd.append("remove_paths", JSON.stringify(removed));
@@ -237,12 +240,12 @@ export default function ProductLibraryPage() {
         const res = await apiFetch(`/product-library/${editing.id}`, { method: "PUT", body: fd });
         const updated = await res.json();
         setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-        toast.success("Product updated");
+        toast.success("Item updated");
       }
       setEditing(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
-      toast.error(msg || "Failed to save product");
+      toast.error(msg || "Failed to save item");
     } finally {
       setSaving(false);
     }
@@ -254,9 +257,9 @@ export default function ProductLibraryPage() {
     try {
       await apiDelete(`/product-library/${product.id}`);
       setProducts((prev) => prev.filter((p) => p.id !== product.id));
-      toast.success("Product deleted");
+      toast.success("Item deleted");
     } catch {
-      toast.error("Failed to delete product");
+      toast.error("Failed to delete item");
     }
   };
 
@@ -280,6 +283,9 @@ export default function ProductLibraryPage() {
       });
       const data = await response.json();
       const params = new URLSearchParams({ batch_id: data.batch_id, src: "local" });
+      if (settings.voiceover_mode !== "quick") params.set("vm", settings.voiceover_mode);
+      if (settings.ai_provider !== "gemini") params.set("ai", settings.ai_provider);
+      if (settings.codex_model) params.set("cm", settings.codex_model);
       router.push(`/batch-generate?${params.toString()}`);
     } catch (error) {
       handleApiError(error, "Batch generation failed");
@@ -292,30 +298,27 @@ export default function ProductLibraryPage() {
     <div className="min-h-full bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <Package className="h-8 w-8 text-primary" />
-              My Products
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Your local product library — used as context for video generation
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {selectedIds.size >= 2 && (
-              <Button onClick={() => setBatchOpen(true)}>
-                <Film className="h-4 w-4 mr-2" /> Generate {selectedIds.size}
+        <PageHeader
+          className="mb-6"
+          icon={<BookOpen className="h-8 w-8 text-primary" />}
+          title="Context Library"
+          description="Products, services, offers — anything you promote, used as context for video generation"
+          actions={
+            <div className="flex gap-2">
+              {selectedIds.size >= 2 && (
+                <Button onClick={() => setBatchOpen(true)}>
+                  <Film className="h-4 w-4 mr-2" /> Generate {selectedIds.size}
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => setImportOpen(true)}>
+                <Upload className="h-4 w-4 mr-2" /> Import
               </Button>
-            )}
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="h-4 w-4 mr-2" /> Import
-            </Button>
-            <Button onClick={openAdd} data-testid="add-product">
-              <PlusCircle className="h-4 w-4 mr-2" /> Add Product
-            </Button>
-          </div>
-        </div>
+              <Button onClick={openAdd} data-testid="add-product">
+                <PlusCircle className="h-4 w-4 mr-2" /> Add Item
+              </Button>
+            </div>
+          }
+        />
 
         <div className="relative mb-5 max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -351,10 +354,10 @@ export default function ProductLibraryPage() {
           </div>
         ) : products.length === 0 ? (
           <EmptyState
-            icon={<Package className="h-6 w-6" />}
-            title="No products yet"
-            description="Add your first product: a title, a few photos, and an optional description. It stays on this computer."
-            action={{ label: "Add Product", onClick: openAdd }}
+            icon={<BookOpen className="h-6 w-6" />}
+            title="Nothing here yet"
+            description="Add your first item — a product, a service, an offer: a title, a few photos, and an optional description. It stays on this computer."
+            action={{ label: "Add Item", onClick: openAdd }}
           />
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -368,7 +371,7 @@ export default function ProductLibraryPage() {
                       const next = new Set(current);
                       if (next.has(product.id)) next.delete(product.id);
                       else if (next.size < 50) next.add(product.id);
-                      else toast.error("A batch can contain at most 50 products");
+                      else toast.error("A batch can contain at most 50 items");
                       return next;
                     })}
                   />
@@ -428,7 +431,7 @@ export default function ProductLibraryPage() {
 
         {!loading && total > 0 && (
           <div className="mt-6 flex items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span>{total.toLocaleString()} products</span>
+            <span>{total.toLocaleString()} items</span>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronLeft className="size-4" /></Button>
               <span>Page {page} of {totalPages}</span>
@@ -451,7 +454,7 @@ export default function ProductLibraryPage() {
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{editing === "new" ? "Add Product" : "Edit Product"}</DialogTitle>
+            <DialogTitle>{editing === "new" ? "Add Item" : "Edit Item"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -460,7 +463,7 @@ export default function ProductLibraryPage() {
               <Label htmlFor="product-title">Title</Label>
               <Input
                 id="product-title"
-                placeholder="e.g. Parfum Oud Royal 50ml"
+                placeholder='e.g. "Parfum Oud Royal 50ml" or "SEO Audit — Starter"'
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
@@ -570,7 +573,7 @@ export default function ProductLibraryPage() {
               </div>
               <Textarea
                 id="product-description"
-                placeholder="Short product description — or generate one from the image + title"
+                placeholder="Short description — or generate one from the image + title"
                 rows={4}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -584,7 +587,7 @@ export default function ProductLibraryPage() {
             </Button>
             <Button onClick={handleSave} disabled={saving} data-testid="save-product">
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {editing === "new" ? "Add Product" : "Save Changes"}
+              {editing === "new" ? "Add Item" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

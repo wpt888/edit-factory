@@ -39,6 +39,7 @@ import {
   Download,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
+import { PageHeader } from "@/components/page-header";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -847,13 +848,10 @@ export default function CreateImagePage() {
   return (
     <div className="w-full max-w-5xl mx-auto py-8 px-4 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">AI Image Generator</h1>
-          <p className="text-muted-foreground">
-            Generate product images with AI, add your logo, and share
-          </p>
-        </div>
+      <PageHeader
+        title="AI Image Generator"
+        description="Generate product images with AI, add your logo, and share"
+        actions={
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -882,7 +880,8 @@ export default function CreateImagePage() {
             </Button>
           )}
         </div>
-      </div>
+        }
+      />
 
       {/* Step indicators */}
       <div className="flex items-center gap-2">
@@ -969,21 +968,21 @@ export default function CreateImagePage() {
             <CardContent className="space-y-4">
               {/* Product picker */}
               <div className="space-y-2">
-                <Label>Product (optional)</Label>
+                <Label>Library item (optional)</Label>
                 <Select value={selectedProductId} onValueChange={setSelectedProductId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select a product..." />
+                    <SelectValue placeholder="Select an item..." />
                   </SelectTrigger>
                   <SelectContent>
                     <div className="p-2">
                       <Input
-                        placeholder="Search products..."
+                        placeholder="Search your library..."
                         value={productSearch}
                         onChange={(e) => setProductSearch(e.target.value)}
                         className="mb-2"
                       />
                     </div>
-                    <SelectItem value="none">No product</SelectItem>
+                    <SelectItem value="none">No item</SelectItem>
                     {products.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         <span className="flex items-center gap-1.5">

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
@@ -160,13 +161,16 @@ export default function WikiPage() {
 
   return (
     <div className="container mx-auto p-6">
-      <div className="mb-4 flex items-center gap-2">
-        <NotebookPen className="size-6 text-primary" />
-        <h1 className="text-2xl font-bold">Notes</h1>
-        <Badge variant="secondary" className="ml-1">
-          {currentProfile?.name || "—"}
-        </Badge>
-      </div>
+      <PageHeader
+        className="mb-4"
+        icon={<NotebookPen className="size-6 text-primary" />}
+        title={
+          <span className="flex items-center gap-2">
+            Notes
+            <Badge variant="secondary" className="text-sm font-normal">{currentProfile?.name || "—"}</Badge>
+          </span>
+        }
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
         {/* Sidebar */}

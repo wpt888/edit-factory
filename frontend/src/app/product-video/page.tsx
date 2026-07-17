@@ -35,6 +35,13 @@ import {
   Images,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
+import {
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SCRIPT_AI_PROVIDER,
+  DESKTOP_CODEX_AVAILABLE,
+  type ScriptAiProvider,
+} from "@/lib/script-ai";
 
 // ---- Inner component that uses useSearchParams ----
 function ProductVideoContent() {
@@ -54,7 +61,10 @@ function ProductVideoContent() {
   const [voiceoverMode, setVoiceoverMode] = useState<"quick" | "elaborate">("quick");
   const [ttsProvider, setTtsProvider] = useState<"edge" | "elevenlabs">("edge");
   const [voiceId, setVoiceId] = useState("");
-  const [aiProvider, setAiProvider] = useState<"gemini" | "claude">("gemini");
+  const [aiProvider, setAiProvider] = useState<ScriptAiProvider>(
+    DEFAULT_SCRIPT_AI_PROVIDER,
+  );
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [duration, setDuration] = useState<string>("30");
   const [encodingPreset, setEncodingPreset] = useState<string>("tiktok");
   const [ctaText, setCtaText] = useState("Comanda acum!");
@@ -193,6 +203,7 @@ function ProductVideoContent() {
         tts_provider: ttsProvider,
         voice_id: voiceId || defaultVoice || null,
         ai_provider: aiProvider,
+        codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
         duration_s: parseInt(duration, 10) || 30,
         encoding_preset: encodingPreset,
         cta_text: ctaText,
@@ -243,24 +254,21 @@ function ProductVideoContent() {
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Products
+            Back to Library
           </Link>
         </div>
 
         {/* Page title */}
-        <div className="flex items-center gap-3 mb-6">
-          <Video className="h-7 w-7 text-primary" />
-          <h1 className="text-2xl font-bold">Generate Product Video</h1>
-        </div>
+        <PageHeader className="mb-6" icon={<Video className="h-7 w-7 text-primary" />} title="Generate Video" />
 
         {/* Empty state when no product is selected */}
         {!productId && (
           <div className="flex flex-col items-center justify-center py-20">
             <EmptyState
               icon={<Video className="h-6 w-6" />}
-              title="Select a product first"
-              description="Pick a product from your library to generate a video."
-              action={{ label: "Go to My Products", onClick: () => router.push("/product-library") }}
+              title="Select an item first"
+              description="Pick an item from your Context Library to generate a video."
+              action={{ label: "Open Context Library", onClick: () => router.push("/product-library") }}
             />
           </div>
         )}
@@ -391,7 +399,7 @@ function ProductVideoContent() {
               <p className="text-xs text-muted-foreground">
                 {voiceoverMode === "quick"
                   ? "Uses a product template for fast generation — no AI cost."
-                  : "Uses Gemini/Claude to write a custom voiceover script — slower but more creative."}
+                  : "Uses your selected AI provider to write a custom voiceover script."}
               </p>
             </div>
 
@@ -403,7 +411,7 @@ function ProductVideoContent() {
                 </Label>
                 <Select
                   value={aiProvider}
-                  onValueChange={(v) => setAiProvider(v as "gemini" | "claude")}
+                  onValueChange={(v) => setAiProvider(v as ScriptAiProvider)}
                   disabled={isFormDisabled}
                 >
                   <SelectTrigger id="ai-provider" className="w-[200px]">
@@ -412,8 +420,28 @@ function ProductVideoContent() {
                   <SelectContent>
                     <SelectItem value="gemini">Gemini</SelectItem>
                     <SelectItem value="claude">Claude</SelectItem>
+                    {DESKTOP_CODEX_AVAILABLE && (
+                      <SelectItem value="codex">Codex (ChatGPT subscription)</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
+                {aiProvider === "codex" && DESKTOP_CODEX_AVAILABLE && (
+                  <div className="space-y-2 pt-2">
+                    <Label htmlFor="codex-model">Codex Model</Label>
+                    <Input
+                      id="codex-model"
+                      value={codexModel}
+                      onChange={(event) => setCodexModel(event.target.value)}
+                      placeholder="gpt-5.4-mini"
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      className="w-full max-w-sm font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Uses this computer&apos;s ChatGPT Codex subscription login.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -479,15 +480,11 @@ export default function SchedulePage() {
   return (
     <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16 py-8 space-y-8">
       {/* Page header */}
-      <div className="flex items-center gap-3">
-        <CalendarClock className="size-7 text-primary" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Smart Schedule</h1>
-          <p className="text-muted-foreground text-sm">
-            Plan and automate publishing across your social media integrations
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={<CalendarClock className="size-7 text-primary" />}
+        title="Smart Schedule"
+        description="Plan and automate publishing across your social media integrations"
+      />
 
       {/* ===== Section 1: Configuration ===== */}
       <Card>

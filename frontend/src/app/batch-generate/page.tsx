@@ -22,6 +22,11 @@ import {
   X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
+import {
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SCRIPT_AI_PROVIDER,
+} from "@/lib/script-ai";
 
 // Status badge config
 function getStatusBadge(status: ProductJobStatus["status"]) {
@@ -108,7 +113,8 @@ function parseBatchSettings(params: URLSearchParams) {
     encoding_preset: params.get("enc") || "tiktok",
     cta_text: params.get("cta") || "Comanda acum!",
     voice_id: params.get("voice") || null,
-    ai_provider: params.get("ai") || "gemini",
+    ai_provider: params.get("ai") || DEFAULT_SCRIPT_AI_PROVIDER,
+    codex_model: params.get("cm") || DEFAULT_CODEX_MODEL,
     source: params.get("src") || "feed",
     enable_denoise: params.get("denoise") === "1",
     enable_sharpen: params.get("sharpen") === "1",
@@ -125,7 +131,8 @@ function buildSettingsParams(settings: ReturnType<typeof parseBatchSettings>): s
   if (settings.encoding_preset !== "tiktok") p.set("enc", settings.encoding_preset);
   if (settings.cta_text !== "Comanda acum!") p.set("cta", settings.cta_text);
   if (settings.voice_id) p.set("voice", settings.voice_id);
-  if (settings.ai_provider !== "gemini") p.set("ai", settings.ai_provider);
+  if (settings.ai_provider !== DEFAULT_SCRIPT_AI_PROVIDER) p.set("ai", settings.ai_provider);
+  if (settings.codex_model !== DEFAULT_CODEX_MODEL) p.set("cm", settings.codex_model);
   if (settings.source !== "feed") p.set("src", settings.source);
   if (settings.enable_denoise) p.set("denoise", "1");
   if (settings.enable_sharpen) p.set("sharpen", "1");
@@ -184,6 +191,7 @@ function BatchGenerateContent() {
         tts_provider: batchSettings.tts_provider,
         voice_id: batchSettings.voice_id,
         ai_provider: batchSettings.ai_provider,
+        codex_model: batchSettings.codex_model,
         duration_s: batchSettings.duration_s,
         encoding_preset: batchSettings.encoding_preset,
         cta_text: batchSettings.cta_text,
@@ -213,8 +221,8 @@ function BatchGenerateContent() {
         <EmptyState
           icon={<Layers className="h-6 w-6" />}
           title="No batch generation"
-          description="Select products and configure a batch generation."
-          action={{ label: "Back to Products", onClick: () => { router.push("/products"); } }}
+          description="Select items and configure a batch generation."
+          action={{ label: "Back to Library", onClick: () => { router.push("/product-library"); } }}
         />
       </div>
     );
@@ -243,19 +251,17 @@ function BatchGenerateContent() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <Link href="/products">
+          <Link href="/product-library">
             <Button variant="ghost" size="sm" className="mb-4 -ml-2">
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Products
+              Back to Library
             </Button>
           </Link>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Film className="h-8 w-8 text-primary" />
-            Batch Generation
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm font-mono">
-            Batch ID: {batchId}
-          </p>
+          <PageHeader
+            icon={<Film className="h-8 w-8 text-primary" />}
+            title="Batch Generation"
+            description={<span className="text-sm font-mono">Batch ID: {batchId}</span>}
+          />
         </div>
 
         {/* Overall progress bar */}

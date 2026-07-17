@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -215,25 +216,23 @@ export default function UsagePage() {
     <div className="min-h-full bg-background text-foreground">
       <div className="container mx-auto p-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <Link href="/pipeline">
-              <Button variant="ghost" size="icon">
-                <ChevronLeft className="h-5 w-5" />
+        <div className="flex items-center gap-4 mb-8">
+          <Link href="/pipeline">
+            <Button variant="ghost" size="icon">
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+          </Link>
+          <PageHeader
+            className="flex-1"
+            title="Usage & Costs"
+            description="Monitor API usage and spending"
+            actions={
+              <Button onClick={fetchData} variant="outline">
+                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                Refresh
               </Button>
-            </Link>
-            <div>
-              <h1 className="text-3xl font-bold text-foreground">Usage & Costs</h1>
-              <p className="text-muted-foreground">Monitor API usage and spending</p>
-            </div>
-          </div>
-          <Button
-            onClick={fetchData}
-            variant="outline"
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+            }
+          />
         </div>
 
         {/* Error Alert */}

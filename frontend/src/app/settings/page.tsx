@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
@@ -889,15 +890,11 @@ export default function SettingsPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <SettingsIcon className="h-8 w-8" />
-        <div>
-          <h1 className="text-3xl font-bold">Settings</h1>
-          <p className="text-muted-foreground">
-            Configure TTS settings for {currentProfile.name}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={<SettingsIcon className="h-8 w-8" />}
+        title="Settings"
+        description={`Configure TTS settings for ${currentProfile.name}`}
+      />
 
       <Card>
         <CardHeader>
