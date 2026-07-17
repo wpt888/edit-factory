@@ -35,7 +35,11 @@ from app.utils import normalize_path
 from app.core.rate_limit import limiter
 from app.services.codex_script_provider import DEFAULT_CODEX_MODEL
 from app.services.script_generator import get_script_generator_for_profile
-from app.services.assembly_service import get_assembly_service, strip_product_group_tags
+from app.services.assembly_service import (
+    get_assembly_service,
+    normalize_transition_in,
+    strip_product_group_tags,
+)
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.config import get_settings
@@ -2615,6 +2619,28 @@ class PipelinePreviewResponse(BaseModel):
     video_timeline: List[dict] = []
 
 
+def _validate_composition_transitions(clips):
+    """Normalize transitionIn on every clip dict in a composition list (in place).
+
+    Trust boundary for the render/preview request bodies: raw transition strings
+    must never survive toward the filtergraph. Raises ValueError on a bad kind or
+    non-numeric duration — pydantic turns that into a 422.
+    """
+    if not isinstance(clips, list):
+        return clips
+    for clip in clips:
+        if not isinstance(clip, dict) or "transitionIn" not in clip:
+            continue
+        normalized = normalize_transition_in(
+            clip.get("transitionIn"), clip_kind=clip.get("kind")
+        )
+        if normalized is None:
+            clip.pop("transitionIn", None)
+        else:
+            clip["transitionIn"] = normalized
+    return clips
+
+
 class PipelineRenderRequest(BaseModel):
     """Request model for batch render."""
     variant_indices: List[int] = Field(..., min_length=1, max_length=10)  # Which variants to render (BUG-PR-13)
@@ -2625,6 +2651,14 @@ class PipelineRenderRequest(BaseModel):
     match_overrides: Optional[Dict[str, List[dict]]] = None
     # Canonical post-merge editor clips, keyed exactly like match_overrides.
     composition_overrides: Optional[Dict[str, List[dict]]] = None
+
+    @field_validator("composition_overrides")
+    @classmethod
+    def _check_transitions(cls, value):
+        if value:
+            for clips in value.values():
+                _validate_composition_transitions(clips)
+        return value
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
     @field_validator("source_video_ids")
@@ -8547,6 +8581,7 @@ async def save_composition(
         "timeline_duration",
         "transforms",
         "pinned",
+        "transitionIn",
     }
     normalized_timeline: List[dict] = []
     cursor = 0.0
@@ -8579,6 +8614,21 @@ async def save_composition(
         clip["end_time"] = source_end
         clip["timeline_start"] = cursor
         clip["timeline_duration"] = duration
+        # Transitions V1 (P0): validate against the allowlist / clamp duration /
+        # strip on intro clips before it is ever persisted or reaches ffmpeg.
+        try:
+            transition_in = normalize_transition_in(
+                raw_clip.get("transitionIn"), clip_kind=clip["kind"]
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {clip_index + 1}: {exc}",
+            )
+        if transition_in is None:
+            clip.pop("transitionIn", None)
+        else:
+            clip["transitionIn"] = transition_in
         normalized_timeline.append(clip)
         cursor += duration
 
@@ -8680,6 +8730,11 @@ class PreviewRenderRequest(BaseModel):
     composition_override: Optional[List[dict]] = None
     source_video_ids: Optional[List[str]] = None
     min_segment_duration: Optional[float] = None
+
+    @field_validator("composition_override")
+    @classmethod
+    def _check_transitions(cls, value):
+        return _validate_composition_transitions(value) if value else value
 
     @field_validator("min_segment_duration", mode="before")
     @classmethod
