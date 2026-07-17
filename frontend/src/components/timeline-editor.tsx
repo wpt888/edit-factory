@@ -40,7 +40,8 @@ import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import { effectiveBoundaryTransitions } from "@/types/composition-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
   TimelineClipShell,
@@ -281,6 +282,9 @@ interface TimelineEditorProps {
   availableSegments: SegmentOption[];
   onMatchesChange: (matches: MatchPreview[]) => void;
   onVideoTimelineChange?: (timeline: CompositionClip[]) => void;
+  /** Transitions V1: this variant's default transition (null/absent = hard cuts). */
+  defaultTransition?: TransitionSpec | null;
+  onDefaultTransitionChange?: (spec: TransitionSpec | null) => void;
   profileId?: string;
   pipelineId?: string;
   variantIndex?: number;
@@ -307,6 +311,8 @@ export function TimelineEditor({
   availableSegments,
   onMatchesChange,
   onVideoTimelineChange,
+  defaultTransition = null,
+  onDefaultTransitionChange,
   profileId,
   pipelineId,
   variantIndex,
@@ -658,6 +664,57 @@ export function TimelineEditor({
       previewSlotRefs.current[slot] = element;
     }
   }, []);
+
+  // ── Transitions V1: instant-preview fade overlay ──────────────────────────
+  // Effective boundaries after the same guards the backend applies, so the
+  // instant preview can never show a fade the render would strip.
+  const transitionBoundaries = useMemo(
+    () => effectiveBoundaryTransitions(displayedComposition, defaultTransition),
+    [displayedComposition, defaultTransition],
+  );
+  // One overlay div per preview mount (compact + expanded dialog). Opacity is
+  // written imperatively from the audio clock every frame — React state at the
+  // 100–300ms half-fade scale would be far too coarse. Detached nodes are
+  // pruned lazily inside the tick.
+  const transitionOverlayElsRef = useRef(new Set<HTMLDivElement>());
+  const registerTransitionOverlay = useCallback((el: HTMLDivElement | null) => {
+    if (el) transitionOverlayElsRef.current.add(el);
+  }, []);
+  useEffect(() => {
+    const els = transitionOverlayElsRef.current;
+    const clear = () => els.forEach((el) => { el.style.opacity = "0"; });
+    if (!isPreviewActive || transitionBoundaries.length === 0) {
+      clear();
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      // The TTS audio element is the master clock — it also holds the scrub
+      // position while paused, so pause/scrub render the correct opacity.
+      const t = previewAudioRef.current?.currentTime ?? 0;
+      let opacity = 0;
+      let color = "#000";
+      for (const boundary of transitionBoundaries) {
+        const half = boundary.durationMs / 2000;
+        if (t >= boundary.time - half && t <= boundary.time + half) {
+          opacity = t < boundary.time
+            ? (t - (boundary.time - half)) / half
+            : 1 - (t - boundary.time) / half;
+          color = boundary.kind === "flash_white" ? "#fff" : "#000";
+          break;
+        }
+      }
+      const clamped = String(Math.max(0, Math.min(1, opacity)));
+      els.forEach((el) => {
+        if (!el.isConnected) { els.delete(el); return; }
+        el.style.opacity = clamped;
+        el.style.backgroundColor = color;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); clear(); };
+  }, [isPreviewActive, transitionBoundaries]);
   const activeSlotRef = useRef(0);
   const slotStateRef = useRef<Array<{
     sourceVideoId: string | null;   // source currently loaded into the slot
@@ -2776,6 +2833,10 @@ export function TimelineEditor({
                   />
                 ))}
 
+                {/* Transitions V1: instant-preview fade overlay, above video/thumbnail,
+                    below attention cues (z>=10) and subtitles (z-50). */}
+                <div ref={registerTransitionOverlay} aria-hidden className="pointer-events-none absolute inset-0 z-[5]" style={{ opacity: 0 }} />
+
                 {!isPreviewActive && (
                   <>
                     {playbackMatches[previewActiveIndex]?.thumbnail_path && (
@@ -2977,6 +3038,9 @@ export function TimelineEditor({
                         }}
                       />
                     ))}
+
+                    {/* Transitions V1: instant-preview fade overlay (expanded view). */}
+                    <div ref={registerTransitionOverlay} aria-hidden className="pointer-events-none absolute inset-0 z-[5]" style={{ opacity: 0 }} />
 
                     {!isPreviewActive && (
                       <>
