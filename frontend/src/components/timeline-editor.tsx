@@ -1511,6 +1511,29 @@ export function TimelineEditor({
     introSlotStateRef.current[1] = { preparedForIndex: null, preparationId: 0, ready: false };
   }, [stopPreviewRafLoop]);
 
+  const focusTimelineKeyboardScope = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, [contenteditable='true'], [role='button']")) return;
+    event.currentTarget.focus({ preventScroll: true });
+  }, []);
+
+  const handleTimelineKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (
+      event.key !== " "
+      || event.altKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.target !== event.currentTarget
+    ) return;
+
+    // Space scrolls the page when the scrub surface owns no keyboard action.
+    // Once the user clicks the timeline, keep the shortcut scoped to this editor.
+    event.preventDefault();
+    if (event.repeat) return;
+    if (isPreviewActive) togglePreviewPlayPause();
+    else activatePreview();
+  }, [activatePreview, isPreviewActive, togglePreviewPlayPause]);
+
   // Expanding/collapsing moves the preview into a different DOM subtree, so the
   // two <video> slots remount blank. Re-seat the active slot + re-stage the idle
   // one after the new elements bind their refs.
@@ -2565,7 +2588,15 @@ export function TimelineEditor({
             );
 
             return (
-              <div className="overflow-x-auto rounded-md border bg-card text-[10px]" aria-label="Multi-track timeline">
+              <div
+                className="overflow-x-auto rounded-md border bg-card text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                tabIndex={0}
+                aria-label="Multi-track timeline"
+                aria-keyshortcuts="Space"
+                title="Click to seek. Space plays or pauses."
+                onPointerDownCapture={focusTimelineKeyboardScope}
+                onKeyDown={handleTimelineKeyDown}
+              >
                 <div className="w-max min-w-full">
                   {/* Time ruler — click to seek while the preview is active */}
                   <div className="flex">
