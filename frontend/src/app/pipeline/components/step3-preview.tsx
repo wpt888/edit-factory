@@ -766,6 +766,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   onOpenChange={handlePreviewPlayerClose}
                   matches={previews[previewVariant]?.matches ?? []}
                   videoTimeline={previews[previewVariant]?.video_timeline ?? []}
+                  defaultTransition={previews[previewVariant]?.defaultTransition ?? null}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
                   visualVersion={activeCard.visualVersion}

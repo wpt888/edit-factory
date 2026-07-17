@@ -47,6 +47,41 @@ export interface CompositionClip {
  * With no default set (the P0 reality — the UI that sets it lands in P1) this is a
  * no-op that returns clips whose payload is byte-identical to today.
  */
+/** One effective (post-guard) boundary transition on the output clock. */
+export interface EffectiveBoundaryTransition {
+  /** Index of the clip the transition leads INTO. */
+  clipIndex: number;
+  /** Output-clock time of the boundary (== clip.timeline_start). */
+  time: number;
+  kind: TransitionKind;
+  durationMs: number;
+}
+
+/**
+ * Effective transitions per boundary, mirroring the backend guards exactly
+ * (`_boundary_transition` in assembly_service.py): none into the first clip or
+ * an intro clip, none where either side's output duration is under 2x the
+ * transition duration. A clip with `transitionIn` absent inherits the variant
+ * default; explicit null = hard cut. Drives the instant-preview fade overlay
+ * and the timeline boundary markers.
+ */
+export function effectiveBoundaryTransitions(
+  clips: CompositionClip[],
+  defaultTransition?: TransitionSpec | null,
+): EffectiveBoundaryTransition[] {
+  const result: EffectiveBoundaryTransition[] = [];
+  for (let i = 1; i < clips.length; i++) {
+    const clip = clips[i];
+    if (clip.kind === "intro") continue;
+    const spec = clip.transitionIn !== undefined ? clip.transitionIn : defaultTransition ?? null;
+    if (!spec) continue;
+    const minLen = (2 * spec.durationMs) / 1000;
+    if (clips[i - 1].timeline_duration < minLen || clip.timeline_duration < minLen) continue;
+    result.push({ clipIndex: i, time: clip.timeline_start, kind: spec.kind, durationMs: spec.durationMs });
+  }
+  return result;
+}
+
 export function resolveCompositionTransitions(
   clips: CompositionClip[],
   defaultTransition?: TransitionSpec | null,

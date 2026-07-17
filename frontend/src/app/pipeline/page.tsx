@@ -34,7 +34,7 @@ import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
 import {
   MatchPreview,
@@ -246,6 +246,9 @@ function PipelinePage() {
   const [previewVariant, setPreviewVariant] = useState<PreviewKey | null>(null);
   const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<PreviewKey, PreviewData>>({});
+  // Always-current mirror for stable per-key handlers (composition/default saves).
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Scroll target: after voice-over generation, bring user back to top of Step 2 for review
   const step2HeaderRef = useRef<HTMLHeadingElement>(null);
@@ -638,6 +641,7 @@ function PipelinePage() {
           apiPut(`/pipeline/${pid}/composition/${baseVariant}`, {
             video_timeline: videoTimeline,
             visual_version: visualVersion,
+            default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
           }).catch((error) => {
             console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
           });
@@ -645,6 +649,29 @@ function PipelinePage() {
       };
     }
     return videoTimelineChangeHandlers.current[previewKey];
+  }, []);
+
+  // Transitions V1: per-variant default transition. Updates the PreviewData blob
+  // and persists via the same composition save (which carries default_transition).
+  const defaultTransitionChangeHandlers = useRef<Record<string, (spec: TransitionSpec | null) => void>>({});
+  const getDefaultTransitionChangeHandler = useCallback((previewKey: string) => {
+    if (!defaultTransitionChangeHandlers.current[previewKey]) {
+      defaultTransitionChangeHandlers.current[previewKey] = (spec: TransitionSpec | null) => {
+        setPreviews((previous) => {
+          const current = previous[previewKey];
+          if (!current) return previous;
+          return { ...previous, [previewKey]: { ...current, defaultTransition: spec } };
+        });
+        const timeline = previewsRef.current[previewKey]?.video_timeline;
+        if (timeline?.length) {
+          // Reuse the debounced composition save so timeline+default persist together.
+          // The ref is updated by the state commit above before the 500ms timer fires.
+          getVideoTimelineChangeHandler(previewKey)(timeline);
+        }
+      };
+    }
+    return defaultTransitionChangeHandlers.current[previewKey];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const interstitialSlidesChangeHandlers = useRef<Record<string, (slides: InterstitialSlide[]) => void>>({});
@@ -1837,7 +1864,15 @@ function PipelinePage() {
           const data = await res.json();
           if (!isMountedRef.current) return;
           newPreviews[previewCard.key] = data;
-          setPreviews(prev => ({ ...prev, [previewCard.key]: data }));
+          // Keep the variant default transition across preview regeneration —
+          // the preview response rebuilds the blob and doesn't carry it.
+          setPreviews(prev => ({
+            ...prev,
+            [previewCard.key]: {
+              ...data,
+              defaultTransition: prev[previewCard.key]?.defaultTransition ?? null,
+            },
+          }));
           // Sync ttsResults from preview response — TTS is generated as part of preview
           if (data.audio_duration > 0) {
             setTtsResults(prev => ({
@@ -3889,7 +3924,11 @@ function PipelinePage() {
 
       const data = await res.json();
       if (!isMountedRef.current) return;
-      setPreviews(prev => ({ ...prev, [previewKey ?? buildPreviewKey(variantIndex)]: data }));
+      setPreviews(prev => {
+        const key = previewKey ?? buildPreviewKey(variantIndex);
+        // Preserve the variant default transition (not in the preview response).
+        return { ...prev, [key]: { ...data, defaultTransition: prev[key]?.defaultTransition ?? null } };
+      });
     } catch (err) {
       handleApiError(err, "Audio regeneration error");
       if (err instanceof ApiError && err.isTimeout) {
@@ -4265,6 +4304,7 @@ function PipelinePage() {
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
+    getDefaultTransitionChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     savePresetName,
