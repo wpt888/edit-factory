@@ -35,6 +35,7 @@ import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
 import type { CompositionClip } from "@/types/composition-timeline";
+import { resolveCompositionTransitions } from "@/types/composition-timeline";
 import {
   MatchPreview,
   PreviewData,
@@ -2000,7 +2001,12 @@ function PipelinePage() {
         );
       }
       if (previews[card.key]?.video_timeline?.length) {
-        compositionOverrides[card.key] = previews[card.key].video_timeline!;
+        // Resolve the variant default into concrete per-boundary transitions so
+        // the backend never receives indirection (no-op until the P1 UI sets it).
+        compositionOverrides[card.key] = resolveCompositionTransitions(
+          previews[card.key].video_timeline!,
+          previews[card.key].defaultTransition,
+        );
       }
     }
 

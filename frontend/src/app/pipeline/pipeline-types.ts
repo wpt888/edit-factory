@@ -1,6 +1,6 @@
 import { SegmentOption } from "@/components/timeline-editor";
 import { SubtitleSettings } from "@/types/video-processing";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -37,6 +37,10 @@ export interface PreviewData {
   intro_offset_sec?: number;
   intro_segments?: Array<{ source_video_path?: string; source_video_id?: string; start_time: number; end_time: number; timeline_start: number; timeline_duration: number }>;
   video_timeline?: CompositionClip[];
+  // P0 item 4: per-variant default transition (null/absent = hard cuts, the default).
+  // Populated by the P1 Assembly Settings UI; resolved to concrete per-boundary
+  // values via resolveCompositionTransitions() before any request is built.
+  defaultTransition?: TransitionSpec | null;
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;
