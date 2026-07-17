@@ -8482,6 +8482,8 @@ async def restore_previews(
             "intro_offset_sec": intro_offset_sec,
             "intro_segments": intro_segments,
             "video_timeline": video_timeline,
+            # Transitions V1: camelCase to land directly in PreviewData.
+            "defaultTransition": pd.get("default_transition"),
         }
 
         # Grab available_segments from the first preview that has them
@@ -8552,6 +8554,9 @@ class SaveCompositionRequest(BaseModel):
     """Persist the canonical post-merge video timeline for one preview."""
     video_timeline: List[dict] = Field(..., min_length=1, max_length=500)
     visual_version: Optional[str] = None
+    # Transitions V1: this variant's default transition (None = hard cuts).
+    # Sent with every composition save; validated like any transitionIn.
+    default_transition: Optional[dict] = None
 
 
 @router.put("/{pipeline_id}/composition/{variant_index}")
@@ -8632,6 +8637,11 @@ async def save_composition(
         normalized_timeline.append(clip)
         cursor += duration
 
+    try:
+        default_transition = normalize_transition_in(body.default_transition)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"default_transition: {exc}")
+
     preview_key = _build_preview_key(variant_index, body.visual_version)
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
@@ -8648,6 +8658,7 @@ async def save_composition(
         preview_data = entry["preview_data"]
         preview_data["video_timeline"] = normalized_timeline
         preview_data["timeline"] = normalized_timeline
+        preview_data["default_transition"] = default_transition
         intro_segments = [
             clip for clip in normalized_timeline if clip.get("kind") == "intro"
         ]

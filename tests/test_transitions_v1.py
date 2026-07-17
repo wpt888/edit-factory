@@ -310,3 +310,48 @@ def test_save_composition_persists_clamped_transition():
 def test_save_composition_legacy_clip_parses_without_field():
     saved = _save([_body_clip()])
     assert "transitionIn" not in saved[0]
+
+
+def test_save_and_restore_round_trip_default_transition():
+    from app.api.pipeline_routes import (
+        SaveCompositionRequest,
+        restore_previews,
+        save_composition,
+    )
+
+    pipeline = _pipeline_with_preview()
+    body = SaveCompositionRequest(
+        video_timeline=[_body_clip()],
+        default_transition={"kind": "flash_white", "durationMs": 5000},  # clamped
+    )
+    with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+         patch("app.api.pipeline_routes._db_save_pipeline"):
+        asyncio.run(save_composition("pipeline-1", 0, body, _profile()))
+        pd = pipeline["previews"]["0"]["preview_data"]
+        assert pd["default_transition"] == {"kind": "flash_white", "durationMs": 600}
+
+        pd.setdefault("audio_duration", 1.0)
+        pd.setdefault("matches", [])
+        with patch("app.api.pipeline_routes._legacy_preview_source_ids_by_path", return_value={}):
+            restored = asyncio.run(restore_previews("pipeline-1", _profile()))
+    assert restored["previews"]["0"]["defaultTransition"] == {
+        "kind": "flash_white",
+        "durationMs": 600,
+    }
+
+
+def test_save_composition_rejects_bad_default_transition():
+    from fastapi import HTTPException
+
+    from app.api.pipeline_routes import SaveCompositionRequest, save_composition
+
+    pipeline = _pipeline_with_preview()
+    body = SaveCompositionRequest(
+        video_timeline=[_body_clip()],
+        default_transition={"kind": "wipe", "durationMs": 300},
+    )
+    with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+         patch("app.api.pipeline_routes._db_save_pipeline"):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(save_composition("pipeline-1", 0, body, _profile()))
+    assert exc.value.status_code == 422
