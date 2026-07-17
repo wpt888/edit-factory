@@ -1,5 +1,26 @@
 # Engineering Change Log
 
+## 2026-07-18 - Pipeline toolbar overlap + heading-consistency fix pack (S1)
+
+- Rebuilt `PipelineStepper`'s toolbar as a plain flex row (context | step
+  track `flex-1` | actions) instead of `absolute left-1/2` + fixed
+  per-breakpoint widths, fixing the stepper/action-button overlap around
+  1100-1300px viewport width.
+- Removed the duplicate "Back to Scripts" button in Step 3's mobile header
+  (the toolbar ghost button already owns that action).
+- Gave every workspace-mode `Card` (7 sites across steps 1-3, source-videos
+  card, history sidebar) `bg-background` instead of the default `bg-card`,
+  removing the visible seam under the toolbar; factored the fix into a
+  shared `WORKSPACE_CARD_BG` constant in `pipeline-utils.tsx`.
+- Unified the Step 2/Step 3 sub-header language (`bg-background`, `h-14`).
+- Split "Review Scripts (N)" / "Preview & Select Variants (N previews
+  shown)" into a heading plus a separate meta line.
+- Added `components/page-header.tsx` and migrated the 14 top-level pages
+  that were missing `font-heading` on their H1 onto it.
+- Added `font-heading` to `CardTitle`'s default className (~40 call sites).
+
+See [Pipeline toolbar overlap + heading-consistency fix pack](28-pipeline-toolbar-heading-fixes.md).
+
 ## 2026-07-17 - Step 3 "Variant Previews" timeline editor rework
 
 - Fixed the Instant Preview frozen playhead (stuck at 0:00, no segment cuts):

@@ -24,3 +24,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Fair multi-tenant render queue](23-render-queue-multi-tenant.md)
 - [BlipStudio credit metering](24-blipstudio-credit-metering.md)
 - [Step 3 "Variant Previews" timeline editor rework](25-step3-variant-timeline-editor.md)
+- [Pipeline toolbar overlap + heading-consistency fix pack](28-pipeline-toolbar-heading-fixes.md)
