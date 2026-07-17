@@ -64,6 +64,10 @@ const titlebar = readFileSync(
   new URL("../src/components/desktop-titlebar.tsx", import.meta.url),
   "utf8",
 );
+const rootLayout = readFileSync(
+  new URL("../src/app/layout.tsx", import.meta.url),
+  "utf8",
+);
 const callbackSource = callbackClient;
 const authProvider = readFileSync(
   new URL("../src/components/auth-provider.tsx", import.meta.url),
@@ -92,6 +96,11 @@ assert.match(
   titlebar,
   /window\.editFactory\?\.isDesktop/,
   "native titlebar controls must be gated by the runtime Electron bridge",
+);
+assert.match(
+  rootLayout,
+  /location\.hostname==="localhost"&&window\.editFactory\?\.isDesktop/,
+  "loopback host pinning must not move browser SSO away from the Creative cookie host",
 );
 assert.match(
   callbackSource,

@@ -8,10 +8,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import { apiPost, apiGet, API_URL } from "@/lib/api";
+import { apiPost, apiGet } from "@/lib/api";
+import { useApiUrl } from "@/hooks/use-api-url";
 import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
+import type { CompositionClip } from "@/types/composition-timeline";
 
 type PreviewPipOverlayConfig = {
   image_url: string;
@@ -24,6 +26,7 @@ interface VariantPreviewPlayerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   matches: MatchPreview[];
+  videoTimeline?: CompositionClip[];
   pipelineId: string;
   variantIndex: number;
   visualVersion?: string;
@@ -57,6 +60,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   open,
   onOpenChange,
   matches,
+  videoTimeline = [],
   pipelineId,
   variantIndex,
   visualVersion,
@@ -83,6 +87,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   audioFadeOut = 0.0,
   applyMetaSubtitleStyle = true,
 }: VariantPreviewPlayerProps) {
+  const mediaApiUrl = useApiUrl();
   const [status, setStatus] = useState<string>("idle");
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState("");
@@ -98,6 +103,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   // Bug #119: keep a ref to matches so the render effect always uses the latest value
   const matchesRef = useRef(matches);
   useEffect(() => { matchesRef.current = matches; }, [matches]);
+  const videoTimelineRef = useRef(videoTimeline);
+  useEffect(() => { videoTimelineRef.current = videoTimeline; }, [videoTimeline]);
 
   // Stop progress tracking (SSE + polling fallback) on unmount or close
   const stopPolling = useCallback(() => {
@@ -157,6 +164,9 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
               duration_override: m.duration_override,
               transforms: m.transforms,
             })),
+            composition_override: videoTimelineRef.current.length > 0
+              ? videoTimelineRef.current
+              : undefined,
             source_video_ids: sourceVideoIds,
             min_segment_duration: minSegmentDuration,
             // Do not reconstruct this field-by-field. The Subtitle Style panel
@@ -259,7 +269,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
         // Primary: SSE progress stream (F2) — instant updates, no 2s polling
         try {
           const es = new EventSource(
-            `${API_URL}/pipeline/preview-progress/${pipelineId}/${variantIndex}${visualVersionQuery}`
+            `${mediaApiUrl}/pipeline/preview-progress/${pipelineId}/${variantIndex}${visualVersionQuery}`
           );
           eventSourceRef.current = es;
           let terminal = false;
@@ -320,12 +330,12 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
   const previewVideoUrl =
     status === "completed" && matchesFingerprint
-      ? `${API_URL}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}${visualVersion ? `&visual_version=${encodeURIComponent(visualVersion)}` : ""}`
+      ? `${mediaApiUrl}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}${visualVersion ? `&visual_version=${encodeURIComponent(visualVersion)}` : ""}`
       : null;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px]">
+      <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px] sm:max-w-[1200px]">
         <DialogHeader>
           <DialogTitle>{title ?? `Variant ${variantIndex + 1} Preview`}</DialogTitle>
         </DialogHeader>

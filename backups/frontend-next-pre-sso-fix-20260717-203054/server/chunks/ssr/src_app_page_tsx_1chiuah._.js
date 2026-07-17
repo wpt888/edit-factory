@@ -1,0 +1,3 @@
+module.exports=[40777,a=>{"use strict";var b=a.i(87924),c=a.i(72131),d=a.i(96221);a.s(["default",0,function(){return(0,c.useEffect)(()=>{window.location.replace("/pipeline")},[]),(0,b.jsx)("div",{className:"flex min-h-screen items-center justify-center bg-background",children:(0,b.jsx)(d.Loader2,{className:"h-8 w-8 animate-spin text-muted-foreground"})})}])}];
+
+//# sourceMappingURL=src_app_page_tsx_1chiuah._.js.map

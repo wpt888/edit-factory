@@ -169,24 +169,203 @@ def _segment_filter_chain(transform: SegmentTransform, width: int, height: int) 
 def _serialize_preview_timeline(
     timeline: List[TimelineEntry],
     segments_data: List[dict],
+    intro_duration_sec: float = 0.0,
+    output_duration: Optional[float] = None,
 ) -> List[dict]:
-    """Serialize timeline entries with source ids needed by browser proxies."""
-    source_video_ids_by_path = {
-        seg.get("source_video_path"): seg.get("source_video_id")
-        for seg in segments_data
-        if seg.get("source_video_path") and seg.get("source_video_id")
-    }
-    return [
-        {
+    """Serialize the post-merge render timeline as the editor source of truth.
+
+    The matcher preview used to expose SRT-level assignments while the renderer
+    performed additional intro, grouping, de-duplication and gap-fill passes.
+    That made the editor look discontinuous and, more importantly, meant it did
+    not describe the video that would actually be rendered.  Each item returned
+    here is now a complete, independently editable output clip.
+    """
+
+    def _matching_segment(entry: TimelineEntry) -> Optional[dict]:
+        candidates = [
+            segment for segment in segments_data
+            if segment.get("source_video_path") == entry.source_video_path
+        ]
+        if not candidates:
+            return None
+
+        def _score(segment: dict) -> tuple:
+            segment_start = float(segment.get("start_time") or 0.0)
+            segment_end = float(segment.get("end_time") or segment_start)
+            contains_start = segment_start - 0.05 <= entry.start_time <= segment_end + 0.05
+            overlap = max(
+                0.0,
+                min(segment_end, entry.end_time) - max(segment_start, entry.start_time),
+            )
+            return (0 if contains_start else 1, abs(segment_start - entry.start_time), -overlap)
+
+        return min(candidates, key=_score)
+
+    serialized: List[dict] = []
+    bounded_output_duration = (
+        max(0.0, float(output_duration)) if output_duration is not None else None
+    )
+    for index, entry in enumerate(timeline):
+        if entry.timeline_duration <= 0.001:
+            continue
+        if bounded_output_duration is not None and entry.timeline_start >= bounded_output_duration - 0.001:
+            break
+
+        visible_duration = entry.timeline_duration
+        if bounded_output_duration is not None:
+            visible_duration = min(
+                visible_duration,
+                bounded_output_duration - entry.timeline_start,
+            )
+        if visible_duration <= 0.001:
+            continue
+
+        segment = _matching_segment(entry) or {}
+        segment_id = segment.get("id")
+        stable_key = "|".join((
+            str(segment_id or segment.get("source_video_id") or entry.source_video_path),
+            f"{entry.start_time:.4f}",
+            f"{entry.timeline_start:.4f}",
+            str(index),
+        ))
+        serialized.append({
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"edit-factory:composition:{stable_key}")),
+            "kind": "intro" if entry.timeline_start < intro_duration_sec - 0.001 else "body",
+            "segment_id": segment_id,
+            "segment_keywords": segment.get("keywords") or [],
             "source_video_path": entry.source_video_path,
-            "source_video_id": source_video_ids_by_path.get(entry.source_video_path),
+            "source_video_id": segment.get("source_video_id"),
+            "thumbnail_path": segment.get("thumbnail_path"),
+            "product_group": segment.get("product_group"),
             "start_time": entry.start_time,
             "end_time": entry.end_time,
             "timeline_start": entry.timeline_start,
-            "timeline_duration": entry.timeline_duration,
-        }
-        for entry in timeline
-    ]
+            "timeline_duration": visible_duration,
+            "transforms": entry.transforms,
+            "pinned": entry.pinned,
+        })
+
+    return serialized
+
+
+def _timeline_from_composition(
+    composition: List[dict],
+    segments_data: List[dict],
+    audio_duration: float,
+) -> List[TimelineEntry]:
+    """Validate an edited composition and convert it to a gapless render timeline.
+
+    Paths supplied by the browser are deliberately ignored.  Every clip is
+    resolved against the already profile-scoped segment library, source ranges
+    are clamped to that segment, and output positions are recomputed
+    cumulatively.  This makes black-frame gaps impossible while preserving the
+    user's clip order and roll edits.
+    """
+    if not isinstance(composition, list) or not composition:
+        raise ValueError("The video composition must contain at least one clip")
+    if len(composition) > 500:
+        raise ValueError("The video composition contains too many clips")
+
+    segment_by_id = {
+        str(segment.get("id")): segment
+        for segment in segments_data
+        if segment.get("id") and not str(segment.get("id")).startswith("_sv_placeholder_")
+    }
+    segments_by_source: Dict[str, List[dict]] = {}
+    for segment in segment_by_id.values():
+        source_video_id = segment.get("source_video_id")
+        if source_video_id:
+            segments_by_source.setdefault(str(source_video_id), []).append(segment)
+
+    def _finite_number(value, fallback: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return number if math.isfinite(number) else fallback
+
+    def _resolve_segment(raw: dict) -> Optional[dict]:
+        segment_id = raw.get("segment_id")
+        if segment_id and str(segment_id) in segment_by_id:
+            return segment_by_id[str(segment_id)]
+
+        source_video_id = raw.get("source_video_id")
+        candidates = segments_by_source.get(str(source_video_id), []) if source_video_id else []
+        if not candidates:
+            return None
+        requested_start = _finite_number(raw.get("start_time"), 0.0)
+        return min(
+            candidates,
+            key=lambda segment: abs(
+                _finite_number(segment.get("start_time"), 0.0) - requested_start
+            ),
+        )
+
+    for original_index, raw in enumerate(composition):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Composition clip {original_index + 1} is invalid")
+
+    ordered = sorted(
+        enumerate(composition),
+        key=lambda item: (
+            _finite_number(item[1].get("timeline_start"), float(item[0])),
+            item[0],
+        ),
+    )
+    timeline: List[TimelineEntry] = []
+    cursor = 0.0
+    for original_index, raw in ordered:
+        segment = _resolve_segment(raw)
+        if not segment or not segment.get("source_video_path"):
+            raise ValueError(
+                f"Composition clip {original_index + 1} no longer exists in the segment library"
+            )
+
+        segment_start = _finite_number(segment.get("start_time"), 0.0)
+        segment_end = _finite_number(segment.get("end_time"), segment_start)
+        if segment_end <= segment_start + 0.001:
+            raise ValueError(f"Composition clip {original_index + 1} has no usable source range")
+
+        requested_start = _finite_number(raw.get("start_time"), segment_start)
+        requested_end = _finite_number(raw.get("end_time"), segment_end)
+        source_start = min(max(requested_start, segment_start), segment_end - 0.001)
+        source_end = min(max(requested_end, source_start + 0.001), segment_end)
+
+        timeline_duration = _finite_number(raw.get("timeline_duration"), 0.0)
+        if timeline_duration < 0.05 or timeline_duration > 3600:
+            raise ValueError(
+                f"Composition clip {original_index + 1} has an invalid output duration"
+            )
+
+        timeline.append(TimelineEntry(
+            source_video_path=str(segment["source_video_path"]),
+            start_time=source_start,
+            end_time=source_end,
+            timeline_start=cursor,
+            timeline_duration=timeline_duration,
+            transforms=raw.get("transforms") if isinstance(raw.get("transforms"), dict) else segment.get("transforms"),
+            pinned=bool(raw.get("pinned", False)),
+        ))
+        cursor += timeline_duration
+
+    # The final mux uses the voice-over as the output boundary.  Keep a tiny
+    # hidden safety tail so rounding at concat boundaries can never expose a
+    # black frame or cut the last subtitle; the editor itself still ends exactly
+    # at audio_duration.
+    required_duration = max(0.0, float(audio_duration)) + 0.05
+    if timeline and cursor < required_duration:
+        last = timeline[-1]
+        timeline[-1] = TimelineEntry(
+            source_video_path=last.source_video_path,
+            start_time=last.start_time,
+            end_time=last.end_time,
+            timeline_start=last.timeline_start,
+            timeline_duration=last.timeline_duration + (required_duration - cursor),
+            transforms=last.transforms,
+            pinned=last.pinned,
+        )
+
+    return timeline
 
 
 def _merge_srt_groups(srt_entries: List[dict], min_segment_duration: float) -> List[List[int]]:
@@ -549,8 +728,19 @@ class AssemblyService:
             logger.warning(
                 f"ElevenLabs TTS failed ({str(el_err)[:200]}) — falling back to Edge TTS (free)"
             )
+            fallback_language = None
+            try:
+                metadata = await tts_service._get_voice_metadata(voice_id)
+                fallback_language = str(
+                    (metadata.get("labels") or {}).get("language") or ""
+                ).lower() or None
+            except Exception:
+                pass
             timestamps = await self._generate_edge_tts_fallback(
-                script_text, profile_id, raw_audio_path
+                script_text,
+                profile_id,
+                raw_audio_path,
+                preferred_language=fallback_language,
             )
 
         # Apply silence removal (same params as _render_final_clip_task)
@@ -600,6 +790,7 @@ class AssemblyService:
         script_text: str,
         profile_id: str,
         raw_audio_path: Path,
+        preferred_language: Optional[str] = None,
     ) -> dict:
         """Generate TTS via Edge (free) and return ESTIMATED character timestamps.
 
@@ -611,7 +802,13 @@ class AssemblyService:
         from app.services.tts.edge import EdgeTTSService
 
         # Respect the profile's configured Edge voice when present
-        edge_voice = "en-US-GuyNeural"
+        romanian_markers = "ăâîșşțţĂÂÎȘŞȚŢ"
+        looks_romanian = any(char in script_text for char in romanian_markers)
+        edge_voice = (
+            "ro-RO-AlinaNeural"
+            if preferred_language == "ro" or looks_romanian
+            else "en-US-GuyNeural"
+        )
         try:
             repo = get_repository()
             profile_row = repo.get_profile(profile_id) if repo else None
@@ -2243,6 +2440,7 @@ class AssemblyService:
         voice_id: Optional[str] = None,
         source_video_ids: Optional[List[str]] = None,
         match_overrides: Optional[List[dict]] = None,
+        composition_override: Optional[List[dict]] = None,
         enable_denoise: bool = False,
         denoise_strength: float = 2.0,
         enable_sharpen: bool = False,
@@ -2290,6 +2488,9 @@ class AssemblyService:
                              When provided, replaces automatic segment matching (Step 5).
                              Each dict has the same shape as MatchResult with an optional
                              duration_override field.
+            composition_override: Optional canonical post-merge video clips from the
+                                  timeline editor. When provided, these clips replace
+                                  the automatic timeline construction in Step 6.
             reuse_audio_path: Path to existing TTS audio to reuse (skips TTS generation).
             reuse_audio_duration: Duration of the reused audio.
             reuse_srt_content: SRT content to reuse with the audio.
@@ -2457,12 +2658,17 @@ class AssemblyService:
             # are in segments_data — even if they weren't returned by the filtered
             # query.  This prevents fallback-to-first-segment when the override
             # references a segment from a source video outside the current filter.
-            if match_overrides:
+            override_references = [
+                *(match_overrides or []),
+                *(composition_override or []),
+            ]
+            if override_references:
                 existing_seg_ids = {seg["id"] for seg in segments_data}
                 missing_seg_ids = [
-                    m.get("segment_id") for m in match_overrides
+                    m.get("segment_id") for m in override_references
                     if m.get("segment_id") and m["segment_id"] not in existing_seg_ids
                 ]
+                missing_seg_ids = list(dict.fromkeys(missing_seg_ids))
                 if missing_seg_ids:
                     logger.info(
                         f"Fetching {len(missing_seg_ids)} override segments missing from "
@@ -2499,7 +2705,7 @@ class AssemblyService:
                 # source_video_ids so the reconstruction path in build_timeline can
                 # always resolve the video file path.
                 override_sv_ids = {
-                    m.get("source_video_id") for m in match_overrides
+                    m.get("source_video_id") for m in override_references
                     if m.get("source_video_id")
                 }
                 existing_sv_ids = {seg["source_video_id"] for seg in segments_data}
@@ -2699,15 +2905,31 @@ class AssemblyService:
             # so the merge pass in build_timeline won't change them further.
             # Ultra-rapid intro is passed through so it appears in the render
             # just as it did in the preview.
-            timeline, _intro_duration_sec = self.build_timeline(
-                match_results=match_results,
-                segments_data=segments_data,
-                audio_duration=audio_duration,
-                duration_overrides=duration_overrides,
-                variant_index=variant_index,
-                min_segment_duration=min_segment_duration,
-                ultra_rapid_intro=ultra_rapid_intro
-            )
+            if composition_override:
+                timeline = _timeline_from_composition(
+                    composition=composition_override,
+                    segments_data=segments_data,
+                    audio_duration=audio_duration,
+                )
+                _intro_duration_sec = sum(
+                    entry.timeline_duration
+                    for entry, raw in zip(timeline, composition_override)
+                    if raw.get("kind") == "intro"
+                )
+                logger.info(
+                    "Step 6/7: Using %s validated composition clips from the timeline editor",
+                    len(timeline),
+                )
+            else:
+                timeline, _intro_duration_sec = self.build_timeline(
+                    match_results=match_results,
+                    segments_data=segments_data,
+                    audio_duration=audio_duration,
+                    duration_overrides=duration_overrides,
+                    variant_index=variant_index,
+                    min_segment_duration=min_segment_duration,
+                    ultra_rapid_intro=ultra_rapid_intro
+                )
 
             # Log final render timeline for debugging
             for t_idx, t_entry in enumerate(timeline):
@@ -2857,6 +3079,7 @@ class AssemblyService:
         pipeline_id: str,
         variant_index: int = 0,
         match_overrides: Optional[List[dict]] = None,
+        composition_override: Optional[List[dict]] = None,
         source_video_ids: Optional[List[str]] = None,
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
@@ -2923,6 +3146,7 @@ class AssemblyService:
             preset_data=preview_preset,
             subtitle_settings=subtitle_settings,
             match_overrides=match_overrides,
+            composition_override=composition_override,
             source_video_ids=source_video_ids,
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
@@ -3183,7 +3407,12 @@ class AssemblyService:
         # Keep the source id alongside the path so the browser can use the
         # seek-friendly preview proxy for ultra-rapid intro clips. Older saved
         # previews may not have it, so the frontend still supports path fallback.
-        timeline_data = _serialize_preview_timeline(timeline, segments_data)
+        timeline_data = _serialize_preview_timeline(
+            timeline,
+            segments_data,
+            intro_duration_sec=intro_duration_sec,
+            output_duration=audio_duration,
+        )
 
         intro_segments = [
             entry for entry in timeline_data
@@ -3312,6 +3541,10 @@ class AssemblyService:
             # visual intro duration, never an audio/SRT offset.
             "intro_offset_sec": float(intro_duration_sec),
             "intro_segments": intro_segments,
+            # Canonical post-merge composition used by the editor, preview
+            # renderer and final renderer. `timeline` remains as a legacy alias
+            # for previously persisted previews and older clients.
+            "video_timeline": timeline_data,
             "total_phrases": len(match_results),
             "matched_count": matched_count,
             "unmatched_count": unmatched_count,

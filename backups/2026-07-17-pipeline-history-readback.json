@@ -1,0 +1,1 @@
+{"query":"select id, name, jsonb_array_length(scripts) as script_count, created_at, updated_at from public.editai_pipelines where profile_id = 'a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc' order by created_at desc limit 10"}

@@ -53,7 +53,7 @@ export function InlineVideoPlayer({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[400px] max-h-[85vh] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
+      <DialogContent className="max-w-[400px] sm:max-w-[400px] max-h-[85vh] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
         <VisuallyHidden><DialogTitle>{title || "Video player"}</DialogTitle></VisuallyHidden>
         <div className="relative flex flex-col max-h-[85vh]">
           <Button

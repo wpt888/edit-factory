@@ -275,9 +275,13 @@ class ProductLibraryStore:
         where = "profile_id = ?"
         params: List[Any] = [profile_id]
         if search:
-            where += " AND (title LIKE ? OR description LIKE ? OR extra_fields LIKE ?)"
+            where += (
+                " AND (title LIKE ? OR description LIKE ? OR sku LIKE ? "
+                "OR external_id LIKE ? OR brand LIKE ? OR category LIKE ? "
+                "OR extra_fields LIKE ?)"
+            )
             term = f"%{search}%"
-            params.extend([term, term, term])
+            params.extend([term] * 7)
         sql = f"SELECT * FROM local_products WHERE {where} ORDER BY created_at DESC"
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
@@ -289,9 +293,13 @@ class ProductLibraryStore:
         where = "profile_id = ?"
         params: List[Any] = [profile_id]
         if search:
-            where += " AND (title LIKE ? OR description LIKE ? OR extra_fields LIKE ?)"
+            where += (
+                " AND (title LIKE ? OR description LIKE ? OR sku LIKE ? "
+                "OR external_id LIKE ? OR brand LIKE ? OR category LIKE ? "
+                "OR extra_fields LIKE ?)"
+            )
             term = f"%{search}%"
-            params.extend([term, term, term])
+            params.extend([term] * 7)
         row = self._conn.execute(
             f"SELECT COUNT(*) FROM local_products WHERE {where}", params
         ).fetchone()

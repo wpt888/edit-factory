@@ -23,12 +23,19 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { apiGetWithRetry } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { ChevronDown, ChevronUp, Film, Loader2 } from "lucide-react";
+import {
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SCRIPT_AI_PROVIDER,
+  DESKTOP_CODEX_AVAILABLE,
+  type ScriptAiProvider,
+} from "@/lib/script-ai";
 
 export interface BatchSettings {
   voiceover_mode: "quick" | "elaborate";
   tts_provider: "edge" | "elevenlabs";
   voice_id: string | null;
-  ai_provider: "gemini" | "claude";
+  ai_provider: ScriptAiProvider;
+  codex_model: string;
   duration_s: number;
   encoding_preset: string;
   cta_text: string;
@@ -57,7 +64,10 @@ export function BatchSettingsDialog({
   const [voiceoverMode, setVoiceoverMode] = useState<"quick" | "elaborate">("quick");
   const [ttsProvider, setTtsProvider] = useState<"edge" | "elevenlabs">("edge");
   const [voiceId, setVoiceId] = useState("");
-  const [aiProvider, setAiProvider] = useState<"gemini" | "claude">("gemini");
+  const [aiProvider, setAiProvider] = useState<ScriptAiProvider>(
+    DEFAULT_SCRIPT_AI_PROVIDER,
+  );
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [duration, setDuration] = useState<string>("30");
   const [encodingPreset, setEncodingPreset] = useState<string>("tiktok");
   const [ctaText, setCtaText] = useState("Comanda acum!");
@@ -97,6 +107,7 @@ export function BatchSettingsDialog({
       tts_provider: ttsProvider,
       voice_id: voiceId || defaultVoice || null,
       ai_provider: aiProvider,
+      codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
       duration_s: parseInt(duration, 10) || 30,
       encoding_preset: encodingPreset,
       cta_text: ctaText,
@@ -142,7 +153,7 @@ export function BatchSettingsDialog({
             <p className="text-xs text-muted-foreground">
               {voiceoverMode === "quick"
                 ? "Uses a product template for fast generation — no AI cost."
-                : "Uses Gemini/Claude to write a custom voiceover script — slower but more creative."}
+                : "Uses your selected AI provider to write a custom voiceover script."}
             </p>
           </div>
 
@@ -154,7 +165,7 @@ export function BatchSettingsDialog({
               </Label>
               <Select
                 value={aiProvider}
-                onValueChange={(v) => setAiProvider(v as "gemini" | "claude")}
+                onValueChange={(v) => setAiProvider(v as ScriptAiProvider)}
                 disabled={loading}
               >
                 <SelectTrigger id="batch-ai-provider" className="w-[200px]">
@@ -163,8 +174,28 @@ export function BatchSettingsDialog({
                 <SelectContent>
                   <SelectItem value="gemini">Gemini</SelectItem>
                   <SelectItem value="claude">Claude</SelectItem>
+                  {DESKTOP_CODEX_AVAILABLE && (
+                    <SelectItem value="codex">Codex (ChatGPT subscription)</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
+              {aiProvider === "codex" && DESKTOP_CODEX_AVAILABLE && (
+                <div className="space-y-2 pt-2">
+                  <Label htmlFor="batch-codex-model">Codex Model</Label>
+                  <Input
+                    id="batch-codex-model"
+                    value={codexModel}
+                    onChange={(event) => setCodexModel(event.target.value)}
+                    placeholder="gpt-5.4-mini"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    className="font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Uses the local ChatGPT Codex subscription login.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

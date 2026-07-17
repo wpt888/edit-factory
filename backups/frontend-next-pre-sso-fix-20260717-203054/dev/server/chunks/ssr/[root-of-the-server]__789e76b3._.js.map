@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 26, "column": 0}, "map": {"version":3,"sources":["file:///C:/OBSID%20SRL/n8n/edit_factory/frontend/src/app/page.tsx"],"sourcesContent":["import { redirect } from \"next/navigation\";\n\nexport default function Home() {\n  redirect(\"/pipeline\");\n}\n"],"names":[],"mappings":";;;;AAAA;AAAA;;AAEe,SAAS;IACtB,IAAA,iMAAQ,EAAC;AACX"}}]
+}

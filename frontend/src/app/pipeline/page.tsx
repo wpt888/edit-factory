@@ -34,6 +34,7 @@ import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
+import type { CompositionClip } from "@/types/composition-timeline";
 import {
   MatchPreview,
   PreviewData,
@@ -59,6 +60,13 @@ import { Step3Preview } from "./components/step3-preview";
 import { Step4Render } from "./components/step4-render";
 import { PipelineStepper } from "./components/pipeline-stepper";
 import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
+import {
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SCRIPT_AI_PROVIDER,
+  DESKTOP_CODEX_AVAILABLE,
+  normalizeScriptAiProvider,
+  type ScriptAiProvider,
+} from "@/lib/script-ai";
 
 // D1: the segment↔product association picker is keyed on Gomag catalog product
 // IDs. With the Gomag catalog gated off (default) it has no products to show, so
@@ -70,7 +78,7 @@ const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
 // The pointer lets us reuse the existing backend restore path (?id=); the draft
 // covers Step-1 text typed before a pipeline id exists yet.
 const PIPELINE_SESSION_KEY = "pipeline.session"; // { pipelineId, step }
-const PIPELINE_DRAFT_KEY = "pipeline.draft"; // { pipelineName, idea, context, variantCount, provider, targetScriptDuration }
+const PIPELINE_DRAFT_KEY = "pipeline.draft"; // { pipelineName, idea, context, variantCount, provider, codexModel, targetScriptDuration }
 const LEGACY_PIPELINE_SESSION_KEY = "ef_pipeline_session";
 const LEGACY_PIPELINE_DRAFT_KEY = "ef_pipeline_draft";
 
@@ -166,7 +174,13 @@ function PipelinePage() {
   const [contextProducts, setContextProducts] = useState<ContextProduct[]>([]);
   const [variantCount, setVariantCount] = useState(3);
   const [targetScriptDuration, setTargetScriptDuration] = useState(30);
-  const [provider, setProvider] = useState("gemini");
+  const [provider, setProviderState] = useState<ScriptAiProvider>(
+    DEFAULT_SCRIPT_AI_PROVIDER,
+  );
+  const setProvider = useCallback((value: string) => {
+    setProviderState(normalizeScriptAiProvider(value));
+  }, []);
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationJob, setGenerationJob] = useState<Partial<AsyncJobState> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -588,6 +602,50 @@ function PipelinePage() {
     return matchesChangeHandlers.current[previewKey];
   }, []);
 
+  const videoTimelineChangeHandlers = useRef<Record<string, (timeline: CompositionClip[]) => void>>({});
+  const videoTimelineSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const getVideoTimelineChangeHandler = useCallback((previewKey: string) => {
+    if (!videoTimelineChangeHandlers.current[previewKey]) {
+      videoTimelineChangeHandlers.current[previewKey] = (videoTimeline: CompositionClip[]) => {
+        setPreviews((previous) => {
+          const current = previous[previewKey] || {} as PreviewData;
+          return {
+            ...previous,
+            [previewKey]: {
+              ...current,
+              video_timeline: videoTimeline,
+              intro_offset_sec: videoTimeline
+                .filter((clip) => clip.kind === "intro")
+                .reduce((sum, clip) => sum + clip.timeline_duration, 0),
+            },
+          };
+        });
+
+        const pid = pipelineIdRef.current;
+        if (!pid) return;
+        if (videoTimelineSaveTimers.current[previewKey]) {
+          clearTimeout(videoTimelineSaveTimers.current[previewKey]);
+        }
+        videoTimelineSaveTimers.current[previewKey] = setTimeout(() => {
+          delete videoTimelineSaveTimers.current[previewKey];
+          const baseVariant = parseInt(previewKey, 10);
+          if (!Number.isFinite(baseVariant)) return;
+          const underscoreIndex = previewKey.indexOf("_");
+          const visualVersion = underscoreIndex > 0
+            ? previewKey.slice(underscoreIndex + 1)
+            : undefined;
+          apiPut(`/pipeline/${pid}/composition/${baseVariant}`, {
+            video_timeline: videoTimeline,
+            visual_version: visualVersion,
+          }).catch((error) => {
+            console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
+          });
+        }, 500);
+      };
+    }
+    return videoTimelineChangeHandlers.current[previewKey];
+  }, []);
+
   const interstitialSlidesChangeHandlers = useRef<Record<string, (slides: InterstitialSlide[]) => void>>({});
   const getInterstitialSlidesChangeHandler = useCallback((previewKey: string) => {
     if (!interstitialSlidesChangeHandlers.current[previewKey]) {
@@ -665,6 +723,7 @@ function PipelinePage() {
           if (!pipelineName && d.pipelineName) setPipelineName(d.pipelineName);
           if (typeof d.variantCount === "number") setVariantCount(d.variantCount);
           if (typeof d.provider === "string" && d.provider) setProvider(d.provider);
+          if (typeof d.codexModel === "string" && d.codexModel) setCodexModel(d.codexModel);
           if (typeof d.targetScriptDuration === "number") setTargetScriptDuration(d.targetScriptDuration);
         }
       }
@@ -708,11 +767,11 @@ function PipelinePage() {
         currentProfile.id,
         PIPELINE_DRAFT_KEY,
         JSON.stringify({
-          pipelineName, idea, context, variantCount, provider, targetScriptDuration,
+          pipelineName, idea, context, variantCount, provider, codexModel, targetScriptDuration,
         }),
       );
     } catch { /* storage full/blocked — non-fatal */ }
-  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, targetScriptDuration, currentProfile?.id]);
+  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, codexModel, targetScriptDuration, currentProfile?.id]);
 
   // Restore pipeline from URL ?id=<pipeline_id> on mount
   const urlRestoreAttempted = useRef(false);
@@ -752,6 +811,7 @@ function PipelinePage() {
         if (data.idea) setIdea(data.idea);
         if (data.context) setContext(stripEmbeddedProductBlocks(data.context));
         if (data.provider) setProvider(data.provider);
+        if (data.codex_model) setCodexModel(data.codex_model);
         if (data.variant_count) setVariantCount(data.variant_count);
         setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
         if (data.library_project_id) setLibraryProjectId(data.library_project_id);
@@ -897,7 +957,9 @@ function PipelinePage() {
   const stripEmbeddedProductBlocks = (value: string): string => {
     if (!value) return "";
     return value
-      .replace(/(?:^|\n)\[Product:\s*[^\]]+\]\s*(?:\n[^\n\[]*)*/g, "")
+      // [ \t]* (not \s*) — a greedy \s* swallowed the newline the description
+      // group needs, so description lines under a block were never stripped.
+      .replace(/(?:^|\n)\[(?:Product|Context):\s*[^\]]+\][ \t]*(?:\n[^\n\[]*)*/g, "")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   };
@@ -921,7 +983,7 @@ function PipelinePage() {
   const contextProductCount = contextProducts.length;
 
   // Context products: fetched from the local Product Library (D1 — the Gomag
-  // catalog is gated off). The library is small, so search filters client-side.
+  // catalog is gated off). The API searches title, SKU and imported fields.
   const fetchCatalogProducts = useCallback(async (search: string, brand: string, category: string, page: number) => {
     void brand; void category; void page; // kept for call-site compatibility; library has no taxonomy/pagination
     setCatalogLoading(true);
@@ -929,10 +991,8 @@ function PipelinePage() {
       const params = new URLSearchParams({ search, page: String(page), page_size: "50" });
       const res = await apiGet(`/product-library?${params}`);
       const data = await res.json();
-      const q = search.trim().toLowerCase();
       interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[]; brand?: string; category?: string; sku?: string; price?: string; sale_price?: string; product_url?: string; extra_fields?: Record<string, unknown> }
       const all = ((data.products || []) as LibraryProduct[])
-        .filter((p) => !q || p.title.toLowerCase().includes(q))
         .map((p) => ({
           id: p.id,
           title: p.title,
@@ -1199,55 +1259,83 @@ function PipelinePage() {
     );
   }, [previewCards, previews, ttsResults]);
 
-  // Auto-select a distinctive thumbnail per variant when previews change
+  // Auto-select a distinctive thumbnail per variant when previews change.
+  // Batch rule: no frame may be reused across variants — identity is the frame
+  // image URL, not the segment (A/B siblings share segments, so distinctness
+  // must come from picking different frames within them).
   useEffect(() => {
     if (previewCards.length === 0) return;
-    const usedSegmentIds = new Set<string>();
-    const newThumbnails: Record<PreviewKey, ThumbnailSelection> = {};
+    let cancelled = false;
 
-    for (const card of previewCards) {
-      // Skip if user manually selected a thumbnail for this variant
-      const existing = variantThumbnails[card.key];
-      if (existing && !existing.isAutoSelected) {
-        newThumbnails[card.key] = existing;
-        usedSegmentIds.add(existing.segmentId);
-        continue;
+    (async () => {
+      const usedUrls = new Set<string>();
+      const newThumbnails: Record<PreviewKey, ThumbnailSelection> = {};
+
+      // Pass 1: reserve every manual selection's frame first, regardless of order.
+      for (const card of previewCards) {
+        const existing = variantThumbnails[card.key];
+        if (existing && !existing.isAutoSelected) {
+          newThumbnails[card.key] = existing;
+          usedUrls.add(existing.imageUrl);
+        }
       }
 
-      const preview = previews[card.key];
-      if (!preview?.matches) continue;
+      // Pass 2: auto-assign a unique frame to the remaining variants.
+      for (const card of previewCards) {
+        if (newThumbnails[card.key]) continue;
+        const preview = previews[card.key];
+        if (!preview?.matches) continue;
 
-      // Collect unique segments with thumbnails
-      const segsWithThumbs = preview.matches
-        .filter((m) => m.segment_id && m.thumbnail_path)
-        .reduce<{ id: string; thumb: string }[]>((acc, m) => {
-          if (!acc.some((s) => s.id === m.segment_id)) {
-            acc.push({ id: m.segment_id!, thumb: m.thumbnail_path! });
+        const segsWithThumbs = preview.matches
+          .filter((m) => m.segment_id && m.thumbnail_path)
+          .reduce<{ id: string; thumb: string }[]>((acc, m) => {
+            if (!acc.some((s) => s.id === m.segment_id)) {
+              acc.push({ id: m.segment_id!, thumb: m.thumbnail_path! });
+            }
+            return acc;
+          }, []);
+        if (segsWithThumbs.length === 0) continue;
+
+        // Prefer a segment whose default frame is still free.
+        let pick = segsWithThumbs.find((s) => !usedUrls.has(s.thumb));
+
+        // All default frames taken (typical for A/B siblings): pull distinct
+        // frames from a segment until we find one no other variant claimed.
+        // ponytail: only fires on collision; /frames caches, so it's cheap.
+        if (!pick) {
+          for (const s of segsWithThumbs) {
+            try {
+              const res = await apiGet(`/segments/${s.id}/frames?count=6`);
+              const frames: { frame_url: string }[] = await res.json();
+              const free = frames.find((f) => !usedUrls.has(f.frame_url));
+              if (free) { pick = { id: s.id, thumb: free.frame_url }; break; }
+            } catch (err) {
+              console.error("Failed to load frames for auto-thumbnail:", err);
+            }
           }
-          return acc;
-        }, []);
+        }
 
-      if (segsWithThumbs.length === 0) continue;
+        // Last resort: accept the segment default even if it duplicates.
+        if (!pick) pick = segsWithThumbs[card.baseIndex % segsWithThumbs.length];
 
-      // Pick a segment not yet used by another variant (diversity)
-      const unused = segsWithThumbs.find((s) => !usedSegmentIds.has(s.id));
-      const picked = unused ?? segsWithThumbs[card.baseIndex % segsWithThumbs.length];
+        newThumbnails[card.key] = {
+          segmentId: pick.id,
+          imageUrl: pick.thumb,
+          isAutoSelected: true,
+        };
+        usedUrls.add(pick.thumb);
+      }
 
-      newThumbnails[card.key] = {
-        segmentId: picked.id,
-        imageUrl: picked.thumb,
-        isAutoSelected: true,
-      };
-      usedSegmentIds.add(picked.id);
-    }
+      if (cancelled) return;
+      const changed = previewCards.some(
+        (card) =>
+          newThumbnails[card.key]?.segmentId !== variantThumbnails[card.key]?.segmentId ||
+          newThumbnails[card.key]?.imageUrl !== variantThumbnails[card.key]?.imageUrl
+      );
+      if (changed) setVariantThumbnails(newThumbnails);
+    })();
 
-    // Only update if something changed
-    const changed = previewCards.some(
-      (card) =>
-        newThumbnails[card.key]?.segmentId !== variantThumbnails[card.key]?.segmentId ||
-        newThumbnails[card.key]?.imageUrl !== variantThumbnails[card.key]?.imageUrl
-    );
-    if (changed) setVariantThumbnails(newThumbnails);
+    return () => { cancelled = true; };
   }, [previews, previewCards]); // eslint-disable-line react-hooks/exhaustive-deps -- variantThumbnails read intentionally from current value
 
   // Fetch product groups when source video selection changes
@@ -1596,6 +1684,7 @@ function PipelinePage() {
         context_products: contextProducts.length > 0 ? contextProducts : undefined,
         variant_count: variantCount,
         provider,
+        codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
         target_script_duration: targetScriptDuration,
       }, { timeout: 60_000, signal: abortController.signal });
 
@@ -1672,6 +1761,7 @@ function PipelinePage() {
         context: stripEmbeddedProductBlocks(context) || "",
         context_products: contextProducts,
         scripts: emptyScripts,
+        provider,
       }, { timeout: 60_000 });
       const data = await res.json();
       if (!isMountedRef.current) return;
@@ -1898,6 +1988,7 @@ function PipelinePage() {
   // Build the render payload (shared between check-render and render calls)
   const buildRenderPayload = () => {
     const matchOverrides: Record<string, MatchPreview[]> = {};
+    const compositionOverrides: Record<string, CompositionClip[]> = {};
     const selectedPreviewCards = previewCards.filter(card => selectedVariants.has(card.baseIndex));
     for (const card of selectedPreviewCards) {
       if (previews[card.key]?.matches && previews[card.key].matches.length > 0) {
@@ -1907,6 +1998,9 @@ function PipelinePage() {
           `[Render] Variant ${card.key}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
           `previews[${card.key}] exists: ${!!previews[card.key]}, matches count: ${previews[card.key]?.matches?.length ?? 0}`
         );
+      }
+      if (previews[card.key]?.video_timeline?.length) {
+        compositionOverrides[card.key] = previews[card.key].video_timeline!;
       }
     }
 
@@ -1946,6 +2040,9 @@ function PipelinePage() {
       voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
       source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
       match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
+      composition_overrides: Object.keys(compositionOverrides).length > 0
+        ? compositionOverrides
+        : undefined,
       interstitial_slides: filteredInterstitialSlides,
       attention_timelines: Object.fromEntries(
         selectedPreviewCards
@@ -2155,6 +2252,7 @@ function PipelinePage() {
       const payload = buildRenderPayload();
       // Remove match_overrides — backend will auto-match with different segments
       delete payload.match_overrides;
+      delete payload.composition_overrides;
       payload.variant_indices = [variantIndex];
 
       const url = `/pipeline/remake/${pipelineId}/${variantIndex}` + (visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "");
@@ -2184,11 +2282,13 @@ function PipelinePage() {
     stopRenderPolling();
     setStep(1);
     setIdea("");
-    setContext("");
+    // Keep `context` — it's reusable brand/business info (mass context) the user
+    // shouldn't retype per video. Selected items (specific context) do reset.
     setContextProducts([]);
     setContextExpanded(true);
     setVariantCount(3);
-    setProvider("gemini");
+    setProvider(DEFAULT_SCRIPT_AI_PROVIDER);
+    setCodexModel(DEFAULT_CODEX_MODEL);
     setError(null);
     setPipelineId(null);
     setGenerationJob(null);
@@ -2247,7 +2347,10 @@ function PipelinePage() {
       if (requestInFlight) return;
       requestInFlight = true;
       try {
-        const res = await apiGet(`/pipeline/generation-status/${pipelineId}`);
+        const res = await apiGet(`/pipeline/generation-status/${pipelineId}`, {
+          cache: "no-store",
+          memoryCache: false,
+        });
         const data = await res.json();
         if (disposed || !isMountedRef.current) return;
         const job = (data.job || {}) as Partial<AsyncJobState>;
@@ -2306,6 +2409,7 @@ function PipelinePage() {
     try {
       const res = await apiGet(`/pipeline/scripts/${id}`);
       const data = await res.json();
+      if (data.codex_model) setCodexModel(data.codex_model);
       const restoredJob = (data.generation_job || {}) as Partial<AsyncJobState>;
       if (isActiveAsyncJob(restoredJob)) {
         setPipelineId(id);
@@ -3363,7 +3467,8 @@ function PipelinePage() {
     try {
       const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${variantIndex}`, {
         provider,
-      }, { timeout: 120_000 });
+        codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
+      }, { timeout: provider === "codex" ? 240_000 : 120_000 });
       const data = await res.json();
 
       // Update script in local state
@@ -3382,7 +3487,11 @@ function PipelinePage() {
       toast.success(`Script ${variantIndex + 1} regenerated`);
     } catch (err) {
       handleApiError(err, "Script regeneration error");
-      toast.error("Failed to regenerate script. Please try again.");
+      toast.error(
+        err instanceof ApiError
+          ? err.detail || err.message
+          : "Failed to regenerate script. Please try again.",
+      );
     } finally {
       setRegeneratingScript(prev => ({ ...prev, [variantIndex]: false }));
     }
@@ -3404,7 +3513,8 @@ function PipelinePage() {
       try {
         const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${i}`, {
           provider,
-        }, { timeout: 120_000 });
+          codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
+        }, { timeout: provider === "codex" ? 240_000 : 120_000 });
         const data = await res.json();
 
         setScripts(prev => {
@@ -3991,6 +4101,9 @@ function PipelinePage() {
     setTargetScriptDuration,
     provider,
     setProvider,
+    codexModel,
+    setCodexModel,
+    codexAvailable: DESKTOP_CODEX_AVAILABLE,
     error,
     totalSegmentDuration,
     isGenerating,
@@ -4145,6 +4258,7 @@ function PipelinePage() {
     getInterstitialSlidesChangeHandler,
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
+    getVideoTimelineChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     savePresetName,

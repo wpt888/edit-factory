@@ -2605,6 +2605,58 @@ async def extract_segment_frames(
     return frames
 
 
+@router.get("/{segment_id}/frame")
+async def extract_segment_frame_at(
+    segment_id: str,
+    pos: float = Query(default=0.0, ge=0.0, le=1.0),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Extract a single thumbnail frame at a normalized scrub position (0..1)
+    within a segment. Powers the timeline scrubber in the thumbnail picker."""
+    repo = get_repository()
+
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    sv = repo.get_source_video(seg["source_video_id"])
+    if not sv:
+        raise HTTPException(status_code=404, detail="Source video not found")
+    video_path = normalize_path(sv["file_path"])
+    if not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    start_t = float(seg["start_time"])
+    end_t = float(seg["end_time"])
+    duration = end_t - start_t
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Segment has zero duration")
+
+    # Quantize to 1/1000 so scrubbing reuses cached frames instead of spawning
+    # a new ffmpeg per pixel of slider travel.
+    pos_q = round(pos, 3)
+    ts = start_t + duration * pos_q
+    frame_filename = f"{segment_id}_scrub_{int(pos_q * 1000):04d}.jpg"
+    frame_path = get_settings().base_dir / "segments" / frame_filename
+    frame_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not frame_path.exists():
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{ts:.3f}",
+            "-i", video_path,
+            "-vframes", "1",
+            "-vf", "scale=540:-1",
+            "-q:v", "3",
+            str(frame_path),
+        ]
+        result = safe_ffmpeg_run(cmd, timeout=15, operation=f"scrub frame {segment_id}@{pos_q}")
+        if not result or result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Frame extraction failed")
+
+    return {"pos": pos_q, "timestamp": round(ts, 3), "frame_url": frame_filename}
+
+
 # ============== FILES ENDPOINT ==============
 
 @router.get("/files/{file_path:path}")

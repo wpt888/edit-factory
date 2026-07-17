@@ -25,11 +25,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
+from app.config import get_settings
 from app.core.rate_limit import limiter
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.job_storage import get_job_storage
 from app.services.script_generator import get_script_generator_for_profile
+from app.services.codex_script_provider import DEFAULT_CODEX_MODEL
 from app.services.studio_metering import (
     MeteringIdentity,
     StudioMeteringBlocked,
@@ -51,6 +53,12 @@ _batch_worker_lock = asyncio.Lock()
 class BatchSettings(BaseModel):
     """Common settings applied to every idea in the batch."""
     provider: str = "gemini"
+    codex_model: str = Field(
+        default=DEFAULT_CODEX_MODEL,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$",
+    )
     voice_id: Optional[str] = None
     elevenlabs_model: str = "eleven_flash_v2_5"
     words_per_subtitle: int = Field(default=2, ge=1, le=6)
@@ -400,6 +408,7 @@ async def _generate_scripts_for_idea(
         product_groups=product_groups_dict or None,
         ai_instructions=ai_instructions,
         target_duration=settings.target_script_duration,
+        codex_model=settings.codex_model,
     )
 
 
@@ -589,6 +598,16 @@ async def create_batch(
     ideas = [i.strip() for i in body.ideas if i.strip()]
     if not ideas:
         raise HTTPException(status_code=400, detail="No non-empty ideas provided")
+    if body.settings.provider not in {"gemini", "claude", "codex"}:
+        raise HTTPException(
+            status_code=400,
+            detail="provider must be 'gemini', 'claude', or 'codex'",
+        )
+    if body.settings.provider == "codex" and not get_settings().desktop_mode:
+        raise HTTPException(
+            status_code=400,
+            detail="Codex (ChatGPT subscription) is available only in Blip Studio desktop.",
+        )
 
     storage = get_job_storage()
     batch_id = str(uuid.uuid4())

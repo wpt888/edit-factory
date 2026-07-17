@@ -49,7 +49,7 @@ import { ImagePickerDialog } from "@/components/dialogs/image-picker-dialog";
 import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/dialogs/product-picker-dialog";
-import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
+import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL, getApiUrl } from "@/lib/api";
 import { pickLocalVideoFiles } from "@/lib/desktop";
 import { ApiError } from "@/lib/api-error";
 import { useRouter } from "next/navigation";
@@ -151,6 +151,7 @@ export default function SegmentsPage() {
   // Source videos state
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<SourceVideo | null>(null);
+  const [mediaApiUrl, setMediaApiUrl] = useState(API_URL);
   const [uploadingVideo, setUploadingVideo] = useState(false);
   const [renamingVideoId, setRenamingVideoId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -244,6 +245,13 @@ export default function SegmentsPage() {
   segmentsRef.current = segments;
   const activeTransformsRef = useRef(activeTransforms);
   activeTransformsRef.current = activeTransforms;
+
+  // Keep native media requests on the same loopback hostname as the renderer.
+  // The initial value stays deterministic for SSR; after hydration the runtime
+  // hostname fixes localhost/127.0.0.1 cookie mismatches.
+  useEffect(() => {
+    setMediaApiUrl(getApiUrl());
+  }, []);
 
   // Format time as mm:ss
   const formatTime = (time: number): string => {
@@ -1967,7 +1975,7 @@ export default function SegmentsPage() {
                       <Video className="size-4 text-muted-foreground" />
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={`${API_URL}/segments/source-videos/${video.id}/thumbnail`}
+                        src={`${mediaApiUrl}/segments/source-videos/${video.id}/thumbnail`}
                         alt={video.name}
                         className="absolute inset-0 w-full h-full object-cover"
                         onError={(e) => {
@@ -2480,7 +2488,7 @@ export default function SegmentsPage() {
       <div className="flex-1 min-h-0">
         {selectedVideo ? (
           <VideoSegmentPlayer
-            videoUrl={`${API_URL}/segments/source-videos/${selectedVideo.id}/stream${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
+            videoUrl={`${mediaApiUrl}/segments/source-videos/${selectedVideo.id}/stream${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
             duration={selectedVideo.duration || 0}
             segments={segments}
             onSegmentCreate={handleSegmentCreate}
@@ -2494,7 +2502,7 @@ export default function SegmentsPage() {
             productGroups={productGroups}
             videoWidth={selectedVideo.width}
             videoHeight={selectedVideo.height}
-            timelineThumbnailUrl={`${API_URL}/segments/source-videos/${selectedVideo.id}/thumbnail${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
+            timelineThumbnailUrl={`${mediaApiUrl}/segments/source-videos/${selectedVideo.id}/thumbnail${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
           />
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">

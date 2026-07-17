@@ -1,0 +1,25 @@
+{
+  "purpose": "Recovery checkpoint before applying migration 053_elevenlabs_tenant_governance.sql",
+  "captured_at": "2026-07-16",
+  "source": "Supabase profiles.tts_settings (voice fields only; no credentials)",
+  "profiles": [
+    {
+      "profile_id": "72fffc27-ae54-49b5-9e96-2843645379f4",
+      "profile_name": "Obsid",
+      "voice_id": "urzoE6aZYmSRdFQ6215h",
+      "voice_name": "Ana Maria"
+    },
+    {
+      "profile_id": "00000000-0000-0000-0000-000000000000",
+      "profile_name": "Default",
+      "voice_id": "",
+      "voice_name": ""
+    },
+    {
+      "profile_id": "1d651396-6bea-4774-bf53-ad17bbc5ad42",
+      "profile_name": "Nortia",
+      "voice_id": "urzoE6aZYmSRdFQ6215h",
+      "voice_name": "Ana Maria"
+    }
+  ]
+}

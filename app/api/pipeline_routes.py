@@ -33,6 +33,7 @@ from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.utils import normalize_path
 from app.core.rate_limit import limiter
+from app.services.codex_script_provider import DEFAULT_CODEX_MODEL
 from app.services.script_generator import get_script_generator_for_profile
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
@@ -86,24 +87,42 @@ def _increment_segment_usage(supabase_client, segment_ids: list):
 
 logger = logging.getLogger(__name__)
 
+_SCRIPT_PROVIDERS = frozenset({"gemini", "claude", "codex"})
+_CODEX_MODEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$"
+
+
+def _validate_script_provider(provider: str) -> None:
+    if provider not in _SCRIPT_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail="provider must be 'gemini', 'claude', or 'codex'",
+        )
+    if provider == "codex" and not get_settings().desktop_mode:
+        raise HTTPException(
+            status_code=400,
+            detail="Codex (ChatGPT subscription) is available only in Blip Studio desktop.",
+        )
+
 
 def _strip_embedded_product_blocks(context: str) -> str:
-    """Remove legacy frontend-injected product blocks from freeform context.
+    """Remove legacy frontend-injected item blocks from freeform context.
 
-    Older frontend builds persisted selected products both in `context_products`
+    Older frontend builds persisted selected items both in `context_products`
     and inline inside `context` as:
 
-        [Product: Title]
+        [Product: Title]   (or [Context: Title] after the Context Library rename)
         Description...
 
-    This leaked stale products into later Gemini calls when a pipeline was
-    restored and product selection changed. Keep `context` as manual text only.
+    This leaked stale items into later Gemini calls when a pipeline was
+    restored and item selection changed. Keep `context` as manual text only.
     """
     if not context:
         return ""
 
     cleaned = _re.sub(
-        r"(?:^|\n)\[Product:\s*[^\]]+\]\s*(?:\n[^\n\[]*)*",
+        # [ \t]* (not \s*) — a greedy \s* swallowed the newline the description
+        # group needs, so description lines under a block were never stripped.
+        r"(?:^|\n)\[(?:Product|Context):\s*[^\]]+\][ \t]*(?:\n[^\n\[]*)*",
         "",
         context,
         flags=_re.MULTILINE,
@@ -137,9 +156,45 @@ def _build_effective_pipeline_context(
                     details.append(f"{key}: {value}")
         if title:
             details_text = "\n".join(details)
-            product_blocks.append(f"[Product: {title}]" + (f"\n{details_text}" if details_text else ""))
+            # Neutral label — items may be products, services, or offers; "Product"
+            # steered scripts toward hard-sell e-commerce copy.
+            product_blocks.append(f"[Context: {title}]" + (f"\n{details_text}" if details_text else ""))
 
     return "\n\n".join(part for part in [manual_context, *product_blocks] if part).strip()
+
+
+def _resolve_pipeline_audio_path(raw_path: str | Path) -> Path:
+    """Resolve persisted relative media paths against the desktop data directory."""
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    appdata_path = get_settings().base_dir / path
+    if appdata_path.exists():
+        return appdata_path
+    # Backward compatibility for older builds that wrote media/ under the CWD.
+    return path
+
+
+def _existing_pipeline_audio_path(
+    raw_path: Optional[str | Path],
+    *,
+    min_bytes: int = 0,
+) -> Optional[Path]:
+    """Return the resolved on-disk audio path when it is usable.
+
+    Pipeline JSON intentionally stores portable paths such as
+    ``media/tts/<profile>/<asset>.mp3``. Every consumer must resolve those paths
+    against ``settings.base_dir`` before checking or handing them to FFmpeg.
+    """
+    if not raw_path:
+        return None
+    path = _resolve_pipeline_audio_path(raw_path)
+    try:
+        if not path.is_file() or path.stat().st_size <= min_bytes:
+            return None
+    except OSError:
+        return None
+    return path
 
 
 def _restore_missing_tts_audio_paths(
@@ -177,7 +232,7 @@ def _restore_missing_tts_audio_paths(
                 continue
 
             audio_path_str = raw_value.get("audio_path")
-            if audio_path_str and Path(audio_path_str).exists():
+            if _existing_pipeline_audio_path(audio_path_str):
                 continue
 
             raw_value["audio_path"] = None
@@ -207,12 +262,12 @@ def _restore_missing_tts_audio_paths(
                     text = (asset.get("tts_text") or "").strip()
                     path = asset.get("mp3_path")
                     if text and path:
-                        if Path(path).exists():
+                        if _existing_pipeline_audio_path(path):
                             lib_lookup[text] = asset
                         else:
                             # DB record exists but file missing — check fallback
                             # location (direct copy from previous generation)
-                            _fb_dir = Path(f"media/tts/{profile_id}")
+                            _fb_dir = get_settings().base_dir / "media" / "tts" / profile_id
                             if _fb_dir.exists():
                                 for _fb_file in _fb_dir.glob("*.mp3"):
                                     if _fb_file.name.startswith(asset["id"]):
@@ -254,7 +309,7 @@ def _restore_missing_tts_audio_paths(
             continue
         preview_data = preview.get("preview_data", {})
         preview_audio_path = preview_data.get("audio_path")
-        if not preview_audio_path or not Path(preview_audio_path).exists():
+        if not _existing_pipeline_audio_path(preview_audio_path):
             continue
         restored_entries[idx] = {
             "audio_path": preview_audio_path,
@@ -302,6 +357,7 @@ def _persist_tts_audio(
     model: str,
     duration: float,
     voice_id: Optional[str] = None,
+    deduplicate: bool = True,
 ) -> Tuple[str, Optional[str]]:
     """
     Persist a (possibly temp/) TTS file to the TTS library, or media/tts/ as fallback.
@@ -324,10 +380,11 @@ def _persist_tts_audio(
             model=model,
             duration=duration,
             voice_id=voice_id,
+            deduplicate=deduplicate,
         )
         if saved_asset_id:
             lib_path = f"media/tts/{profile_id}/{saved_asset_id}.mp3"
-            if Path(lib_path).exists():
+            if _resolve_pipeline_audio_path(lib_path).exists():
                 logger.info(
                     f"[Profile {profile_id}] TTS auto-saved to library: "
                     f"asset {saved_asset_id}, path updated to {lib_path}"
@@ -348,15 +405,16 @@ def _persist_tts_audio(
                 if _existing.data and _existing.data[0].get("mp3_path"):
                     _lib_path = _existing.data[0]["mp3_path"]
                     _lib_asset_id = _existing.data[0]["id"]
-                    if Path(_lib_path).exists():
+                    _lib_full_path = _resolve_pipeline_audio_path(_lib_path)
+                    if _lib_full_path.exists():
                         logger.info(
                             f"[Profile {profile_id}] TTS dedup: reusing library path {_lib_path}"
                         )
                         return _lib_path, _lib_asset_id
                     if Path(audio_path).exists():
                         # Library file missing on disk — re-copy from temp source
-                        Path(_lib_path).parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(audio_path, _lib_path)
+                        _lib_full_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(audio_path, _lib_full_path)
                         logger.info(
                             f"[Profile {profile_id}] TTS dedup: re-copied to library path {_lib_path}"
                         )
@@ -368,15 +426,17 @@ def _persist_tts_audio(
     # on server restart.
     if Path(audio_path).exists():
         try:
-            _fallback_dir = Path(f"media/tts/{profile_id}")
+            _fallback_dir = get_settings().base_dir / "media" / "tts" / profile_id
             _fallback_dir.mkdir(parents=True, exist_ok=True)
-            _fallback_path = _fallback_dir / Path(audio_path).name
+            _fallback_name = f"{uuid.uuid4()}{Path(audio_path).suffix or '.mp3'}"
+            _fallback_path = _fallback_dir / _fallback_name
             shutil.copy2(audio_path, str(_fallback_path))
+            _fallback_rel = f"media/tts/{profile_id}/{_fallback_name}"
             logger.info(
-                f"[Profile {profile_id}] TTS fallback: copied to {_fallback_path} "
+                f"[Profile {profile_id}] TTS fallback: copied to {_fallback_rel} "
                 f"(library save did not persist)"
             )
-            return str(_fallback_path), None
+            return _fallback_rel, None
         except Exception as _fb_err:
             logger.error(
                 f"[Profile {profile_id}] TTS persistence failed — temp path stays in "
@@ -549,6 +609,13 @@ def _compute_render_fingerprint(
             mo_segment_ids = sorted(str(m.get("segment_id", "")) for m in mo_variant)
             mo_transforms = {str(i): m.get("transforms") or {} for i, m in enumerate(mo_variant)}
 
+    composition_variant = []
+    composition_overrides = getattr(render_request, "composition_overrides", None)
+    if composition_overrides:
+        composition_variant = composition_overrides.get(lookup_key) or []
+        if not composition_variant and lookup_key != str(variant_index):
+            composition_variant = composition_overrides.get(str(variant_index)) or []
+
     interstitial = []
     if render_request.interstitial_slides:
         # Interstitials are still keyed by base variant index (no per-version split)
@@ -616,6 +683,9 @@ def _compute_render_fingerprint(
         "force_cpu": render_request.force_cpu,
         "match_override_segments": mo_segment_ids,
         "match_override_transforms": mo_transforms,
+        # Order, trims and output durations are all render-affecting. Keep the
+        # full composition in the hash instead of reducing it to segment IDs.
+        "composition_override": composition_variant,
         "interstitial_slides": interstitial,
         "attention_timeline": attention_timeline,
         "pip_overlays": render_request.pip_overlays or {},
@@ -839,6 +909,66 @@ def _promote_temp_audio_paths_to_library(pipeline_id: str, pipeline_dict: dict) 
             )
 
 
+_PIPELINE_SCHEMA_FALLBACKS = (
+    (
+        ("generation_job", "tts_jobs"),
+        ("generation_job", "tts_jobs"),
+        "Async pipeline job columns missing; run migration 054. "
+        "Retrying without persisted job state.",
+    ),
+    (
+        ("attention_timeline",),
+        ("attention_timeline",),
+        "attention_timeline column missing; run migration 051. Retrying without it.",
+    ),
+    (
+        ("subtitle_settings_by_key",),
+        ("subtitle_settings_by_key",),
+        "subtitle_settings_by_key column missing; run migration 042. Retrying without it.",
+    ),
+    (
+        ("selected_captions", "target_script_duration", "min_segment_duration"),
+        ("selected_captions", "target_script_duration", "min_segment_duration"),
+        "Legacy pipeline columns missing; retrying without optional render metadata.",
+    ),
+    (
+        ("script_names",),
+        ("script_names",),
+        "script_names column missing; run migration 052. Retrying without script labels.",
+    ),
+)
+
+
+def _upsert_pipeline_with_schema_fallback(repo, row: dict) -> None:
+    """Persist core history despite multiple unapplied additive migrations."""
+    pending = dict(row)
+    removed_groups: set[tuple[str, ...]] = set()
+
+    while True:
+        try:
+            repo.upsert_pipeline(pending)
+            return
+        except Exception as upsert_err:
+            error_text = str(upsert_err)
+            matched = False
+            for markers, columns, warning in _PIPELINE_SCHEMA_FALLBACKS:
+                group = tuple(columns)
+                if group in removed_groups:
+                    continue
+                if not any(marker in error_text for marker in markers):
+                    continue
+                if not any(column in pending for column in columns):
+                    continue
+                logger.warning(warning)
+                for column in columns:
+                    pending.pop(column, None)
+                removed_groups.add(group)
+                matched = True
+                break
+            if not matched:
+                raise
+
+
 def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
     """Upsert full pipeline state to editai_pipelines. Graceful degradation with retry."""
     # PRE-PERSIST INVARIANT: no audio_path under temp/ may be persisted in DB.
@@ -908,7 +1038,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "attention_timeline": attention_timeline_json,
             }
             try:
-                repo.upsert_pipeline(row)
+                _upsert_pipeline_with_schema_fallback(repo, row)
             except Exception as upsert_err:
                 err_str = str(upsert_err)
                 # Graceful degradation for pre-migration databases
@@ -2116,7 +2246,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and "preview_data" in v:
                 pd = v["preview_data"]
-                if pd.get("audio_path") and not Path(pd["audio_path"]).exists():
+                if pd.get("audio_path") and not _existing_pipeline_audio_path(pd["audio_path"]):
                     pd["audio_path"] = None
 
         render_jobs = {}
@@ -2173,7 +2303,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 logger.warning(f"Skipping invalid tts_previews key: {k}")
                 continue
             # Verify audio_path still exists on disk
-            if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
+            if isinstance(v, dict) and v.get("audio_path") and not _existing_pipeline_audio_path(v["audio_path"]):
                 v["audio_path"] = None
 
         generation_job = (
@@ -2422,7 +2552,13 @@ class PipelineGenerateRequest(BaseModel):
     context: str = Field(default="", max_length=5000)  # Product/brand context
     context_products: List[ContextProductItem] = Field(default_factory=list)  # Structured product data
     variant_count: int = Field(default=3, ge=1, le=10)  # Number of script variants (1-10)
-    provider: str = "gemini"            # "gemini" or "claude"
+    provider: str = "gemini"            # "gemini", "claude", or desktop-only "codex"
+    codex_model: str = Field(
+        default=DEFAULT_CODEX_MODEL,
+        min_length=1,
+        max_length=100,
+        pattern=_CODEX_MODEL_PATTERN,
+    )
     target_script_duration: Optional[float] = Field(default=None, ge=5, le=300)  # Desired script duration in seconds (overrides auto-computed from segments)
 
 
@@ -2476,6 +2612,7 @@ class PipelinePreviewResponse(BaseModel):
     available_segments: List[dict] = []
     intro_offset_sec: float = 0.0
     intro_segments: List[dict] = []
+    video_timeline: List[dict] = []
 
 
 class PipelineRenderRequest(BaseModel):
@@ -2486,6 +2623,8 @@ class PipelineRenderRequest(BaseModel):
     # Timeline editor overrides: preview key -> list of match dicts (with optional duration_override)
     # Keys are either "0" for standard previews or "0_A"/"0_B" for Meta preview versions.
     match_overrides: Optional[Dict[str, List[dict]]] = None
+    # Canonical post-merge editor clips, keyed exactly like match_overrides.
+    composition_overrides: Optional[Dict[str, List[dict]]] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
     @field_validator("source_video_ids")
@@ -3438,7 +3577,13 @@ async def update_pipeline_script_names(
 
 class PipelineRegenerateScriptRequest(BaseModel):
     """Request model for regenerating a single script via AI."""
-    provider: str = "gemini"  # "gemini" or "claude"
+    provider: str = "gemini"  # "gemini", "claude", or desktop-only "codex"
+    codex_model: str = Field(
+        default=DEFAULT_CODEX_MODEL,
+        min_length=1,
+        max_length=100,
+        pattern=_CODEX_MODEL_PATTERN,
+    )
 
 
 class PipelineRegenerateScriptResponse(BaseModel):
@@ -3478,8 +3623,7 @@ async def regenerate_script(
             detail=f"variant_index {variant_index} out of range (0-{len(scripts) - 1})"
         )
 
-    if body.provider not in ["gemini", "claude"]:
-        raise HTTPException(status_code=400, detail="provider must be 'gemini' or 'claude'")
+    _validate_script_provider(body.provider)
 
     # Retrieve original generation context from pipeline
     idea = pipeline.get("idea", "")
@@ -3582,6 +3726,7 @@ async def regenerate_script(
         status="pending",
         variant_index=variant_index,
         prior_script_fingerprint=_stable_hash(str(scripts[variant_index])),
+        model=body.codex_model if body.provider == "codex" else None,
         created_at=_job_timestamp(),
     )
     output_persisted = False
@@ -3628,7 +3773,8 @@ async def regenerate_script(
             provider=body.provider,
             product_groups=product_groups_dict if product_groups_dict else None,
             ai_instructions=ai_instructions,
-            target_duration=stored_target_duration
+            target_duration=stored_target_duration,
+            codex_model=body.codex_model,
         )
 
         if not new_scripts:
@@ -3647,6 +3793,8 @@ async def regenerate_script(
         # Update pipeline state
         with _get_pipeline_state_lock(pipeline_id):
             pipeline["scripts"][variant_index] = new_script
+            if body.provider == "codex":
+                pipeline["codex_model"] = body.codex_model
 
             # Invalidate TTS for this variant (script changed)
             tts_previews = pipeline.get("tts_previews", {})
@@ -4000,6 +4148,7 @@ async def _run_pipeline_generation_job(
             product_groups=product_groups_dict or None,
             ai_instructions=ai_instructions,
             target_duration=body.target_script_duration,
+            codex_model=body.codex_model,
         )
 
         if _generation_job_cancelled(pipeline_id):
@@ -4015,6 +4164,7 @@ async def _run_pipeline_generation_job(
             raise RuntimeError("Pipeline disappeared while scripts were generating")
         result = {
             "provider": body.provider,
+            "model": body.codex_model if body.provider == "codex" else None,
             "keyword_count": len(unique_keywords),
             "variant_count": len(scripts),
             "total_segment_duration": round(total_segment_duration, 1),
@@ -4027,6 +4177,8 @@ async def _run_pipeline_generation_job(
             pipeline["script_names"] = [f"Script {index + 1}" for index in range(len(scripts))]
             pipeline["variant_count"] = len(scripts)
             pipeline["keyword_count"] = len(unique_keywords)
+            if body.provider == "codex":
+                pipeline["codex_model"] = body.codex_model
             generation_job.update({
                 "status": "processing",
                 "progress": 99,
@@ -4073,11 +4225,25 @@ async def _run_pipeline_generation_job(
     except Exception as e:
         logger.error(f"Pipeline generation failed for {pipeline_id}: {e}", exc_info=True)
         await _settle_generation_metering(pipeline_id, user_id, delivered=False)
+        error_text = str(e).casefold()
+        if "api_key_invalid" in error_text or "api key not valid" in error_text:
+            provider_label = "Gemini" if body_data.get("provider") == "gemini" else "AI provider"
+            user_error = (
+                f"{provider_label} API key is invalid. "
+                "Update the API key in Setup, then try generating again."
+            )
+        elif "authentication" in error_text or "unauthorized" in error_text:
+            user_error = (
+                "The selected AI provider rejected its credentials. "
+                "Update the API key in Setup, then try generating again."
+            )
+        elif deduplicate:
+            user_error = "Pipeline generation service unavailable. Please try again later."
         _update_generation_job(
             pipeline_id,
             status="failed",
             current_step="Generation failed",
-            error="Pipeline generation service unavailable. Please try again later.",
+            error=user_error,
             completed_at=_job_timestamp(),
         )
 
@@ -4096,14 +4262,15 @@ async def generate_pipeline(
     current_user: AuthUser = Depends(get_current_user),
 ):
     """Queue script generation and immediately return a persisted pipeline ID."""
-    if body.provider not in {"gemini", "claude"}:
-        raise HTTPException(status_code=400, detail="provider must be 'gemini' or 'claude'")
+    _validate_script_provider(body.provider)
     if not body.idea.strip():
         raise HTTPException(status_code=400, detail="idea cannot be empty")
 
     pipeline_id = str(uuid.uuid4())
     identity = MeteringIdentity(profile.user_id, current_user.email)
     generation_job = _new_async_job("Queued for script generation")
+    generation_job["provider"] = body.provider
+    generation_job["model"] = body.codex_model if body.provider == "codex" else None
     generation_job["metering"] = {
         **new_metering_record(
             "studio.script_pipeline",
@@ -4117,6 +4284,7 @@ async def generate_pipeline(
         "scripts": [],
         "script_names": [],
         "provider": body.provider,
+        "codex_model": body.codex_model if body.provider == "codex" else None,
         "name": body.name,
         "idea": body.idea,
         "context": body.context,
@@ -4358,7 +4526,7 @@ async def adopt_library_tts(
     ):
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
     audio_path = asset.get("mp3_path")
-    if not audio_path or not Path(audio_path).exists():
+    if not _existing_pipeline_audio_path(audio_path):
         raise HTTPException(status_code=404, detail="TTS audio file no longer exists on disk")
 
     audio_duration = asset.get("audio_duration", 0.0)
@@ -4465,10 +4633,12 @@ async def _generate_variant_tts_work(
             "style": _vs.get("style", _tts_svc.voice_settings["style"]),
             "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
         }
+        _language_code = await _tts_svc._resolve_language_code(_effective_voice)
         _cache_key = {
             "text": cleaned_text, "voice_id": _effective_voice,
             "model_id": request.elevenlabs_model, "provider": "elevenlabs",
             "type": "with_timestamps",
+            "language_code": _language_code or "",
             "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
         }
         if cache_delete(_cache_key, "elevenlabs"):
@@ -4601,6 +4771,9 @@ async def _generate_variant_tts_work(
             model=request.elevenlabs_model,
             duration=audio_duration,
             voice_id=request.voice_id,
+            # This endpoint is an explicit regeneration request. Never swap its
+            # fresh output for a prior library file that merely shares the text.
+            deduplicate=False,
         )
         if _persist_path != str(audio_path) or _lib_asset_id:
             with state_lock:
@@ -5030,7 +5203,7 @@ async def get_variant_tts_audio(
     if not audio_path_str:
         raise HTTPException(status_code=404, detail="No audio file for this variant")
 
-    audio_path = Path(audio_path_str)
+    audio_path = _resolve_pipeline_audio_path(audio_path_str)
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio file no longer exists on disk")
 
@@ -5126,15 +5299,17 @@ async def preview_variant(
         # fall back to file cache which returned stale audio.
         if script_match:
             audio_path_str = existing_tts.get("audio_path")
-            if not (audio_path_str and Path(audio_path_str).exists()):
+            resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
+            if not resolved_audio_path:
                 # Self-heal: the temp file may be gone but a persistent library
                 # copy usually exists — reattach it instead of regenerating TTS.
                 if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
                     _tts_previews = pipeline.get("tts_previews", {})
                     existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index)) or existing_tts
                     audio_path_str = existing_tts.get("audio_path")
-            if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
-                reuse_audio_path = audio_path_str
+                    resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
+            if resolved_audio_path:
+                reuse_audio_path = str(resolved_audio_path)
                 reuse_audio_duration = existing_tts.get("audio_duration")
                 # Also grab SRT content from Step 2 to avoid TTS regeneration
                 stored_srt = existing_tts.get("srt_content")
@@ -5478,6 +5653,7 @@ async def preview_variant(
             available_segments=preview_data.get("available_segments", []),
             intro_offset_sec=preview_data.get("intro_offset_sec", 0.0),
             intro_segments=preview_data.get("intro_segments", []),
+            video_timeline=preview_data.get("video_timeline", preview_data.get("timeline", [])),
         )
 
     except ValueError as e:
@@ -5801,15 +5977,8 @@ async def render_variants(
             audio_duration = float((tts_entry or {}).get("audio_duration") or 0)
         except (TypeError, ValueError):
             audio_duration = 0
-        try:
-            has_durable_audio = bool(
-                audio_path
-                and audio_duration > 0
-                and Path(str(audio_path)).exists()
-                and Path(str(audio_path)).stat().st_size > 100
-            )
-        except OSError:
-            has_durable_audio = False
+        resolved_audio_path = _existing_pipeline_audio_path(audio_path, min_bytes=100)
+        has_durable_audio = bool(resolved_audio_path and audio_duration > 0)
         script_text = pipeline.get("scripts", [])[vid]
         cleaned_script = strip_product_group_tags(script_text)
         script_matches = tts_entry.get("script_hash") == _stable_hash(cleaned_script)
@@ -6155,6 +6324,21 @@ async def render_variants(
                     f"render will use auto-matching (may differ from preview!)"
                 )
 
+            variant_composition_override = None
+            if render_request.composition_overrides:
+                _composition_key = str(job_key) if job_key is not None else str(vid)
+                variant_composition_override = (
+                    render_request.composition_overrides.get(_composition_key)
+                    or render_request.composition_overrides.get(str(vid))
+                )
+                if variant_composition_override:
+                    logger.info(
+                        "[RENDER %s] Using %s canonical composition clips for variant %s",
+                        _render_fingerprint,
+                        len(variant_composition_override),
+                        _composition_key,
+                    )
+
             # PIP-07: Removed dead first assignment of variant_interstitial_slides
             # (was overwritten later in the function). The actual lookup is below.
 
@@ -6178,8 +6362,9 @@ async def render_variants(
 
                     if settings_match:
                         audio_path_str = existing_tts.get("audio_path")
-                        if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
-                            reuse_audio_path = audio_path_str
+                        resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
+                        if resolved_audio_path:
+                            reuse_audio_path = str(resolved_audio_path)
                             reuse_audio_duration = existing_tts.get("audio_duration")
 
                             # ── SRT reuse guard ──────────────────────────────
@@ -6369,6 +6554,7 @@ async def render_variants(
                         voice_id=render_request.voice_id,
                         source_video_ids=render_request.source_video_ids,
                         match_overrides=variant_match_overrides,
+                        composition_override=variant_composition_override,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
                         enable_sharpen=render_request.enable_sharpen,
@@ -6838,8 +7024,9 @@ async def remake_variant(
 
     if existing_tts:
         audio_path_str = existing_tts.get("audio_path")
-        if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
-            reuse_audio_path = audio_path_str
+        resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
+        if resolved_audio_path:
+            reuse_audio_path = str(resolved_audio_path)
             reuse_audio_duration = existing_tts.get("audio_duration")
             reuse_srt_content = existing_tts.get("srt_content")
         else:
@@ -7646,7 +7833,7 @@ async def get_pipeline_status(pipeline_id: str):
     for idx_key, preview_data in pipeline.get("previews", {}).items():
         pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
         audio_path_str = pd.get("audio_path")
-        has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+        has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
         audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
         has_srt = bool(pd.get("srt_content"))
         preview_info[str(idx_key)] = VariantPreviewInfo(
@@ -7660,7 +7847,7 @@ async def get_pipeline_status(pipeline_id: str):
     for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
         if isinstance(tts_data, dict):
             audio_path_str = tts_data.get("audio_path")
-            has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+            has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
             audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
             tts_info[str(idx_key)] = VariantTtsInfo(
                 has_audio=has_audio,
@@ -7701,7 +7888,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     for idx_key, preview_data in pipeline.get("previews", {}).items():
         pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
         audio_path_str = pd.get("audio_path")
-        has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+        has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
         audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
         has_srt = bool(pd.get("srt_content"))
         preview_info[str(idx_key)] = {
@@ -7715,7 +7902,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
         if isinstance(tts_data, dict):
             audio_path_str = tts_data.get("audio_path")
-            has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+            has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
             audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
             tts_info[str(idx_key)] = {
                 "has_audio": has_audio,
@@ -7739,6 +7926,11 @@ async def get_pipeline_scripts(pipeline_id: str):
         "idea": pipeline.get("idea", ""),
         "context": _strip_embedded_product_blocks(pipeline.get("context", "")),
         "provider": pipeline.get("provider", "gemini"),
+        "codex_model": (
+            pipeline.get("codex_model")
+            or (pipeline.get("generation_job") or {}).get("model")
+            or ((pipeline.get("generation_job") or {}).get("result") or {}).get("model")
+        ),
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
         "meta_multiplication": bool(pipeline.get("meta_multiplication", True)),
         "library_project_id": pipeline.get("library_project_id"),
@@ -8103,7 +8295,13 @@ def _legacy_preview_source_ids_by_path(
     }
     for preview_entry in stored_previews.values():
         preview_data = preview_entry.get("preview_data", {}) if isinstance(preview_entry, dict) else {}
-        for collection_name in ("matches", "available_segments", "intro_segments"):
+        for collection_name in (
+            "matches",
+            "available_segments",
+            "intro_segments",
+            "video_timeline",
+            "timeline",
+        ):
             for item in preview_data.get(collection_name, []) or []:
                 if isinstance(item, dict) and item.get("source_video_id"):
                     source_video_ids.add(str(item["source_video_id"]))
@@ -8222,6 +8420,23 @@ async def restore_previews(
                 idx_key,
             )
 
+        raw_video_timeline = pd.get("video_timeline") or pd.get("timeline") or []
+        video_timeline = _restore_intro_proxy_segments(raw_video_timeline, source_ids_by_path)
+        for clip_index, clip in enumerate(video_timeline):
+            # The source proxy uses the ID; absolute host paths must not cross
+            # the API boundary. Old timelines did not have IDs/kinds, so make
+            # those fields deterministic during restore.
+            clip.pop("source_video_path", None)
+            timeline_start = float(clip.get("timeline_start") or 0.0)
+            clip.setdefault(
+                "id",
+                f"legacy-{idx_key}-{clip_index}-{timeline_start:.3f}",
+            )
+            clip.setdefault(
+                "kind",
+                "intro" if timeline_start < intro_offset_sec - 0.001 else "body",
+            )
+
         result_previews[str(idx_key)] = {
             "audio_duration": pd.get("audio_duration", 0),
             "srt_content": pd.get("srt_content", ""),
@@ -8232,6 +8447,7 @@ async def restore_previews(
             "available_segments": pd.get("available_segments", []),
             "intro_offset_sec": intro_offset_sec,
             "intro_segments": intro_segments,
+            "video_timeline": video_timeline,
         }
 
         # Grab available_segments from the first preview that has them
@@ -8298,6 +8514,108 @@ async def save_matches(
     }
 
 
+class SaveCompositionRequest(BaseModel):
+    """Persist the canonical post-merge video timeline for one preview."""
+    video_timeline: List[dict] = Field(..., min_length=1, max_length=500)
+    visual_version: Optional[str] = None
+
+
+@router.put("/{pipeline_id}/composition/{variant_index}")
+async def save_composition(
+    pipeline_id: str,
+    variant_index: int,
+    body: SaveCompositionRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Persist gapless clip order, source trims and output durations from Step 3."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    allowed_fields = {
+        "id",
+        "kind",
+        "segment_id",
+        "segment_keywords",
+        "source_video_id",
+        "thumbnail_path",
+        "product_group",
+        "start_time",
+        "end_time",
+        "timeline_duration",
+        "transforms",
+        "pinned",
+    }
+    normalized_timeline: List[dict] = []
+    cursor = 0.0
+    for clip_index, raw_clip in enumerate(body.video_timeline):
+        if not isinstance(raw_clip, dict):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} is invalid")
+        try:
+            duration = float(raw_clip.get("timeline_duration"))
+            source_start = float(raw_clip.get("start_time"))
+            source_end = float(raw_clip.get("end_time"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {clip_index + 1} has invalid timing",
+            )
+        if (
+            not all(math.isfinite(value) for value in (duration, source_start, source_end))
+            or duration < 0.05
+            or source_end <= source_start
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {clip_index + 1} has invalid timing",
+            )
+
+        clip = {key: raw_clip.get(key) for key in allowed_fields if key in raw_clip}
+        clip["id"] = str(raw_clip.get("id") or f"clip-{clip_index}-{cursor:.3f}")
+        clip["kind"] = "intro" if raw_clip.get("kind") == "intro" else "body"
+        clip["start_time"] = source_start
+        clip["end_time"] = source_end
+        clip["timeline_start"] = cursor
+        clip["timeline_duration"] = duration
+        normalized_timeline.append(clip)
+        cursor += duration
+
+    preview_key = _build_preview_key(variant_index, body.visual_version)
+    state_lock = _get_pipeline_state_lock(pipeline_id)
+    with state_lock:
+        previews = pipeline.setdefault("previews", {})
+        entry = previews.get(preview_key)
+        if entry is None and body.visual_version is None:
+            entry = previews.get(variant_index)
+        if not isinstance(entry, dict) or "preview_data" not in entry:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No preview exists for variant {preview_key} — generate a preview first",
+            )
+
+        preview_data = entry["preview_data"]
+        preview_data["video_timeline"] = normalized_timeline
+        preview_data["timeline"] = normalized_timeline
+        intro_segments = [
+            clip for clip in normalized_timeline if clip.get("kind") == "intro"
+        ]
+        preview_data["intro_segments"] = intro_segments
+        preview_data["intro_offset_sec"] = sum(
+            float(clip["timeline_duration"]) for clip in intro_segments
+        )
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    _db_save_pipeline(pipeline_id, pipeline)
+    return {
+        "status": "saved",
+        "preview_key": preview_key,
+        "clip_count": len(normalized_timeline),
+        "duration": cursor,
+    }
+
+
 @router.get("/audio/{pipeline_id}/{variant_index}")
 async def get_pipeline_audio(
     pipeline_id: str,
@@ -8329,12 +8647,11 @@ async def get_pipeline_audio(
                       pipeline.get("tts_previews", {}).get(str(variant_index))
         if tts_preview:
             audio_path_str = tts_preview.get("audio_path")
-            if audio_path_str:
-                audio_path = Path(audio_path_str)
-                if audio_path.exists():
-                    return FileResponse(path=str(audio_path), media_type="audio/mpeg",
-                        content_disposition_type="inline",
-                        headers={"Cache-Control": "no-cache"})
+            audio_path = _existing_pipeline_audio_path(audio_path_str)
+            if audio_path:
+                return FileResponse(path=str(audio_path), media_type="audio/mpeg",
+                    content_disposition_type="inline",
+                    headers={"Cache-Control": "no-cache"})
         raise HTTPException(status_code=404, detail="No preview available for this variant")
 
     preview_data = preview.get("preview_data", {})
@@ -8343,8 +8660,8 @@ async def get_pipeline_audio(
     if not audio_path_str:
         raise HTTPException(status_code=404, detail="No audio file for this variant")
 
-    audio_path = Path(audio_path_str)
-    if not audio_path.exists():
+    audio_path = _existing_pipeline_audio_path(audio_path_str)
+    if not audio_path:
         raise HTTPException(status_code=404, detail="Audio file no longer exists on disk")
 
     return FileResponse(
@@ -8360,6 +8677,7 @@ async def get_pipeline_audio(
 class PreviewRenderRequest(BaseModel):
     """Request model for server-side FFmpeg preview render."""
     match_overrides: List[dict]
+    composition_override: Optional[List[dict]] = None
     source_video_ids: Optional[List[str]] = None
     min_segment_duration: Optional[float] = None
 
@@ -8498,20 +8816,23 @@ async def render_preview(
         )
 
     audio_path_str = tts_data.get("audio_path")
-    if not audio_path_str or not Path(audio_path_str).exists():
+    resolved_audio_path = _existing_pipeline_audio_path(audio_path_str)
+    if not resolved_audio_path:
         # Self-heal: temp file may be gone but a persistent library copy usually exists
         if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
             _tts = pipeline.get("tts_previews", {})
             tts_data = _tts.get(variant_index) or _tts.get(str(variant_index)) or tts_data
             audio_path_str = tts_data.get("audio_path")
-    if not audio_path_str or not Path(audio_path_str).exists():
+            resolved_audio_path = _existing_pipeline_audio_path(audio_path_str)
+    if not resolved_audio_path:
         raise HTTPException(
             status_code=400,
             detail=f"Voice-over audio file for variant {variant_index + 1} is missing from disk. Regenerate the voice-over (Step 2).",
         )
+    audio_path_str = str(resolved_audio_path)
 
     try:
-        audio_mtime = str(Path(audio_path_str).stat().st_mtime)
+        audio_mtime = str(resolved_audio_path.stat().st_mtime)
     except OSError:
         audio_mtime = "0"
 
@@ -8534,6 +8855,7 @@ async def render_preview(
             }
             for i, m in enumerate(render_request.match_overrides)
         ],
+        "composition": render_request.composition_override or [],
         "source_video_ids": sorted(render_request.source_video_ids or []),
         "min_segment_duration": render_request.min_segment_duration,
         "words_per_subtitle": render_request.words_per_subtitle,
@@ -8658,6 +8980,7 @@ async def render_preview(
                         pipeline_id=pipeline_id,
                         variant_index=effective_variant_index,
                         match_overrides=render_request.match_overrides,
+                        composition_override=render_request.composition_override,
                         source_video_ids=render_request.source_video_ids,
                         reuse_audio_path=audio_path_str,
                         reuse_audio_duration=reuse_audio_duration,
@@ -8955,7 +9278,7 @@ async def generate_video_captions(
                 ) if isinstance(extras, dict) else ""
                 details = "; ".join(part for part in (desc, extra_text) if part)
                 product_lines.append(f"- {title}: {details}" if details else f"- {title}")
-            prompt_parts.append(f"Products featured in this video:\n" + "\n".join(product_lines))
+            prompt_parts.append("Featured in this video:\n" + "\n".join(product_lines))
         # Context from pipeline (includes product descriptions)
         elif pipeline_context:
             prompt_parts.append(f"Context:\n{pipeline_context}")

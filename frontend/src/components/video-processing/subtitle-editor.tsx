@@ -506,7 +506,7 @@ export function SubtitleEditor({
       </div>
 
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogContent className="max-w-[min(95vw,900px)] p-0 bg-black border-0">
+        <DialogContent className="max-w-[min(95vw,900px)] sm:max-w-[min(95vw,900px)] p-0 bg-black border-0">
           <DialogHeader className="sr-only">
             <DialogTitle>Subtitle Preview (Fullscreen)</DialogTitle>
             <DialogDescription>Enlarged subtitle preview view</DialogDescription>

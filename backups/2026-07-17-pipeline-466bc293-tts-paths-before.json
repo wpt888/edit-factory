@@ -1,0 +1,14 @@
+{
+  "pipeline_id": "466bc293-a7ed-40c6-a015-d59c6479c47f",
+  "profile_id": "a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc",
+  "before": {
+    "0": "media\\tts\\a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc\\tts_trimmed.mp3",
+    "1": "media\\tts\\a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc\\tts_trimmed.mp3",
+    "2": "media\\tts\\a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc\\tts_trimmed.mp3"
+  },
+  "after": {
+    "0": ["media/tts/a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc/6c5db2b5-a5df-4c3c-81bb-751dc9febe50.mp3", "6c5db2b5-a5df-4c3c-81bb-751dc9febe50"],
+    "1": ["media/tts/a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc/a7a319d7-36e4-4b50-8254-a7ce4ccd4ee1.mp3", "a7a319d7-36e4-4b50-8254-a7ce4ccd4ee1"],
+    "2": ["media/tts/a35ce8f1-e4ba-4bf5-b9a1-adca9016a3dc/ffa7086f-6ab9-4080-b8bd-936c1c8a8457.mp3", "ffa7086f-6ab9-4080-b8bd-936c1c8a8457"]
+  }
+}

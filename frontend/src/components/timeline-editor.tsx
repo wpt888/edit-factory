@@ -33,12 +33,27 @@ import {
   Pin,
   ScanLine,
 } from "lucide-react";
-import { API_URL } from "@/lib/api";
+import { apiGet } from "@/lib/api";
+import { useApiUrl } from "@/hooks/use-api-url";
+import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
+import type { CompositionClip } from "@/types/composition-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
+import {
+  TimelineClipShell,
+  TimelineWaveform,
+} from "@/components/timeline/timeline-primitives";
+import {
+  MultiTrackTimeline,
+  TIMELINE_MIN_WIDTH,
+  TIMELINE_MIN_ZOOM,
+  TIMELINE_MAX_ZOOM,
+  TIMELINE_LABEL_WIDTH,
+  TIMELINE_END_GUTTER,
+} from "@/components/timeline/multi-track-timeline";
 import { Sparkles } from "lucide-react";
 
 const compactPreviewFrameStyle: React.CSSProperties = {
@@ -50,6 +65,13 @@ const compactPreviewFrameStyle: React.CSSProperties = {
 const expandedPreviewFrameStyle: React.CSSProperties = {
   aspectRatio: "9 / 16",
   width: "min(421.875px, 100%)",
+  maxWidth: "100%",
+};
+
+// Full-editor center pane: height comes from flex-1, width follows 9:16.
+const fullPreviewFrameStyle: React.CSSProperties = {
+  aspectRatio: "9 / 16",
+  width: "auto",
   maxWidth: "100%",
 };
 
@@ -110,7 +132,7 @@ export interface SegmentOption {
 }
 
 export interface IntroSegment {
-  source_video_path: string;
+  source_video_path?: string;
   source_video_id?: string;
   start_time: number;
   end_time: number;
@@ -128,43 +150,137 @@ export interface InterstitialSlide {
   productTitle?: string;         // For display in timeline
 }
 
-// Horizontal scale of the multi-track timeline's time axis.
-// ponytail: fixed scale; add a zoom control if long videos make lanes cramped.
-const TIMELINE_PX_PER_SEC = 48;
+const EMPTY_ATTENTION_CUES: AttentionCue[] = [];
 
-// Status colors shared by the storyboard strip and the multi-track Video lane.
-function matchStatusStyle(match: MatchPreview, isSelected: boolean) {
-  const isMatched = match.segment_id !== null && match.confidence > 0;
-  const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
-  const isPinned = match.pinned === true;
-  const isLowConfidence = isMatched && !isPinned && match.confidence < 0.5;
-  const border = isMatched
-    ? isLowConfidence
-      ? "border-amber-400"
-      : "border-success"
-    : isAutoFilled
-    ? "border-muted-foreground"
-    : "border-amber-500";
-  const bg = isSelected
-    ? "bg-accent"
-    : isMatched
-    ? isLowConfidence
-      ? "bg-amber-50/60 dark:bg-amber-950/10"
-      : "bg-success/10"
-    : isAutoFilled
-    ? "bg-muted/50"
-    : "bg-amber-50 dark:bg-amber-950/20";
-  return { border, bg, isPinned };
-}
+const reflowComposition = (clips: CompositionClip[]): CompositionClip[] => {
+  let cursor = 0;
+  return clips.map((clip) => {
+    const next = {
+      ...clip,
+      timeline_start: cursor,
+      timeline_duration: Math.max(0.05, clip.timeline_duration),
+    };
+    cursor += next.timeline_duration;
+    return next;
+  });
+};
+
+const fitCompositionToDuration = (
+  clips: CompositionClip[],
+  duration: number,
+): CompositionClip[] => {
+  if (clips.length === 0 || duration <= 0) return reflowComposition(clips);
+  const fitted: CompositionClip[] = [];
+  let cursor = 0;
+  for (const clip of reflowComposition(clips)) {
+    if (cursor >= duration - 0.001) break;
+    const visibleDuration = Math.min(clip.timeline_duration, duration - cursor);
+    if (visibleDuration < 0.05 && fitted.length > 0) {
+      fitted[fitted.length - 1].timeline_duration += visibleDuration;
+      cursor += visibleDuration;
+      break;
+    }
+    fitted.push({ ...clip, timeline_start: cursor, timeline_duration: visibleDuration });
+    cursor += visibleDuration;
+  }
+  if (fitted.length > 0 && cursor < duration - 0.001) {
+    fitted[fitted.length - 1].timeline_duration += duration - cursor;
+  }
+  return reflowComposition(fitted);
+};
+
+const buildLegacyComposition = (
+  matches: MatchPreview[],
+  introSegments: IntroSegment[],
+  availableSegments: SegmentOption[],
+  audioDuration: number,
+): CompositionClip[] => {
+  const clips: CompositionClip[] = [];
+  const findLibrarySegment = (
+    sourceVideoId: string | undefined,
+    sourceStart: number,
+  ) => availableSegments
+    .filter((segment) => !sourceVideoId || segment.source_video_id === sourceVideoId)
+    .sort((a, b) => Math.abs((a.start_time ?? 0) - sourceStart) - Math.abs((b.start_time ?? 0) - sourceStart))[0];
+
+  for (const [index, intro] of [...introSegments]
+    .sort((a, b) => a.timeline_start - b.timeline_start)
+    .entries()) {
+    const librarySegment = findLibrarySegment(intro.source_video_id, intro.start_time);
+    clips.push({
+      id: `legacy-intro-${index}-${intro.start_time.toFixed(3)}`,
+      kind: "intro",
+      segment_id: librarySegment?.id ?? null,
+      segment_keywords: librarySegment?.keywords ?? [],
+      source_video_id: intro.source_video_id ?? librarySegment?.source_video_id ?? null,
+      thumbnail_path: librarySegment?.thumbnail_path,
+      product_group: librarySegment?.product_group,
+      start_time: intro.start_time,
+      end_time: intro.end_time,
+      timeline_start: 0,
+      timeline_duration: intro.timeline_duration,
+      transforms: librarySegment?.transforms,
+    });
+  }
+
+  const introDuration = clips.reduce((sum, clip) => sum + clip.timeline_duration, 0);
+  const grouped = new Map<string, MatchPreview[]>();
+  matches.forEach((match, index) => {
+    const key = match.merge_group != null ? `group-${match.merge_group}` : `match-${index}`;
+    const group = grouped.get(key) ?? [];
+    group.push(match);
+    grouped.set(key, group);
+  });
+
+  let bodyTimeToSkip = introDuration;
+  for (const [key, group] of grouped.entries()) {
+    const representative = group.find((match) => match.pinned) ?? group[0];
+    if (!representative) continue;
+    const groupDuration = representative.merge_group_duration
+      ?? Math.max(0.05, group[group.length - 1].srt_end - group[0].srt_start);
+    if (bodyTimeToSkip >= groupDuration - 0.001) {
+      bodyTimeToSkip = Math.max(0, bodyTimeToSkip - groupDuration);
+      continue;
+    }
+    const visibleDuration = groupDuration - bodyTimeToSkip;
+    bodyTimeToSkip = 0;
+    const librarySegment = availableSegments.find((segment) => segment.id === representative.segment_id)
+      ?? findLibrarySegment(representative.source_video_id, representative.segment_start_time ?? 0);
+    if (!librarySegment && !representative.source_video_id) continue;
+    const sourceStart = representative.segment_start_time ?? librarySegment?.start_time ?? 0;
+    const sourceEnd = representative.segment_end_time
+      ?? librarySegment?.end_time
+      ?? sourceStart + visibleDuration;
+    clips.push({
+      id: `legacy-${key}-${representative.segment_id ?? representative.source_video_id ?? "clip"}`,
+      kind: "body",
+      segment_id: representative.segment_id ?? librarySegment?.id ?? null,
+      segment_keywords: representative.segment_keywords ?? librarySegment?.keywords ?? [],
+      source_video_id: representative.source_video_id ?? librarySegment?.source_video_id ?? null,
+      thumbnail_path: representative.thumbnail_path ?? librarySegment?.thumbnail_path,
+      product_group: representative.product_group ?? librarySegment?.product_group,
+      start_time: sourceStart,
+      end_time: Math.max(sourceStart + 0.05, sourceEnd),
+      timeline_start: 0,
+      timeline_duration: visibleDuration,
+      transforms: representative.transforms ?? librarySegment?.transforms,
+      pinned: representative.pinned,
+    });
+  }
+
+  return fitCompositionToDuration(clips, audioDuration);
+};
 
 interface TimelineEditorProps {
   matches: MatchPreview[];
   audioDuration: number;
   introOffsetSec?: number;
   introSegments?: IntroSegment[];
+  videoTimeline?: CompositionClip[];
   sourceVideoIds: string[];
   availableSegments: SegmentOption[];
   onMatchesChange: (matches: MatchPreview[]) => void;
+  onVideoTimelineChange?: (timeline: CompositionClip[]) => void;
   profileId?: string;
   pipelineId?: string;
   variantIndex?: number;
@@ -186,9 +302,11 @@ export function TimelineEditor({
   audioDuration,
   introOffsetSec: requestedIntroOffsetSec = 0,
   introSegments = [],
+  videoTimeline = [],
   sourceVideoIds: _sourceVideoIds,
   availableSegments,
   onMatchesChange,
+  onVideoTimelineChange,
   profileId,
   pipelineId,
   variantIndex,
@@ -200,6 +318,8 @@ export function TimelineEditor({
   onRenderPreview,
   displayMode = "card",
 }: TimelineEditorProps) {
+  const mediaApiUrl = useApiUrl();
+  const attentionCues = attentionTimeline?.cues ?? EMPTY_ATTENTION_CUES;
   const cueBoundaryIndex = useCallback((startMs: number) => {
     let result = -1;
     matches.forEach((match, index) => {
@@ -210,7 +330,7 @@ export function TimelineEditor({
 
   const interstitialSlides = useMemo<InterstitialSlide[]>(() => {
     if (!attentionTimeline) return legacyInterstitialSlides;
-    return attentionTimeline.cues.map((cue) => {
+    return attentionCues.map((cue) => {
       const layer = cue.layers[0];
       const preset = layer?.animation.preset ?? "static";
       return {
@@ -223,11 +343,11 @@ export function TimelineEditor({
         productTitle: "Attention overlay",
       };
     });
-  }, [attentionTimeline, legacyInterstitialSlides, cueBoundaryIndex]);
+  }, [attentionCues, attentionTimeline, legacyInterstitialSlides, cueBoundaryIndex]);
 
   const emitSlides = useCallback((slides: InterstitialSlide[]) => {
     if (onAttentionTimelineChange && attentionTimeline) {
-      const existing = new Map(attentionTimeline.cues.map((cue) => [cue.id, cue]));
+      const existing = new Map(attentionCues.map((cue) => [cue.id, cue]));
       const cues: AttentionCue[] = slides.map((slide) => {
         const old = existing.get(slide.id);
         const boundary = slide.afterMatchIndex < 0
@@ -266,31 +386,31 @@ export function TimelineEditor({
       return;
     }
     onInterstitialSlidesChange?.(slides);
-  }, [attentionTimeline, matches, onAttentionTimelineChange, onInterstitialSlidesChange]);
+  }, [attentionCues, attentionTimeline, matches, onAttentionTimelineChange, onInterstitialSlidesChange]);
 
   const updateCueTiming = useCallback((cueId: string, startMs: number, durationMs: number) => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     const maxMs = Math.max(1, audioDuration * 1000);
     onAttentionTimelineChange({
       ...attentionTimeline,
-      cues: attentionTimeline.cues.map(cue => cue.id === cueId ? {
+      cues: attentionCues.map(cue => cue.id === cueId ? {
         ...cue,
         startMs: Math.max(0, Math.min(Math.round(startMs), maxMs - 100)),
         durationMs: Math.max(100, Math.min(Math.round(durationMs), maxMs)),
       } : cue),
     });
-  }, [attentionTimeline, audioDuration, onAttentionTimelineChange]);
+  }, [attentionCues, attentionTimeline, audioDuration, onAttentionTimelineChange]);
 
   const updateCueLayer = useCallback((cueId: string, changes: Partial<AttentionCue["layers"][number]>) => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     onAttentionTimelineChange({
       ...attentionTimeline,
-      cues: attentionTimeline.cues.map(cue => cue.id === cueId ? {
+      cues: attentionCues.map(cue => cue.id === cueId ? {
         ...cue,
         layers: cue.layers.map((layer, index) => index === 0 ? { ...layer, ...changes } : layer),
       } : cue),
     });
-  }, [attentionTimeline, onAttentionTimelineChange]);
+  }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
 
   const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
@@ -325,21 +445,122 @@ export function TimelineEditor({
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }, [attentionTimeline, audioDuration, matches, onAttentionTimelineChange, updateCueTiming]);
+
+  const composition = useMemo(() => {
+    const source = videoTimeline.length > 0
+      ? [...videoTimeline].sort((a, b) => a.timeline_start - b.timeline_start)
+      : buildLegacyComposition(matches, introSegments, availableSegments, audioDuration);
+    // Composition clips ship without thumbnail_path (old saved timelines never
+    // had one; the backend serializer resolves it by source-path equality, which
+    // yields null). Backfill from the segment pool — by segment_id when present,
+    // else by same source video + nearest source start — so the Video lane shows
+    // previews instead of bare Film icons.
+    const thumbFor = (clip: CompositionClip): string | null | undefined => {
+      if (clip.thumbnail_path) return clip.thumbnail_path;
+      if (clip.segment_id) {
+        const byId = availableSegments.find((seg) => seg.id === clip.segment_id);
+        if (byId?.thumbnail_path) return byId.thumbnail_path;
+      }
+      const nearest = availableSegments
+        .filter((seg) => seg.thumbnail_path
+          && (!clip.source_video_id || seg.source_video_id === clip.source_video_id))
+        .sort((a, b) => Math.abs((a.start_time ?? 0) - clip.start_time)
+          - Math.abs((b.start_time ?? 0) - clip.start_time))[0];
+      return nearest?.thumbnail_path ?? clip.thumbnail_path;
+    };
+    const enriched = source.map((clip) => {
+      const thumbnail_path = thumbFor(clip);
+      return thumbnail_path === clip.thumbnail_path ? clip : { ...clip, thumbnail_path };
+    });
+    return fitCompositionToDuration(enriched, audioDuration);
+  }, [audioDuration, availableSegments, introSegments, matches, videoTimeline]);
+  const [compositionDraft, setCompositionDraft] = useState<CompositionClip[] | null>(null);
+  const displayedComposition = compositionDraft ?? composition;
+  const compositionIntroDuration = displayedComposition
+    .filter((clip) => clip.kind === "intro")
+    .reduce((sum, clip) => sum + clip.timeline_duration, 0);
+
+  useEffect(() => {
+    setCompositionDraft(null);
+  }, [videoTimeline]);
+
+  const commitComposition = useCallback((next: CompositionClip[]) => {
+    const normalized = fitCompositionToDuration(next, audioDuration);
+    setCompositionDraft(null);
+    onVideoTimelineChange?.(normalized);
+  }, [audioDuration, onVideoTimelineChange]);
+
   // Legacy restored previews may contain only an absolute source path. Those
   // paths are intentionally forbidden by the backend file endpoint, so never
   // enter intro mode unless every clip can use the scoped preview proxy.
-  const introOffsetSec =
-    requestedIntroOffsetSec > 0 &&
-    introSegments.length > 0 &&
-    introSegments.every((segment) => Boolean(segment.source_video_id))
+  // Canonical compositions play intro clips through the same clip engine as
+  // every other cut. The old special intro player remains disabled so the four
+  // micro-clips are no longer collapsed into one opaque timeline block.
+  const introOffsetSec = composition.length > 0
+    ? 0
+    : requestedIntroOffsetSec > 0 &&
+      introSegments.length > 0 &&
+      introSegments.every((segment) => Boolean(segment.source_video_id))
       ? requestedIntroOffsetSec
       : 0;
 
   // The editor intentionally exposes one canonical view: the timeline.
   const [viewMode] = useState<"timeline" | "list">("timeline");
 
+  // Full-editor workspace sizing. The maximized editor behaves like an NLE:
+  // the inspector/program boundary and the program/timeline boundary can both
+  // be dragged, while card mode keeps its original flow layout.
+  const fullLayoutRef = useRef<HTMLDivElement>(null);
+  const [fullInspectorWidth, setFullInspectorWidth] = useState(320);
+  const [fullTimelineHeight, setFullTimelineHeight] = useState(260);
+
+  const beginFullLayoutResize = useCallback((
+    event: React.PointerEvent<HTMLDivElement>,
+    axis: "inspector" | "timeline",
+  ) => {
+    if (displayMode !== "full") return;
+    event.preventDefault();
+
+    const bounds = fullLayoutRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startInspectorWidth = fullInspectorWidth;
+    const startTimelineHeight = fullTimelineHeight;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    document.body.style.cursor = axis === "inspector" ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      if (axis === "inspector") {
+        const maxWidth = Math.max(240, Math.min(640, bounds.width - 360));
+        setFullInspectorWidth(Math.min(maxWidth, Math.max(220, startInspectorWidth + moveEvent.clientX - startX)));
+        return;
+      }
+
+      const maxHeight = Math.max(180, Math.min(640, bounds.height - 180));
+      setFullTimelineHeight(Math.min(maxHeight, Math.max(140, startTimelineHeight - (moveEvent.clientY - startY))));
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+  }, [displayMode, fullInspectorWidth, fullTimelineHeight]);
+
   // Dialog state (used for both unmatched assignment and swap)
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
+  const [assigningClipId, setAssigningClipId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"same" | "all">("all");
   // D2: "Generate with AI" — capture the phrase text before the assign dialog
@@ -349,14 +570,39 @@ export function TimelineEditor({
 
   // Timeline view state
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSourceVideoId = useRef<string | null>(null);
   const lastStartTime = useRef<number | null>(null);
 
+  // The maximized editor uses the same fit -> zoom -> pan model as the source
+  // footage timeline. A single scroll viewport and lane width drive every
+  // track, so subtitles, attention assets, video and audio never drift apart.
+  const multiTrackScrollRef = useRef<HTMLDivElement>(null);
+  const timelineSeekRafRef = useRef<number | null>(null);
+  const pendingTimelineSeekRef = useRef<number | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(1);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(TIMELINE_MIN_WIDTH + TIMELINE_LABEL_WIDTH);
+
+  useEffect(() => {
+    const viewport = multiTrackScrollRef.current;
+    if (!viewport) return;
+    const updateWidth = () => setTimelineViewportWidth(viewport.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [attentionTimeline, displayMode, viewMode]);
+
+  useEffect(() => () => {
+    if (timelineSeekRafRef.current !== null) cancelAnimationFrame(timelineSeekRafRef.current);
+  }, []);
+
   // Drag-and-drop state
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [compositionDragId, setCompositionDragId] = useState<string | null>(null);
 
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
@@ -369,6 +615,28 @@ export function TimelineEditor({
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
   const [previewSlotMatchIndexes, setPreviewSlotMatchIndexes] = useState<Array<number | null>>([null, null]);
   const [isPreviewIntro, setIsPreviewIntro] = useState(false);
+  const [previewAudioSrc, setPreviewAudioSrc] = useState<string | null>(null);
+  const [isPreviewAudioLoading, setIsPreviewAudioLoading] = useState(false);
+  const [previewAudioLoadFailed, setPreviewAudioLoadFailed] = useState(false);
+  const [voiceoverPeaks, setVoiceoverPeaks] = useState<number[]>([]);
+  const playbackMatches = useMemo<MatchPreview[]>(() => displayedComposition.map((clip, index) => ({
+    srt_index: index,
+    srt_text: clip.segment_keywords?.slice(0, 3).join(", ") || `${clip.kind === "intro" ? "Intro" : "Clip"} ${index + 1}`,
+    srt_start: clip.timeline_start,
+    srt_end: clip.timeline_start + clip.timeline_duration,
+    segment_id: clip.segment_id ?? null,
+    segment_keywords: clip.segment_keywords ?? [],
+    matched_keyword: clip.segment_keywords?.[0] ?? null,
+    confidence: clip.segment_id ? 1 : 0,
+    source_video_id: clip.source_video_id ?? undefined,
+    segment_start_time: clip.start_time,
+    segment_end_time: clip.end_time,
+    thumbnail_path: clip.thumbnail_path ?? undefined,
+    merge_group: index,
+    merge_group_duration: clip.timeline_duration,
+    transforms: clip.transforms,
+    pinned: clip.pinned,
+  })), [displayedComposition]);
   const compactPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   const expandedPreviewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>();
   // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
@@ -420,7 +688,7 @@ export function TimelineEditor({
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
   const previewSegmentStartTimeRef = useRef<number | undefined>(undefined);
   const pendingCanPlayRef = useRef<(() => void) | null>(null);
-  const matchesRef = useRef(matches);
+  const matchesRef = useRef(playbackMatches);
   const previewRafIdRef = useRef<number | null>(null);
   const seekGraceTimestampRef = useRef(0);
   const lastReportedTimeRef = useRef(0);
@@ -436,7 +704,13 @@ export function TimelineEditor({
   useEffect(() => { isPreviewActiveRef.current = isPreviewActive; }, [isPreviewActive]);
   useEffect(() => { isPreviewIntroRef.current = isPreviewIntro; }, [isPreviewIntro]);
   useEffect(() => { previewActiveIndexRef.current = previewActiveIndex; }, [previewActiveIndex]);
-  useEffect(() => { matchesRef.current = matches; }, [matches]);
+  useEffect(() => {
+    matchesRef.current = playbackMatches;
+    if (previewActiveIndexRef.current >= playbackMatches.length) {
+      previewActiveIndexRef.current = Math.max(0, playbackMatches.length - 1);
+      setPreviewActiveIndex(previewActiveIndexRef.current);
+    }
+  }, [playbackMatches]);
 
   // Cleanup: pause all audio/video and stop rAF on unmount
   useEffect(() => {
@@ -468,12 +742,96 @@ export function TimelineEditor({
     }
   }, [isPreviewActive]);
 
-  // Matches that have a usable video segment (drives canPreview). The old
-  // per-source video pool + prune effect are gone — we now use two fixed slots.
-  const videoMatches = matches.filter((m) => m.segment_id && m.source_video_id);
+  // Matches the client-side stitcher can actually play (drives canPreview).
+  // Playback streams by source_video_id and seeks by segment_start_time;
+  // segment_id is only a library reference the player never touches. Requiring
+  // it here wrongly blanked the preview for older pipelines whose saved timeline
+  // stored source_video_id without segment_id. The old per-source video pool +
+  // prune effect are gone — we now use two fixed slots.
+  const videoMatches = playbackMatches.filter((m) => m.source_video_id && m.segment_start_time != null);
 
   // Can we show the preview? Need pipelineId, profileId, and at least one video match
   const canPreview = !!(pipelineId && variantIndex !== undefined && profileId && videoMatches.length > 0);
+
+  // The audio endpoint requires a Supabase bearer token. Native <audio> requests
+  // cannot attach that header, so loading the API URL directly returns 401 and
+  // freezes the master preview clock at 0:00. Fetch it through the authenticated
+  // API client, then let the media element play the resulting local blob URL.
+  useEffect(() => {
+    if (!canPreview || !pipelineId || variantIndex === undefined) {
+      setPreviewAudioSrc(null);
+      setVoiceoverPeaks([]);
+      setIsPreviewAudioLoading(false);
+      setPreviewAudioLoadFailed(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const audioElement = previewAudioRef.current;
+    let objectUrl: string | null = null;
+    setPreviewAudioSrc(null);
+    setVoiceoverPeaks([]);
+    setIsPreviewAudioLoading(true);
+    setPreviewAudioLoadFailed(false);
+
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, {
+      signal: controller.signal,
+      cache: "no-store",
+      memoryCache: false,
+    })
+      .then((response) => response.blob())
+      .then(async (blob) => {
+        if (controller.signal.aborted) return;
+        if (blob.size === 0) throw new Error("Preview audio response was empty");
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewAudioSrc(objectUrl);
+        setIsPreviewAudioLoading(false);
+
+        try {
+          const AudioContextClass = window.AudioContext
+            ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (!AudioContextClass) return;
+          const context = new AudioContextClass();
+          try {
+            const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+            if (controller.signal.aborted) return;
+            const channel = decoded.getChannelData(0);
+            const bucketCount = 220;
+            const bucketSize = Math.max(1, Math.floor(channel.length / bucketCount));
+            const peaks = Array.from({ length: bucketCount }, (_, bucketIndex) => {
+              const start = bucketIndex * bucketSize;
+              const end = Math.min(channel.length, start + bucketSize);
+              let peak = 0;
+              for (let sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+                peak = Math.max(peak, Math.abs(channel[sampleIndex]));
+              }
+              return Math.min(1, peak * 1.35);
+            });
+            setVoiceoverPeaks(peaks);
+          } finally {
+            await context.close().catch(() => undefined);
+          }
+        } catch (waveformError) {
+          console.warn("[TimelineEditor] Could not decode the voiceover waveform", waveformError);
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        console.warn("[TimelineEditor] Could not load authenticated preview audio", error);
+        setPreviewAudioLoadFailed(true);
+        setIsPreviewAudioLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+      if (audioElement && objectUrl && audioElement.src === objectUrl) {
+        audioElement.pause();
+        audioElement.removeAttribute("src");
+        audioElement.load();
+      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [canPreview, pipelineId, variantIndex]);
   // Next index that triggers a REAL video cut (different merge group than the
   // segment at `curIdx`). Phrases inside one merge group share a single video
   // segment, so they never become a staging target — the picture stays put while
@@ -495,8 +853,8 @@ export function TimelineEditor({
   }, []);
   const getPreviewStreamUrl = useCallback((sourceVideoId: string) => {
     if (!profileId) return "";
-    return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
-  }, [profileId]);
+    return `${mediaApiUrl}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
+  }, [mediaApiUrl, profileId]);
 
   // --- Continuous (live, client-side) preview helpers ---
   // NOTE: this is a client-side segment stitcher driven by the TTS audio clock,
@@ -1256,16 +1614,104 @@ export function TimelineEditor({
     seatActiveSlot(newIdx, isPreviewPlayingRef.current);
   }, [findActiveMatch, seatActiveSlot, introOffsetSec, playIntroAt]);
 
+  const compositionEnd = displayedComposition.reduce(
+    (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
+    0,
+  );
+  const subtitleEnd = matches.reduce((maximum, match) => Math.max(maximum, match.srt_end), 0);
+  const attentionEnd = (attentionTimeline?.cues ?? []).reduce(
+    (maximum, cue) => Math.max(maximum, (cue.startMs + cue.durationMs) / 1000),
+    0,
+  );
+  const timelineDuration = Math.max(audioDuration, compositionEnd, subtitleEnd, attentionEnd, 0.05);
+
+  const scheduleTimelineSeek = useCallback((time: number) => {
+    pendingTimelineSeekRef.current = Math.max(0, Math.min(timelineDuration, time));
+    if (timelineSeekRafRef.current !== null) return;
+    timelineSeekRafRef.current = requestAnimationFrame(() => {
+      timelineSeekRafRef.current = null;
+      const pending = pendingTimelineSeekRef.current;
+      pendingTimelineSeekRef.current = null;
+      if (pending !== null) seekPreviewToTime(pending);
+    });
+  }, [seekPreviewToTime, timelineDuration]);
+
+  const beginMultiTrackScrub = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (!isPreviewActive || timelineDuration <= 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-timeline-block]")) return;
+    const axis = (event.currentTarget as HTMLElement).closest("[data-timeline-axis]") as HTMLElement | null;
+    if (!axis) return;
+
+    event.preventDefault();
+    const seekAt = (clientX: number) => {
+      const rect = axis.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+      scheduleTimelineSeek(ratio * timelineDuration);
+    };
+    seekAt(event.clientX);
+
+    const handleMove = (moveEvent: PointerEvent) => seekAt(moveEvent.clientX);
+    const handleUp = (upEvent: PointerEvent) => {
+      seekAt(upEvent.clientX);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+  }, [isPreviewActive, scheduleTimelineSeek, timelineDuration]);
+
+  const setTimelineZoomAt = useCallback((nextZoom: number, clientX?: number) => {
+    const viewport = multiTrackScrollRef.current;
+    const normalizedZoom = Math.max(TIMELINE_MIN_ZOOM, Math.min(TIMELINE_MAX_ZOOM, nextZoom));
+    if (!viewport) {
+      setTimelineZoom(normalizedZoom);
+      return;
+    }
+
+    const rect = viewport.getBoundingClientRect();
+    const fitWidth = Math.max(
+      TIMELINE_MIN_WIDTH,
+      viewport.clientWidth - TIMELINE_LABEL_WIDTH - TIMELINE_END_GUTTER,
+    );
+    const oldLaneWidth = fitWidth * timelineZoom;
+    const newLaneWidth = fitWidth * normalizedZoom;
+    const localX = Math.min(rect.width, Math.max(TIMELINE_LABEL_WIDTH, (clientX ?? rect.left + rect.width / 2) - rect.left));
+    const contentX = viewport.scrollLeft + localX - TIMELINE_LABEL_WIDTH;
+    const timeRatio = Math.min(1, Math.max(0, contentX / Math.max(1, oldLaneWidth)));
+
+    setTimelineZoom(normalizedZoom);
+    requestAnimationFrame(() => {
+      viewport.scrollLeft = Math.max(0, TIMELINE_LABEL_WIDTH + timeRatio * newLaneWidth - localX);
+    });
+  }, [timelineZoom]);
+
+  useEffect(() => {
+    const viewport = multiTrackScrollRef.current;
+    if (!viewport || viewMode !== "timeline") return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        viewport.scrollLeft += event.deltaX || event.deltaY;
+        return;
+      }
+      const factor = event.deltaY > 0 ? 0.9 : 1.1;
+      setTimelineZoomAt(timelineZoom * factor, event.clientX);
+    };
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, [attentionTimeline, setTimelineZoomAt, timelineZoom, viewMode]);
+
   const handlePreviewSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     seekPreviewToTime(parseFloat(e.target.value));
   }, [seekPreviewToTime]);
 
-  const handleSeekToSegment = useCallback((idx: number) => {
-    if (!isPreviewActive) return;
-    jumpToIndex(idx);
-  }, [isPreviewActive, jumpToIndex]);
-
   const activatePreview = useCallback(() => {
+    if (!previewAudioSrc) return;
+
     // Call play() synchronously from the click handler. Chromium can reject a
     // first play() made later from canplay/seek callbacks because the transient
     // user activation has expired. Keep this authorized playback muted and
@@ -1463,7 +1909,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seatActiveSlot, seekSlotTo, setSegmentEndBoundary, playAudioAndStartLoop]);
+  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, previewAudioSrc, seatActiveSlot, seekSlotTo, setSegmentEndBoundary, playAudioAndStartLoop]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
@@ -1556,22 +2002,30 @@ export function TimelineEditor({
   // Filtered segments: proximity ±2 rule + source filter + keyword search
   const filteredSegments = useMemo(() => {
     let pool = availableSegments;
+    const assigningClipIndex = assigningClipId === null
+      ? -1
+      : displayedComposition.findIndex((clip) => clip.id === assigningClipId);
 
     // Source video filter
-    if (sourceFilter === "same" && assigningIndex !== null) {
-      const currentSourceId = matches[assigningIndex]?.source_video_id;
+    if (sourceFilter === "same" && (assigningIndex !== null || assigningClipIndex >= 0)) {
+      const currentSourceId = assigningClipIndex >= 0
+        ? displayedComposition[assigningClipIndex]?.source_video_id
+        : matches[assigningIndex!]?.source_video_id;
       if (currentSourceId) {
         pool = pool.filter(seg => seg.source_video_id === currentSourceId);
       }
     }
 
     // Proximity ±2: exclude segments already used at neighboring positions
-    if (assigningIndex !== null) {
+    if (assigningIndex !== null || assigningClipIndex >= 0) {
       const nearbySegmentIds = new Set<string>();
       for (let offset = -2; offset <= 2; offset++) {
         if (offset === 0) continue;
-        const neighborIdx = assigningIndex + offset;
-        if (neighborIdx >= 0 && neighborIdx < matches.length) {
+        const neighborIdx = (assigningClipIndex >= 0 ? assigningClipIndex : assigningIndex!) + offset;
+        if (assigningClipIndex >= 0 && neighborIdx >= 0 && neighborIdx < displayedComposition.length) {
+          const neighborId = displayedComposition[neighborIdx].segment_id;
+          if (neighborId) nearbySegmentIds.add(neighborId);
+        } else if (assigningClipIndex < 0 && neighborIdx >= 0 && neighborIdx < matches.length) {
           const neighborId = matches[neighborIdx].segment_id;
           if (neighborId) nearbySegmentIds.add(neighborId);
         }
@@ -1586,38 +2040,73 @@ export function TimelineEditor({
     }
 
     return pool;
-  }, [availableSegments, assigningIndex, matches, searchQuery, sourceFilter]);
+  }, [availableSegments, assigningClipId, assigningIndex, displayedComposition, matches, searchQuery, sourceFilter]);
 
   // Count how many segments were excluded by proximity rule (for UI indicator)
   const proximityExcludedCount = useMemo(() => {
-    if (assigningIndex === null) return 0;
+    const assigningClipIndex = assigningClipId === null
+      ? -1
+      : displayedComposition.findIndex((clip) => clip.id === assigningClipId);
+    if (assigningIndex === null && assigningClipIndex < 0) return 0;
     const nearbySegmentIds = new Set<string>();
     for (let offset = -2; offset <= 2; offset++) {
       if (offset === 0) continue;
-      const neighborIdx = assigningIndex + offset;
-      if (neighborIdx >= 0 && neighborIdx < matches.length) {
+      const neighborIdx = (assigningClipIndex >= 0 ? assigningClipIndex : assigningIndex!) + offset;
+      if (assigningClipIndex >= 0 && neighborIdx >= 0 && neighborIdx < displayedComposition.length) {
+        const neighborId = displayedComposition[neighborIdx].segment_id;
+        if (neighborId) nearbySegmentIds.add(neighborId);
+      } else if (assigningClipIndex < 0 && neighborIdx >= 0 && neighborIdx < matches.length) {
         const neighborId = matches[neighborIdx].segment_id;
         if (neighborId) nearbySegmentIds.add(neighborId);
       }
     }
     return availableSegments.filter(seg => nearbySegmentIds.has(seg.id)).length;
-  }, [availableSegments, assigningIndex, matches]);
+  }, [availableSegments, assigningClipId, assigningIndex, displayedComposition, matches]);
 
 
   // --- Dialog handlers ---
 
   const handleOpenDialog = (matchIndex: number) => {
     setAssigningIndex(matchIndex);
+    setAssigningClipId(null);
+    setSearchQuery("");
+  };
+
+  const handleOpenClipDialog = (clipId: string) => {
+    setAssigningClipId(clipId);
+    setAssigningIndex(null);
     setSearchQuery("");
   };
 
   const handleCloseDialog = () => {
     setAssigningIndex(null);
+    setAssigningClipId(null);
     setSearchQuery("");
     setSourceFilter("all");
   };
 
   const handleSelectSegment = (segment: SegmentOption) => {
+    if (assigningClipId !== null) {
+      const sourceStart = segment.start_time ?? 0;
+      const sourceEnd = segment.end_time ?? sourceStart + Math.max(0.05, segment.duration);
+      const updated = displayedComposition.map((clip) => clip.id === assigningClipId
+        ? {
+            ...clip,
+            segment_id: segment.id,
+            segment_keywords: segment.keywords,
+            source_video_id: segment.source_video_id,
+            thumbnail_path: segment.thumbnail_path,
+            product_group: segment.product_group,
+            start_time: sourceStart,
+            end_time: Math.max(sourceStart + 0.05, sourceEnd),
+            transforms: segment.transforms,
+            pinned: true,
+          }
+        : clip);
+      commitComposition(updated);
+      handleCloseDialog();
+      return;
+    }
     if (assigningIndex === null) return;
 
     // When swapping a segment, propagate to ALL entries in the same merge group.
@@ -1652,6 +2141,163 @@ export function TimelineEditor({
 
     onMatchesChange(updatedMatches);
     handleCloseDialog();
+  };
+
+  const rollCompositionBoundary = useCallback((
+    clips: CompositionClip[],
+    leftIndex: number,
+    requestedDelta: number,
+  ) => {
+    const left = clips[leftIndex];
+    const right = clips[leftIndex + 1];
+    if (!left || !right) return clips;
+    const minimumDuration = 0.1;
+    const delta = Math.max(
+      minimumDuration - left.timeline_duration,
+      Math.min(right.timeline_duration - minimumDuration, requestedDelta),
+    );
+    if (Math.abs(delta) < 0.0001) return clips;
+
+    const leftLibrary = availableSegments.find((segment) => segment.id === left.segment_id);
+    const rightLibrary = availableSegments.find((segment) => segment.id === right.segment_id);
+    const leftMaximumEnd = leftLibrary?.end_time ?? Math.max(left.end_time, left.end_time + Math.max(0, delta));
+    const rightMinimumStart = rightLibrary?.start_time ?? Math.min(right.start_time, right.start_time + Math.min(0, delta));
+
+    const updated = clips.map((clip) => ({ ...clip }));
+    updated[leftIndex] = {
+      ...left,
+      timeline_duration: left.timeline_duration + delta,
+      end_time: Math.max(
+        left.start_time + 0.05,
+        Math.min(leftMaximumEnd, left.end_time + delta),
+      ),
+      pinned: true,
+    };
+    updated[leftIndex + 1] = {
+      ...right,
+      timeline_duration: right.timeline_duration - delta,
+      start_time: Math.min(
+        right.end_time - 0.05,
+        Math.max(rightMinimumStart, right.start_time + delta),
+      ),
+      pinned: true,
+    };
+    return reflowComposition(updated);
+  }, [availableSegments]);
+
+  const beginCompositionRoll = (
+    event: React.PointerEvent<HTMLSpanElement>,
+    leftIndex: number,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const axis = event.currentTarget.closest("[data-timeline-axis]") as HTMLElement | null;
+    if (!axis || timelineDuration <= 0) return;
+    const startX = event.clientX;
+    const original = displayedComposition.map((clip) => ({ ...clip }));
+    let latest = original;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const update = (clientX: number) => {
+      const delta = (clientX - startX) / Math.max(1, axis.clientWidth) * timelineDuration;
+      latest = rollCompositionBoundary(original, leftIndex, delta);
+      setCompositionDraft(latest);
+    };
+    const finish = (upEvent: PointerEvent) => {
+      update(upEvent.clientX);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      commitComposition(latest);
+    };
+    const cancel = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setCompositionDraft(null);
+    };
+    const move = (moveEvent: PointerEvent) => update(moveEvent.clientX);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+  };
+
+  const moveCompositionClip = useCallback((clipId: string, direction: -1 | 1) => {
+    const currentIndex = displayedComposition.findIndex((clip) => clip.id === clipId);
+    if (currentIndex < 0) return;
+    const kind = displayedComposition[currentIndex].kind;
+    let targetIndex = currentIndex + direction;
+    while (
+      targetIndex >= 0 &&
+      targetIndex < displayedComposition.length &&
+      displayedComposition[targetIndex].kind !== kind
+    ) {
+      targetIndex += direction;
+    }
+    if (targetIndex < 0 || targetIndex >= displayedComposition.length) return;
+    const updated = [...displayedComposition];
+    const [moved] = updated.splice(currentIndex, 1);
+    updated.splice(targetIndex, 0, moved);
+    commitComposition(updated);
+  }, [commitComposition, displayedComposition]);
+
+  const dropCompositionClip = (targetId: string) => {
+    if (!compositionDragId || compositionDragId === targetId) {
+      setCompositionDragId(null);
+      return;
+    }
+    const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
+    const targetIndex = displayedComposition.findIndex((clip) => clip.id === targetId);
+    if (
+      sourceIndex < 0 ||
+      targetIndex < 0 ||
+      displayedComposition[sourceIndex].kind !== displayedComposition[targetIndex].kind
+    ) {
+      setCompositionDragId(null);
+      return;
+    }
+    const updated = [...displayedComposition];
+    const [moved] = updated.splice(sourceIndex, 1);
+    updated.splice(targetIndex, 0, moved);
+    setCompositionDragId(null);
+    commitComposition(updated);
+  };
+
+  const nudgeCompositionSource = (clipId: string, edge: "in" | "out", delta: number) => {
+    const clip = displayedComposition.find((candidate) => candidate.id === clipId);
+    if (!clip) return;
+    const library = availableSegments.find((segment) => segment.id === clip.segment_id);
+    const minimumStart = library?.start_time ?? 0;
+    const maximumEnd = library?.end_time ?? Math.max(clip.end_time, clip.end_time + Math.max(0, delta));
+    const updated = displayedComposition.map((candidate) => {
+      if (candidate.id !== clipId) return candidate;
+      if (edge === "in") {
+        return {
+          ...candidate,
+          start_time: Math.min(
+            candidate.end_time - 0.05,
+            Math.max(minimumStart, candidate.start_time + delta),
+          ),
+          pinned: true,
+        };
+      }
+      return {
+        ...candidate,
+        end_time: Math.max(
+          candidate.start_time + 0.05,
+          Math.min(maximumEnd, candidate.end_time + delta),
+        ),
+        pinned: true,
+      };
+    });
+    commitComposition(updated);
   };
 
   // --- Drag-and-drop handlers ---
@@ -1812,6 +2458,7 @@ export function TimelineEditor({
     emitSlides(updated);
     setSelectedSlideId(newSlide.id);
     setSelectedBlockIndex(null);
+    setSelectedClipId(null);
   };
 
   const handleUpdateSlide = (slideId: string, changes: Partial<InterstitialSlide>) => {
@@ -1893,7 +2540,7 @@ export function TimelineEditor({
     };
   }, [viewMode, selectedBlockIndex, matches, profileId, getPreviewStreamUrl]);
 
-  if (matches.length === 0) {
+  if (matches.length === 0 && composition.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
         <Film className="size-4 mr-2" />
@@ -1904,23 +2551,30 @@ export function TimelineEditor({
 
   // Determine dialog title based on context
   const isSwapMode =
-    assigningIndex !== null &&
-    matches[assigningIndex]?.segment_id !== null;
+    (assigningIndex !== null && matches[assigningIndex]?.segment_id !== null) ||
+    (assigningClipId !== null && displayedComposition.some(
+      (clip) => clip.id === assigningClipId && Boolean(clip.segment_id),
+    ));
   const dialogTitle = isSwapMode ? "Swap Segment" : "Select Segment";
-  const dialogSubLabel = isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
+  const dialogSubLabel = assigningClipId !== null
+    ? "Replacing timeline clip"
+    : isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
 
   // Calculate total duration for proportional widths in timeline view
-  const bodyDuration = audioDuration > 0
-    ? audioDuration
-    : matches.reduce((sum, m) => sum + (m.duration_override ?? (m.srt_end - m.srt_start)), 0);
+  const bodyDuration = timelineDuration;
   const totalDuration = bodyDuration;
   const previewTotalDuration = previewDuration || audioDuration;
 
   // Selected match for inline preview
   const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
+  const selectedClip = selectedClipId === null
+    ? null
+    : displayedComposition.find((clip) => clip.id === selectedClipId) ?? null;
 
   const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
-    const subtitleText = matches[previewActiveIndex]?.srt_text;
+    const subtitleText = matches.find(
+      (match) => match.srt_start <= previewCurrentTime && previewCurrentTime < match.srt_end,
+    )?.srt_text;
     if (!subtitleText || containerHeight <= 0) return null;
 
     const fontSize = scaleSubtitleFontPx(
@@ -1989,7 +2643,7 @@ export function TimelineEditor({
   const renderAttentionOverlays = () => {
     if (!attentionTimeline) return null;
     const nowMs = previewCurrentTime * 1000;
-    return attentionTimeline.cues.flatMap((cue) => {
+    return attentionCues.flatMap((cue) => {
       if (nowMs < cue.startMs || nowMs >= cue.startMs + cue.durationMs) return [];
       return cue.layers.map((layer) => {
         const url = layer.assetUrl || layer.assetId;
@@ -2016,28 +2670,84 @@ export function TimelineEditor({
   };
 
   return (
-    <>
+    /* In "full" mode the root is an NLE grid with two draggable splitters:
+       inspector | program monitor above, timeline below. The nested containers
+       use `display: contents` so their panels become direct grid items; card
+       mode keeps the original flow layout. */
+    <div
+      ref={displayMode === "full" ? fullLayoutRef : undefined}
+      className={
+        displayMode === "full"
+          ? "grid h-full min-h-0 overflow-hidden bg-border"
+          : "contents"
+      }
+      style={displayMode === "full" ? {
+        gridTemplateColumns: `${fullInspectorWidth}px 2px minmax(0, 1fr)`,
+        gridTemplateRows: `auto minmax(0, 1fr) 2px ${fullTimelineHeight}px`,
+      } : undefined}
+    >
       {/* Preload audio as soon as preview is possible — mounted before isPreviewActive
           so it has time to load before user clicks Play Preview */}
       {canPreview && (
         <audio
           ref={previewAudioRef}
-          src={`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`}
+          src={previewAudioSrc ?? undefined}
           preload="auto"
           style={{ display: "none" }}
         />
+      )}
+
+      {displayMode === "full" && (
+        <>
+          <div
+            role="separator"
+            aria-label="Resize clip settings panel"
+            aria-orientation="vertical"
+            aria-valuenow={Math.round(fullInspectorWidth)}
+            tabIndex={0}
+            className="relative z-30 col-start-2 row-start-2 cursor-col-resize bg-border transition-colors hover:bg-primary focus-visible:bg-primary focus-visible:outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+            onPointerDown={(event) => beginFullLayoutResize(event, "inspector")}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              setFullInspectorWidth((width) => Math.min(640, Math.max(220, width + (event.key === "ArrowRight" ? 16 : -16))));
+            }}
+          />
+          <div
+            role="separator"
+            aria-label="Resize timeline panel"
+            aria-orientation="horizontal"
+            aria-valuenow={Math.round(fullTimelineHeight)}
+            tabIndex={0}
+            className="relative z-30 col-span-3 row-start-3 cursor-row-resize bg-border transition-colors hover:bg-primary focus-visible:bg-primary focus-visible:outline-none after:absolute after:inset-x-0 after:top-1/2 after:h-2 after:-translate-y-1/2"
+            onPointerDown={(event) => beginFullLayoutResize(event, "timeline")}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+              event.preventDefault();
+              setFullTimelineHeight((height) => Math.min(640, Math.max(140, height + (event.key === "ArrowUp" ? 16 : -16))));
+            }}
+          />
+        </>
       )}
 
       {/* Inline continuous preview player */}
       {canPreview && pipelineId && variantIndex !== undefined && profileId && (
         <>
           {!isPreviewExpanded && (
-            <div className="rounded-lg border bg-card mb-3 overflow-hidden">
+            <div
+              className={`bg-card overflow-hidden ${
+                displayMode === "full"
+                  ? "col-start-3 row-start-2 flex min-h-0 flex-col"
+                  : "mb-3 rounded-lg border"
+              }`}
+            >
               {/* Video display with subtitle overlay */}
               <div
                 ref={compactPreviewMeasurement.ref}
-                className="group relative mx-auto bg-black flex items-center justify-center"
-                style={displayMode === "full" ? expandedPreviewFrameStyle : compactPreviewFrameStyle}
+                className={`group relative isolate mx-auto flex items-center justify-center overflow-hidden bg-black ${
+                  displayMode === "full" ? "min-h-0 flex-1" : ""
+                }`}
+                style={displayMode === "full" ? fullPreviewFrameStyle : compactPreviewFrameStyle}
               >
                 {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
                     prepareSlot/seatActiveSlot. Visibility follows the active slot. */}
@@ -2055,7 +2765,7 @@ export function TimelineEditor({
                     style={{
                       display: "block",
                       opacity:
-                        activeSlot === slot && (isPreviewIntro || matches[previewActiveIndex]?.source_video_id)
+                        activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
                           ? 1
                           : 0,
                       zIndex: activeSlot === slot ? 1 : 0,
@@ -2067,19 +2777,31 @@ export function TimelineEditor({
                 ))}
 
                 {!isPreviewActive && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/35">
-                    <Button
-                      variant="secondary"
-                      size="icon"
-                      className="size-12 rounded-full shadow-lg"
-                      onClick={activatePreview}
-                      aria-label="Play preview"
-                      title="Play preview"
-                    >
-                      <Play className="size-5 fill-current" />
-                    </Button>
-                    <span className="text-[11px] text-white/75">Play preview</span>
-                  </div>
+                  <>
+                    {playbackMatches[previewActiveIndex]?.thumbnail_path && (
+                      <img
+                        src={segmentFileUrl(mediaApiUrl, playbackMatches[previewActiveIndex].thumbnail_path!)}
+                        alt=""
+                        className="absolute inset-0 z-[5] h-full w-full object-cover"
+                        onError={(event) => { event.currentTarget.style.display = "none"; }}
+                      />
+                    )}
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/35">
+                      <Button
+                        variant="secondary"
+                        size="icon"
+                        className="size-12 rounded-full shadow-lg"
+                        onClick={activatePreview}
+                        disabled={isPreviewAudioLoading || !previewAudioSrc}
+                        aria-label="Play preview"
+                        title={previewAudioLoadFailed ? "Preview audio could not be loaded" : "Play preview"}
+                      >
+                        {isPreviewAudioLoading
+                          ? <Loader2 className="size-5 animate-spin" />
+                          : <Play className="size-5 fill-current" />}
+                      </Button>
+                    </div>
+                  </>
                 )}
 
                 {onRenderPreview && (
@@ -2106,7 +2828,7 @@ export function TimelineEditor({
                 )}
 
                 {/* No video fallback */}
-                {!isPreviewIntro && !matches[previewActiveIndex]?.source_video_id && (
+                {!isPreviewIntro && !playbackMatches[previewActiveIndex]?.source_video_id && (
                   <div className="flex items-center justify-center text-muted-foreground text-sm">
                     No video for this segment
                   </div>
@@ -2121,7 +2843,7 @@ export function TimelineEditor({
               </div>
 
               {/* Controls */}
-              <div className="px-3 py-2 space-y-1.5">
+              <div className={`shrink-0 space-y-1.5 px-3 py-2 ${displayMode === "full" ? "mx-auto w-full max-w-xl" : ""}`}>
                 {/* Progress bar */}
                 <input
                   type="range"
@@ -2146,6 +2868,7 @@ export function TimelineEditor({
                       size="icon"
                       className="size-7"
                       onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
+                      disabled={!isPreviewActive && (isPreviewAudioLoading || !previewAudioSrc)}
                       title="Replay from beginning"
                       aria-label="Replay from beginning"
                     >
@@ -2166,7 +2889,9 @@ export function TimelineEditor({
                       size="icon"
                       className="size-8"
                       onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
+                      disabled={!isPreviewActive && (isPreviewAudioLoading || !previewAudioSrc)}
                       title={isPreviewPlaying ? "Pause" : "Play"}
+                      aria-label={isPreviewPlaying ? "Pause preview" : "Play preview"}
                     >
                       {isPreviewPlaying ? (
                         <Pause className="size-4" />
@@ -2179,7 +2904,7 @@ export function TimelineEditor({
                       size="icon"
                       className="size-7"
                       onClick={previewNextSegment}
-                      disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
+                      disabled={!isPreviewActive || previewActiveIndex >= playbackMatches.length - 1}
                       title="Next segment"
                     >
                       <SkipForward className="size-3.5" />
@@ -2207,7 +2932,7 @@ export function TimelineEditor({
                   </div>
 
                   <span className="text-[11px] text-muted-foreground">
-                    {previewActiveIndex + 1}/{matches.length}
+                    {previewActiveIndex + 1}/{playbackMatches.length}
                   </span>
                 </div>
               </div>
@@ -2215,7 +2940,7 @@ export function TimelineEditor({
           )}
 
           <Dialog open={isPreviewExpanded} onOpenChange={setIsPreviewExpanded}>
-            <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px] p-0 overflow-hidden">
+            <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px] sm:max-w-[1200px] p-0 overflow-hidden">
               <DialogHeader className="px-6 pt-6 pb-0">
                 <DialogTitle>Expanded Preview</DialogTitle>
               </DialogHeader>
@@ -2223,7 +2948,7 @@ export function TimelineEditor({
                 <div className="rounded-lg border bg-card overflow-hidden">
                   <div
                     ref={expandedPreviewMeasurement.ref}
-                    className="group relative mx-auto bg-black flex items-center justify-center"
+                    className="group relative isolate mx-auto flex items-center justify-center overflow-hidden bg-black"
                     style={expandedPreviewFrameStyle}
                   >
                     {/* Ping-pong double-buffer (expanded view) — same two slots,
@@ -2242,7 +2967,7 @@ export function TimelineEditor({
                         style={{
                           display: "block",
                           opacity:
-                            activeSlot === slot && (isPreviewIntro || matches[previewActiveIndex]?.source_video_id)
+                            activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
                               ? 1
                               : 0,
                           zIndex: activeSlot === slot ? 1 : 0,
@@ -2254,19 +2979,31 @@ export function TimelineEditor({
                     ))}
 
                     {!isPreviewActive && (
-                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/35">
-                        <Button
-                          variant="secondary"
-                          size="icon"
-                          className="size-14 rounded-full shadow-lg"
-                          onClick={activatePreview}
-                          aria-label="Play preview"
-                          title="Play preview"
-                        >
-                          <Play className="size-6 fill-current" />
-                        </Button>
-                        <span className="text-xs text-white/75">Play preview</span>
-                      </div>
+                      <>
+                        {playbackMatches[previewActiveIndex]?.thumbnail_path && (
+                          <img
+                            src={segmentFileUrl(mediaApiUrl, playbackMatches[previewActiveIndex].thumbnail_path!)}
+                            alt=""
+                            className="absolute inset-0 z-[5] h-full w-full object-cover"
+                            onError={(event) => { event.currentTarget.style.display = "none"; }}
+                          />
+                        )}
+                        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/35">
+                          <Button
+                            variant="secondary"
+                            size="icon"
+                            className="size-14 rounded-full shadow-lg"
+                            onClick={activatePreview}
+                            disabled={isPreviewAudioLoading || !previewAudioSrc}
+                            aria-label="Play preview"
+                            title={previewAudioLoadFailed ? "Preview audio could not be loaded" : "Play preview"}
+                          >
+                            {isPreviewAudioLoading
+                              ? <Loader2 className="size-6 animate-spin" />
+                              : <Play className="size-6 fill-current" />}
+                          </Button>
+                        </div>
+                      </>
                     )}
 
                     {onRenderPreview && (
@@ -2291,7 +3028,7 @@ export function TimelineEditor({
                       </div>
                     )}
 
-                    {!isPreviewIntro && !matches[previewActiveIndex]?.source_video_id && (
+                    {!isPreviewIntro && !playbackMatches[previewActiveIndex]?.source_video_id && (
                       <div className="flex items-center justify-center text-muted-foreground text-sm">
                         No video for this segment
                       </div>
@@ -2327,6 +3064,7 @@ export function TimelineEditor({
                           size="icon"
                           className="size-8"
                           onClick={isPreviewActive ? restartPreviewFromZero : activatePreview}
+                          disabled={!isPreviewActive && (isPreviewAudioLoading || !previewAudioSrc)}
                           title="Replay from beginning"
                           aria-label="Replay from beginning"
                         >
@@ -2347,6 +3085,7 @@ export function TimelineEditor({
                           size="icon"
                           className="size-9"
                           onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
+                          disabled={!isPreviewActive && (isPreviewAudioLoading || !previewAudioSrc)}
                           title={isPreviewPlaying ? "Pause" : "Play"}
                         >
                           {isPreviewPlaying ? (
@@ -2360,7 +3099,7 @@ export function TimelineEditor({
                           size="icon"
                           className="size-8"
                           onClick={previewNextSegment}
-                          disabled={!isPreviewActive || previewActiveIndex >= matches.length - 1}
+                          disabled={!isPreviewActive || previewActiveIndex >= playbackMatches.length - 1}
                           title="Next segment"
                         >
                           <SkipForward className="size-4" />
@@ -2379,7 +3118,7 @@ export function TimelineEditor({
                       </div>
 
                       <span className="text-xs text-muted-foreground">
-                        {previewActiveIndex + 1}/{matches.length}
+                        {previewActiveIndex + 1}/{playbackMatches.length}
                       </span>
                     </div>
                   </div>
@@ -2390,21 +3129,40 @@ export function TimelineEditor({
         </>
       )}
 
+      {/* Full editor: center pane fallback when this variant has no playable media. */}
+      {displayMode === "full" && !canPreview && (
+          <div className="col-start-3 row-start-2 flex min-h-0 flex-col items-center justify-center gap-3 overflow-hidden bg-card">
+            <span className="px-4 text-center text-sm text-muted-foreground">
+              Preview unavailable for this variant
+            </span>
+          </div>
+        )}
+
+      {/* Full editor: left inspector placeholder when nothing is selected */}
+      {displayMode === "full" &&
+        (viewMode !== "timeline" ||
+          (selectedSlideId === null && !selectedClip && (selectedBlockIndex === null || !selectedMatch))) && (
+          <div className="col-start-1 row-start-2 flex min-h-0 items-center justify-center bg-card p-4 text-center text-sm text-muted-foreground">
+            Select a clip or slide on the timeline to edit its settings here
+          </div>
+        )}
+
       {viewMode === "timeline" ? (
         /* ========== TIMELINE VIEW ========== */
-        <div className="space-y-3">
-          {attentionTimeline && totalDuration > 0 && (() => {
+        <div className={displayMode === "full" ? "contents" : "space-y-3"}>
+          {totalDuration > 0 && (() => {
             /* ========== MULTI-TRACK TIMELINE ==========
                One shared time axis (0..totalDuration — the voiceover clock).
                Every lane positions blocks as a % of that axis, so rows stay
                aligned by construction; the grid scrolls horizontally as one. */
             const pct = (sec: number) => `${(Math.min(Math.max(sec, 0), totalDuration) / totalDuration) * 100}%`;
             const widthPct = (sec: number) => `${(Math.max(sec, 0) / totalDuration) * 100}%`;
-            const laneMinWidth = Math.max(480, Math.round(totalDuration * TIMELINE_PX_PER_SEC));
-            const tickStep = totalDuration > 120 ? 5 : 1;
-            const ticks: number[] = [];
-            for (let s = 0; s <= Math.floor(totalDuration); s += tickStep) ticks.push(s);
-            const sfxCues = attentionTimeline.cues.filter(cue => cue.sfxAssetId || cue.sfxUrl);
+            const fitLaneWidth = Math.max(
+              TIMELINE_MIN_WIDTH,
+              timelineViewportWidth - TIMELINE_LABEL_WIDTH - TIMELINE_END_GUTTER,
+            );
+            const laneWidth = Math.round(fitLaneWidth * timelineZoom);
+            const sfxCues = attentionCues.filter(cue => cue.sfxAssetId || cue.sfxUrl);
             const playhead = isPreviewActive ? (
               <div
                 className="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary"
@@ -2416,76 +3174,85 @@ export function TimelineEditor({
             const lanes: { label: string; height: string; attention?: boolean; action?: React.ReactNode; content: React.ReactNode }[] = [
               {
                 label: "Video",
-                height: "h-14",
+                height: "h-16",
                 content: (
                   <>
-                    {introOffsetSec > 0 && (
-                      <div
-                        className="absolute inset-y-1 flex items-center overflow-hidden rounded border-2 border-violet-500 bg-violet-500/15 px-1 text-[9px] font-medium text-violet-700 dark:text-violet-300"
-                        style={{ left: 0, width: pct(introOffsetSec) }}
-                        title={`Rapid intro over soundtrack (${introOffsetSec.toFixed(1)}s)`}
-                      >
-                        <span className="truncate">Rapid intro</span>
-                      </div>
-                    )}
-                    {/* One clip block per phrase (NLE semantics). Phrases sharing
-                        one source (same merge_group) render as separate, abutting
-                        blocks with a subtle "linked" tint — the data model keeps
-                        merge_group; only the visual is per-phrase. */}
-                    {matches.map((match, idx) => {
-                      const start = Math.max(match.srt_start, introOffsetSec);
-                      const end = match.srt_end;
-                      if (end - start <= 0.001) return null;
-                      const isSelected = selectedBlockIndex === idx;
+                    {displayedComposition.map((clip, idx) => {
+                      const isSelected = selectedClipId === clip.id;
                       const isHighlighted = isPreviewActive && previewActiveIndex === idx;
-                      const status = matchStatusStyle(match, isSelected);
-                      const mg = match.merge_group;
-                      const linkedPrev = mg != null && idx > 0 && matches[idx - 1].merge_group === mg;
-                      const linkedNext = mg != null && idx < matches.length - 1 && matches[idx + 1].merge_group === mg;
-                      const words = match.srt_text.trim().split(/\s+/);
-                      const blockLabel = match.matched_keyword?.trim()
-                        || `${words.slice(0, 3).join(" ")}${words.length > 3 ? "..." : ""}`;
+                      const blockLabel = clip.segment_keywords?.slice(0, 2).join(", ")
+                        || `${clip.kind === "intro" ? "Intro" : "Clip"} ${idx + 1}`;
                       return (
-                        <button
-                          type="button"
-                          key={`clip-${match.srt_index}`}
-                          className={`absolute inset-y-1 overflow-hidden border-2 text-left ${status.border} ${status.bg} ${isSelected || isHighlighted ? "z-10 ring-1 ring-primary" : ""} ${linkedPrev ? "rounded-l-none" : "rounded-l"} ${linkedNext ? "rounded-r-none" : "rounded-r"}`}
-                          style={{ left: pct(start), width: widthPct(end - start) }}
-                          title={`${match.srt_text}${linkedPrev || linkedNext ? " · linked (shares one source clip)" : ""}`}
+                        <TimelineClipShell
+                          key={clip.id}
+                          testId={`composition-clip-${clip.id}`}
+                          draggable
+                          className={`${clip.kind === "intro"
+                            ? "border-violet-300/75 bg-violet-400/15"
+                            : "border-lime-300/60 bg-lime-300/10"} overflow-visible ${isSelected || isHighlighted
+                            ? "z-10 ring-2 ring-white/80"
+                            : ""} ${compositionDragId === clip.id ? "opacity-45" : "cursor-grab active:cursor-grabbing"}`}
+                          style={{ left: pct(clip.timeline_start), width: widthPct(clip.timeline_duration) }}
+                          title={`${blockLabel} · output ${formatTime(clip.timeline_start)}–${formatTime(clip.timeline_start + clip.timeline_duration)} · source ${clip.start_time.toFixed(2)}–${clip.end_time.toFixed(2)}`}
                           onClick={() => {
                             if (isPreviewActive) {
-                              handleSeekToSegment(idx);
+                              jumpToIndex(idx);
                             } else {
-                              setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx);
+                              setSelectedClipId(clip.id === selectedClipId ? null : clip.id);
+                              setSelectedBlockIndex(null);
                               setSelectedSlideId(null);
                             }
                           }}
+                          onDragStart={(event) => {
+                            setCompositionDragId(clip.id);
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", clip.id);
+                          }}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            dropCompositionClip(clip.id);
+                          }}
+                          onDragEnd={() => setCompositionDragId(null)}
                         >
-                          {match.thumbnail_path && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 text-white/25">
+                            <Film className="size-4" />
+                          </div>
+                          {clip.thumbnail_path && (
                             <img
-                              src={`${API_URL}/segments/files/${encodeURIComponent(match.thumbnail_path.split("/").pop() ?? "")}`}
+                              src={segmentFileUrl(mediaApiUrl, clip.thumbnail_path)}
                               alt=""
+                              draggable={false}
                               loading="lazy"
-                              className="absolute inset-0 h-full w-full object-cover opacity-50"
+                              className="absolute inset-0 h-full w-full object-cover opacity-55"
+                              onError={(event) => { event.currentTarget.style.display = "none"; }}
                             />
                           )}
-                          {(linkedPrev || linkedNext) && (
-                            <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-chart-2/70" />
-                          )}
-                          {status.isPinned && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); handleTogglePin(idx); }}
-                              className="absolute right-0.5 top-0.5 z-20 text-primary transition-colors hover:text-muted-foreground"
-                              title="Pinned — manually assigned, click to unpin"
-                            >
-                              <Pin className="size-3 fill-current" />
-                            </button>
-                          )}
-                          <span className="absolute inset-x-1 bottom-0.5 z-10 truncate text-[9px] font-medium text-foreground">
-                            {blockLabel}
+                          <span className="absolute left-1 top-1 z-10 flex items-center gap-1 text-[8px] font-semibold uppercase tracking-wide text-white/80">
+                            <GripVertical className="size-3" />
+                            {clip.kind === "intro" ? "Intro" : `V${idx + 1}`}
                           </span>
-                        </button>
+                          {clip.pinned && (
+                            <Pin className="absolute right-1 top-1 z-10 size-3 fill-current text-lime-200" />
+                          )}
+                          <span className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between gap-1 text-[9px] font-medium text-white">
+                            <span className="truncate drop-shadow">{blockLabel}</span>
+                            <span className="shrink-0 font-mono text-[8px] text-white/70">
+                              {clip.timeline_duration.toFixed(2)}s
+                            </span>
+                          </span>
+                          {idx < displayedComposition.length - 1 && (
+                            <span
+                              role="separator"
+                              aria-label={`Trim boundary after ${blockLabel}`}
+                              className="absolute inset-y-0 right-0 z-30 w-2 translate-x-1/2 cursor-col-resize border-x border-white/25 bg-white/20 opacity-70 transition hover:bg-white/70 group-hover:opacity-100"
+                              onPointerDown={(event) => beginCompositionRoll(event, idx)}
+                            />
+                          )}
+                        </TimelineClipShell>
                       );
                     })}
                   </>
@@ -2508,19 +3275,24 @@ export function TimelineEditor({
                 ) : null,
                 content: (
                   <>
-                    {attentionTimeline.cues.length === 0 && (
+                    {attentionCues.length === 0 && (
                       <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/60">
                         No attention images — use the + on this lane to add one, then drag to position
                       </div>
                     )}
-                    {attentionTimeline.cues.map(cue => (
+                    {attentionCues.map(cue => (
                       <button
                         type="button"
                         key={cue.id}
+                        data-timeline-block
                         className="absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded bg-primary/70 px-1 text-left text-primary-foreground active:cursor-grabbing"
                         style={{ left: pct(cue.startMs / 1000), width: widthPct(cue.durationMs / 1000) }}
                         onPointerDown={(event) => beginCueTimingDrag(event, cue, "move")}
-                        onClick={() => setSelectedSlideId(cue.id)}
+                        onClick={() => {
+                          setSelectedSlideId(cue.id);
+                          setSelectedClipId(null);
+                          setSelectedBlockIndex(null);
+                        }}
                         title="Drag to move. Hold Alt to disable subtitle snapping."
                       >
                         {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
@@ -2536,14 +3308,15 @@ export function TimelineEditor({
               {
                 label: "Subtitles",
                 height: "h-8",
-                content: matches.map((match, idx) => (
+                content: matches.map((match) => (
                   <button
                     type="button"
                     key={match.srt_index}
+                    data-timeline-block
                     className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1 text-left leading-tight hover:bg-foreground/10"
                     style={{ left: pct(match.srt_start), width: widthPct(Math.max(0.05, match.srt_end - match.srt_start)) }}
                     title={match.srt_text}
-                    onClick={() => { if (isPreviewActive) handleSeekToSegment(idx); }}
+                    onClick={() => { if (isPreviewActive) seekPreviewToTime(match.srt_start); }}
                   >
                     {match.srt_text}
                   </button>
@@ -2551,16 +3324,23 @@ export function TimelineEditor({
               },
               {
                 label: "Voiceover",
-                height: "h-7",
+                height: "h-10",
                 content: (
                   <>
                     <div
-                      className="absolute inset-y-1 left-0 rounded bg-emerald-500/20 bg-[repeating-linear-gradient(90deg,transparent_0_3px,currentColor_3px_4px)] text-emerald-500/30"
+                      className="absolute inset-y-1 left-0 overflow-hidden rounded-sm border border-emerald-300/35 bg-emerald-400/10"
                       style={{ width: pct(audioDuration) }}
-                    />
-                    <span className="absolute left-1 top-1/2 z-10 -translate-y-1/2 text-[9px] font-medium text-emerald-700 dark:text-emerald-300">
+                    >
+                      <TimelineWaveform peaks={voiceoverPeaks} className="inset-y-1 opacity-90" />
+                    </div>
+                    <span className="pointer-events-none absolute left-1 top-1/2 z-10 -translate-y-1/2 text-[9px] font-medium text-emerald-100 drop-shadow">
                       TTS voiceover · {formatTime(audioDuration)}
                     </span>
+                    <span
+                      className="absolute inset-y-0 w-px bg-emerald-200"
+                      style={{ left: pct(audioDuration) }}
+                      title={`Voiceover ends at ${formatTime(audioDuration)}`}
+                    />
                   </>
                 ),
               },
@@ -2588,61 +3368,186 @@ export function TimelineEditor({
             );
 
             return (
-              <div
-                className="overflow-x-auto rounded-md border bg-card text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-                tabIndex={0}
-                aria-label="Multi-track timeline"
-                aria-keyshortcuts="Space"
-                title="Click to seek. Space plays or pauses."
-                onPointerDownCapture={focusTimelineKeyboardScope}
-                onKeyDown={handleTimelineKeyDown}
-              >
-                <div className="w-max min-w-full">
-                  {/* Time ruler — click to seek while the preview is active */}
-                  <div className="flex">
-                    <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center border-r bg-card px-2 font-medium text-muted-foreground">
-                      Time
-                    </div>
-                    <div
-                      className={`relative h-6 flex-1 ${isPreviewActive ? "cursor-pointer" : ""}`}
-                      style={{ minWidth: laneMinWidth }}
-                      title={isPreviewActive ? "Click to seek" : undefined}
-                      onClick={(event) => {
-                        if (!isPreviewActive) return;
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
-                        seekPreviewToTime(ratio * totalDuration);
-                      }}
-                    >
-                      {ticks.map(s => (
-                        <React.Fragment key={s}>
-                          <div
-                            className={`absolute bottom-0 w-px ${s % 5 === 0 ? "h-2.5 bg-foreground/40" : "h-1.5 bg-foreground/20"}`}
-                            style={{ left: pct(s) }}
-                          />
-                          {s % 5 === 0 && totalDuration - s > 0.4 && (
-                            <span className="absolute top-0 pl-0.5 text-[8px] leading-none text-muted-foreground" style={{ left: pct(s) }}>
-                              {s}s
-                            </span>
-                          )}
-                        </React.Fragment>
-                      ))}
+              <MultiTrackTimeline
+                scrollRef={multiTrackScrollRef}
+                className={displayMode === "full"
+                  ? "col-span-3 row-start-4 h-full min-h-0 overflow-auto bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                  : "overflow-x-auto rounded-md border border-white/10 bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"}
+                containerProps={{
+                  tabIndex: 0,
+                  "aria-label": "Multi-track timeline",
+                  "aria-keyshortcuts": "Space",
+                  title: "Drag to scrub. Space plays or pauses. Scroll to zoom around the cursor. Shift+scroll to pan.",
+                  onPointerDownCapture: focusTimelineKeyboardScope,
+                  onKeyDown: handleTimelineKeyDown,
+                }}
+                laneWidth={laneWidth}
+                ruler={{
+                  duration: totalDuration,
+                  currentTime: isPreviewActive ? previewCurrentTime : undefined,
+                  className: isPreviewActive ? "cursor-ew-resize" : "",
+                  onPointerDown: beginMultiTrackScrub,
+                }}
+                zoom={timelineZoom}
+                minZoom={TIMELINE_MIN_ZOOM}
+                maxZoom={TIMELINE_MAX_ZOOM}
+                onZoomChange={(zoom) => setTimelineZoomAt(zoom)}
+                onFit={() => {
+                  setTimelineZoom(1);
+                  if (multiTrackScrollRef.current) multiTrackScrollRef.current.scrollLeft = 0;
+                }}
+                lanes={orderedLanes.map(lane => ({
+                  label: lane.label,
+                  height: lane.height,
+                  action: lane.action,
+                  meta: lane.label === "Video" && compositionIntroDuration > 0 ? (
+                    <span className="font-mono text-[8px] text-violet-300">
+                      intro {compositionIntroDuration.toFixed(1)}s
+                    </span>
+                  ) : undefined,
+                  axisClassName: `bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%] ${isPreviewActive ? "cursor-ew-resize" : ""}`,
+                  axisProps: {
+                    title: isPreviewActive ? "Drag to scrub" : undefined,
+                    onPointerDown: beginMultiTrackScrub,
+                    ...(lane.attention ? { "data-attention-track": "" } : {}),
+                  },
+                  showEndLine: true,
+                  content: (
+                    <>
+                      {lane.content}
                       {playhead}
+                    </>
+                  ),
+                }))}
+              />
+            );
+          })()}
+
+          {selectedClip && (() => {
+            const clipIndex = displayedComposition.findIndex((clip) => clip.id === selectedClip.id);
+            const previousSameKind = displayedComposition
+              .slice(0, clipIndex)
+              .some((clip) => clip.kind === selectedClip.kind);
+            const nextSameKind = displayedComposition
+              .slice(clipIndex + 1)
+              .some((clip) => clip.kind === selectedClip.kind);
+            const commitRoll = (leftIndex: number, delta: number) => {
+              commitComposition(rollCompositionBoundary(displayedComposition, leftIndex, delta));
+            };
+            return (
+              <div
+                className={displayMode === "full"
+                  ? "col-start-1 row-start-2 min-h-0 space-y-4 overflow-y-auto bg-[#111411] p-4 text-white"
+                  : "space-y-4 rounded-md border border-lime-300/25 bg-[#111411] p-4 text-white"}
+                data-testid="composition-clip-inspector"
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-white/60">
+                      <Film className="size-3.5" />
+                      Clip settings
+                    </div>
+                    <p className="mt-1 truncate text-sm font-medium">
+                      {selectedClip.segment_keywords?.slice(0, 3).join(", ") || `Clip ${clipIndex + 1}`}
+                    </p>
+                  </div>
+                  <Badge className={selectedClip.kind === "intro"
+                    ? "border-violet-300/40 bg-violet-400/15 text-violet-200"
+                    : "border-lime-300/40 bg-lime-400/15 text-lime-200"}
+                  >
+                    {selectedClip.kind === "intro" ? "Rapid intro" : "Body"}
+                  </Badge>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded border border-white/10 bg-black/20 p-2">
+                    <span className="block text-[9px] uppercase tracking-wide text-white/45">Output</span>
+                    <span className="font-mono text-white/85">
+                      {formatTime(selectedClip.timeline_start)}–{formatTime(selectedClip.timeline_start + selectedClip.timeline_duration)}
+                    </span>
+                  </div>
+                  <div className="rounded border border-white/10 bg-black/20 p-2">
+                    <span className="block text-[9px] uppercase tracking-wide text-white/45">Duration</span>
+                    <span className="font-mono text-white/85">{selectedClip.timeline_duration.toFixed(2)}s</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Arrange</span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="Move earlier"
+                      aria-label="Move earlier"
+                      className="size-8 border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                      disabled={!previousSameKind}
+                      onClick={() => moveCompositionClip(selectedClip.id, -1)}
+                    >
+                      <SkipBack className="size-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="Move later"
+                      aria-label="Move later"
+                      className="size-8 border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                      disabled={!nextSameKind}
+                      onClick={() => moveCompositionClip(selectedClip.id, 1)}
+                    >
+                      <SkipForward className="size-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon"
+                      title="Swap footage"
+                      aria-label="Swap footage"
+                      className="size-8 bg-lime-300 text-black hover:bg-lime-200"
+                      onClick={() => handleOpenClipDialog(selectedClip.id)}
+                    >
+                      <RefreshCw className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2 border-t border-white/10 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Roll edit output boundary</span>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-white/65">Left edge</span>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex <= 0}
+                          onClick={() => commitRoll(clipIndex - 1, -0.1)}>−0.1</Button>
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex <= 0}
+                          onClick={() => commitRoll(clipIndex - 1, 0.1)}>+0.1</Button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-white/65">Right edge</span>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex >= displayedComposition.length - 1}
+                          onClick={() => commitRoll(clipIndex, -0.1)}>−0.1</Button>
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex >= displayedComposition.length - 1}
+                          onClick={() => commitRoll(clipIndex, 0.1)}>+0.1</Button>
+                      </div>
                     </div>
                   </div>
-                  {orderedLanes.map(lane => (
-                    <div key={lane.label} className="flex border-t">
-                      <div className="sticky left-0 z-30 flex w-28 shrink-0 items-center justify-between gap-1 border-r bg-card px-2 font-medium">
-                        <span className="truncate">{lane.label}</span>
-                        {lane.action}
-                      </div>
-                      <div
-                        className={`relative flex-1 ${lane.height}`}
-                        style={{ minWidth: laneMinWidth }}
-                        {...(lane.attention ? { "data-attention-track": "" } : {})}
-                      >
-                        {lane.content}
-                        {playhead}
+                </div>
+
+                <div className="space-y-2 border-t border-white/10 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Source trim</span>
+                  {(["in", "out"] as const).map((edge) => (
+                    <div key={edge} className="flex items-center justify-between gap-2">
+                      <span className="text-xs capitalize text-white/65">
+                        {edge} · {(edge === "in" ? selectedClip.start_time : selectedClip.end_time).toFixed(2)}s
+                      </span>
+                      <div className="flex gap-1">
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white"
+                          onClick={() => nudgeCompositionSource(selectedClip.id, edge, -0.1)}>−0.1</Button>
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white"
+                          onClick={() => nudgeCompositionSource(selectedClip.id, edge, 0.1)}>+0.1</Button>
                       </div>
                     </div>
                   ))}
@@ -2656,7 +3561,11 @@ export function TimelineEditor({
             const slide = interstitialSlides.find((s) => s.id === selectedSlideId);
             if (!slide) return null;
             return (
-              <div className="rounded-md border border-primary/25 bg-primary/10 p-4 space-y-3">
+              <div
+                className={displayMode === "full"
+                  ? "col-start-1 row-start-2 min-h-0 space-y-3 overflow-y-auto bg-card p-4"
+                  : "space-y-3 rounded-md border border-primary/25 bg-primary/10 p-4"}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                     <ImageIcon className="size-4 text-primary" />
@@ -2704,8 +3613,8 @@ export function TimelineEditor({
                       />
                     </div>
 
-                    {attentionTimeline?.cues.find(cue => cue.id === slide.id)?.layers[0] && (() => {
-                      const layer = attentionTimeline.cues.find(cue => cue.id === slide.id)!.layers[0];
+                    {attentionCues.find(cue => cue.id === slide.id)?.layers[0] && (() => {
+                      const layer = attentionCues.find(cue => cue.id === slide.id)!.layers[0];
                       return (
                         <div className="grid grid-cols-3 gap-2 rounded border p-2">
                           {(["x", "y", "width", "height"] as const).map(field => (
@@ -2814,26 +3723,41 @@ export function TimelineEditor({
 
           {/* Inline preview panel (shown when a segment block is selected) */}
           {selectedBlockIndex !== null && selectedMatch && (
-            <div className="rounded-md border bg-card p-4 space-y-3">
-              <div className="flex items-start gap-4">
-                {/* Video preview */}
-                {selectedMatch.source_video_id && profileId ? (
-                  <div className="flex-shrink-0 w-48 rounded overflow-hidden bg-black">
-                    <video
-                      ref={videoRef}
-                      className="w-full h-auto"
-                      controls
-                      muted
-                    />
-                  </div>
-                ) : (
-                  <div className="flex-shrink-0 w-48 h-28 rounded bg-muted flex items-center justify-center">
-                    <Film className="size-6 text-muted-foreground" />
-                  </div>
+            <div
+              className={displayMode === "full"
+                ? "col-start-1 row-start-2 min-h-0 space-y-3 overflow-y-auto bg-card p-4"
+                : "space-y-3 rounded-md border bg-card p-4"}
+            >
+              <div className={`flex gap-4 ${displayMode === "full" ? "flex-col" : "items-start"}`}>
+                {/* Card mode keeps the source monitor used during quick edits.
+                    Full mode already has a dedicated program monitor in the
+                    center pane, so a second player in the inspector is visually
+                    ambiguous and wastes most of the inspector width. */}
+                {displayMode !== "full" && (
+                  selectedMatch.source_video_id && profileId ? (
+                    <div className="flex-shrink-0 w-48 rounded overflow-hidden bg-black">
+                      <video
+                        ref={videoRef}
+                        className="w-full h-auto"
+                        controls
+                        muted
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-shrink-0 w-48 h-28 rounded bg-muted flex items-center justify-center">
+                      <Film className="size-6 text-muted-foreground" />
+                    </div>
+                  )
                 )}
 
                 {/* Details */}
                 <div className="flex-1 min-w-0 space-y-2">
+                  {displayMode === "full" && (
+                    <div className="flex items-center gap-2 border-b pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      <Film className="size-3.5" />
+                      Clip settings
+                    </div>
+                  )}
                   <div className="text-sm font-medium">
                     #{selectedMatch.srt_index + 1}: {selectedMatch.srt_text}
                   </div>
@@ -2949,7 +3873,11 @@ export function TimelineEditor({
         </div>
       ) : (
         /* ========== LIST VIEW ========== */
-        <div className="max-h-[500px] overflow-y-auto rounded-md border">
+        <div
+          className={displayMode === "full"
+            ? "col-span-3 row-start-4 h-full min-h-0 overflow-y-auto bg-card"
+            : "max-h-[500px] overflow-y-auto rounded-md border"}
+        >
           <div className="divide-y">
             {/* "+" insert before first row */}
             {(onInterstitialSlidesChange || onAttentionTimelineChange) && (
@@ -3278,7 +4206,7 @@ export function TimelineEditor({
 
       {/* Segment assignment / swap dialog */}
       <Dialog
-        open={assigningIndex !== null}
+        open={assigningIndex !== null || assigningClipId !== null}
         onOpenChange={(open) => {
           if (!open) handleCloseDialog();
         }}
@@ -3288,7 +4216,7 @@ export function TimelineEditor({
             <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
 
-          {assigningIndex !== null && (
+          {(assigningIndex !== null || assigningClipId !== null) && (
             <div className="space-y-3">
               {/* Phrase being assigned */}
               <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
@@ -3296,7 +4224,9 @@ export function TimelineEditor({
                   {dialogSubLabel}
                 </span>
                 <p className="mt-0.5 font-medium">
-                  &ldquo;{matches[assigningIndex]?.srt_text}&rdquo;
+                  &ldquo;{assigningClipId !== null
+                    ? displayedComposition.find((clip) => clip.id === assigningClipId)?.segment_keywords?.join(", ") || "Timeline clip"
+                    : matches[assigningIndex!]?.srt_text}&rdquo;
                 </p>
               </div>
 
@@ -3306,7 +4236,9 @@ export function TimelineEditor({
                 size="sm"
                 className="w-full gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
                 onClick={() => {
-                  setAiGenPrompt(matches[assigningIndex]?.srt_text ?? "");
+                  setAiGenPrompt(assigningClipId !== null
+                    ? displayedComposition.find((clip) => clip.id === assigningClipId)?.segment_keywords?.join(" ") ?? ""
+                    : matches[assigningIndex!]?.srt_text ?? "");
                   setAiGenOpen(true);
                 }}
               >
@@ -3410,6 +4342,6 @@ export function TimelineEditor({
         initialPrompt={aiGenPrompt}
         onGenerated={(seg) => handleSelectSegment(seg)}
       />
-    </>
+    </div>
   );
 }

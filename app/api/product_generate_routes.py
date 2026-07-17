@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
 from app.config import get_settings
@@ -42,6 +42,7 @@ from app.services.studio_metering import (
     settle_metering_record,
 )
 from app.utils import normalize_path
+from app.services.codex_script_provider import DEFAULT_CODEX_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,19 @@ _TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "deni
 _PRODUCT_JOB_LEASE_SECONDS = 30 * 60
 
 
+def _validate_product_script_provider(provider: str) -> None:
+    if provider not in {"gemini", "claude", "codex"}:
+        raise HTTPException(
+            status_code=400,
+            detail="ai_provider must be 'gemini', 'claude', or 'codex'",
+        )
+    if provider == "codex" and not get_settings().desktop_mode:
+        raise HTTPException(
+            status_code=400,
+            detail="Codex (ChatGPT subscription) is available only in Blip Studio desktop.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Request model
 # ---------------------------------------------------------------------------
@@ -62,7 +76,13 @@ class ProductGenerateRequest(BaseModel):
     voiceover_mode: str = "quick"           # "quick" | "elaborate"
     tts_provider: str = "edge"              # "edge" | "elevenlabs"
     voice_id: Optional[str] = None         # Override voice; falls back to profile/default
-    ai_provider: str = "gemini"             # "gemini" | "claude" (elaborate mode only)
+    ai_provider: str = "gemini"             # "gemini" | "claude" | "codex"
+    codex_model: str = Field(
+        default=DEFAULT_CODEX_MODEL,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$",
+    )
     duration_s: int = 30                    # 15 | 30 | 45 | 60
     encoding_preset: str = "tiktok"         # "tiktok" | "reels" | "youtube_shorts"
     voiceover_template: str = "{title}. {brand}. Pret: {price} lei."  # quick mode template
@@ -84,6 +104,12 @@ class BatchGenerateRequest(BaseModel):
     tts_provider: str = "edge"              # "edge" default per v5 roadmap decision
     voice_id: Optional[str] = None
     ai_provider: str = "gemini"
+    codex_model: str = Field(
+        default=DEFAULT_CODEX_MODEL,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$",
+    )
     duration_s: int = 30
     encoding_preset: str = "tiktok"
     voiceover_template: str = "{title}. {brand}. Pret: {price} lei."
@@ -680,6 +706,8 @@ async def generate_product_video(
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
+    if request.voiceover_mode == "elaborate":
+        _validate_product_script_provider(request.ai_provider)
 
     # Verify product exists — source determines which table to query
     if request.source == "local":
@@ -769,6 +797,8 @@ async def batch_generate_products(
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
+    if request.voiceover_mode == "elaborate":
+        _validate_product_script_provider(request.ai_provider)
     job_storage = get_job_storage()
 
     batch_id = str(uuid.uuid4())
@@ -1403,16 +1433,11 @@ async def _generate_product_video_task(
 
         elif request.voiceover_mode == "elaborate":
             # Use ScriptGenerator for AI-generated script
-            from app.services.script_generator import ScriptGenerator
+            from app.services.script_generator import get_script_generator_for_profile
 
             _mark_product_operation_started(job_id, "script")
 
-            from app.services.credentials.vault import get_vault_manager
-            _vault = get_vault_manager()
-            generator = ScriptGenerator(
-                gemini_api_key=_vault.get_api_key_or_default(profile_id, "gemini") or settings.gemini_api_key,
-                anthropic_api_key=_vault.get_api_key_or_default(profile_id, "anthropic") or getattr(settings, "anthropic_api_key", None),
-            )
+            generator = get_script_generator_for_profile(profile_id)
 
             scripts = await asyncio.to_thread(
                 generator.generate_scripts,
@@ -1421,6 +1446,7 @@ async def _generate_product_video_task(
                 keywords=[],
                 variant_count=1,
                 provider=request.ai_provider,
+                codex_model=request.codex_model,
             )
 
             if scripts:

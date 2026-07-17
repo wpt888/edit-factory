@@ -10,8 +10,10 @@ Tests cover:
 
 All tests run fully offline — no Supabase, no FFmpeg, no network.
 """
+import asyncio
 import pytest
-from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------
@@ -294,3 +296,35 @@ def test_time_parse_minutes_only(assembly_service):
 def test_time_parse_milliseconds_precision(assembly_service):
     """00:00:01,250 → 1.25 seconds."""
     assert assembly_service._srt_time_to_seconds("00:00:01,250") == pytest.approx(1.25)
+
+
+def test_edge_fallback_uses_romanian_voice_for_romanian_text(
+    assembly_service, tmp_path
+):
+    captured = {}
+
+    class FakeEdgeTTSService:
+        def __init__(self, output_dir, default_voice):
+            captured["default_voice"] = default_voice
+
+        async def generate_audio(self, text, voice_id, output_path):
+            captured["voice_id"] = voice_id
+            return SimpleNamespace(duration_seconds=1.0)
+
+    with patch(
+        "app.services.tts.edge.EdgeTTSService", FakeEdgeTTSService
+    ), patch(
+        "app.services.assembly_service.get_repository", return_value=None
+    ):
+        timestamps = asyncio.run(
+            assembly_service._generate_edge_tts_fallback(
+                "Lucrezi pe șantier și în trafic.",
+                "profile-id",
+                tmp_path / "tts_raw.mp3",
+                preferred_language="ro",
+            )
+        )
+
+    assert captured["default_voice"] == "ro-RO-AlinaNeural"
+    assert captured["voice_id"] == "ro-RO-AlinaNeural"
+    assert timestamps["characters"][0] == "L"

@@ -85,6 +85,18 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
+        {/* Host pinning (native desktop only): the backend's HttpOnly media cookie is
+            SameSite=Lax on 127.0.0.1:8000, so a page opened on "localhost"
+            (a different site in cookie terms) silently 401s every source-video
+            thumbnail/preview. Browser launches must remain on localhost so the
+            Creative SSO cookie can be checked against localhost:3000. */}
+        {DESKTOP_BUILD && (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `if(location.hostname==="localhost"&&window.editFactory?.isDesktop)location.replace(location.href.replace("//localhost","//127.0.0.1"))`,
+            }}
+          />
+        )}
         {/* Anti-flash: the server always renders class="dark" (the default);
             this runs before first paint and strips it when the stored
             preference is light. Key must match theme-provider.tsx. */}

@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/tts-library/layout,_N_T_/tts-library/page,_N_T_/tts-library"
+  },
+  "segmentPaths": [
+    "/_tree",
+    "/_full",
+    "/tts-library/__PAGE__",
+    "/tts-library",
+    "/_index",
+    "/_head"
+  ]
+}

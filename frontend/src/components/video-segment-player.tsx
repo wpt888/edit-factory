@@ -6,6 +6,13 @@ import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
+import { TimelineClipShell } from "@/components/timeline/timeline-primitives";
+import {
+  MultiTrackTimeline,
+  TIMELINE_MIN_WIDTH,
+  TIMELINE_LABEL_WIDTH,
+  TIMELINE_END_GUTTER,
+} from "@/components/timeline/multi-track-timeline";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -166,6 +173,7 @@ export function VideoSegmentPlayer({
   const [resizePreview, setResizePreview] = useState<{ start: number; end: number } | null>(null);
   const resizePreviewRef = useRef<{ start: number; end: number } | null>(null);
   const wasPlayingBeforeResize = useRef(false);
+  const segmentDragMovedRef = useRef(false);
 
   // Track which video IDs we've already fetched voice data for
   const voiceFetchedRef = useRef<Set<string>>(new Set());
@@ -176,7 +184,11 @@ export function VideoSegmentPlayer({
   // Timeline zoom state
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = fit all, higher = zoomed in
   const [scrollOffset, setScrollOffset] = useState(0); // 0-1 range for panning
-  const timelineRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null); // points at the Video lane axis
+  const timelineScrollRef = useRef<HTMLDivElement>(null); // the multi-track scroll container
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(
+    TIMELINE_MIN_WIDTH + TIMELINE_LABEL_WIDTH + TIMELINE_END_GUTTER,
+  );
 
   // Video preview zoom state
   const [videoZoom, setVideoZoom] = useState(1);
@@ -192,6 +204,27 @@ export function VideoSegmentPlayer({
   const maxOffset = Math.max(0, 1 - (1 / zoomLevel));
   const visibleStart = scrollOffset * safeDuration;
   const visibleEnd = visibleStart + visibleDuration;
+  const updateTimelineZoom = useCallback((requestedZoom: number) => {
+    const nextZoom = Math.max(1, Math.min(20, requestedZoom));
+    setZoomLevel(nextZoom);
+    setScrollOffset((offset) => Math.min(offset, Math.max(0, 1 - 1 / nextZoom)));
+  }, []);
+
+  // Lanes fill the container width (window-model zoom, not horizontal scroll),
+  // so every lane axis is exactly as wide as the visible track area.
+  useEffect(() => {
+    const el = timelineScrollRef.current;
+    if (!el) return;
+    const update = () => setTimelineViewportWidth(el.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const timelineLaneWidth = Math.max(
+    TIMELINE_MIN_WIDTH,
+    timelineViewportWidth - TIMELINE_LABEL_WIDTH - TIMELINE_END_GUTTER,
+  );
 
   const sourceAspectRatio = videoWidth && videoHeight
     ? `${videoWidth} / ${videoHeight}`
@@ -856,13 +889,16 @@ export function VideoSegmentPlayer({
   const startMove = useCallback((e: React.MouseEvent, segment: Segment) => {
     e.stopPropagation();
     e.preventDefault();
-    seekTo(segment.start_time);
     onSegmentClick?.(segment);
 
-    if (!segment.id || !onSegmentResize) return;
+    if (!segment.id || !onSegmentResize) {
+      seekTo(segment.start_time);
+      return;
+    }
     const pointerTime = getTimeFromMouseEvent(e);
     if (pointerTime === null) return;
 
+    segmentDragMovedRef.current = false;
     wasPlayingBeforeResize.current = isPlaying;
     if (videoRef.current && isPlaying) {
       videoRef.current.pause();
@@ -907,6 +943,9 @@ export function VideoSegmentPlayer({
         resizingInfo.edge === 'move' &&
         Math.abs(e.clientX - (resizingInfo.startClientX ?? e.clientX)) < 3
       ) return;
+      if (resizingInfo.edge === 'move') {
+        segmentDragMovedRef.current = true;
+      }
 
       const time = getTimeFromMouseEvent(e);
       if (time === null) return;
@@ -935,7 +974,12 @@ export function VideoSegmentPlayer({
         return updated;
       });
 
-      seekTo(clampedTime);
+      // Resizing an edge previews that exact source frame. Moving the whole
+      // range deliberately leaves the playhead alone so the two controls stay
+      // independent.
+      if (resizingInfo.edge !== 'move') {
+        seekTo(clampedTime);
+      }
     };
 
     const handleMouseUp = () => {
@@ -946,10 +990,15 @@ export function VideoSegmentPlayer({
       );
       if (finalPreview && positionChanged && onSegmentResize) {
         onSegmentResize(resizingInfo.segmentId, finalPreview.start, finalPreview.end);
+      } else if (resizingInfo.edge === 'move' && !segmentDragMovedRef.current) {
+        // Preserve the familiar click-to-select/seek behavior without coupling
+        // the playhead to an actual segment drag.
+        seekTo(resizingInfo.originalStart);
       }
       setResizingInfo(null);
       setResizePreview(null);
       resizePreviewRef.current = null;
+      segmentDragMovedRef.current = false;
       if (wasPlayingBeforeResize.current && videoRef.current) {
         videoRef.current.play().catch(() => {});
       }
@@ -1032,7 +1081,7 @@ export function VideoSegmentPlayer({
 
     const rect = timeline.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, rect.width - 16);
+    const width = Math.max(1, rect.width);
     const height = 40;
 
     canvas.width = width * dpr;
@@ -1273,228 +1322,251 @@ export function VideoSegmentPlayer({
 
       <ResizablePanel id="source-video-timeline" defaultSize={190} minSize={150} maxSize="55%" className="min-h-0">
       <div className="flex h-full min-h-0 flex-col gap-1 pt-1">
-      {/* Filmstrip timeline: time ruler, source frames, waveform and numbered ranges. */}
-      <div
-        ref={timelineRef}
-        className={`relative min-h-[108px] flex-1 overflow-hidden border-y border-border/60 bg-background/80 px-2 select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-        onMouseDown={handleTimelineMouseDown}
-        aria-label="Source video timeline"
-      >
-        {/* Time scale markers */}
-        <div className="absolute left-2 right-2 top-1 h-6 font-mono text-[9px] text-muted-foreground pointer-events-none">
-          {Array.from({ length: 7 }, (_, index) => {
-            const time = visibleStart + (index / 6) * visibleDuration;
-            const position = (index / 6) * 100;
-            return (
-              <span
-                key={`${time.toFixed(3)}-${index}`}
-                className="absolute top-0"
-                style={{
-                  left: `${position}%`,
-                  transform: index === 0 ? undefined : index === 6 ? "translateX(-100%)" : "translateX(-50%)",
-                }}
-              >
-                {formatTime(time)}
-              </span>
-            );
-          })}
-        </div>
-
-        {/* Source frames */}
-        <div className="absolute left-2 right-2 top-7 flex h-11 overflow-hidden rounded-t-md border border-white/10 bg-black/80 pointer-events-none">
-          {timelineFrames.map((frameUrl, index) => (
-            <div
-              key={`${frameUrl || "empty"}-${index}`}
-              className="h-full flex-1 border-r border-black/35 bg-gradient-to-br from-zinc-800 to-zinc-950 bg-cover bg-center last:border-r-0"
-              style={frameUrl ? {
-                backgroundImage: `linear-gradient(rgba(0,0,0,.1), rgba(0,0,0,.24)), url("${frameUrl}")`,
-              } : undefined}
-            />
-          ))}
-        </div>
-
-        {/* Waveform lane */}
-        <div className="absolute left-2 right-2 top-[72px] h-10 overflow-hidden rounded-b-md border-x border-b border-white/10 bg-zinc-950/95 pointer-events-none">
-          {showWaveform && waveformData.length === 0 && !waveformLoading && (
-            <div className="absolute inset-0 opacity-25" style={{
-              backgroundImage: "repeating-linear-gradient(90deg, transparent 0 5px, rgba(255,255,255,.22) 5px 6px)",
-            }} />
-          )}
-        </div>
-
-        {/* Waveform canvas */}
-        {showWaveform && waveformData.length > 0 && (
-          <canvas
-            ref={canvasRef}
-            className="absolute left-2 right-2 top-[72px] z-[5] h-10 pointer-events-none"
-          />
-        )}
-
-        {/* Product group bands */}
-        {showGroupBands && productGroups.map((group) => {
-          const bandStart = ((group.start_time - visibleStart) / visibleDuration) * 100;
-          const bandEnd = ((group.end_time - visibleStart) / visibleDuration) * 100;
-          const left = Math.max(0, bandStart);
-          const right = Math.min(100, bandEnd);
-          const width = right - left;
-          if (width <= 0 || bandEnd < 0 || bandStart > 100) return null;
-          const color = group.color || "var(--chart-2)";
-          return (
-            <div
-              key={group.id}
-              className="absolute bottom-[21px] z-[8] h-1 pointer-events-none"
-              style={{
-                left: `${left}%`,
-                width: `${width}%`,
-                backgroundColor: color,
-              }}
-              title={`${group.label} (${group.segments_count} segments)`}
-            >
-              {width > 4 && (
-                <span
-                  className="absolute -top-3.5 left-0.5 text-[8px] font-bold truncate drop-shadow"
-                  style={{ color, maxWidth: `${width}%` }}
-                >
-                  {group.label}
-                </span>
-              )}
-            </div>
-          );
-        })}
-
-        {/* Segment markers */}
-        {segments.map((segment, segmentIndex) => {
-          const style = getSegmentStyle(segment);
-          if (style.display === 'none') return null;
-          const isBeingResized = resizingInfo?.segmentId === segment.id;
-          const isBeingMoved = isBeingResized && resizingInfo?.edge === 'move';
-          const displayStart = isBeingResized && resizePreview ? resizePreview.start : segment.start_time;
-          const displayEnd = isBeingResized && resizePreview ? resizePreview.end : segment.end_time;
-          return (
-            <div
-              key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
-              className={`absolute top-7 z-20 h-[84px] rounded-[5px] border-2 ${
-                isBeingMoved ? 'cursor-grabbing' : 'cursor-grab'
-              } ${
-                isBeingResized ? '' : 'transition-[background-color,box-shadow]'
-              } ${
-                currentSegment?.id === segment.id
-                  ? "border-primary bg-primary/20 shadow-[0_0_14px_rgba(210,255,46,0.3)]"
-                  : "border-primary/90 bg-primary/10 hover:bg-primary/20"
-              }`}
-              style={style}
-              onMouseDown={(e) => startMove(e, segment)}
-              onClick={(e) => e.stopPropagation()}
-              title={`${formatTime(displayStart)} - ${formatTime(displayEnd)}\n${segment.keywords.join(", ")}`}
-            >
-              <span className="absolute -top-[19px] left-1/2 grid h-[19px] min-w-[19px] -translate-x-1/2 place-items-center rounded-[5px] bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground shadow-sm">
-                {segmentIndex + 1}
-              </span>
-              {parseFloat(style.width || '0') > 4 && (
-                <span className="absolute -bottom-[20px] left-1/2 -translate-x-1/2 whitespace-nowrap font-mono text-[9px] font-medium text-primary">
-                  {formatTime(displayStart)} – {formatTime(displayEnd)}
-                </span>
-              )}
-              {/* Resize drag handles */}
-              {onSegmentResize && segment.id && (
-                <>
-                  <div
-                    className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
-                    onMouseDown={(e) => startResize(e, segment, 'start')}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <div
-                    className="absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
-                    onMouseDown={(e) => startResize(e, segment, 'end')}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </>
-              )}
-              {/* Time tooltip during move/resize */}
-              {isBeingResized && resizePreview && (
-                <div className="absolute -top-7 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1.5 py-0.5 font-mono text-[10px] text-white shadow-lg">
-                  {formatTime(resizePreview.start)} – {formatTime(resizePreview.end)}
+      {/* Multi-track source timeline: shared ruler + Video / Audio / Groups lanes.
+          Mirrors the pipeline Step 3 timeline via the shared MultiTrackTimeline
+          shell. Zoom stays a window-model (lane width is fixed to the viewport);
+          timelineRef points at the Video lane so all % positioning math is reused. */}
+      <MultiTrackTimeline
+        scrollRef={timelineScrollRef}
+        className="flex-1 min-h-0 overflow-auto border-y border-white/10 bg-[#0d0f0d] text-[10px] text-white"
+        laneWidth={timelineLaneWidth}
+        ruler={{
+          startTime: visibleStart,
+          duration: visibleDuration,
+          currentTime,
+        }}
+        zoom={zoomLevel}
+        minZoom={1}
+        maxZoom={20}
+        onZoomChange={updateTimelineZoom}
+        onFit={() => { setZoomLevel(1); setScrollOffset(0); }}
+        lanes={[
+          {
+            label: "Video",
+            height: "h-20",
+            axisRef: timelineRef,
+            axisClassName: isScrubbing ? "cursor-grabbing" : "cursor-crosshair",
+            axisProps: {
+              onMouseDown: handleTimelineMouseDown,
+              "aria-label": "Source video timeline",
+              title: "Drag empty space or the playhead to seek. Drag a segment to move it; drag its edges to trim it.",
+            },
+            showEndLine: true,
+            content: (
+              <>
+                {/* Source frames fill the lane */}
+                <div className="absolute inset-0 flex overflow-hidden bg-black/80 pointer-events-none">
+                  {timelineFrames.map((frameUrl, index) => (
+                    <div
+                      key={`${frameUrl || "empty"}-${index}`}
+                      className="h-full flex-1 border-r border-black/35 bg-gradient-to-br from-zinc-800 to-zinc-950 bg-cover bg-center last:border-r-0"
+                      style={frameUrl ? {
+                        backgroundImage: `linear-gradient(rgba(0,0,0,.28), rgba(0,0,0,.42)), url("${frameUrl}")`,
+                      } : undefined}
+                    />
+                  ))}
                 </div>
-              )}
-            </div>
-          );
-        })}
 
-        {/* Current marking range */}
-        {getCurrentMarkStyle() && (
-          <div
-            className="absolute top-7 z-10 h-[84px] rounded border-2 border-dashed border-amber-400 bg-amber-400/20"
-            style={getCurrentMarkStyle()!}
-          />
-        )}
+                {/* Segment markers */}
+                {segments.map((segment, segmentIndex) => {
+                  const style = getSegmentStyle(segment);
+                  if (style.display === 'none') return null;
+                  const isBeingResized = resizingInfo?.segmentId === segment.id;
+                  const isBeingMoved = isBeingResized && resizingInfo?.edge === 'move';
+                  const displayStart = isBeingResized && resizePreview ? resizePreview.start : segment.start_time;
+                  const displayEnd = isBeingResized && resizePreview ? resizePreview.end : segment.end_time;
+                  return (
+                    <TimelineClipShell
+                      key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
+                      dataSegmentId={segment.id}
+                      className={`z-20 border-2 ${
+                        isBeingMoved ? 'cursor-grabbing' : 'cursor-grab'
+                      } ${
+                        isBeingResized ? '' : 'transition-[background-color,box-shadow]'
+                      } ${
+                        currentSegment?.id === segment.id
+                          ? "border-lime-300 bg-lime-300/20 shadow-[0_0_14px_rgba(210,255,46,0.3)] ring-1 ring-white/70"
+                          : "border-lime-300/70 bg-lime-300/10 hover:bg-lime-300/20"
+                      }`}
+                      style={style}
+                      onMouseDown={(e) => startMove(e, segment)}
+                      title={`Drag to move segment\n${formatTime(displayStart)} - ${formatTime(displayEnd)}\n${segment.keywords.join(", ")}`}
+                    >
+                      <span
+                        className="absolute left-1 top-1 z-10 grid h-4 min-w-4 place-items-center rounded-[4px] bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground shadow-sm"
+                        aria-label={`Segment ${segmentIndex + 1}`}
+                      >
+                        {segmentIndex + 1}
+                      </span>
+                      {parseFloat(style.width || '0') > 8 && (
+                        <span className="absolute inset-x-1 bottom-1 z-10 truncate text-center font-mono text-[8px] font-medium text-lime-100 drop-shadow">
+                          {formatTime(displayStart)} – {formatTime(displayEnd)}
+                        </span>
+                      )}
+                      {/* Resize drag handles */}
+                      {onSegmentResize && segment.id && (
+                        <>
+                          <div
+                            className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
+                            onMouseDown={(e) => startResize(e, segment, 'start')}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <div
+                            className="absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
+                            onMouseDown={(e) => startResize(e, segment, 'end')}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </>
+                      )}
+                      {/* Time tooltip during move/resize */}
+                      {isBeingResized && resizePreview && (
+                        <div className="absolute -top-7 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1.5 py-0.5 font-mono text-[10px] text-white shadow-lg">
+                          {formatTime(resizePreview.start)} – {formatTime(resizePreview.end)}
+                        </div>
+                      )}
+                    </TimelineClipShell>
+                  );
+                })}
 
-        {/* Start mark point */}
-        {getMarkStartPosition() !== null && (
-          <div
-            className="absolute top-6 z-30 h-[88px] w-0.5 bg-amber-400"
-            style={{ left: `${getMarkStartPosition()}%` }}
-          />
-        )}
+                {/* Current marking range */}
+                {getCurrentMarkStyle() && (
+                  <div
+                    className="absolute inset-y-0 z-10 rounded border-2 border-dashed border-amber-400 bg-amber-400/20"
+                    style={getCurrentMarkStyle()!}
+                  />
+                )}
 
-        {/* Group marking range (purple) */}
-        {getGroupMarkStyle() && (
-          <div
-            className="absolute top-7 z-10 h-[84px] rounded border-2 border-dashed border-chart-2 bg-chart-2/20"
-            style={getGroupMarkStyle()!}
-          >
-            <span className="absolute left-1 top-0.5 text-[9px] font-medium text-foreground">Group</span>
-          </div>
-        )}
+                {/* Start mark point */}
+                {getMarkStartPosition() !== null && (
+                  <div
+                    className="absolute inset-y-0 z-30 w-0.5 bg-amber-400"
+                    style={{ left: `${getMarkStartPosition()}%` }}
+                  />
+                )}
 
-        {/* Group mark start point */}
-        {getGroupMarkStartPosition() !== null && (
-          <div
-            className="absolute top-6 z-30 h-[88px] w-0.5 bg-chart-2"
-            style={{ left: `${getGroupMarkStartPosition()}%` }}
-          />
-        )}
+                {/* Group marking range (purple) */}
+                {getGroupMarkStyle() && (
+                  <div
+                    className="absolute inset-y-0 z-10 rounded border-2 border-dashed border-chart-2 bg-chart-2/20"
+                    style={getGroupMarkStyle()!}
+                  >
+                    <span className="absolute left-1 top-0.5 text-[9px] font-medium text-foreground">Group</span>
+                  </div>
+                )}
 
-        {/* Playhead — always rendered so playheadRef is available during scrubbing.
-            Visibility controlled via style to allow updatePlayheadDOM to work even when
-            the playhead starts off-screen and scrubs into view. */}
-        <div
-          ref={playheadRef}
-          className="absolute top-5 bottom-4 z-40 w-px bg-white shadow-[0_0_4px_rgba(255,255,255,0.8)]"
-          style={{
-            left: `${getPlayheadPosition()}%`,
-            pointerEvents: 'none',
-            display: (getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100) ? '' : 'none',
-          }}
-        >
-          <div
-            className="absolute -left-1.5 -top-0.5 size-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
-            style={{ pointerEvents: 'auto' }}
-            onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
-          />
-        </div>
+                {/* Group mark start point */}
+                {getGroupMarkStartPosition() !== null && (
+                  <div
+                    className="absolute inset-y-0 z-30 w-0.5 bg-chart-2"
+                    style={{ left: `${getGroupMarkStartPosition()}%` }}
+                  />
+                )}
 
-        {/* Zoom indicator + inline zoom controls */}
-        {zoomLevel > 1 && (
-          <div className="absolute bottom-0 right-1 z-50 flex items-center gap-1 rounded bg-background/90 px-1.5 py-0.5">
-            <Slider
-              value={[scrollOffset * 100]}
-              min={0}
-              max={maxOffset * 100}
-              step={0.1}
-              onValueChange={([val]) => setScrollOffset(val / 100)}
-              className="w-20"
-              onMouseDown={(e) => e.stopPropagation()}
-            />
-            <button
-              className="font-mono text-[9px] text-muted-foreground hover:text-foreground"
-              onClick={(e) => { e.stopPropagation(); setZoomLevel(1); setScrollOffset(0); }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              {zoomLevel.toFixed(1)}x
-            </button>
-          </div>
-        )}
-      </div>
+                {/* Playhead — always rendered so playheadRef is available during scrubbing.
+                    Visibility controlled via style to allow updatePlayheadDOM to work even when
+                    the playhead starts off-screen and scrubs into view. */}
+                <div
+                  ref={playheadRef}
+                  className="absolute -top-1 -bottom-1 z-40 w-px bg-white shadow-[0_0_4px_rgba(255,255,255,0.8)]"
+                  style={{
+                    left: `${getPlayheadPosition()}%`,
+                    pointerEvents: 'none',
+                    display: (getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100) ? '' : 'none',
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="absolute -left-1.5 -top-0.5 size-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
+                    style={{ pointerEvents: 'auto' }}
+                    onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
+                    aria-label="Move playhead"
+                    title="Drag playhead"
+                  />
+                </div>
+
+                {/* Pan slider — only relevant while zoomed in (window model). */}
+                {zoomLevel > 1 && (
+                  <div
+                    className="absolute bottom-1 right-1 z-50 flex items-center gap-1 rounded bg-background/90 px-1.5 py-0.5"
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <Slider
+                      value={[scrollOffset * 100]}
+                      min={0}
+                      max={maxOffset * 100}
+                      step={0.1}
+                      onValueChange={([val]) => setScrollOffset(val / 100)}
+                      className="w-20"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                )}
+              </>
+            ),
+          },
+          {
+            label: "Audio",
+            height: "h-10",
+            axisClassName: "bg-zinc-950/95",
+            content: (
+              <>
+                {showWaveform && waveformData.length === 0 && !waveformLoading && (
+                  <div className="absolute inset-0 opacity-25 pointer-events-none" style={{
+                    backgroundImage: "repeating-linear-gradient(90deg, transparent 0 5px, rgba(255,255,255,.22) 5px 6px)",
+                  }} />
+                )}
+                {showWaveform && waveformData.length > 0 && (
+                  <canvas
+                    ref={canvasRef}
+                    className="absolute left-0 top-0 z-[5] pointer-events-none"
+                  />
+                )}
+                {!showWaveform && (
+                  <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[9px] text-white/35">
+                    Waveform hidden
+                  </span>
+                )}
+              </>
+            ),
+          },
+          ...(showGroupBands && productGroups.length > 0 ? [{
+            label: "Groups",
+            height: "h-6",
+            content: (
+              <>
+                {productGroups.map((group) => {
+                  const bandStart = ((group.start_time - visibleStart) / visibleDuration) * 100;
+                  const bandEnd = ((group.end_time - visibleStart) / visibleDuration) * 100;
+                  const left = Math.max(0, bandStart);
+                  const right = Math.min(100, bandEnd);
+                  const width = right - left;
+                  if (width <= 0 || bandEnd < 0 || bandStart > 100) return null;
+                  const color = group.color || "var(--chart-2)";
+                  return (
+                    <div
+                      key={group.id}
+                      className="absolute inset-y-1 flex items-center overflow-hidden rounded-sm border px-1 pointer-events-none"
+                      style={{
+                        left: `${left}%`,
+                        width: `${width}%`,
+                        backgroundColor: `color-mix(in srgb, ${color} 22%, transparent)`,
+                        borderColor: color,
+                      }}
+                      title={`${group.label} (${group.segments_count} segments)`}
+                    >
+                      {width > 4 && (
+                        <span className="truncate text-[8px] font-bold" style={{ color }}>
+                          {group.label}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            ),
+          }] : []),
+        ]}
+      />
 
       {/* Secondary editing controls stay quiet under the visual timeline. */}
       <div className="flex min-h-8 flex-shrink-0 flex-wrap items-center gap-1 border-t border-border/60 px-1 pt-1">
@@ -1533,30 +1605,6 @@ export function VideoSegmentPlayer({
           title="Voice detection"
         >
           {voiceLoading ? <Loader2 className="size-3 animate-spin" /> : <Mic className="size-3.5" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          onClick={() => {
-            const nextZoom = Math.max(1, zoomLevel / 1.25);
-            setZoomLevel(nextZoom);
-            setScrollOffset((offset) => Math.min(offset, Math.max(0, 1 - 1 / nextZoom)));
-          }}
-          disabled={zoomLevel <= 1}
-          title="Zoom timeline out"
-        >
-          <ZoomOut className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          onClick={() => setZoomLevel((level) => Math.min(20, level * 1.25))}
-          disabled={zoomLevel >= 20}
-          title="Zoom timeline in"
-        >
-          <ZoomIn className="size-3.5" />
         </Button>
         <div className="flex-1" />
         <Button

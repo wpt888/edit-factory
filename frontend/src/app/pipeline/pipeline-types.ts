@@ -1,5 +1,6 @@
 import { SegmentOption } from "@/components/timeline-editor";
 import { SubtitleSettings } from "@/types/video-processing";
+import type { CompositionClip } from "@/types/composition-timeline";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -11,6 +12,7 @@ export interface MatchPreview {
   segment_keywords: string[];
   matched_keyword: string | null;
   confidence: number;
+  duration_override?: number;
   is_auto_filled?: boolean;
   product_group?: string | null;
   source_video_id?: string;
@@ -33,7 +35,8 @@ export interface PreviewData {
   unmatched_count: number;
   available_segments?: SegmentOption[];
   intro_offset_sec?: number;
-  intro_segments?: Array<{ source_video_path: string; source_video_id?: string; start_time: number; end_time: number; timeline_start: number; timeline_duration: number }>;
+  intro_segments?: Array<{ source_video_path?: string; source_video_id?: string; start_time: number; end_time: number; timeline_start: number; timeline_duration: number }>;
+  video_timeline?: CompositionClip[];
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;
@@ -146,6 +149,7 @@ export interface PipelineScriptsResponse {
   idea?: string;
   context?: string;
   provider?: string;
+  codex_model?: string | null;
   variant_count?: number;
   meta_multiplication?: boolean;
   library_project_id?: string | null;

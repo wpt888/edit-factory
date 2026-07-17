@@ -21,27 +21,46 @@
 
 See [Pipeline toolbar overlap + heading-consistency fix pack](28-pipeline-toolbar-heading-fixes.md).
 
-## 2026-07-18 - Shell, spacing, and icon-sizing sweep (S2)
+## 2026-07-17 - Pipeline media preview host parity
 
-- Added `PageShell` — one canonical page container (`max-w-7xl`/`max-w-3xl`/
-  `max-w-[1600px]`, shared padding) — and migrated every top-level route
-  onto it, eliminating six ad-hoc width recipes and four padding splits
-  (`container mx-auto`, `max-w-[1400px]`, `p-4 md:p-8` vs the canonical
-  responsive padding, mismatched `create-video`/`create-image` padding).
-- Folded header `mb-6`/`mb-8` into `space-y-6` on the page parent
-  (`librarie`, `products`, `product-library`, `tts-library`, `usage`).
-- Removed `Card`'s default `shadow-sm` and the 7 now-inert
-  `shadow-none` overrides it required on pipeline workspace cards and the
-  login split-card.
-- Swept 841 matching `h-N w-N`/`w-N h-N` icon-sizing pairs to `size-N`
-  across 45 files; skipped 13 files a concurrent session was actively
-  editing (reverted cleanly rather than bundling in-flight work).
-- Dropped the redundant manual `font-heading` on `CardTitle` call sites
-  in `signup`/`login`/`login/reset-password` (the base class already
-  carries it from S1).
-- Unified `product-video`'s four `CardContent` paddings onto one default.
+- Fixed broken Pipeline thumbnails and previews caused by native media URLs
+  using `127.0.0.1` while the browser page and media-session cookie used
+  `localhost`.
+- Added a hydration-safe runtime API URL hook and applied it to Step 3,
+  source-video cards, the timeline, the thumbnail picker, variant previews,
+  and completed render media.
+- Normalized Windows and POSIX thumbnail paths to basename-only segment URLs,
+  preventing full `C:\...` paths from being encoded into `<img>` sources.
+- Verified TypeScript, focused ESLint, the Windows-path URL helper, the desktop
+  media-session tests (4 passed), and CodeGraph synchronization. The standalone
+  rebuild remains pending because the running Electron server locked
+  `.next/standalone`; no process was terminated.
 
-See [Shell, spacing, and icon-sizing sweep](29-shell-spacing-sweep.md).
+See [Pipeline media preview host parity](27-pipeline-media-preview-host-parity.md).
+
+## 2026-07-17 - Local BlipCreative to BlipStudio SSO recovery
+
+- Fixed the local Studio platform bridge so it calls the running BlipCreative
+  app instead of the production domain, and made the web desktop-auth endpoint
+  reuse the same server-only Supabase identity configuration as `/studio`.
+- Confirmed that the SSO token was issued and consumed successfully; Supabase
+  was healthy and the Auth.js user mapping matched the existing Supabase user.
+  The visible "Desktop identity provider is unavailable" message was therefore
+  a misleading fallback symptom, not the root cause.
+- Found the actual failure after token consumption: the desktop production
+  build unconditionally changed a browser launch from `localhost:3947` to
+  `127.0.0.1:3947`. That separated Studio from the Auth.js cookie on
+  `localhost:3000`, so the Creative-session check invalidated the newly issued
+  Studio session and returned the user to login.
+- Restricted loopback host pinning to a real Electron renderer
+  (`window.editFactory?.isDesktop`). Normal browser SSO now remains on
+  `localhost`; native Electron still uses `127.0.0.1` for its backend media
+  cookie contract.
+- Rebuilt the standalone frontend and relaunched Electron. Verified the auth
+  regression check, focused ESLint, TypeScript, production build, frontend and
+  backend health, and credentialed CORS from `http://localhost:3947`.
+
+See [Local BlipCreative to BlipStudio SSO recovery](26-local-creative-studio-sso.md).
 
 ## 2026-07-17 - Step 3 "Variant Previews" timeline editor rework
 

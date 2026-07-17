@@ -84,7 +84,7 @@ export function ImagePickerDialog({
         setImages(data.images ?? []);
       } catch {
         if (cancelled) return;
-        toast.error("Failed to load product images");
+        toast.error("Failed to load item images");
         setImages([]);
       } finally {
         if (!cancelled) setLoading(false);

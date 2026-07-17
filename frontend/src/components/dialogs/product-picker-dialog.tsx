@@ -241,7 +241,7 @@ export function ProductPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Select a Product</DialogTitle>
+          <DialogTitle>Select an Item</DialogTitle>
         </DialogHeader>
 
         {/* Filter row */}
@@ -250,7 +250,7 @@ export function ProductPickerDialog({
           <div className="relative flex-1 min-w-[180px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
-              placeholder="Search products..."
+              placeholder="Search your library..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
@@ -297,7 +297,7 @@ export function ProductPickerDialog({
           ) : products.length === 0 ? (
             <EmptyState
               icon={<Package className="size-6" />}
-              title="No products found"
+              title="No items found"
               description="Try adjusting your search or filters."
             />
           ) : (

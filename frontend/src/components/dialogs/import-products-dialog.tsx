@@ -34,7 +34,7 @@ interface Preview {
 }
 
 const FIELDS = [
-  ["title", "Product name", true],
+  ["title", "Title / name", true],
   ["description", "Description", false],
   ["external_id", "External ID", false],
   ["sku", "SKU", false],
@@ -82,7 +82,7 @@ export function ImportProductsDialog({
     data.append("source_url", sourceUrl.trim());
     if (file) data.append("file", file);
     if (includeMapping) {
-      data.append("name", name.trim() || file?.name || "Product import");
+      data.append("name", name.trim() || file?.name || "Imported source");
       data.append("mapping_json", JSON.stringify(mapping));
     }
     return data;
@@ -99,9 +99,9 @@ export function ImportProductsDialog({
       const data = (await response.json()) as Preview;
       setPreview(data);
       setMapping(data.suggested_mapping || {});
-      if (!name) setName(file?.name?.replace(/\.[^.]+$/, "") || "Google Sheets products");
+      if (!name) setName(file?.name?.replace(/\.[^.]+$/, "") || "Google Sheets import");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not read product source");
+      toast.error(error instanceof Error ? error.message : "Could not read source");
     } finally {
       setBusy(false);
     }
@@ -109,19 +109,19 @@ export function ImportProductsDialog({
 
   const importRows = async () => {
     if (!mapping.title) {
-      toast.error("Map a column to Product name");
+      toast.error("Map a column to Title / name");
       return;
     }
     setBusy(true);
     try {
       const response = await apiUpload("/product-library/import", formData(true));
       const result = await response.json();
-      toast.success(`Imported ${result.imported} products${result.skipped ? `; skipped ${result.skipped}` : ""}`);
+      toast.success(`Imported ${result.imported} items${result.skipped ? `; skipped ${result.skipped}` : ""}`);
       onImported();
       onOpenChange(false);
       reset();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Product import failed");
+      toast.error(error instanceof Error ? error.message : "Import failed");
     } finally {
       setBusy(false);
     }
@@ -138,9 +138,9 @@ export function ImportProductsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) reset(); }}>
-      <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-x-hidden overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="size-5" /> Import products</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="size-5" /> Import into Context Library</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -158,7 +158,7 @@ export function ImportProductsDialog({
           </div>
           <div className="space-y-2">
             <Label>Source name</Label>
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="My store products" />
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Store products, Service list, Offers" />
           </div>
         </div>
 
@@ -192,19 +192,19 @@ export function ImportProductsDialog({
             {busy && <Loader2 className="size-4 animate-spin" />} Read headers
           </Button>
         ) : (
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-              Found <strong>{preview.row_count}</strong> data rows and <strong>{preview.headers.length}</strong> columns. Every column is retained in the product&apos;s custom fields.
+              Found <strong>{preview.row_count}</strong> data rows and <strong>{preview.headers.length}</strong> columns. Every column is retained in the item&apos;s custom fields.
             </div>
 
             <div>
               <h3 className="mb-3 font-medium">Map columns used by the pipeline</h3>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {FIELDS.map(([field, label, required]) => (
-                  <div key={field} className="space-y-1.5">
+                  <div key={field} className="min-w-0 space-y-1.5">
                     <Label>{label}{required ? " *" : ""}</Label>
                     <Select value={(mapping[field] as string) || "__none__"} onValueChange={(value) => setField(field, value)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-full min-w-0"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {!required && <SelectItem value="__none__">Not mapped</SelectItem>}
                         {preview.headers.map((header) => <SelectItem key={header} value={header}>{header}</SelectItem>)}

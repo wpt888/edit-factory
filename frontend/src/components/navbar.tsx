@@ -21,7 +21,7 @@ import {
   Clapperboard,
   Film,
   Scissors,
-  ShoppingBag,
+  BookOpen,
   Video,
   ListChecks,
   ListVideo,
@@ -69,11 +69,11 @@ const allNavGroups = [
     ],
   },
   {
-    label: "Products",
+    label: "Context",
     items: [
-      // D1: local product library is the default source; the Gomag catalog is
+      // D1: local context library is the default source; the Gomag catalog is
       // gated off (see /products page + CATALOG_GOMAG_ENABLED backend flag).
-      { label: "Products", href: "/product-library", icon: ShoppingBag },
+      { label: "Context Library", href: "/product-library", icon: BookOpen },
       { label: "Generate", href: "/product-video", icon: Video },
       { label: "Batch Generate", href: "/batch-generate", icon: ListChecks },
     ],

@@ -551,7 +551,10 @@ function checkUrl(url) {
 
 // Supabase session restoration in the renderer decides whether login is needed.
 async function checkStartupState() {
-  return `http://127.0.0.1:${FRONTEND_PORT}`;
+  // Open the canonical initial Pipeline URL directly. Loading `/` first would
+  // cause two consecutive renderer navigations (`/` -> `/pipeline` ->
+  // `/pipeline?step=1`) and abort the API requests started by the middle page.
+  return `http://127.0.0.1:${FRONTEND_PORT}/pipeline?step=1`;
 }
 
 // Branded splash window: shown immediately on launch so the user sees life

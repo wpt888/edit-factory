@@ -607,7 +607,7 @@ export function PublishDialog({
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-muted/50 border border-border">
                 <Info className="size-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div className="text-sm">
-                  <span className="font-medium text-muted-foreground">Product:</span>{" "}
+                  <span className="font-medium text-muted-foreground">Item:</span>{" "}
                   <span className="text-muted-foreground">
                     {projectName && <span className="font-medium">{projectName} — </span>}
                     {contextText.length > 200 ? contextText.slice(0, 200) + "..." : contextText}

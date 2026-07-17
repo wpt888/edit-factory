@@ -203,6 +203,23 @@ class ElevenLabsTTSService(TTSService):
         if category not in {"premade", "default"}:
             raise ElevenLabsVoiceAccessDenied(voice_id)
 
+    async def _resolve_language_code(
+        self, voice_id: str, explicit_language_code: Optional[str] = None
+    ) -> Optional[str]:
+        """Resolve the ISO 639-1 language used to normalize TTS pronunciation."""
+        if explicit_language_code:
+            return explicit_language_code.lower()
+        try:
+            metadata = await self._get_voice_metadata(voice_id)
+            language = str((metadata.get("labels") or {}).get("language") or "").lower()
+            if len(language) == 2 and language.isalpha():
+                return language
+        except Exception as exc:
+            # Language enforcement improves pronunciation but must not turn a
+            # temporary metadata lookup failure into a TTS outage.
+            logger.warning("Could not resolve language for ElevenLabs voice %s: %s", voice_id, exc)
+        return None
+
     @property
     def provider_name(self) -> str:
         """Return provider identifier."""
@@ -302,6 +319,9 @@ class ElevenLabsTTSService(TTSService):
             )
 
         await self._assert_voice_authorized(voice_id)
+        language_code = await self._resolve_language_code(
+            voice_id, kwargs.get("language_code")
+        )
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +340,7 @@ class ElevenLabsTTSService(TTSService):
         vs = voice_settings
         cache_key = {
             "text": text, "voice_id": voice_id, "model_id": self.model_id, "provider": "elevenlabs",
+            "language_code": language_code or "",
             "vs": f"{vs['stability']:.2f}_{vs['similarity_boost']:.2f}_{vs['style']:.2f}_{vs.get('speed', 1.0):.2f}"
         }
         cached = cache_lookup(cache_key, "elevenlabs", output_path)
@@ -344,6 +365,8 @@ class ElevenLabsTTSService(TTSService):
             "model_id": self.model_id,
             "voice_settings": voice_settings
         }
+        if language_code:
+            data["language_code"] = language_code
 
         if len(text) > ELEVENLABS_MAX_CHARS:
             raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
@@ -542,6 +565,9 @@ class ElevenLabsTTSService(TTSService):
             )
 
         await self._assert_voice_authorized(voice_id)
+        language_code = await self._resolve_language_code(
+            voice_id, kwargs.get("language_code")
+        )
 
         if len(text) > ELEVENLABS_MAX_CHARS:
             raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
@@ -565,6 +591,7 @@ class ElevenLabsTTSService(TTSService):
         cache_key = {
             "text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs",
             "type": "with_timestamps",
+            "language_code": language_code or "",
             "vs": f"{vs['stability']:.2f}_{vs['similarity_boost']:.2f}_{vs['style']:.2f}_{vs.get('speed', 1.0):.2f}"
         }
         cached = cache_lookup(cache_key, "elevenlabs", output_path)
@@ -590,6 +617,8 @@ class ElevenLabsTTSService(TTSService):
             "model_id": model_id or self.model_id,
             "voice_settings": voice_settings
         }
+        if language_code:
+            data["language_code"] = language_code
 
         logger.info(f"Generating TTS with timestamps for {len(text)} characters with voice {voice_id}...")
 

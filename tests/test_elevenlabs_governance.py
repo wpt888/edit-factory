@@ -153,9 +153,17 @@ def test_tts_settles_using_provider_character_cost_header(sqlite_backend, tmp_pa
         profile_id=profile_id,
     )
 
+    api_call = AsyncMock(return_value=response)
     with patch(
         "app.services.tts.elevenlabs._call_elevenlabs_api_new",
-        new=AsyncMock(return_value=response),
+        new=api_call,
+    ), patch.object(
+        service,
+        "_get_voice_metadata",
+        new=AsyncMock(return_value={
+            "voice_id": "private-voice",
+            "labels": {"language": "ro"},
+        }),
     ), patch("app.services.tts.elevenlabs.librosa.get_duration", return_value=0.2):
         asyncio.run(service.generate_audio_with_timestamps(
             text="hello world",
@@ -163,6 +171,7 @@ def test_tts_settles_using_provider_character_cost_header(sqlite_backend, tmp_pa
             output_path=tmp_path / "voice.mp3",
         ))
 
+    assert api_call.await_args.args[2]["language_code"] == "ro"
     balance = get_credit_balance(profile_id)
     assert balance["credits_used"] == 17
     assert balance["credits_reserved"] == 0

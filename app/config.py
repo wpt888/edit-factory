@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
 
+    # Local Codex CLI using the signed-in ChatGPT subscription (desktop only)
+    codex_model: str = "gpt-5.4-mini"
+    codex_cli_path: str = ""
+    codex_timeout_seconds: int = 180
+
     # Supabase
     supabase_url: str = ""
     supabase_key: str = ""

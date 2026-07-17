@@ -38,7 +38,6 @@ import {
   MessageSquareText,
   ChevronDown,
   Pencil,
-  ShoppingBag,
   BookOpen,
   XCircle,
   Search,
@@ -412,18 +411,16 @@ export function PipelineCaptionGenerator({
   };
 
   // D1: products come from the local Product Library (Gomag catalog gated off).
-  // The library is small — filter client-side, no server pagination.
+  // Search is handled by the API across title, SKU and imported fields.
   const fetchCatalogProducts = useCallback(async (search: string, page: number) => {
     void page;
     setCatalogLoading(true);
     try {
-      const q = search.trim().toLowerCase();
       const params = new URLSearchParams({ search, page: String(page), page_size: "50" });
       const res = await apiGet(`/product-library?${params}`);
       const data = await res.json();
       interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[]; brand?: string; category?: string; sku?: string; price?: string; sale_price?: string; product_url?: string; extra_fields?: Record<string, unknown> }
       const all = ((data.products || []) as LibraryProduct[])
-        .filter((p) => !q || p.title.toLowerCase().includes(q))
         .map((p) => ({
           id: p.id,
           title: p.title,
@@ -442,7 +439,7 @@ export function PipelineCaptionGenerator({
       setCatalogProducts(all);
       setCatalogPagination(data.pagination || { page, page_size: all.length || 20, total: all.length, total_pages: 1 });
     } catch {
-      toast.error("Failed to load products");
+      toast.error("Failed to load context library");
     } finally {
       setCatalogLoading(false);
     }
@@ -727,7 +724,7 @@ export function PipelineCaptionGenerator({
                   <Badge variant="outline" className="text-xs font-normal">Optional</Badge>
                   {contextProducts.length > 0 && (
                     <Badge variant="secondary" className="text-xs font-normal">
-                      {contextProducts.length} {contextProducts.length === 1 ? "product" : "products"}
+                      {contextProducts.length} {contextProducts.length === 1 ? "item" : "items"}
                     </Badge>
                   )}
                 </span>
@@ -743,13 +740,13 @@ export function PipelineCaptionGenerator({
               <div className={`rounded-lg border p-3 space-y-3 ${contextProducts.length > 0 ? "border-primary/30 bg-primary/5" : "bg-muted/30"}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <ShoppingBag className="size-4 text-primary" />
+                    <BookOpen className="size-4 text-primary" />
                     <span className="text-sm font-medium">
                       {contextProducts.length === 0
-                        ? "No products selected"
+                        ? "No context items selected"
                         : contextProducts.length === 1
-                          ? "Product selected"
-                          : `${contextProducts.length} products selected`}
+                          ? "1 context item selected"
+                          : `${contextProducts.length} context items selected`}
                     </span>
                   </div>
                   <Button
@@ -759,7 +756,7 @@ export function PipelineCaptionGenerator({
                     onClick={handleOpenCatalog}
                   >
                     <BookOpen className="size-3.5 mr-1" />
-                    {catalogOpen ? "Close Catalog" : "Add from Catalog"}
+                    {catalogOpen ? "Close Library" : "Add from Library"}
                   </Button>
                 </div>
 
@@ -795,7 +792,7 @@ export function PipelineCaptionGenerator({
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                   <Input
-                    placeholder="Search products..."
+                    placeholder="Search your library..."
                     value={catalogSearch}
                     onChange={(e) => handleCatalogSearch(e.target.value)}
                     className="pl-8 h-8 text-sm"
@@ -809,7 +806,7 @@ export function PipelineCaptionGenerator({
                   <Loader2 className="size-5 animate-spin text-muted-foreground" />
                 </div>
               ) : catalogProducts.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
+                <p className="text-sm text-muted-foreground text-center py-4">Nothing found — add items in the Context Library</p>
               ) : (
                 <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto">
                   {catalogProducts.map((p) => (

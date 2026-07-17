@@ -9,7 +9,7 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from app.config import get_settings
 
@@ -167,10 +167,15 @@ class TTSLibraryService:
         model: str,
         duration: float,
         voice_id: Optional[str] = None,
+        deduplicate: bool = True,
     ) -> Optional[str]:
         """
         Copy TTS output from pipeline/render into the persistent library.
-        Deduplicates on (profile_id, text, model). Returns asset_id or None if skipped/failed.
+        Deduplicates on the TTS identity when requested. Explicit voice-over
+        regeneration disables deduplication so freshly generated audio can
+        never be replaced by an older library file with the same script text.
+
+        Returns asset_id or None if skipped/failed.
         """
         # Lazy import repository
         try:
@@ -182,22 +187,32 @@ class TTSLibraryService:
             logger.warning(f"TTS Library save_from_pipeline: no repository: {e}")
             return None
 
-        # Check for existing duplicate
-        try:
-            from app.repositories.models import QueryFilters
-            existing = repo.list_tts_assets(
-                profile_id,
-                filters=QueryFilters(
-                    select="id",
-                    eq={"tts_text": text.strip(), "tts_model": model},
-                    limit=1,
-                ),
-            )
-            if existing.data:
-                logger.info(f"TTS Library: dedup hit, skipping save for text={text[:40]}...")
-                return None
-        except Exception as e:
-            logger.warning(f"TTS Library dedup check failed: {e}")
+        # Check for an existing duplicate. Voice identity is part of the lookup:
+        # equal text spoken by different voices is not equal audio.
+        if deduplicate:
+            try:
+                from app.repositories.models import QueryFilters
+
+                identity = {
+                    "tts_text": text.strip(),
+                    "tts_model": model,
+                    "tts_provider": "elevenlabs",
+                }
+                if voice_id:
+                    identity["tts_voice_id"] = voice_id
+                existing = repo.list_tts_assets(
+                    profile_id,
+                    filters=QueryFilters(
+                        select="id",
+                        eq=identity,
+                        limit=1,
+                    ),
+                )
+                if existing.data:
+                    logger.info(f"TTS Library: dedup hit, skipping save for text={text[:40]}...")
+                    return None
+            except Exception as e:
+                logger.warning(f"TTS Library dedup check failed: {e}")
 
         asset_id = str(uuid.uuid4())
         asset_dir = self._asset_dir(profile_id)

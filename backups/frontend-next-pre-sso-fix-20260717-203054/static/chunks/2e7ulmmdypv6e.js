@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,9165,t=>{"use strict";var i=t.i(28762);t.i(64014),t.s(["apiFetch",()=>i.apiFetch])}]);

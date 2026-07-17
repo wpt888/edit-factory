@@ -306,6 +306,84 @@ def test_preview_timeline_includes_source_id_for_seek_proxy():
     assert serialized[0]["source_video_path"] == "/fake/v7.mp4"
 
 
+def test_preview_timeline_serializes_each_intro_cut_and_stops_at_audio_end():
+    from app.services.assembly_service import TimelineEntry, _serialize_preview_timeline
+
+    timeline = [
+        TimelineEntry("/fake/v1.mp4", 1.0, 1.5, 0.0, 0.5),
+        TimelineEntry("/fake/v2.mp4", 2.0, 2.5, 0.5, 0.5),
+        TimelineEntry("/fake/v3.mp4", 3.0, 6.0, 1.0, 3.0),
+    ]
+    serialized = _serialize_preview_timeline(
+        timeline,
+        [_seg("s1", "v1"), _seg("s2", "v2"), _seg("s3", "v3")],
+        intro_duration_sec=1.0,
+        output_duration=3.25,
+    )
+
+    assert [clip["kind"] for clip in serialized] == ["intro", "intro", "body"]
+    assert len({clip["id"] for clip in serialized}) == 3
+    assert [clip["segment_id"] for clip in serialized] == ["s1", "s2", "s3"]
+    assert sum(clip["timeline_duration"] for clip in serialized) == pytest.approx(3.25)
+    assert serialized[-1]["timeline_duration"] == pytest.approx(2.25)
+
+
+def test_edited_composition_becomes_gapless_profile_scoped_timeline():
+    from app.services.assembly_service import _timeline_from_composition
+
+    segments = [
+        _seg("s1", "v1", 10.0, 15.0),
+        _seg("s2", "v2", 20.0, 24.0),
+    ]
+    composition = [
+        {
+            "id": "clip-b",
+            "segment_id": "s2",
+            "source_video_id": "v2",
+            "source_video_path": "/untrusted/client/path.mp4",
+            "start_time": 19.0,
+            "end_time": 30.0,
+            "timeline_start": 2.0,
+            "timeline_duration": 1.0,
+        },
+        {
+            "id": "clip-a",
+            "segment_id": "s1",
+            "source_video_id": "v1",
+            "start_time": 11.0,
+            "end_time": 13.0,
+            "timeline_start": 0.0,
+            "timeline_duration": 2.0,
+        },
+    ]
+
+    timeline = _timeline_from_composition(composition, segments, audio_duration=3.0)
+
+    assert [entry.source_video_path for entry in timeline] == ["/fake/v1.mp4", "/fake/v2.mp4"]
+    assert [entry.timeline_start for entry in timeline] == pytest.approx([0.0, 2.0])
+    assert timeline[1].start_time == pytest.approx(20.0)
+    assert timeline[1].end_time == pytest.approx(24.0)
+    assert sum(entry.timeline_duration for entry in timeline) == pytest.approx(3.05)
+
+
+def test_edited_composition_rejects_unknown_library_clip():
+    from app.services.assembly_service import _timeline_from_composition
+
+    with pytest.raises(ValueError, match="no longer exists"):
+        _timeline_from_composition(
+            [{
+                "id": "missing",
+                "segment_id": "outside-profile",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "timeline_start": 0.0,
+                "timeline_duration": 1.0,
+            }],
+            [_seg("owned", "v1")],
+            audio_duration=1.0,
+        )
+
+
 # --- F7: merge_group collapse sums duration_overrides ------------------------
 
 def test_collapse_sums_duration_overrides(service):

@@ -3,14 +3,22 @@
 The first non-empty row is always treated as the header.  Importers preserve
 every source column in ``extra_fields`` while also mapping selected columns to
 the canonical fields used by the pipeline.
+
+Imported text is converted from HTML to plain text (see ``html_to_text``).
+Every e-commerce platform (GoMag, Shopify, WooCommerce, ...) exports the product
+description as an HTML body, and both the canonical ``description`` and the
+``extra_fields`` bag are fed verbatim into the AI prompt, so raw markup would
+burn tokens and derail the script.
 """
 
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -30,7 +38,7 @@ CANONICAL_FIELDS = (
 )
 
 _ALIASES = {
-    "title": ("title", "name", "product", "product name", "produs", "nume", "nume produs"),
+    "title": ("title", "name", "product", "product name", "produs", "nume", "nume produs", "service", "serviciu", "item", "oferta", "ofertă"),
     "description": ("description", "descriere", "body", "details"),
     "external_id": ("external_id", "external id", "id", "product id", "item id"),
     "images": ("images", "image", "image_url", "image url", "image_link", "poze", "imagine"),
@@ -41,6 +49,77 @@ _ALIASES = {
     "sale_price": ("sale_price", "sale price", "discount price", "pret redus", "preț redus"),
     "product_url": ("product_url", "product url", "link", "url"),
 }
+
+
+# Tags that render as a line break. Everything else is inline and must NOT
+# introduce whitespace, or words get split mid-sentence.
+_BLOCK_TAGS = frozenset({
+    "p", "br", "div", "li", "ul", "ol", "tr", "td", "th", "table",
+    "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "hr", "blockquote",
+})
+
+# Deliberately strict: requires a real tag (closing, or opening WITH a '>') or a
+# character entity. A bare '<' — "marime < 5", "<XL" — must not look like markup,
+# otherwise HTMLParser would swallow it as a bogus tag and silently eat data.
+_MARKUP_RE = re.compile(
+    r"</[a-zA-Z][^>]*>"
+    r"|<[a-zA-Z][a-zA-Z0-9]*(?:\s[^>]*)?/?>"
+    r"|&(?:[a-zA-Z]+|#\d+);"
+)
+
+
+class _TextExtractor(HTMLParser):
+    """HTML body -> readable plain text; stdlib handles entity decoding."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in _BLOCK_TAGS:
+            self._parts.append("\n")
+        if tag == "li":
+            self._parts.append("- ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def html_to_text(value: str) -> str:
+    """Convert an HTML fragment to plain text, preserving line structure.
+
+    A naive ``re.sub(r'<[^>]*>', '', s)`` glues adjacent block text together —
+    ``<li>lentila dubla</li><li>lentila transparenta</li>`` collapses into
+    "...dublalentila...". Block tags therefore become newlines and list items
+    get a "- " bullet. Returns non-markup input untouched (fast path), so plain
+    CSV cells (SKUs, prices, sizes like "<XL") are never rewritten. Idempotent.
+    """
+    if not value or not _MARKUP_RE.search(value):
+        return value
+    parser = _TextExtractor()
+    parser.feed(value)
+    parser.close()
+    # convert_charrefs already decoded entities; a second unescape catches the
+    # double-encoded (&amp;nbsp;) rows common in migrated catalogs. NBSP is then
+    # folded to a real space so the collapse below actually sees it.
+    out = html.unescape(parser.text()).replace("\xa0", " ")
+    out = re.sub(r"[ \t]+", " ", out)
+    out = re.sub(r" *\n *", "\n", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    lines = [line for line in (raw.rstrip() for raw in out.split("\n")) if line not in ("", "-")]
+    return "\n".join(lines).strip()
+
+
+def _clean(value: Any) -> Any:
+    """html_to_text for strings; other cell types (int/float/date) pass through."""
+    return html_to_text(value) if isinstance(value, str) else value
 
 
 def google_sheet_csv_url(url: str) -> str:
@@ -157,13 +236,13 @@ def normalize_rows(rows: list[dict[str, Any]], mapping: dict[str, Any]) -> tuple
     products: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     for row_number, row in enumerate(rows, start=2):
-        title = str(row.get(title_column) or "").strip()
+        title = html_to_text(str(row.get(title_column) or "")).strip()
         if not title:
             errors.append({"row": row_number, "error": "Product name is empty"})
             continue
         canonical: dict[str, Any] = {
             "title": title,
-            "description": str(row.get(mapping.get("description")) or "").strip(),
+            "description": html_to_text(str(row.get(mapping.get("description")) or "")).strip(),
             "external_id": str(row.get(mapping.get("external_id")) or row.get(mapping.get("sku")) or "").strip(),
             "brand": str(row.get(mapping.get("brand")) or "").strip(),
             "category": str(row.get(mapping.get("category")) or "").strip(),
@@ -172,7 +251,10 @@ def normalize_rows(rows: list[dict[str, Any]], mapping: dict[str, Any]) -> tuple
             "sale_price": str(row.get(mapping.get("sale_price")) or "").strip(),
             "product_url": str(row.get(mapping.get("product_url")) or "").strip(),
             "image_links": _image_values(row, mapping.get("images")),
-            "extra_fields": {key: value for key, value in row.items()},
+            # Cleaned too: the prompt builder dumps every non-title/description
+            # key verbatim, so a source column named "Descriere" (not matching the
+            # builder's exclusion set) would otherwise leak raw HTML into the AI.
+            "extra_fields": {key: _clean(value) for key, value in row.items()},
         }
         products.append(canonical)
     return products, errors

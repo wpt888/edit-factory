@@ -1,0 +1,1 @@
+{"query":"select id, jsonb_array_length(scripts) as script_count, tts_previews, updated_at from public.editai_pipelines where id = '466bc293-a7ed-40c6-a015-d59c6479c47f'"}

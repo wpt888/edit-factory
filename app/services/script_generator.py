@@ -1,6 +1,6 @@
 """
 AI Script Generator Service
-Generates TTS-safe scripts using Gemini or Claude AI with segment keyword awareness.
+Generates TTS-safe scripts using Gemini, Claude, or local Codex with segment keyword awareness.
 """
 import re
 import time
@@ -10,6 +10,11 @@ from typing import List, Optional, Dict
 from google import genai
 import anthropic
 
+from app.services.codex_script_provider import (
+    DEFAULT_CODEX_MODEL,
+    CodexScriptProvider,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,7 +22,7 @@ class ScriptGenerator:
     """
     AI-powered script generation for social media videos.
 
-    Supports Gemini and Claude providers, generates TTS-safe scripts with
+    Supports Gemini, Claude, and local Codex providers, generates TTS-safe scripts with
     keyword awareness for downstream video segment matching.
     """
 
@@ -26,7 +31,11 @@ class ScriptGenerator:
         gemini_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         gemini_model: str = "gemini-2.5-flash",
-        anthropic_model: str = "claude-sonnet-4-6"
+        anthropic_model: str = "claude-sonnet-4-6",
+        codex_model: str = DEFAULT_CODEX_MODEL,
+        codex_enabled: bool = False,
+        codex_cli_path: Optional[str] = None,
+        codex_timeout_seconds: int = 180,
     ):
         """
         Initialize script generator with API keys.
@@ -36,11 +45,19 @@ class ScriptGenerator:
             anthropic_api_key: Anthropic Claude API key
             gemini_model: Gemini model to use (default: gemini-2.5-flash)
             anthropic_model: Anthropic model to use (default: claude-sonnet-4-6)
+            codex_model: Local Codex model slug (default: gpt-5.4-mini)
+            codex_enabled: Whether the desktop-only Codex provider is available
         """
         self.gemini_api_key = gemini_api_key
         self.anthropic_api_key = anthropic_api_key
         self.gemini_model = gemini_model
         self.anthropic_model = anthropic_model
+        self.codex_model = codex_model
+        self.codex_enabled = codex_enabled
+        self._codex_provider = CodexScriptProvider(
+            cli_path=codex_cli_path,
+            timeout_seconds=codex_timeout_seconds,
+        )
 
         # Lazy-initialized clients (protected by _client_lock for thread safety)
         self._gemini_client = None
@@ -58,7 +75,8 @@ class ScriptGenerator:
         provider: str,
         product_groups: Optional[Dict[str, List[str]]] = None,
         ai_instructions: str = "",
-        target_duration: Optional[float] = None
+        target_duration: Optional[float] = None,
+        codex_model: Optional[str] = None,
     ) -> List[str]:
         """
         Generate N script variants using specified AI provider.
@@ -68,7 +86,7 @@ class ScriptGenerator:
             context: Product/brand context
             keywords: Available segment keywords from library
             variant_count: Number of script variants to generate (1-10)
-            provider: "gemini" or "claude"
+            provider: "gemini", "claude", or desktop-only "codex"
             product_groups: Optional dict mapping group labels to keyword lists
             ai_instructions: Optional creator rules/guidelines for the AI
             target_duration: Optional target duration in seconds for word count estimation
@@ -81,8 +99,10 @@ class ScriptGenerator:
             Exception: If AI generation fails
         """
         # Validate provider
-        if provider not in ["gemini", "claude"]:
-            raise ValueError(f"Invalid provider: {provider}. Must be 'gemini' or 'claude'")
+        if provider not in ["gemini", "claude", "codex"]:
+            raise ValueError(
+                f"Invalid provider: {provider}. Must be 'gemini', 'claude', or 'codex'"
+            )
 
         # Validate variant count
         if variant_count < 1 or variant_count > 10:
@@ -93,6 +113,10 @@ class ScriptGenerator:
             raise ValueError("GEMINI_API_KEY is required for Gemini provider")
         if provider == "claude" and not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for Claude provider")
+        if provider == "codex" and not self.codex_enabled:
+            raise ValueError(
+                "Codex (ChatGPT subscription) is available only in the Blip Studio desktop app."
+            )
 
         logger.info(
             f"Generating {variant_count} scripts with {provider} "
@@ -108,11 +132,16 @@ class ScriptGenerator:
             try:
                 if provider == "gemini":
                     raw_response = self._generate_with_gemini(prompt)
-                else:  # claude
+                    scripts = self._parse_scripts(raw_response, variant_count)
+                elif provider == "claude":
                     raw_response = self._generate_with_claude(prompt, variant_count)
-
-                # Parse and sanitize scripts
-                scripts = self._parse_scripts(raw_response, variant_count)
+                    scripts = self._parse_scripts(raw_response, variant_count)
+                else:
+                    scripts = self._codex_provider.generate_scripts(
+                        prompt=prompt,
+                        variant_count=variant_count,
+                        model=codex_model or self.codex_model,
+                    )
 
                 # Sanitize for TTS
                 clean_scripts = [self._sanitize_for_tts(script) for script in scripts]
@@ -484,20 +513,15 @@ def get_script_generator() -> ScriptGenerator:
                 from app.config import get_settings
                 settings = get_settings()
 
-                gemini_key = settings.gemini_api_key or ""
-                anthropic_key = settings.anthropic_api_key or ""
-                if not gemini_key.strip() and not anthropic_key.strip():
-                    raise ValueError(
-                        "ScriptGenerator requires at least one API key "
-                        "(gemini_api_key or anthropic_api_key). "
-                        "Check your .env configuration."
-                    )
-
                 _script_generator = ScriptGenerator(
                     gemini_api_key=settings.gemini_api_key,
                     anthropic_api_key=settings.anthropic_api_key,
                     gemini_model=settings.gemini_model,
-                    anthropic_model=settings.anthropic_model
+                    anthropic_model=settings.anthropic_model,
+                    codex_model=settings.codex_model,
+                    codex_enabled=settings.desktop_mode,
+                    codex_cli_path=settings.codex_cli_path or None,
+                    codex_timeout_seconds=settings.codex_timeout_seconds,
                 )
 
     return _script_generator
@@ -517,17 +541,15 @@ def get_script_generator_for_profile(profile_id: str) -> "ScriptGenerator":
     gemini_key = vault.get_api_key_or_default(profile_id, "gemini") or settings.gemini_api_key
     anthropic_key = vault.get_api_key_or_default(profile_id, "anthropic") or settings.anthropic_api_key
 
-    if not (gemini_key or "").strip() and not (anthropic_key or "").strip():
-        raise ValueError(
-            "ScriptGenerator requires at least one API key "
-            "(gemini_api_key or anthropic_api_key)."
-        )
-
     return ScriptGenerator(
         gemini_api_key=gemini_key,
         anthropic_api_key=anthropic_key,
         gemini_model=settings.gemini_model,
         anthropic_model=settings.anthropic_model,
+        codex_model=settings.codex_model,
+        codex_enabled=settings.desktop_mode,
+        codex_cli_path=settings.codex_cli_path or None,
+        codex_timeout_seconds=settings.codex_timeout_seconds,
     )
 
 
