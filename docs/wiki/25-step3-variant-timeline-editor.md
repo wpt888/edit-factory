@@ -93,6 +93,15 @@ overlays into the assembled clip, then `_render_with_preset()` burns subtitles
 on top — final order video < attention < subtitles. No backend change was
 needed.
 
+## Commits
+
+- `116cfac` fix(preview): start rAF clock only after audio.play() resolves
+- `c082ec5` refactor(timeline): remove duplicate storyboard strip, single timeline
+- `bd4fa9b` feat(timeline): render one Video-lane clip per phrase (NLE semantics)
+- `9c775bd` fix(timeline): order lanes top=topmost layer (Subtitles > Attention > Video)
+- `adb36bf` feat(step3): maximize control opens full-screen editor per variant
+- `fbcff77` docs(wiki): Step 3 variant timeline editor rework page + index/log
+
 ## Verification
 
 `npx next build` compiles cleanly (all routes, including `/pipeline`);

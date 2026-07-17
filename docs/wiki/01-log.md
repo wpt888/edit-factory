@@ -24,6 +24,9 @@
 - New wiki page `25-step3-variant-timeline-editor.md`. Verified via clean
   `next build` + `tsc` + `eslint`; live browser verification not feasible
   without a populated pipeline and a running app instance.
+- Commits: `116cfac` (preview clock fix), `c082ec5` (storyboard strip removal),
+  `bd4fa9b` (per-phrase Video clips), `9c775bd` (lane order), `adb36bf`
+  (maximize editor), `fbcff77` (wiki).
 
 ## 2026-07-16 - BlipStudio credit metering validated live E2E (Goal D)
 
