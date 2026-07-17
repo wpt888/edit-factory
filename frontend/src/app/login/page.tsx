@@ -150,7 +150,7 @@ function LoginContent() {
             ))}
           </div>
         </section>
-      <Card className="w-full max-w-none rounded-none border-0 bg-card px-2 py-8 shadow-none sm:px-6 lg:flex lg:flex-col lg:justify-center">
+      <Card className="w-full max-w-none rounded-none border-0 bg-card px-2 py-8 sm:px-6 lg:flex lg:flex-col lg:justify-center">
         <CardHeader className="space-y-1 text-center">
           <CardTitle className="font-heading text-2xl font-bold tracking-tight">
             {forgotMode ? "Reset Password" : "Welcome back!"}

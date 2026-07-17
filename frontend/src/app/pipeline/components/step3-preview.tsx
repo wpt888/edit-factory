@@ -303,7 +303,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               >
             {/* Assembly controls affect clip selection, not final-file rendering. */}
             <Card
-              className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}
+              className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
               data-testid="step3-assembly-settings"
             >
               <CardHeader className="min-[1280px]:px-4">
@@ -396,7 +396,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             </Card>
 
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
-            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}>
+            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
               <CardHeader className="pb-4 min-[1280px]:px-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1">
@@ -562,7 +562,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               </aside>
 
               <section
-                className="min-w-0 space-y-3 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:space-y-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:[&>[data-slot=card]]:gap-3 min-[1280px]:[&>[data-slot=card]]:rounded-none min-[1280px]:[&>[data-slot=card]]:border-0 min-[1280px]:[&>[data-slot=card]]:py-3 min-[1280px]:[&>[data-slot=card]]:shadow-none min-[1280px]:[&>[data-slot=card]>[data-slot=card-header]]:px-4 min-[1280px]:[&>[data-slot=card]>[data-slot=card-content]]:px-4"
+                className="min-w-0 space-y-3 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:space-y-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:[&>[data-slot=card]]:gap-3 min-[1280px]:[&>[data-slot=card]]:rounded-none min-[1280px]:[&>[data-slot=card]]:border-0 min-[1280px]:[&>[data-slot=card]]:py-3 min-[1280px]:[&>[data-slot=card]>[data-slot=card-header]]:px-4 min-[1280px]:[&>[data-slot=card]>[data-slot=card-content]]:px-4"
                 aria-label="Variant previews"
                 data-testid="step3-variant-canvas"
               >
@@ -583,7 +583,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 if (!preview) return null;
 
                 return (
-                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`}>
+                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
                     <CardHeader className="min-[1280px]:px-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">

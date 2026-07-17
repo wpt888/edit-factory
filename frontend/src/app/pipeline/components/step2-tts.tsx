@@ -337,7 +337,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
 
             {/* ElevenLabs model selector */}
-            <Card className={`overflow-hidden ${workspaceLayout ? `min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}` : ""}`}>
+            <Card className={`overflow-hidden ${workspaceLayout ? `min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}` : ""}`}>
               <CardHeader className={`flex flex-row items-center justify-between space-y-0 border-b pb-3 ${workspaceLayout ? "min-[1280px]:px-4" : ""}`}>
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
                 <ElevenCreditsBadge
@@ -622,7 +622,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
 
                 return (
-                  <Card key={index} className={`rounded-none border-x-0 border-t-0 bg-transparent py-0 shadow-none transition-colors first:border-t ${approvedScripts.has(index) ? "border-b-success/40 bg-success/[0.035]" : ""}`}>
+                  <Card key={index} className={`rounded-none border-x-0 border-t-0 bg-transparent py-0 transition-colors first:border-t ${approvedScripts.has(index) ? "border-b-success/40 bg-success/[0.035]" : ""}`}>
                     <CardHeader className="px-4 pb-2 pt-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="group/name flex min-w-0 items-center gap-1.5">

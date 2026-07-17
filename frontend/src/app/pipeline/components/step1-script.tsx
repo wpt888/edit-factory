@@ -169,7 +169,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
               aria-label="Video idea editor"
               data-testid="step1-idea-canvas"
             >
-            <Card className={workspaceLayout ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}` : undefined}>
+            <Card className={workspaceLayout ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}` : undefined}>
               <CardHeader className={workspaceLayout ? "min-[1280px]:border-b min-[1280px]:px-5 min-[1280px]:pb-4" : undefined}>
                 <CardTitle>Video Idea</CardTitle>
                 <CardDescription>

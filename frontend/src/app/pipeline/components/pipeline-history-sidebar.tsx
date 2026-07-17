@@ -88,7 +88,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
             data-testid="pipeline-history-sidebar"
           >
             <Card className={isEditingWorkspace
-              ? `min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`
+              ? `min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 ${WORKSPACE_CARD_BG}`
               : "min-[1280px]:sticky min-[1280px]:top-16"
             }>
               <CardHeader

@@ -49,7 +49,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
   return (
     <Card
       className={workspace
-        ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 min-[1280px]:shadow-none ${WORKSPACE_CARD_BG}`
+        ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}`
         : "order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2"
       }
       data-testid="source-videos-panel"
