@@ -963,6 +963,27 @@ export function TimelineEditor({
     }
   }, []);
 
+  // Make the master audio clock authoritative: start the rAF loop ONLY once
+  // play() actually resolves. Chromium flips `audio.paused` to false
+  // synchronously the instant play() is called — even while that promise is
+  // still pending or about to reject (e.g. the click-primed muted/looping
+  // play() being interrupted by our currentTime reset). The old startup code
+  // gated the real play() on `if (audio.paused)`, saw false, skipped it, then
+  // started the loop against a clock frozen at 0 — the "playhead stuck at 0:00,
+  // no segment ever advances" bug. Playing unconditionally and clearing the
+  // playing state on rejection means the UI never claims to be playing dead audio.
+  const playAudioAndStartLoop = useCallback((audio: HTMLAudioElement, activationId?: number) => {
+    audio.play().then(() => {
+      if (activationId != null && activationIdRef.current !== activationId) return; // stale — Stop pressed
+      if (!isPreviewPlayingRef.current) return; // paused meanwhile
+      startPreviewRafLoop();
+    }).catch(() => {
+      isPreviewPlayingRef.current = false;
+      setIsPreviewPlaying(false);
+      stopPreviewRafLoop();
+    });
+  }, [startPreviewRafLoop, stopPreviewRafLoop]);
+
   // Audio metadata + ended events (no timeupdate — rAF replaces it)
   useEffect(() => {
     if (!isPreviewActive) return;
@@ -1083,7 +1104,9 @@ export function TimelineEditor({
       preparedNextForIndexRef.current = null;
       if (isPreviewIntro) {
         // The intro is visual-only: resume the voiceover from the same timeline
-        // position so it remains audible under the rapid shots.
+        // position so it remains audible under the rapid shots. The intro branch
+        // deliberately pauses/holds the audio, so it can't use the play-then-loop
+        // helper — keep its own play + loop start.
         audio.loop = false;
         audio.muted = false;
         audio.play().catch(() => {
@@ -1095,18 +1118,17 @@ export function TimelineEditor({
           audio.pause();
           introHeldTimelineTimeRef.current = audio.currentTime;
         }
+        startPreviewRafLoop();
       } else {
         audio.loop = false;
         audio.muted = false;
         seatActiveSlot(previewActiveIndexRef.current, true);
-        audio.play().catch(() => {
-          isPreviewPlayingRef.current = false;
-          setIsPreviewPlaying(false);
-        });
+        // Start the clock loop only after play() confirms — never against a
+        // clock that isn't actually advancing (root fix for the frozen playhead).
+        playAudioAndStartLoop(audio);
       }
-      startPreviewRafLoop();
     }
-  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot, isPreviewIntro, playIntroAt]);
+  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot, isPreviewIntro, playIntroAt, playAudioAndStartLoop]);
 
   const restartPreviewFromZero = useCallback(() => {
     const audio = previewAudioRef.current;
@@ -1334,13 +1356,7 @@ export function TimelineEditor({
             audio.currentTime = 0;
             audio.loop = false;
             audio.muted = false;
-            if (audio.paused) {
-              audio.play().catch(() => {
-                isPreviewPlayingRef.current = false;
-                setIsPreviewPlaying(false);
-              });
-            }
-            startPreviewRafLoop();
+            playAudioAndStartLoop(audio, thisActivation);
           };
 
           prepareIntroSlot(0, 0, startIntroClock);
@@ -1361,13 +1377,7 @@ export function TimelineEditor({
             audio.loop = false;
             audio.muted = false;
             seatActiveSlot(0, true);
-            startPreviewRafLoop();
-            if (audio.paused) {
-              audio.play().catch(() => {
-                isPreviewPlayingRef.current = false;
-                setIsPreviewPlaying(false);
-              });
-            }
+            playAudioAndStartLoop(audio, thisActivation);
           }, 5000);
           return;
         }
@@ -1379,13 +1389,10 @@ export function TimelineEditor({
           audio.currentTime = 0;
           audio.loop = false;
           audio.muted = false;
-          startPreviewRafLoop();
-          if (audio.paused) {
-            audio.play().catch(() => {
-              isPreviewPlayingRef.current = false;
-              setIsPreviewPlaying(false);
-            });
-          }
+          // Only start the rAF clock loop once play() resolves — the loop reads
+          // audio.currentTime as the master clock, so it must never spin against
+          // a clock that isn't advancing (root fix for the frozen playhead).
+          playAudioAndStartLoop(audio, thisActivation);
         };
 
         // Pre-seek the first segment into the ACTIVE slot BEFORE starting audio —
@@ -1451,7 +1458,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seatActiveSlot, seekSlotTo, setSegmentEndBoundary, startPreviewRafLoop]);
+  }, [applySlotVisibility, findActiveMatch, introOffsetSec, introSegments.length, loadSlotSource, prepareIntroSlot, prepareSlot, seatActiveSlot, seekSlotTo, setSegmentEndBoundary, playAudioAndStartLoop]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
