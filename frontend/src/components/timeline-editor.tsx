@@ -1575,25 +1575,6 @@ export function TimelineEditor({
     return availableSegments.filter(seg => nearbySegmentIds.has(seg.id)).length;
   }, [availableSegments, assigningIndex, matches]);
 
-  // Memoize timeline group computation to avoid recalculating on every render
-  const timelineGroups = useMemo(() => {
-    const groups: { groupId: number; groupDuration: number; matchIndices: number[] }[] = [];
-    let currentGroup: typeof groups[0] | null = null;
-    matches.forEach((match, idx) => {
-      const mg = match.merge_group;
-      if (mg !== undefined && currentGroup && currentGroup.groupId === mg) {
-        currentGroup.matchIndices.push(idx);
-      } else {
-        currentGroup = {
-          groupId: mg ?? idx,
-          groupDuration: match.merge_group_duration ?? (match.srt_end - match.srt_start),
-          matchIndices: [idx],
-        };
-        groups.push(currentGroup);
-      }
-    });
-    return groups;
-  }, [matches]);
 
   // --- Dialog handlers ---
 
@@ -2362,42 +2343,59 @@ export function TimelineEditor({
                         <span className="truncate">Rapid intro</span>
                       </div>
                     )}
-                    {timelineGroups.map(group => {
-                      const firstIdx = group.matchIndices[0];
-                      const lastIdx = group.matchIndices[group.matchIndices.length - 1];
-                      const firstMatch = matches[firstIdx];
-                      const end = matches[lastIdx]?.srt_end ?? firstMatch.srt_end;
-                      const start = Math.max(firstMatch.srt_start, introOffsetSec);
+                    {/* One clip block per phrase (NLE semantics). Phrases sharing
+                        one source (same merge_group) render as separate, abutting
+                        blocks with a subtle "linked" tint — the data model keeps
+                        merge_group; only the visual is per-phrase. */}
+                    {matches.map((match, idx) => {
+                      const start = Math.max(match.srt_start, introOffsetSec);
+                      const end = match.srt_end;
                       if (end - start <= 0.001) return null;
-                      const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
-                      const isHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
-                      const status = matchStatusStyle(firstMatch, isSelected);
-                      const words = firstMatch.srt_text.trim().split(/\s+/);
-                      const blockLabel = firstMatch.matched_keyword?.trim()
+                      const isSelected = selectedBlockIndex === idx;
+                      const isHighlighted = isPreviewActive && previewActiveIndex === idx;
+                      const status = matchStatusStyle(match, isSelected);
+                      const mg = match.merge_group;
+                      const linkedPrev = mg != null && idx > 0 && matches[idx - 1].merge_group === mg;
+                      const linkedNext = mg != null && idx < matches.length - 1 && matches[idx + 1].merge_group === mg;
+                      const words = match.srt_text.trim().split(/\s+/);
+                      const blockLabel = match.matched_keyword?.trim()
                         || `${words.slice(0, 3).join(" ")}${words.length > 3 ? "..." : ""}`;
                       return (
                         <button
                           type="button"
-                          key={`lane-${group.groupId}`}
-                          className={`absolute inset-y-1 overflow-hidden rounded border-2 text-left ${status.border} ${status.bg} ${isSelected || isHighlighted ? "ring-1 ring-primary" : ""}`}
+                          key={`clip-${match.srt_index}`}
+                          className={`absolute inset-y-1 overflow-hidden border-2 text-left ${status.border} ${status.bg} ${isSelected || isHighlighted ? "z-10 ring-1 ring-primary" : ""} ${linkedPrev ? "rounded-l-none" : "rounded-l"} ${linkedNext ? "rounded-r-none" : "rounded-r"}`}
                           style={{ left: pct(start), width: widthPct(end - start) }}
-                          title={group.matchIndices.map(i => matches[i].srt_text).join(" ")}
+                          title={`${match.srt_text}${linkedPrev || linkedNext ? " · linked (shares one source clip)" : ""}`}
                           onClick={() => {
                             if (isPreviewActive) {
-                              handleSeekToSegment(firstIdx);
+                              handleSeekToSegment(idx);
                             } else {
-                              setSelectedBlockIndex(firstIdx === selectedBlockIndex ? null : firstIdx);
+                              setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx);
                               setSelectedSlideId(null);
                             }
                           }}
                         >
-                          {firstMatch.thumbnail_path && (
+                          {match.thumbnail_path && (
                             <img
-                              src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path.split("/").pop() ?? "")}`}
+                              src={`${API_URL}/segments/files/${encodeURIComponent(match.thumbnail_path.split("/").pop() ?? "")}`}
                               alt=""
                               loading="lazy"
                               className="absolute inset-0 h-full w-full object-cover opacity-50"
                             />
+                          )}
+                          {(linkedPrev || linkedNext) && (
+                            <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-chart-2/70" />
+                          )}
+                          {status.isPinned && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleTogglePin(idx); }}
+                              className="absolute right-0.5 top-0.5 z-20 text-primary transition-colors hover:text-muted-foreground"
+                              title="Pinned — manually assigned, click to unpin"
+                            >
+                              <Pin className="h-3 w-3 fill-current" />
+                            </button>
                           )}
                           <span className="absolute inset-x-1 bottom-0.5 z-10 truncate text-[9px] font-medium text-foreground">
                             {blockLabel}
