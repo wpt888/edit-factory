@@ -175,6 +175,9 @@ interface TimelineEditorProps {
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
   attentionTimeline?: AttentionTimeline;
   onAttentionTimelineChange?: (timeline: AttentionTimeline) => void;
+  // "card" = compact in-card editor; "full" = the maximized modal editor
+  // (bigger inline preview, everything else identical — same component reused).
+  displayMode?: "card" | "full";
 }
 
 
@@ -194,6 +197,7 @@ export function TimelineEditor({
   onInterstitialSlidesChange,
   attentionTimeline,
   onAttentionTimelineChange,
+  displayMode = "card",
 }: TimelineEditorProps) {
   const cueBoundaryIndex = useCallback((startMs: number) => {
     let result = -1;
@@ -2058,7 +2062,7 @@ export function TimelineEditor({
               <div
                 ref={compactPreviewMeasurement.ref}
                 className="relative mx-auto bg-black flex items-center justify-center"
-                style={compactPreviewFrameStyle}
+                style={displayMode === "full" ? expandedPreviewFrameStyle : compactPreviewFrameStyle}
               >
                 {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
                     prepareSlot/seatActiveSlot. Visibility follows the active slot. */}

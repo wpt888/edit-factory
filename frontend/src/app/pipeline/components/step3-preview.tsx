@@ -44,6 +44,7 @@ import {
   RefreshCw,
   Film,
   Info,
+  Maximize2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -64,7 +65,7 @@ import {
 import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
-import { useEffect, useMemo, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 /**
  * Timeline state contract consumed by the future CompositePreviewPlayer (F5).
@@ -187,6 +188,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     setShowSkipDialog,
     handleRender,
   }: Step3Ctx = ctx;
+
+  // Which variant's full-screen editor modal is open (card.key), or null.
+  const [maximizedKey, setMaximizedKey] = useState<string | null>(null);
 
   const previewProxySourceIdsKey = useMemo(() => Array.from(new Set(
     previewCards.flatMap((card) =>
@@ -575,6 +579,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
+                            onClick={() => setMaximizedKey(card.key)}
+                            title="Maximize editor — full-screen timeline for this variant"
+                          >
+                            <Maximize2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
                             onClick={() => {
                               // Stop any playing audio before opening preview player
                               if (audioRef.current) {
@@ -761,6 +774,52 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   audioFadeIn={renderAdjust.audioFadeIn}
                   audioFadeOut={renderAdjust.audioFadeOut}
                 />
+              );
+            })()}
+
+            {/* Maximized full-screen editor for one variant. Reuses the same
+                TimelineEditor (displayMode="full") bound to this variant's shared
+                handlers, so edits made here and in the card stay in sync. */}
+            {maximizedKey !== null && (() => {
+              const card = previewCards.find((c) => c.key === maximizedKey);
+              const preview = card ? previews[card.key] : null;
+              if (!card || !preview) return null;
+              return (
+                <Dialog open onOpenChange={(open) => { if (!open) setMaximizedKey(null); }}>
+                  <DialogContent className="flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[1600px] flex-col gap-0 overflow-hidden p-0">
+                    <DialogHeader className="shrink-0 border-b px-6 py-3">
+                      <DialogTitle className="flex items-center gap-2 text-base">
+                        <Film className="h-4 w-4" />
+                        {card.label} — Full Editor
+                        {card.metaPlatform && (
+                          <Badge variant="outline" className="text-xs">
+                            {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
+                          </Badge>
+                        )}
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                      <TimelineEditor
+                        displayMode="full"
+                        matches={preview.matches}
+                        audioDuration={preview.audio_duration}
+                        introOffsetSec={preview.intro_offset_sec ?? 0}
+                        introSegments={preview.intro_segments ?? []}
+                        sourceVideoIds={selectedSourceIdsArray}
+                        availableSegments={availableSegments}
+                        profileId={currentProfile?.id}
+                        pipelineId={pipelineId ?? undefined}
+                        variantIndex={card.baseIndex}
+                        subtitleSettings={getPreviewSubtitleSettingsFor(card)}
+                        interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
+                        onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
+                        attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
+                        onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
+                        onMatchesChange={getMatchesChangeHandler(card.key)}
+                      />
+                    </div>
+                  </DialogContent>
+                </Dialog>
               );
             })()}
 
