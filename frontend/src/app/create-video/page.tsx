@@ -81,7 +81,7 @@ export default function CreateVideoPage() {
   const failed = status?.status === "failed";
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
+    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 sm:px-6 lg:px-8 py-8">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 text-primary"><Sparkles className="size-5" /> Seedance 2.0</div>

@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -296,10 +297,9 @@ export default function ProductLibraryPage() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
-          className="mb-6"
           icon={<BookOpen className="h-8 w-8 text-primary" />}
           title="Context Library"
           description="Products, services, offers — anything you promote, used as context for video generation"
@@ -439,7 +439,7 @@ export default function ProductLibraryPage() {
             </div>
           </div>
         )}
-      </div>
+      </PageShell>
 
       <ImportProductsDialog open={importOpen} onOpenChange={setImportOpen} onImported={refreshImportedData} />
       <BatchSettingsDialog

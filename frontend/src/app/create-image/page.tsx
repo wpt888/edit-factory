@@ -846,7 +846,7 @@ export default function CreateImagePage() {
   // ============== Render ==============
 
   return (
-    <div className="w-full max-w-5xl mx-auto py-8 px-4 space-y-6">
+    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <PageHeader
         title="AI Image Generator"

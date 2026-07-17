@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_SCRIPT_AI_PROVIDER,
@@ -248,7 +249,7 @@ function BatchGenerateContent() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <PageShell>
         {/* Header */}
         <div className="mb-8">
           <Link href="/product-library">
@@ -351,7 +352,7 @@ function BatchGenerateContent() {
             ))}
           </div>
         )}
-      </div>
+      </PageShell>
     </div>
   );
 }

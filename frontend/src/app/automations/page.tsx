@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { PageShell } from "@/components/page-shell";
 
 type WorkflowNode = {
   id: string;
@@ -205,7 +206,7 @@ export default function AutomationsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 p-4 md:p-8">
+    <PageShell className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="rounded-lg border border-border bg-card p-2.5">
@@ -422,6 +423,6 @@ export default function AutomationsPage() {
           <RefreshCw className="mr-2 size-4 animate-spin" /> Loading cloud automations…
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

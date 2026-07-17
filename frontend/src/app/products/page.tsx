@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -455,10 +456,9 @@ export default function ProductsPage() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
-          className="mb-6"
           icon={<Package className="h-8 w-8 text-primary" />}
           title="Products"
           description="Browse and filter synced product catalog"
@@ -774,7 +774,7 @@ export default function ProductsPage() {
             </p>
           </div>
         )}
-      </div>
+      </PageShell>
 
       {/* Create Feed dialog */}
       <CreateFeedDialog

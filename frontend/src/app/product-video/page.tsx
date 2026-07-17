@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_SCRIPT_AI_PROVIDER,
@@ -246,7 +247,7 @@ function ProductVideoContent() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <PageShell width="narrow">
         {/* Back navigation */}
         <div className="mb-6">
           <Link
@@ -276,7 +277,7 @@ function ProductVideoContent() {
         {/* Product info card */}
         {productId && (
           <Card className="mb-6">
-            <CardContent className="p-4">
+            <CardContent>
               <div className="flex gap-4 items-start">
                 {image && (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -307,7 +308,7 @@ function ProductVideoContent() {
         {productId && footageCount !== null && (
           footageCount > 0 ? (
             <Card className="mb-6 border-primary/40">
-              <CardContent className="p-4">
+              <CardContent>
                 <div className="flex items-start gap-3">
                   <Film className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0 space-y-3">
@@ -350,7 +351,7 @@ function ProductVideoContent() {
             </Card>
           ) : (
             <Card className="mb-6">
-              <CardContent className="p-4">
+              <CardContent>
                 <div className="flex items-start gap-3">
                   <Images className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
@@ -691,7 +692,7 @@ function ProductVideoContent() {
             </CardContent>
           </Card>
         )}
-      </div>
+      </PageShell>
     </div>
   );
 }
