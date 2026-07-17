@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { apiGet, apiPost, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiPost, apiDelete, handleApiError } from "@/lib/api";
+import { useApiUrl } from "@/hooks/use-api-url";
 import {
   Sparkles,
   AlertCircle,
@@ -64,6 +65,7 @@ function renderStatusKey(status: VariantStatus) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function Step4Render({ ctx }: { ctx: any }) {
+  const mediaApiUrl = useApiUrl();
   const {
     isRendering,
     handleCancelRender,
@@ -86,6 +88,9 @@ export function Step4Render({ ctx }: { ctx: any }) {
     libraryProjectId,
     pipelineLayout,
   }: Step4Ctx = ctx;
+  // Step 4 deliberately stays a plain stacked-card layout (no workspace
+  // split/bg-background treatment like steps 1-3) — render progress is a
+  // simple list, not an editing surface. Out of scope for the S1 fix pack.
   return (
           <div className="space-y-5">
             <div className="flex items-center justify-between">
@@ -344,16 +349,16 @@ export function Step4Render({ ctx }: { ctx: any }) {
                           className="w-full rounded-md bg-black max-h-80 object-contain"
                           poster={
                             status.thumbnail_path
-                              ? `${API_URL}/library/files/${encodeURIComponent(status.thumbnail_path)}`
+                              ? `${mediaApiUrl}/library/files/${encodeURIComponent(status.thumbnail_path)}`
                               : undefined
                           }
                           preload="auto"
-                          src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}`}
+                          src={`${mediaApiUrl}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}`}
                         />
                         <div className="flex gap-2">
                           <Button variant="outline" className="flex-1" asChild>
                             <a
-                              href={`${API_URL}/library/files/${encodeURIComponent(
+                              href={`${mediaApiUrl}/library/files/${encodeURIComponent(
                                 status.final_video_path
                               )}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}&download=true`}
                               download
