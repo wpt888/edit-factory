@@ -1,5 +1,30 @@
 # Engineering Change Log
 
+## 2026-07-17 - Step 3 "Variant Previews" timeline editor rework
+
+- Fixed the Instant Preview frozen playhead (stuck at 0:00, no segment cuts):
+  the click-primed `audio.play()` left `audio.paused` transiently false, so
+  startup skipped the authoritative `play()` and ran the rAF clock loop against
+  audio stuck at 0. Added `playAudioAndStartLoop()` to start the loop only after
+  `play()` resolves and clear the playing state on rejection; applied to all
+  startup paths and the non-intro resume.
+- Removed the duplicate storyboard strip; the multi-track timeline is now the
+  single segment view. Relocated its "+" attention-image insert to the Attention
+  images lane; all other affordances remain via Video-lane selection + the
+  inline panel. Updated the stale strip hint.
+- Video lane now renders one clip block per phrase with real SRT boundaries
+  (NLE semantics); adjacent same-`merge_group` clips get a subtle linked tint
+  and flattened touching corners. `merge_group` data model unchanged. Pin
+  indicator relocated onto clips.
+- Added a Maximize control per variant card opening a near-fullscreen editor
+  that reuses `TimelineEditor` via a new `displayMode="full"` prop.
+- Reordered the multi-track lanes to top = topmost visual layer (Subtitles >
+  Attention images > Video, then audio). Backend compositor was already correct
+  (attention baked before subtitles in `assembly_service.py`); no backend change.
+- New wiki page `25-step3-variant-timeline-editor.md`. Verified via clean
+  `next build` + `tsc` + `eslint`; live browser verification not feasible
+  without a populated pipeline and a running app instance.
+
 ## 2026-07-16 - BlipStudio credit metering validated live E2E (Goal D)
 
 - Validated the Studio→web credit metering path end-to-end for the first time
