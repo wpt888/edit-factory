@@ -87,6 +87,22 @@ fiecărui item rămân vizibile); un `ChevronRight` sus în rail îl reextinde. 
 complet (decizie user: iconițele trebuie să rămână). Web persistă prin cookie server-read
 (fără flash), desktop prin `localStorage`.
 
+### Shell alignment (X1 — 2026-07-18, sursa canonică: WEB)
+- **Media Library** = iconița lucide `Images` în ambele (desktop folosea `Cloud`, greșit).
+- **Copy switcher de produse identic:** array-ul `PRODUCTS` (`components/product-switcher.tsx`
+  pe web, `frontend/src/components/product-switcher.tsx` pe desktop) trebuie să aibă
+  `name` + `description` identice caracter cu caracter pentru fiecare produs. Sursa
+  canonică e web-ul (`href`/`external`/`icon` rămân specifice fiecărei aplicații).
+- **Hover pe item de nav inactiv:** `hover:text-sidebar-accent-foreground` (NU
+  `hover:text-lime` — lime nu e accent aprobat pe hover de nav).
+- **Class string pentru labelul de grup din sidebar (identic în ambele):**
+  `px-3 pt-4 pb-1 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/35 uppercase`.
+  Listele de nav folosesc `gap-0.5` (nu `gap-1`); rail-ul colapsat desenează un
+  divizor (`mx-2 my-1.5 border-t border-sidebar-border`) între grupuri.
+- **Scala Button:** bază `rounded-lg` + size `default` = **h-9** în ambele aplicații
+  (decizie 2026-07-18, „apple-like click target" — desktop era deja h-9, web a trecut
+  de la h-8 la h-9).
+
 ## 2. Divergențe APROBATE (nu le "repara")
 
 1. **Radius Electron:** `html.desktop { --radius: 0.375rem }` — deliberat ("precision
@@ -166,3 +182,15 @@ temă monocromă propagată pe web ✓ (gap închis). Fixuri aplicate 2026-07-13
 secțiune colapsată "Legacy integrations" pe Settings (`SHOW_LEGACY_INTEGRATIONS=false`,
 Schedule/Calendar rămân funcționale pe backend Postiz). Watchlist rămas: doar
 consolidarea "Schedule" + "Calendar" (non-paritate, intern desktop).
+
+Follow-up 2026-07-18 (X1 — pachetul de aliniere a shell-ului, sursă canonică WEB):
+Media Library icon (`Images`), copy identic în product switcher, token hover nav
+(`sidebar-accent-foreground`, nu lime), class string identic pt. labelul de grup,
+`gap-0.5` pe listele de nav, divizoare de grup pe rail-ul colapsat, radius footer
+`rounded-xl` → `rounded-lg`, widget credite unificat (Zap lime + „AI Credits
+Remaining", fără bară de quota pe desktop — `/platform/me` nu expune quota),
+Button `rounded-lg` + `h-9` în ambele aplicații, activ-route pe web acum
+boundary-safe (`pathname === href || startsWith(href + "/")`, ca pe desktop).
+Coliziune reziduală de iconițe pe desktop: `AI Video` a primit `Film`, dar
+`Local Exports` folosește deja `Film` — rămâne watchlist pentru un audit viitor.
+Structura meniului NU s-a schimbat (divergență aprobată, vezi §2).
