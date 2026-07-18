@@ -12,6 +12,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   CheckCircle,
   AlertTriangle,
   Search,
@@ -40,7 +52,7 @@ import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, EffectiveBoundaryTransition, TransitionKind, TransitionSpec } from "@/types/composition-timeline";
 import { effectiveBoundaryTransitions } from "@/types/composition-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
@@ -2357,6 +2369,23 @@ export function TimelineEditor({
     commitComposition(updated);
   };
 
+  // Transitions V1: boundary popover writes. `next === undefined` clears the
+  // override so the clip inherits the variant default again (the sentinel the
+  // data model already uses); `null` is an explicit hard-cut override; an
+  // object is an explicit transition override. Routed through the same
+  // commitComposition path as every other clip edit, so save/undo see it.
+  const setBoundaryTransition = useCallback((clipId: string, next: TransitionSpec | null | undefined) => {
+    const updated = displayedComposition.map((candidate) => {
+      if (candidate.id !== clipId) return candidate;
+      if (next === undefined) {
+        const { transitionIn: _drop, ...rest } = candidate;
+        return rest;
+      }
+      return { ...candidate, transitionIn: next };
+    });
+    commitComposition(updated);
+  }, [commitComposition, displayedComposition]);
+
   // --- Drag-and-drop handlers ---
 
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
@@ -3317,6 +3346,22 @@ export function TimelineEditor({
                             />
                           )}
                         </TimelineClipShell>
+                      );
+                    })}
+                    {/* Transitions V1: one popover marker per body-clip boundary. Skips
+                        the first clip (no previous clip) and any boundary INTO an intro
+                        clip — intro micro-clips never take a transition. */}
+                    {displayedComposition.map((clip, idx) => {
+                      if (idx === 0 || clip.kind === "intro") return null;
+                      const effective = transitionBoundaries.find((b) => b.clipIndex === idx) ?? null;
+                      return (
+                        <BoundaryTransitionMarker
+                          key={`boundary-${clip.id}`}
+                          left={pct(clip.timeline_start)}
+                          override={clip.transitionIn}
+                          effective={effective}
+                          onChange={(next) => setBoundaryTransition(clip.id, next)}
+                        />
                       );
                     })}
                   </>
@@ -4407,5 +4452,119 @@ export function TimelineEditor({
         onGenerated={(seg) => handleSelectSegment(seg)}
       />
     </div>
+  );
+}
+
+const TRANSITION_DURATION_PRESETS: { value: number; label: string }[] = [
+  { value: 200, label: "Fast" },
+  { value: 350, label: "Normal" },
+  { value: 500, label: "Slow" },
+];
+
+/**
+ * Transitions V1: clickable marker on a body-clip boundary. `override` is the
+ * clip's raw `transitionIn` (undefined = inherits the variant default, null =
+ * explicit cut, object = explicit transition); `effective` is the same
+ * boundary post-guard from `effectiveBoundaryTransitions` (what will actually
+ * render — may be null even with an override, e.g. either side too short).
+ */
+function BoundaryTransitionMarker({
+  left,
+  override,
+  effective,
+  onChange,
+}: {
+  left: string;
+  override: TransitionSpec | null | undefined;
+  effective: EffectiveBoundaryTransition | null;
+  onChange: (next: TransitionSpec | null | undefined) => void;
+}) {
+  const isOverride = override !== undefined;
+  const isCut = override === null;
+  const [pendingKind, setPendingKind] = useState<TransitionKind | "cut">(
+    isCut ? "cut" : override?.kind ?? effective?.kind ?? "cut"
+  );
+  const [pendingDuration, setPendingDuration] = useState(override?.durationMs ?? effective?.durationMs ?? 350);
+
+  const dotClass = isOverride
+    ? isCut
+      ? "border-white/70 bg-black" // explicit cut override
+      : "border-primary bg-primary" // explicit transition override
+    : effective
+      ? "border-primary bg-primary/30" // inherited default, resolves to a transition
+      : "border-white/40 bg-transparent"; // inherited default, resolves to a cut (or no default set)
+
+  return (
+    <Popover
+      onOpenChange={(open) => {
+        if (!open) return;
+        setPendingKind(isCut ? "cut" : override?.kind ?? effective?.kind ?? "cut");
+        setPendingDuration(override?.durationMs ?? effective?.durationMs ?? 350);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`absolute top-1/2 z-20 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition hover:scale-125 ${dotClass}`}
+          style={{ left }}
+          title={isOverride
+            ? (isCut ? "Cut (override)" : `${override?.kind === "flash_white" ? "Flash white" : "Dip to black"} (override)`)
+            : (effective ? "Uses variant default" : "Cut (variant default)")}
+          aria-label="Edit transition at this boundary"
+        />
+      </PopoverTrigger>
+      <PopoverContent className="w-64 space-y-3" align="center">
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-muted-foreground">Transition</span>
+          <Select value={pendingKind} onValueChange={(value) => {
+            const kind = value as TransitionKind | "cut";
+            setPendingKind(kind);
+            if (kind === "cut") { onChange(null); return; }
+            const durationMs = pendingKind === kind ? pendingDuration : kind === "flash_white" ? 200 : 350;
+            setPendingDuration(durationMs);
+            onChange({ kind, durationMs });
+          }}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cut">Cut</SelectItem>
+              <SelectItem value="dip_black">Dip to black</SelectItem>
+              <SelectItem value="flash_white">Flash white</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {pendingKind !== "cut" && (
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Duration</span>
+            <Select value={String(pendingDuration)} onValueChange={(value) => {
+              const durationMs = Number(value);
+              setPendingDuration(durationMs);
+              onChange({ kind: pendingKind, durationMs });
+            }}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRANSITION_DURATION_PRESETS.map((preset) => (
+                  <SelectItem key={preset.value} value={String(preset.value)}>{preset.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full"
+          disabled={!isOverride}
+          onClick={() => onChange(undefined)}
+        >
+          Use variant default
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
