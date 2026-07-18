@@ -86,3 +86,67 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
             "message": "Attention timeline revision conflict",
             "current": document,
         }
+
+
+def test_apply_system_template_appends_and_rejects_foreign_personal_template(monkeypatch):
+    profile_id = "profile-attention"
+    existing_cue = {
+        "id": "existing",
+        "startMs": 100,
+        "durationMs": 500,
+        "layers": [],
+        "zone": "behind",
+    }
+    pipeline = {
+        "id": "pipeline-attention",
+        "profile_id": profile_id,
+        "attention_timeline": {"0": {"revision": 4, "cues": [existing_cue]}},
+    }
+    foreign_template = {
+        "id": "foreign-stack",
+        "profile_id": "another-profile",
+        "name": "Foreign Stack",
+        "config": {"strategy": "count", "count": 1, "layers": 2},
+    }
+    repository = _AttentionRepository(foreign_template)
+    monkeypatch.setattr(pipeline_routes, "_get_pipeline_or_load", lambda pipeline_id: pipeline)
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repository)
+
+    app = FastAPI()
+    app.include_router(pipeline_routes.router)
+    app.dependency_overrides[get_profile_context] = lambda: ProfileContext(
+        profile_id=profile_id,
+        user_id="user-attention",
+    )
+
+    with TestClient(app) as client:
+        appended = client.post(
+            "/pipeline/pipeline-attention/attention-timeline/0/apply-template",
+            json={
+                "templateId": "system-tornado-stack",
+                "assetUrls": ["a.png", "b.png", "c.png"],
+                "durationMs": 15000,
+                "subtitleBoundariesMs": [3000, 6000, 9000, 12000],
+                "revision": 4,
+                "mode": "append",
+            },
+        )
+        assert appended.status_code == 200, appended.text
+        document = appended.json()
+        assert document["revision"] == 5
+        assert document["cues"][0] == existing_cue
+        assert len(document["cues"]) == 3
+        assert all(len(cue["layers"]) == 3 for cue in document["cues"][1:])
+        assert all(cue["templateId"] == "system-tornado-stack" for cue in document["cues"][1:])
+
+        forbidden = client.post(
+            "/pipeline/pipeline-attention/attention-timeline/0/apply-template",
+            json={
+                "templateId": "foreign-stack",
+                "assetUrls": ["a.png"],
+                "durationMs": 10000,
+                "revision": 5,
+            },
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "Access denied to this attention template"
