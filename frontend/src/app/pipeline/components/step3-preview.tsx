@@ -705,6 +705,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
+                        previewKey={card.key}
                         variantIndex={card.baseIndex}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
@@ -844,6 +845,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
+                        previewKey={card.key}
                         variantIndex={card.baseIndex}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}

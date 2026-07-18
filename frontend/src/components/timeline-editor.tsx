@@ -26,20 +26,24 @@ import {
   SkipBack,
   SkipForward,
   ImageIcon,
+  Images,
+  Layers3,
+  LayoutTemplate,
   Trash2,
-  ChevronDown,
   Loader2,
   Maximize2,
   Pin,
   ScanLine,
 } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
 import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
+import type { AttentionTemplate } from "@/types/attention-template";
+import { normalizeAttentionTemplate } from "@/types/attention-template";
 import type { CompositionClip } from "@/types/composition-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
@@ -55,6 +59,8 @@ import {
   TIMELINE_END_GUTTER,
 } from "@/components/timeline/multi-track-timeline";
 import { Sparkles } from "lucide-react";
+import { toast } from "sonner";
+import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
 
 const compactPreviewFrameStyle: React.CSSProperties = {
   aspectRatio: "9 / 16",
@@ -149,6 +155,10 @@ export interface InterstitialSlide {
   kenBurnsDirection?: "zoom-in" | "zoom-out" | "pan-left" | "pan-right"; // Default "zoom-in"
   productTitle?: string;         // For display in timeline
 }
+
+type AttentionAssetTarget =
+  | { kind: "template" }
+  | { kind: "layer"; cueId: string; layerId: string };
 
 const EMPTY_ATTENTION_CUES: AttentionCue[] = [];
 
@@ -283,6 +293,7 @@ interface TimelineEditorProps {
   onVideoTimelineChange?: (timeline: CompositionClip[]) => void;
   profileId?: string;
   pipelineId?: string;
+  previewKey?: string;
   variantIndex?: number;
   subtitleSettings?: SubtitleSettings;
   interstitialSlides?: InterstitialSlide[];
@@ -309,6 +320,7 @@ export function TimelineEditor({
   onVideoTimelineChange,
   profileId,
   pipelineId,
+  previewKey,
   variantIndex,
   subtitleSettings,
   interstitialSlides: legacyInterstitialSlides = [],
@@ -320,6 +332,33 @@ export function TimelineEditor({
 }: TimelineEditorProps) {
   const mediaApiUrl = useApiUrl();
   const attentionCues = attentionTimeline?.cues ?? EMPTY_ATTENTION_CUES;
+  const [attentionTemplates, setAttentionTemplates] = useState<AttentionTemplate[]>([]);
+  const [selectedAttentionTemplateId, setSelectedAttentionTemplateId] = useState("");
+  const [attentionTemplatesLoading, setAttentionTemplatesLoading] = useState(false);
+  const [attentionTemplateApplying, setAttentionTemplateApplying] = useState(false);
+  const [templateAssetUrls, setTemplateAssetUrls] = useState<string[]>([]);
+  const [attentionAssetTarget, setAttentionAssetTarget] = useState<AttentionAssetTarget | null>(null);
+
+  useEffect(() => {
+    if (!pipelineId) return;
+    let cancelled = false;
+    setAttentionTemplatesLoading(true);
+    apiGet("/attention-templates")
+      .then(async (response) => {
+        const data = (await response.json()) as { templates?: AttentionTemplate[] };
+        if (cancelled) return;
+        const templates = data.templates ?? [];
+        setAttentionTemplates(templates);
+        setSelectedAttentionTemplateId((current) => current || templates[0]?.id || "");
+      })
+      .catch(() => {
+        if (!cancelled) setAttentionTemplates([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAttentionTemplatesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [pipelineId]);
   const cueBoundaryIndex = useCallback((startMs: number) => {
     let result = -1;
     matches.forEach((match, index) => {
@@ -380,6 +419,7 @@ export function TimelineEditor({
           sfxUrl: old?.sfxUrl,
           sfxVolumeDb: old?.sfxVolumeDb ?? 0,
           templateId: old?.templateId,
+          zone: old?.zone ?? "behind",
         };
       });
       onAttentionTimelineChange({ ...attentionTimeline, cues });
@@ -401,16 +441,127 @@ export function TimelineEditor({
     });
   }, [attentionCues, attentionTimeline, audioDuration, onAttentionTimelineChange]);
 
-  const updateCueLayer = useCallback((cueId: string, changes: Partial<AttentionCue["layers"][number]>) => {
+  const updateCueLayer = useCallback((
+    cueId: string,
+    layerId: string,
+    changes: Partial<AttentionCue["layers"][number]>,
+  ) => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     onAttentionTimelineChange({
       ...attentionTimeline,
       cues: attentionCues.map(cue => cue.id === cueId ? {
         ...cue,
-        layers: cue.layers.map((layer, index) => index === 0 ? { ...layer, ...changes } : layer),
+        layers: cue.layers.map(layer => layer.id === layerId ? { ...layer, ...changes } : layer),
       } : cue),
     });
   }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
+
+  const addCueLayer = useCallback((cueId: string) => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    const cue = attentionCues.find(item => item.id === cueId);
+    if (!cue || cue.layers.length >= 20) return;
+    const previous = cue.layers[cue.layers.length - 1];
+    const layerId = crypto.randomUUID();
+    const width = previous?.width ?? 0.8;
+    const height = previous?.height ?? 0.8;
+    const maxX = Math.max(0, 1 - width);
+    const maxY = Math.max(0, 1 - height);
+    const nextLayer: AttentionCue["layers"][number] = {
+      id: layerId,
+      assetId: `pending:${layerId}`,
+      x: Math.min(maxX, (previous?.x ?? 0.1) + 0.03),
+      y: Math.min(maxY, (previous?.y ?? 0.1) + 0.03),
+      width,
+      height,
+      zIndex: Math.max(0, ...cue.layers.map(layer => layer.zIndex)) + 1,
+      fit: previous?.fit ?? "contain",
+      animation: {
+        ...(previous?.animation ?? {
+          preset: "pop",
+          enterMs: 250,
+          exitMs: 200,
+          delayMs: 0,
+          intensity: 1,
+        }),
+        delayMs: cue.layers.length * 120,
+      },
+    };
+    onAttentionTimelineChange({
+      ...attentionTimeline,
+      cues: attentionCues.map(item => item.id === cueId
+        ? { ...item, layers: [...item.layers, nextLayer] }
+        : item),
+    });
+    setAttentionAssetTarget({ kind: "layer", cueId, layerId });
+  }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
+
+  const removeCueLayer = useCallback((cueId: string, layerId: string) => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    onAttentionTimelineChange({
+      ...attentionTimeline,
+      cues: attentionCues.map(cue => cue.id === cueId && cue.layers.length > 1
+        ? { ...cue, layers: cue.layers.filter(layer => layer.id !== layerId) }
+        : cue),
+    });
+  }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
+
+  const updateCueZone = useCallback((cueId: string, zone: "behind" | "front") => {
+    if (!attentionTimeline || !onAttentionTimelineChange) return;
+    onAttentionTimelineChange({
+      ...attentionTimeline,
+      cues: attentionCues.map(cue => cue.id === cueId ? { ...cue, zone } : cue),
+    });
+  }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
+
+  const selectAttentionAsset = useCallback((url: string) => {
+    if (!attentionAssetTarget) return;
+    if (attentionAssetTarget.kind === "template") {
+      setTemplateAssetUrls(current => current.includes(url) ? current : [...current, url]);
+      return;
+    }
+    updateCueLayer(attentionAssetTarget.cueId, attentionAssetTarget.layerId, {
+      assetId: url,
+      assetUrl: url,
+    });
+  }, [attentionAssetTarget, updateCueLayer]);
+
+  const applyAttentionTemplate = useCallback(async () => {
+    if (!pipelineId || !previewKey || !attentionTimeline || !onAttentionTimelineChange) return;
+    if (!selectedAttentionTemplateId || templateAssetUrls.length === 0) return;
+    setAttentionTemplateApplying(true);
+    try {
+      await apiPost(`/pipeline/${pipelineId}/attention-timeline/${previewKey}/apply-template`, {
+        templateId: selectedAttentionTemplateId,
+        assetUrls: templateAssetUrls,
+        durationMs: Math.max(1, Math.round(audioDuration * 1000)),
+        subtitleBoundariesMs: Array.from(new Set(matches.flatMap(match => [
+          Math.round(match.srt_start * 1000),
+          Math.round(match.srt_end * 1000),
+        ]))).sort((a, b) => a - b),
+        revision: attentionTimeline.revision,
+        mode: "replace",
+      });
+      const response = await apiGet(`/pipeline/${pipelineId}/attention-timeline/${previewKey}`, {
+        cache: "no-store",
+      });
+      const document = (await response.json()) as AttentionTimeline;
+      onAttentionTimelineChange(document);
+      toast.success("Attention template applied");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not apply attention template");
+    } finally {
+      setAttentionTemplateApplying(false);
+    }
+  }, [
+    attentionTimeline,
+    audioDuration,
+    matches,
+    onAttentionTimelineChange,
+    pipelineId,
+    previewKey,
+    selectedAttentionTemplateId,
+    templateAssetUrls,
+  ]);
 
   const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
@@ -2659,7 +2810,8 @@ export function TimelineEditor({
             style={{
               left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
               width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
-              objectFit: layer.fit, zIndex: 10 + layer.zIndex,
+              objectFit: layer.fit,
+              zIndex: (cue.zone === "front" ? 60 : 10) + layer.zIndex,
               animationDuration: `${duration}ms`,
               ["--attention-intensity" as string]: layer.animation.intensity,
             }}
@@ -2667,6 +2819,94 @@ export function TimelineEditor({
         );
       });
     });
+  };
+
+  const renderAttentionWorkflow = () => {
+    const selectedTemplate = attentionTemplates.find(template => template.id === selectedAttentionTemplateId);
+    const config = normalizeAttentionTemplate(selectedTemplate);
+    return (
+      <div className="w-full space-y-3 rounded-lg border border-lime-300/20 bg-[#111411] p-3 text-left text-white" data-testid="attention-template-workflow">
+        <div className="flex items-center gap-2">
+          <LayoutTemplate className="size-4 text-lime-300" />
+          <div>
+            <p className="text-sm font-medium">Attention template</p>
+            <p className="text-[11px] text-white/50">Choose images, then distribute them on the subtitle clock.</p>
+          </div>
+        </div>
+
+        <label className="block space-y-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
+          Template
+          <select
+            value={selectedAttentionTemplateId}
+            onChange={(event) => setSelectedAttentionTemplateId(event.target.value)}
+            disabled={attentionTemplatesLoading}
+            className="h-9 w-full rounded-md border border-white/15 bg-black/30 px-2 text-xs normal-case tracking-normal text-white outline-none focus:border-lime-300"
+          >
+            {attentionTemplates.length === 0 && <option value="">No templates available</option>}
+            {attentionTemplates.map(template => (
+              <option key={template.id} value={template.id}>
+                {template.name}{template.is_system ? " · System" : " · Personal"}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {selectedTemplate && (
+          <div className="grid grid-cols-3 gap-1.5 text-[10px] text-white/65">
+            <span className="rounded bg-white/5 px-2 py-1">{config.layers} layer{config.layers === 1 ? "" : "s"}</span>
+            <span className="rounded bg-white/5 px-2 py-1">{Math.round(config.size * 100)}% size</span>
+            <span className="rounded bg-white/5 px-2 py-1 capitalize">{config.zone}</span>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Source images</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 border-lime-300/35 bg-lime-300/5 px-2 text-xs text-lime-200 hover:bg-lime-300/10 hover:text-lime-100"
+              onClick={() => setAttentionAssetTarget({ kind: "template" })}
+            >
+              <Images className="size-3.5" />
+              Gallery / Upload
+            </Button>
+          </div>
+          {templateAssetUrls.length === 0 ? (
+            <p className="rounded border border-dashed border-white/15 px-3 py-3 text-center text-xs text-white/40">
+              Add at least one image. Three images make the stacked templates easiest to see.
+            </p>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              {templateAssetUrls.map((url, index) => (
+                <div key={url} className="group relative overflow-hidden rounded border border-white/15 bg-black/30">
+                  <img src={url} alt="" className="aspect-square w-full object-cover" />
+                  <button
+                    type="button"
+                    className="absolute right-1 top-1 rounded bg-black/75 px-1 text-[10px] text-white opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
+                    onClick={() => setTemplateAssetUrls(current => current.filter((_, itemIndex) => itemIndex !== index))}
+                    aria-label={`Remove source image ${index + 1}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <Button
+          type="button"
+          className="w-full bg-lime-300 text-black hover:bg-lime-200"
+          disabled={!selectedAttentionTemplateId || templateAssetUrls.length === 0 || attentionTemplateApplying}
+          onClick={() => void applyAttentionTemplate()}
+        >
+          {attentionTemplateApplying ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Layers3 className="mr-2 size-4" />}
+          {attentionTemplateApplying ? "Applying..." : "Apply template"}
+        </Button>
+      </div>
+    );
   };
 
   return (
@@ -3138,12 +3378,16 @@ export function TimelineEditor({
           </div>
         )}
 
+      {displayMode === "card" && attentionTimeline && renderAttentionWorkflow()}
+
       {/* Full editor: left inspector placeholder when nothing is selected */}
       {displayMode === "full" &&
         (viewMode !== "timeline" ||
           (selectedSlideId === null && !selectedClip && (selectedBlockIndex === null || !selectedMatch))) && (
-          <div className="col-start-1 row-start-2 flex min-h-0 items-center justify-center bg-card p-4 text-center text-sm text-muted-foreground">
-            Select a clip or slide on the timeline to edit its settings here
+          <div className="col-start-1 row-start-2 min-h-0 overflow-y-auto bg-card p-4">
+            {attentionTimeline ? renderAttentionWorkflow() : (
+              <p className="text-center text-sm text-muted-foreground">Select a clip on the timeline to edit its settings here</p>
+            )}
           </div>
         )}
 
@@ -3556,10 +3800,11 @@ export function TimelineEditor({
             );
           })()}
 
-          {/* Interstitial slide config panel (shown when a slide block is selected) */}
+          {/* Attention cue config panel (shown when an attention block is selected) */}
           {selectedSlideId !== null && (() => {
             const slide = interstitialSlides.find((s) => s.id === selectedSlideId);
-            if (!slide) return null;
+            const cue = attentionCues.find(item => item.id === selectedSlideId);
+            if (!slide || !cue) return null;
             return (
               <div
                 className={displayMode === "full"
@@ -3568,8 +3813,8 @@ export function TimelineEditor({
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <ImageIcon className="size-4 text-primary" />
-                    Image Slide Config
+                    <Layers3 className="size-4 text-primary" />
+                    Attention cue · {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
                   </div>
                   <Button
                     variant="ghost"
@@ -3582,140 +3827,157 @@ export function TimelineEditor({
                   </Button>
                 </div>
 
-                <div className="flex items-start gap-4">
-                  {/* Image preview */}
-                  <div className="flex-shrink-0 size-20 rounded border overflow-hidden bg-muted flex items-center justify-center">
-                    {slide.imageUrl ? (
-                      <img
-                        src={slide.imageUrl}
-                        alt="Product"
-                        className="w-full h-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                    ) : (
-                      <ImageIcon className="size-6 text-muted-foreground" />
-                    )}
+                <div className="flex items-center justify-between gap-2 rounded-md border bg-background/60 p-2">
+                  <div>
+                    <p className="text-xs font-medium">Subtitle layer</p>
+                    <p className="text-[10px] text-muted-foreground">Choose whether images composite below or above captions.</p>
                   </div>
+                  <div className="flex rounded-md border bg-muted/30 p-0.5">
+                    {(["behind", "front"] as const).map(zone => (
+                      <button
+                        key={zone}
+                        type="button"
+                        className={`rounded px-2 py-1 text-[11px] capitalize transition ${
+                          (cue.zone ?? "behind") === zone ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                        }`}
+                        onClick={() => updateCueZone(cue.id, zone)}
+                      >
+                        {zone === "front" ? "In front" : "Behind"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                  <div className="flex-1 min-w-0 space-y-2">
-                    {/* Image URL */}
-                    <div className="space-y-1">
-                      <div className="flex gap-1 text-[10px] text-muted-foreground" role="tablist" aria-label="Asset picker">
-                        {['Gallery', 'Upload', 'Products', 'Generate with AI', 'URL'].map(name => <span key={name} className={`rounded px-1.5 py-0.5 ${name === 'URL' ? 'bg-muted text-foreground' : ''}`}>{name}</span>)}
-                      </div>
-                      <label className="text-xs font-medium text-muted-foreground">Image URL (advanced)</label>
-                      <input
-                        type="text"
-                        value={slide.imageUrl}
-                        onChange={(e) => handleUpdateSlide(slide.id, { imageUrl: e.target.value })}
-                        placeholder="https://..."
-                        className="w-full h-7 text-xs px-2 rounded border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      />
-                    </div>
+                <div className="space-y-2">
+                  {cue.layers.map((layer, layerIndex) => {
+                    const layerUrl = layer.assetUrl || layer.assetId;
+                    return (
+                      <div key={layer.id} className="space-y-2 rounded-md border bg-background/50 p-2" data-testid={`attention-layer-${layerIndex}`}>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded border bg-muted"
+                            onClick={() => setAttentionAssetTarget({ kind: "layer", cueId: cue.id, layerId: layer.id })}
+                            title="Choose from Gallery or Upload"
+                          >
+                            {layerUrl && !layerUrl.startsWith("pending:")
+                              ? <img src={layerUrl} alt="" className="h-full w-full object-cover" />
+                              : <ImageIcon className="size-5 text-muted-foreground" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium">Image {layerIndex + 1}</span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-1.5 text-[10px] text-destructive"
+                                disabled={cue.layers.length === 1}
+                                onClick={() => removeCueLayer(cue.id, layer.id)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                            <button
+                              type="button"
+                              className="mt-1 text-[10px] font-medium text-primary hover:underline"
+                              onClick={() => setAttentionAssetTarget({ kind: "layer", cueId: cue.id, layerId: layer.id })}
+                            >
+                              Gallery / Upload
+                            </button>
+                          </div>
+                        </div>
 
-                    {attentionCues.find(cue => cue.id === slide.id)?.layers[0] && (() => {
-                      const layer = attentionCues.find(cue => cue.id === slide.id)!.layers[0];
-                      return (
-                        <div className="grid grid-cols-3 gap-2 rounded border p-2">
+                        <Input
+                          value={layerUrl.startsWith("pending:") ? "" : layerUrl}
+                          onChange={(event) => updateCueLayer(cue.id, layer.id, {
+                            assetId: event.target.value || `pending:${layer.id}`,
+                            assetUrl: event.target.value || undefined,
+                          })}
+                          placeholder="Image URL (advanced)"
+                          className="h-7 text-xs"
+                        />
+
+                        <div className="grid grid-cols-3 gap-1.5">
                           {(["x", "y", "width", "height"] as const).map(field => (
-                            <label key={field} className="space-y-0.5 text-[10px] uppercase text-muted-foreground">
+                            <label key={field} className="space-y-0.5 text-[9px] uppercase text-muted-foreground">
                               {field}
-                              <Input type="number" min={0} max={1} step={0.01} className="h-7 text-xs" value={layer[field]}
-                                onChange={event => updateCueLayer(slide.id, { [field]: Math.max(0, Math.min(1, Number(event.target.value))) })} />
+                              <Input
+                                type="number"
+                                min={field === "width" || field === "height" ? 0.01 : 0}
+                                max={1}
+                                step={0.01}
+                                className="h-7 text-xs"
+                                value={layer[field]}
+                                onChange={(event) => updateCueLayer(cue.id, layer.id, {
+                                  [field]: Math.max(field === "width" || field === "height" ? 0.01 : 0, Math.min(1, Number(event.target.value))),
+                                })}
+                              />
                             </label>
                           ))}
-                          <label className="space-y-0.5 text-[10px] uppercase text-muted-foreground">Layer
-                            <Input type="number" min={0} max={1000} className="h-7 text-xs" value={layer.zIndex}
-                              onChange={event => updateCueLayer(slide.id, { zIndex: Number(event.target.value) })} />
+                          <label className="space-y-0.5 text-[9px] uppercase text-muted-foreground">
+                            Delay ms
+                            <Input
+                              type="number"
+                              min={0}
+                              max={60000}
+                              step={20}
+                              className="h-7 text-xs"
+                              value={layer.animation.delayMs}
+                              onChange={(event) => updateCueLayer(cue.id, layer.id, {
+                                animation: { ...layer.animation, delayMs: Math.max(0, Number(event.target.value)) },
+                              })}
+                            />
                           </label>
-                          <label className="space-y-0.5 text-[10px] uppercase text-muted-foreground">Fit
-                            <select className="h-7 w-full rounded border bg-background px-1 text-xs" value={layer.fit}
-                              onChange={event => updateCueLayer(slide.id, { fit: event.target.value as "contain" | "cover" })}>
-                              <option value="contain">Contain</option><option value="cover">Cover</option>
+                          <label className="space-y-0.5 text-[9px] uppercase text-muted-foreground">
+                            Fit
+                            <select
+                              className="h-7 w-full rounded border bg-background px-1 text-xs"
+                              value={layer.fit}
+                              onChange={(event) => updateCueLayer(cue.id, layer.id, { fit: event.target.value as "contain" | "cover" })}
+                            >
+                              <option value="contain">Contain</option>
+                              <option value="cover">Cover</option>
                             </select>
                           </label>
                         </div>
-                      );
-                    })()}
-
-                    {/* Duration */}
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Duration</label>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-5"
-                          onClick={() => handleUpdateSlide(slide.id, { duration: Math.max(0.5, slide.duration - 0.5) })}
-                        >
-                          <Minus className="size-3" />
-                        </Button>
-                        <span className="w-12 text-center text-xs font-mono tabular-nums">
-                          {slide.duration.toFixed(1)}s
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-5"
-                          onClick={() => handleUpdateSlide(slide.id, { duration: Math.min(5.0, slide.duration + 0.5) })}
-                        >
-                          <Plus className="size-3" />
-                        </Button>
-                        <input
-                          type="range"
-                          min={0.5}
-                          max={5.0}
-                          step={0.5}
-                          value={slide.duration}
-                          onChange={(e) => handleUpdateSlide(slide.id, { duration: parseFloat(e.target.value) })}
-                          className="w-24 h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
-                        />
                       </div>
-                    </div>
+                    );
+                  })}
+                </div>
 
-                    {/* Animation toggle */}
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Animation</label>
-                      <div className="flex gap-1">
-                        <Button
-                          variant={slide.animation === "static" ? "default" : "outline"}
-                          size="sm"
-                          className="h-6 text-xs px-2"
-                          onClick={() => handleUpdateSlide(slide.id, { animation: "static" })}
-                        >
-                          Static
-                        </Button>
-                        <Button
-                          variant={slide.animation === "kenburns" ? "default" : "outline"}
-                          size="sm"
-                          className="h-6 text-xs px-2"
-                          onClick={() => handleUpdateSlide(slide.id, { animation: "kenburns" })}
-                        >
-                          Ken Burns
-                        </Button>
-                      </div>
-                    </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-1 border-primary/40 text-primary"
+                  disabled={cue.layers.length >= 20}
+                  onClick={() => addCueLayer(cue.id)}
+                >
+                  <Plus className="size-3.5" />
+                  + image to this moment
+                </Button>
 
-                    {/* Ken Burns direction */}
-                    {slide.animation === "kenburns" && (
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Direction</label>
-                        <div className="relative">
-                          <select
-                            value={slide.kenBurnsDirection ?? "zoom-in"}
-                            onChange={(e) => handleUpdateSlide(slide.id, { kenBurnsDirection: e.target.value as InterstitialSlide["kenBurnsDirection"] })}
-                            className="h-6 text-xs pl-2 pr-6 rounded border bg-background text-foreground appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
-                          >
-                            <option value="zoom-in">Zoom In</option>
-                            <option value="zoom-out">Zoom Out</option>
-                            <option value="pan-left">Pan Left</option>
-                            <option value="pan-right">Pan Right</option>
-                          </select>
-                          <ChevronDown className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <div className="flex items-center gap-2 border-t pt-3">
+                  <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Duration</label>
+                  <Button variant="ghost" size="icon" className="size-5"
+                    onClick={() => handleUpdateSlide(slide.id, { duration: Math.max(0.5, slide.duration - 0.5) })}>
+                    <Minus className="size-3" />
+                  </Button>
+                  <span className="w-12 text-center text-xs font-mono tabular-nums">{slide.duration.toFixed(1)}s</span>
+                  <Button variant="ghost" size="icon" className="size-5"
+                    onClick={() => handleUpdateSlide(slide.id, { duration: Math.min(5.0, slide.duration + 0.5) })}>
+                    <Plus className="size-3" />
+                  </Button>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={5.0}
+                    step={0.1}
+                    value={slide.duration}
+                    onChange={(event) => handleUpdateSlide(slide.id, { duration: Number(event.target.value) })}
+                    className="h-1.5 min-w-0 flex-1 appearance-none rounded-lg bg-secondary accent-primary"
+                  />
                 </div>
               </div>
             );
@@ -4336,6 +4598,12 @@ export function TimelineEditor({
       </Dialog>
 
       {/* D2: AI segment generation — on success, assign the new clip to the phrase */}
+      <AttentionAssetPickerDialog
+        open={attentionAssetTarget !== null}
+        onOpenChange={(open) => { if (!open) setAttentionAssetTarget(null); }}
+        onSelect={selectAttentionAsset}
+      />
+
       <GenerateAiSegmentDialog
         open={aiGenOpen}
         onOpenChange={setAiGenOpen}
