@@ -147,7 +147,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       </div>
 
       <div
-        className="hidden min-w-0 flex-1 items-center justify-center min-[1100px]:flex"
+        className="absolute left-1/2 hidden w-full max-w-lg -translate-x-1/2 items-center justify-center min-[1100px]:flex min-[1280px]:max-w-xl min-[1500px]:max-w-2xl"
         aria-label="Pipeline progress"
         data-testid="pipeline-progress"
       >
@@ -201,7 +201,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       </div>
       </div>
 
-      <div className="flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
+      <div className="ml-auto flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
         {step === 3 && (
           <Button
             variant="ghost"
