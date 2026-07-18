@@ -82,15 +82,12 @@ def distribute_attention_cues(
     zone = template.get("zone", "behind")
     positions = layout_positions(layer_count, size)
     cues = []
-    last_asset = None
     asset_cursor = 0
     for cue_index, start in enumerate(placed):
         cue_layers = []
         for layer_index in range(layer_count):
-            candidates = [asset for asset in assets if asset != last_asset] or assets
-            asset = candidates[asset_cursor % len(candidates)]
+            asset = assets[asset_cursor % len(assets)]
             asset_cursor += 1
-            last_asset = asset
             cue_layers.append({
                 "id": f"cue-{cue_index}-layer-{layer_index}", "assetId": asset,
                 "x": positions[layer_index][0], "y": positions[layer_index][1],

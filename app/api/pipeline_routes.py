@@ -36,6 +36,7 @@ from app.core.rate_limit import limiter
 from app.services.codex_script_provider import DEFAULT_CODEX_MODEL
 from app.services.script_generator import get_script_generator_for_profile
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
+from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.config import get_settings
@@ -3279,6 +3280,15 @@ class AttentionTimelineRequest(BaseModel):
     cues: List[AttentionCue] = Field(default_factory=list, max_length=500)
 
 
+class ApplyAttentionTemplateRequest(BaseModel):
+    templateId: str = Field(min_length=1, max_length=100)
+    assetUrls: List[str] = Field(min_length=1, max_length=100)
+    durationMs: int = Field(gt=0)
+    subtitleBoundariesMs: List[int] = Field(default_factory=list)
+    revision: int = Field(ge=0)
+    mode: Literal["replace", "append"] = "replace"
+
+
 def _validate_preview_key(preview_key: str) -> None:
     if not _re.fullmatch(r"\d+(?:_[A-J])?", preview_key):
         raise HTTPException(status_code=400, detail="Invalid preview key")
@@ -3329,6 +3339,66 @@ async def update_attention_timeline(
             "revision": current_revision + 1,
             "cues": [cue.model_dump(exclude_none=True) for cue in request.cues],
         }
+        timelines[preview_key] = document
+        pipeline["attention_timeline"] = timelines
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+        try:
+            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
+        except Exception:
+            _db_save_pipeline(pipeline_id, pipeline)
+    return document
+
+
+@router.post("/{pipeline_id}/attention-timeline/{preview_key}/apply-template")
+async def apply_attention_template(
+    pipeline_id: str,
+    preview_key: str,
+    request: ApplyAttentionTemplateRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Distribute a system or owned template into a revisioned timeline."""
+    _validate_preview_key(preview_key)
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    resolved = next(
+        (template for template in SYSTEM_TEMPLATES if template.get("id") == request.templateId),
+        None,
+    )
+    if resolved is None:
+        row = get_repository().get_attention_template(request.templateId)
+        if not row:
+            raise HTTPException(status_code=404, detail="Attention template not found")
+        if row.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=403, detail="Access denied to this attention template")
+        resolved = {
+            **(row.get("config") or {}),
+            "id": row["id"],
+            "name": row["name"],
+        }
+
+    new_cues = distribute_attention_cues(
+        duration_ms=request.durationMs,
+        subtitle_boundaries_ms=request.subtitleBoundariesMs,
+        template=resolved,
+        asset_ids=request.assetUrls,
+    )
+
+    with _get_pipeline_state_lock(pipeline_id):
+        timelines = dict(pipeline.get("attention_timeline") or {})
+        current = timelines.get(preview_key) or {"revision": 0, "cues": []}
+        current_revision = int(current.get("revision", 0))
+        if request.revision != current_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Attention timeline revision conflict", "current": current},
+            )
+        cues = new_cues if request.mode == "replace" else [*current.get("cues", []), *new_cues]
+        document = {"revision": current_revision + 1, "cues": cues}
         timelines[preview_key] = document
         pipeline["attention_timeline"] = timelines
         with _pipelines_lock:
