@@ -294,9 +294,10 @@ interface TimelineEditorProps {
   availableSegments: SegmentOption[];
   onMatchesChange: (matches: MatchPreview[]) => void;
   onVideoTimelineChange?: (timeline: CompositionClip[]) => void;
-  /** Transitions V1: this variant's default transition (null/absent = hard cuts). */
+  /** Transitions V1: this variant's default transition (null/absent = hard cuts).
+   *  The setter lives in step3-preview.tsx's Assembly Settings control, not here —
+   *  this editor only reads it to resolve boundary markers/preview fades. */
   defaultTransition?: TransitionSpec | null;
-  onDefaultTransitionChange?: (spec: TransitionSpec | null) => void;
   profileId?: string;
   pipelineId?: string;
   variantIndex?: number;
@@ -324,7 +325,6 @@ export function TimelineEditor({
   onMatchesChange,
   onVideoTimelineChange,
   defaultTransition = null,
-  onDefaultTransitionChange,
   profileId,
   pipelineId,
   variantIndex,

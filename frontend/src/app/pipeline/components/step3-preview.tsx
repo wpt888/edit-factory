@@ -770,7 +770,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                         defaultTransition={preview.defaultTransition ?? null}
-                        onDefaultTransitionChange={getDefaultTransitionChangeHandler(card.key)}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </CardContent>
@@ -912,7 +911,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                         defaultTransition={preview.defaultTransition ?? null}
-                        onDefaultTransitionChange={getDefaultTransitionChangeHandler(card.key)}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </div>
