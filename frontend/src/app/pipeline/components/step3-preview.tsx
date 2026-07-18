@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -45,6 +46,7 @@ import {
   Info,
   Maximize2,
   Minimize2,
+  LayoutTemplate,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -301,6 +303,21 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:bg-border"
                 data-testid="step3-inspector"
               >
+            <Card className={`order-3 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
+              <CardContent className="space-y-2 min-[1280px]:px-4">
+                <div className="flex items-center gap-2">
+                  <LayoutTemplate className="size-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-medium">Attention images</p>
+                    <p className="text-xs text-muted-foreground">Design reusable size, stack, timing, and subtitle-zone presets.</p>
+                  </div>
+                </div>
+                <Button asChild variant="outline" size="sm" className="w-full border-primary/35 text-primary">
+                  <Link href="/attention-templates">Open template space</Link>
+                </Button>
+              </CardContent>
+            </Card>
+
             {/* Assembly controls affect clip selection, not final-file rendering. */}
             <Card
               className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
