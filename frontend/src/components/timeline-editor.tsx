@@ -4505,7 +4505,7 @@ function BoundaryTransitionMarker({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`absolute top-1/2 z-20 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition hover:scale-125 ${dotClass}`}
+          className={`absolute top-1/2 z-40 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition hover:scale-125 ${dotClass}`}
           style={{ left }}
           title={isOverride
             ? (isCut ? "Cut (override)" : `${override?.kind === "flash_white" ? "Flash white" : "Dip to black"} (override)`)
