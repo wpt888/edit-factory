@@ -1,5 +1,34 @@
 # Engineering Change Log
 
+## 2026-07-18 - Timeline transitions V1: dip to black + flash white
+
+- Added `transitionIn { kind: dip_black | flash_white, durationMs }` to
+  composition clips (frontend type + backend `TimelineEntry`), additive with
+  no migration; per-variant `defaultTransition` resolved client-side before
+  any request.
+- One shared backend validator at every composition ingress (save loop,
+  `composition_overrides`, `composition_override`, `_timeline_from_composition`):
+  bad kind/duration → 422, out-of-range → clamped [150, 600], intro clips
+  stripped; filtergraph args built only from the validated enum + int.
+- Render: fade-out/fade-in halves appended to `extract_segment()`'s `-vf`
+  chain — timeline duration invariant by construction (real-FFmpeg ffprobe
+  test), zero-transition concat `-c copy` fast path untouched; fade specs
+  enter the segment cache key only when present (legacy keys byte-identical,
+  invalidation limited to adjacent segments). Guards: intro clips, sides
+  shorter than 2×duration, interstitial-slide boundaries.
+- Step 3 UI: per-variant "Default transition" + "Duration" selects; boundary
+  dot markers with popover (Cut / Dip to black / Flash white, duration
+  preset, "Use variant default", override state); marker raised to z-40 over
+  the z-30 trim handle after live testing caught click interception.
+- Instant preview: rAF-driven opacity overlay from the TTS-audio master
+  clock (pause/scrub correct, no dual playback); subtitles/attention cues
+  sit above and never fade.
+- Verified: 711 backend tests green (61 transitions), tsc/eslint/build
+  clean, real-render boundary frames (solid black / white, control clean,
+  all 6.000000s), live-app screenshots on pipeline "hugo, test".
+
+See [Timeline transitions V1 — dip to black + flash white](30-timeline-transitions-v1.md).
+
 ## 2026-07-18 - Pipeline toolbar overlap + heading-consistency fix pack (S1)
 
 - Rebuilt `PipelineStepper`'s toolbar as a plain flex row (context | step
