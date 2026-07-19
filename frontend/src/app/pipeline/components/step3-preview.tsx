@@ -52,7 +52,7 @@ import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionKind, TransitionSpec } from "@/types/composition-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
@@ -91,6 +91,7 @@ type Step3Ctx = {
   selectedSourceIdsArray: string[];
   getMatchesChangeHandler: (previewKey: string) => (matches: MatchPreview[]) => void;
   getVideoTimelineChangeHandler: (previewKey: string) => (timeline: CompositionClip[]) => void;
+  getDefaultTransitionChangeHandler: (previewKey: string) => (spec: TransitionSpec | null) => void;
   getInterstitialSlidesChangeHandler: (previewKey: string) => (slides: InterstitialSlide[]) => void;
   attentionTimelines: Record<PreviewKey, AttentionTimeline>;
   getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
@@ -158,6 +159,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
+    getDefaultTransitionChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
@@ -692,6 +694,60 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         );
                       })()}
 
+                      {/* Transitions V1: this variant's default transition, applied to
+                          every body-clip boundary unless a boundary has its own override. */}
+                      {(() => {
+                        const spec = preview.defaultTransition ?? null;
+                        const setSpec = getDefaultTransitionChangeHandler(card.key);
+                        return (
+                          <div className="flex items-center justify-between gap-4 pb-2 border-b">
+                            <div className="flex items-center gap-1">
+                              <Label htmlFor={`default-transition-${card.key}`}>Default transition</Label>
+                              <InlineInfo label="About default transition">
+                                Applied to every cut between clips in this variant, unless a boundary marker on the timeline overrides it.
+                              </InlineInfo>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Select
+                                value={spec?.kind ?? "none"}
+                                onValueChange={(value) => {
+                                  if (value === "none") { setSpec(null); return; }
+                                  const kind = value as TransitionKind;
+                                  setSpec({
+                                    kind,
+                                    durationMs: spec?.kind === kind ? spec.durationMs : kind === "flash_white" ? 200 : 350,
+                                  });
+                                }}
+                              >
+                                <SelectTrigger id={`default-transition-${card.key}`} className="w-36">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">None</SelectItem>
+                                  <SelectItem value="dip_black">Dip to black</SelectItem>
+                                  <SelectItem value="flash_white">Flash white</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              {spec && (
+                                <Select
+                                  value={String(spec.durationMs)}
+                                  onValueChange={(value) => setSpec({ kind: spec.kind, durationMs: Number(value) })}
+                                >
+                                  <SelectTrigger className="w-28" aria-label="Transition duration">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="200">Fast</SelectItem>
+                                    <SelectItem value="350">Normal</SelectItem>
+                                    <SelectItem value="500">Slow</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* Full timeline editor — uses this variant's effective subtitle style */}
                       <TimelineEditor
                         matches={preview.matches}
@@ -711,6 +767,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
+                        defaultTransition={preview.defaultTransition ?? null}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </CardContent>
@@ -764,6 +821,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   onOpenChange={handlePreviewPlayerClose}
                   matches={previews[previewVariant]?.matches ?? []}
                   videoTimeline={previews[previewVariant]?.video_timeline ?? []}
+                  defaultTransition={previews[previewVariant]?.defaultTransition ?? null}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
                   visualVersion={activeCard.visualVersion}
@@ -863,6 +921,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
+                        defaultTransition={preview.defaultTransition ?? null}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </div>

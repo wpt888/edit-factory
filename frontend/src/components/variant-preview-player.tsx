@@ -13,7 +13,8 @@ import { useApiUrl } from "@/hooks/use-api-url";
 import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import { resolveCompositionTransitions } from "@/types/composition-timeline";
 
 type PreviewPipOverlayConfig = {
   image_url: string;
@@ -27,6 +28,8 @@ interface VariantPreviewPlayerProps {
   onOpenChange: (open: boolean) => void;
   matches: MatchPreview[];
   videoTimeline?: CompositionClip[];
+  /** Variant default transition — resolved into concrete transitionIn before posting. */
+  defaultTransition?: TransitionSpec | null;
   pipelineId: string;
   variantIndex: number;
   visualVersion?: string;
@@ -61,6 +64,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   onOpenChange,
   matches,
   videoTimeline = [],
+  defaultTransition,
   pipelineId,
   variantIndex,
   visualVersion,
@@ -105,6 +109,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   useEffect(() => { matchesRef.current = matches; }, [matches]);
   const videoTimelineRef = useRef(videoTimeline);
   useEffect(() => { videoTimelineRef.current = videoTimeline; }, [videoTimeline]);
+  const defaultTransitionRef = useRef(defaultTransition);
+  useEffect(() => { defaultTransitionRef.current = defaultTransition; }, [defaultTransition]);
 
   // Stop progress tracking (SSE + polling fallback) on unmount or close
   const stopPolling = useCallback(() => {
@@ -164,8 +170,10 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
               duration_override: m.duration_override,
               transforms: m.transforms,
             })),
+            // Same resolution as the final render request: expand the variant
+            // default into concrete per-boundary transitionIn (preview/render parity).
             composition_override: videoTimelineRef.current.length > 0
-              ? videoTimelineRef.current
+              ? resolveCompositionTransitions(videoTimelineRef.current, defaultTransitionRef.current)
               : undefined,
             source_video_ids: sourceVideoIds,
             min_segment_duration: minSegmentDuration,

@@ -65,8 +65,15 @@ def make_key(
     transform_filters: list,
     codec_params: list,
     fps: float,
+    fade: Optional[dict] = None,
 ) -> Optional[str]:
-    """Build the cache key, or None if the source can't be stat'ed."""
+    """Build the cache key, or None if the source can't be stat'ed.
+
+    ``fade`` carries the resolved transition ingredients for this slot (P0). It is
+    added to the payload ONLY when present, so segments with no adjacent
+    transition keep byte-identical keys to legacy renders — cache invalidation is
+    then limited to the segments bordering an edited transition boundary.
+    """
     try:
         st = os.stat(source_video_path)
     except OSError:
@@ -84,6 +91,8 @@ def make_key(
         "codec": list(codec_params),
         "fps": fps,
     }
+    if fade:
+        payload["fade"] = fade
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True).encode()
     ).hexdigest()
