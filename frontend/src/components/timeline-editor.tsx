@@ -3575,21 +3575,34 @@ export function TimelineEditor({
                 )),
               },
               // Image tracks Vn..V2 (z-order: higher track composites in front).
-              ...imageTracks.map((track): LaneDef => ({
+              ...imageTracks.map((track, laneIdx): LaneDef => ({
                 label: `V${track.index}`,
                 height: "h-9",
                 attention: true,
                 trackIndex: track.index,
                 action: canInsertSlide ? (
-                  <button
-                    type="button"
-                    onClick={() => handleInsertSlide(selectedBlockIndex ?? -1, track.index)}
-                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
-                    title="Add attention image to this track (drag it on the lane to position)"
-                    aria-label={`Add attention image to ${track.id}`}
-                  >
-                    <Plus className="size-3" />
-                  </button>
+                  <div className="flex items-center gap-0.5">
+                    {laneIdx === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setAddedVideoTracks((n) => n + 1)}
+                        className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
+                        title="Add video track"
+                        aria-label="Add video track"
+                      >
+                        <Layers3 className="size-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleInsertSlide(selectedBlockIndex ?? -1, track.index)}
+                      className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
+                      title="Add attention image to this track (drag it on the lane to position)"
+                      aria-label={`Add attention image to ${track.id}`}
+                    >
+                      <Plus className="size-3" />
+                    </button>
+                  </div>
                 ) : null,
                 content: (
                   <ImageLane
@@ -3711,7 +3724,7 @@ export function TimelineEditor({
                 scrollRef={multiTrackScrollRef}
                 className={displayMode === "full"
                   ? "col-span-3 row-start-4 h-full min-h-0 overflow-auto bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-                  : "-mx-6 min-[1280px]:-mx-4 overflow-x-auto border-y border-white/10 bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"}
+                  : "-mx-6 min-[1280px]:-mx-4 max-h-[45vh] overflow-x-auto overflow-y-auto border-y border-white/10 bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"}
                 containerProps={{
                   tabIndex: 0,
                   "aria-label": "Multi-track timeline",
