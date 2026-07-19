@@ -3017,7 +3017,9 @@ export function TimelineEditor({
               left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
               width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
               objectFit: layer.fit,
-              zIndex: (cue.zone === "front" ? 60 : 10) + layer.zIndex,
+              // Front zone always sits above subtitles (60+); behind-zone cues
+              // stack by track so a higher image track composites in front.
+              zIndex: (cue.zone === "front" ? 60 : 10 + ((cue.track ?? 2) - 2) * 20) + layer.zIndex,
               animationDuration: `${duration}ms`,
               ["--attention-intensity" as string]: layer.animation.intensity,
             }}
