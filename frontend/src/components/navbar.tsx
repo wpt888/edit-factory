@@ -8,6 +8,7 @@ import blipostLogo from "../../public/blipost-logo.png";
 import { cn } from "@/lib/utils";
 import { ProfileSwitcher } from "@/components/profile-switcher";
 import { ProductSwitcher } from "@/components/product-switcher";
+import { WorkspaceBar } from "@/components/workspace-bar";
 import { useProfile } from "@/contexts/profile-context";
 import { useAuth } from "@/components/auth-provider";
 import { apiGet } from "@/lib/api";
@@ -381,19 +382,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="mt-3">
               <ProductSwitcher activeProduct="studio" />
             </div>
-            {/* Desktop picks workspaces from the titlebar tabs; web gets a dropdown here. */}
-            {!DESKTOP_MODE && (
-              <div className="mt-3">
-                <ProfileSwitcher />
-              </div>
-            )}
           </div>
           <div className="flex-1 overflow-y-auto px-3 pt-2">
             <AppNav />
           </div>
           <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
             <CreditBalance />
-            {DESKTOP_MODE && <ProfileSwitcher />}
+            <ProfileSwitcher />
             <div className="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-sidebar-accent/50 p-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
                 {initial}
@@ -421,6 +416,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* content + mobile chrome */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Web-only workspace tabs — desktop gets the same strip inside its Electron titlebar. */}
+        {!DESKTOP_MODE && (
+          <div className="hidden md:block">
+            <WorkspaceBar />
+          </div>
+        )}
         <header className="sticky top-0 z-40 flex flex-col gap-2 border-b border-sidebar-border bg-sidebar px-4 pt-3 pb-2 text-sidebar-foreground md:hidden">
           <div className="flex items-center justify-between">
             <div className="flex min-w-0 items-center gap-3">

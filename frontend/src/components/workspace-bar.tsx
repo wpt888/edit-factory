@@ -14,8 +14,6 @@ import {
   saveWorkspaceOrder,
 } from "@/lib/workspace-session";
 
-const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
-
 interface WorkspaceBarProps {
   titlebar?: boolean;
 }
@@ -25,7 +23,11 @@ interface DropTarget {
   side: "before" | "after";
 }
 
-/** Desktop workspace tabs. One existing profile is one workspace. */
+/**
+ * Workspace tabs. One existing profile is one workspace. Mounted in the
+ * desktop titlebar (Electron) and as a top strip in the web AppShell —
+ * callers gate where it appears.
+ */
 export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -122,8 +124,6 @@ export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
     setDraggedProfileId(null);
     setDropTarget(null);
   };
-
-  if (!DESKTOP_MODE) return null;
 
   return (
     <>
