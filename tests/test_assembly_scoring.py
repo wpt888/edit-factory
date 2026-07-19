@@ -458,3 +458,24 @@ def test_collapse_sums_duration_overrides(service):
         ov = overrides[i].get("duration_override")
         total += ov if ov is not None else (original[i].srt_end - original[i].srt_start)
     assert total == pytest.approx(1.5 + 2.0)
+
+
+# --- Source round-robin ------------------------------------------------------
+
+def test_two_sources_alternate_one_and_one(service):
+    """No keywords/pins → picks must alternate source videos strictly."""
+    segs = [_seg(f"a{i}", "vA", start=i * 10.0, end=i * 10.0 + 10) for i in range(3)]
+    segs += [_seg(f"b{i}", "vB", start=i * 10.0, end=i * 10.0 + 10) for i in range(3)]
+    res = service.match_srt_to_segments(_srt(8), segs, preset="balanced")
+    sources = [m.source_video_id for m in res]
+    assert all(sources[i] != sources[i + 1] for i in range(len(sources) - 1)), sources
+
+
+def test_three_sources_cycle_round_robin(service):
+    segs = []
+    for src in ("vA", "vB", "vC"):
+        segs += [_seg(f"{src}-{i}", src, start=i * 10.0, end=i * 10.0 + 10) for i in range(3)]
+    res = service.match_srt_to_segments(_srt(9), segs, preset="balanced")
+    sources = [m.source_video_id for m in res]
+    for i in range(len(sources) - 3):
+        assert len(set(sources[i:i + 3])) == 3, sources

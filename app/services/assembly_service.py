@@ -106,9 +106,11 @@ class MatchResult:
 
 # --- Timeline transitions V1 (P0) ------------------------------------------
 # The transition "into" a clip (boundary between the previous clip and this one).
-# Absent/None = hard cut. Only these two kinds exist in V1 (no-overlap fades);
-# duration is stored as an int millisecond value, never the UI label.
-TRANSITION_KINDS = frozenset({"dip_black", "flash_white"})
+# Absent/None = hard cut. "dip_black"/"flash_white" are no-overlap fades baked
+# into each segment's -vf chain; "fade" is a true cross dissolve rendered by an
+# xfade merge pass between extraction and concat (see plan_xfade_runs). Duration
+# is stored as an int millisecond value, never the UI label.
+TRANSITION_KINDS = frozenset({"dip_black", "flash_white", "fade"})
 TRANSITION_MS_MIN = 150
 TRANSITION_MS_MAX = 600
 
@@ -228,12 +230,37 @@ def resolve_fade_spec(timeline: List["TimelineEntry"], i: int) -> Optional[dict]
     """
     fade: dict = {}
     this_t = _boundary_transition(timeline, i)
-    if this_t:
+    if this_t and this_t["kind"] != "fade":
         fade["in"] = {"kind": this_t["kind"], "ms": this_t["durationMs"]}
     next_t = _boundary_transition(timeline, i + 1)
-    if next_t:
+    if next_t and next_t["kind"] != "fade":
         fade["out"] = {"kind": next_t["kind"], "ms": next_t["durationMs"]}
     return fade or None
+
+
+def plan_xfade_runs(timeline: List["TimelineEntry"], have: List[bool]) -> List[List[int]]:
+    """Group timeline indices into concat units for the xfade merge pass.
+
+    Cross-dissolve ("fade") boundaries need their two sides merged into one
+    file with an ``xfade`` filter — per-segment ``fade=`` filters can't blend
+    across a concat cut. Returns runs of consecutive indices joined by
+    effective fade boundaries; every other index is its own single-item run.
+    A boundary where either side failed extraction (``have[i]`` False) degrades
+    to a hard cut, matching the existing skip-and-warn behavior.
+    """
+    runs: List[List[int]] = []
+    for i in range(len(timeline)):
+        if not have[i]:
+            continue
+        t = _boundary_transition(timeline, i)
+        if (
+            t and t["kind"] == "fade"
+            and runs and runs[-1][-1] == i - 1
+        ):
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return runs
 
 
 # Colors keyed by the validated transition enum. The dict lookup is the last
@@ -1218,6 +1245,10 @@ class AssemblyService:
 
         # Recency ledger: srt index each segment was last used at (-inf = never).
         last_used: Dict[str, int] = {}
+        # Source-video recency ledger — drives round-robin across source videos:
+        # the least-recently-used source scores highest on the diversity term.
+        last_source_used: Dict[str, int] = {}
+        num_sources = len({s.get("source_video_id") for s in segments_data}) or 1
         _used_single_use_ids: set = set()
 
         # RNG only used by the "shuffle" preset for near-tie scatter.
@@ -1280,6 +1311,7 @@ class AssemblyService:
                     current_product_group = seg_group
                 prev_segment_id = pin_id
                 prev_source_video_id = seg.get("source_video_id")
+                last_source_used[prev_source_video_id] = idx
                 prev_segment_start = seg.get("start_time")
                 prev_segment_end = seg.get("end_time")
                 matches.append(MatchResult(
@@ -1317,6 +1349,7 @@ class AssemblyService:
                     current_product_group = seg_group
                 prev_segment_id = ai_id
                 prev_source_video_id = seg.get("source_video_id")
+                last_source_used[prev_source_video_id] = idx
                 prev_segment_start = seg.get("start_time")
                 prev_segment_end = seg.get("end_time")
                 matches.append(MatchResult(
@@ -1396,7 +1429,9 @@ class AssemblyService:
                     prev_source_video_id is not None
                     and seg.get("source_video_id") == prev_source_video_id
                 )
-                diversity = 0.0 if same_src_as_prev else 1.0
+                # Round-robin diversity: least-recently-used source wins.
+                _src_last = last_source_used.get(seg.get("source_video_id"))
+                diversity = 1.0 if _src_last is None else min(1.0, (idx - _src_last) / num_sources)
 
                 overlap = 0.0
                 if (same_src_as_prev and prev_segment_start is not None
@@ -1455,7 +1490,8 @@ class AssemblyService:
                     recency = 1.0 if last is None else min(1.0, (idx - last) / max(2, n))
                     same_src = (prev_source_video_id is not None
                                 and seg.get("source_video_id") == prev_source_video_id)
-                    diversity = 0.0 if same_src else 1.0
+                    _src_last = last_source_used.get(seg.get("source_video_id"))
+                    diversity = 1.0 if _src_last is None else min(1.0, (idx - _src_last) / num_sources)
                     overlap = 1.0 if (same_src and prev_segment_start is not None
                                       and prev_segment_end is not None
                                       and seg.get("start_time", 0.0) < prev_segment_end
@@ -1519,6 +1555,7 @@ class AssemblyService:
             ))
             prev_segment_id = sid
             prev_source_video_id = best_seg.get("source_video_id")
+            last_source_used[prev_source_video_id] = idx
             prev_segment_start = best_seg.get("start_time")
             prev_segment_end = best_seg.get("end_time")
 
@@ -2271,6 +2308,17 @@ class AssemblyService:
         # F2: per-segment cache hit/miss counters (logged after extraction)
         _cache_stats = {"hit": 0, "miss": 0}
 
+        # Preview mode: dedicated semaphore + shorter timeouts + lighter codec.
+        # Hoisted out of extract_segment so the xfade merge pass reuses them.
+        _slot_fn = acquire_preview_prep_slot if _preview_mode else acquire_prep_slot
+        _extract_timeout = 60 if _preview_mode else 120
+        _main_timeout = 120 if _preview_mode else 600
+        _codec_params = (
+            get_prep_codec_params(preset="ultrafast", crf=28, include_audio=False)
+            if _preview_mode
+            else get_prep_codec_params(include_audio=False)
+        )
+
         async def extract_segment(i: int, entry: TimelineEntry):
             segment_file = temp_dir / f"segment_{i:03d}.mp4"
 
@@ -2319,16 +2367,6 @@ class AssemblyService:
 
             segment_raw = None  # VID-14: track for cleanup
             try:
-                # Preview mode: dedicated semaphore + shorter timeouts + lighter codec
-                _slot_fn = acquire_preview_prep_slot if _preview_mode else acquire_prep_slot
-                _extract_timeout = 60 if _preview_mode else 120
-                _main_timeout = 120 if _preview_mode else 600
-                _codec_params = (
-                    get_prep_codec_params(preset="ultrafast", crf=28, include_audio=False)
-                    if _preview_mode
-                    else get_prep_codec_params(include_audio=False)
-                )
-
                 # F2: per-segment cache — identical extractions are reused across
                 # renders, so an iterative edit only re-extracts what it changed.
                 cache_key = segment_cache.make_key(
@@ -2457,9 +2495,65 @@ class AssemblyService:
                             except Exception as e:
                                 logger.warning(f"PiP overlay failed for segment {i} (segment_id={seg_id}): {e}")
 
-        # Collect successful segments in order (preserves original timeline ordering)
-        segment_files = [f for i, f in enumerate(results) if f is not None]
-        failed_count = len(results) - len(segment_files)
+        # Cross-dissolve merge pass: runs of segments joined by "fade" boundaries
+        # are combined with tpad+xfade into one file each. The outgoing clip's
+        # last frame is frozen (tpad clone) for the dissolve window, so the
+        # merged duration is exactly the sum of the slot durations — audio sync
+        # is preserved by construction, same as the V1 no-overlap family.
+        # ponytail: merge outputs are not cached — segments still are, and a
+        # merge re-encode is one short ffmpeg pass per edited boundary run.
+        async def _merge_xfade_run(run: List[int], out_file: Path) -> bool:
+            filter_parts: List[str] = []
+            current = "[0:v]"
+            acc = timeline[run[0]].timeline_duration
+            for j in range(1, len(run)):
+                idx = run[j]
+                d = _boundary_transition(timeline, idx)["durationMs"] / 1000.0
+                filter_parts.append(
+                    f"{current}tpad=stop_mode=clone:stop_duration={d:.3f}[p{j}]"
+                )
+                out_label = "[vout]" if j == len(run) - 1 else f"[x{j}]"
+                filter_parts.append(
+                    f"[p{j}][{j}:v]xfade=transition=fade:duration={d:.3f}:offset={acc:.3f}{out_label}"
+                )
+                current = out_label
+                acc += timeline[idx].timeline_duration
+            cmd = ["ffmpeg", "-y", "-threads", "4"]
+            for idx in run:
+                cmd.extend(["-i", str(results[idx])])
+            cmd.extend([
+                "-filter_complex", ";".join(filter_parts),
+                "-map", "[vout]",
+                *_codec_params,
+                "-r", str(TARGET_FPS),
+                "-fps_mode", "cfr",
+                "-video_track_timescale", "15360",
+                "-force_key_frames", "expr:eq(n,0)",
+                "-an", "-pix_fmt", "yuv420p",
+                str(out_file),
+            ])
+            async with await _slot_fn():
+                result = await asyncio.to_thread(
+                    safe_ffmpeg_run, cmd, _main_timeout, "xfade merge"
+                )
+            return result.returncode == 0 and out_file.exists()
+
+        have = [f is not None for f in results]
+        xfade_runs = plan_xfade_runs(timeline, have)
+        segment_files: List[Path] = []
+        for k, run in enumerate(xfade_runs):
+            if len(run) == 1:
+                segment_files.append(results[run[0]])
+                continue
+            merged = temp_dir / f"xfade_run_{k:03d}.mp4"
+            if await _merge_xfade_run(run, merged):
+                segment_files.append(merged)
+                logger.info(f"Cross dissolve: merged segments {run} into {merged.name}")
+            else:
+                # Graceful degradation: fall back to hard cuts for this run
+                logger.warning(f"xfade merge failed for run {run} — falling back to hard cuts")
+                segment_files.extend(results[idx] for idx in run)
+        failed_count = len(results) - sum(have)
 
         if failed_count == len(results):
             raise RuntimeError(f"All {len(results)} segments failed to extract — cannot assemble video")
@@ -3412,13 +3506,23 @@ class AssemblyService:
         _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash, "karaoke": bool((subtitle_settings or {}).get("karaoke", False))}
 
         srt_content = ""
-        if reuse_srt_content:
+        # Karaoke guard (mirrors assemble_and_render): the Step-2 SRT is generated
+        # WITHOUT {\k} tags, so reusing it when karaoke is requested would silently
+        # drop the per-word highlight from the burned preview subtitles.
+        _want_karaoke = bool((subtitle_settings or {}).get("karaoke", False))
+        _reused_has_karaoke = bool(reuse_srt_content) and "{\\k" in reuse_srt_content
+        if reuse_srt_content and (not _want_karaoke or _reused_has_karaoke):
             # SRT already available from Step 2 tts_previews — use directly
             srt_content = reuse_srt_content
             logger.info("Preview Step 2/4: Reusing SRT content from Step 2 tts_previews")
-            # Populate SRT cache so future calls (render, etc.) also hit cache
-            srt_cache_store(_srt_cache_key, srt_content)
+            # Populate SRT cache so future calls (render, etc.) also hit cache —
+            # but only when tag presence matches the key's karaoke flag, otherwise
+            # a tag-less SRT stored under karaoke=True poisons the render's lookup.
+            if _reused_has_karaoke == _want_karaoke:
+                srt_cache_store(_srt_cache_key, srt_content)
         else:
+            if reuse_srt_content and _want_karaoke and not _reused_has_karaoke:
+                logger.info("Preview Step 2/4: Step-2 SRT lacks karaoke tags — regenerating for karaoke captions")
             cached_srt = srt_cache_lookup(_srt_cache_key)
             if cached_srt:
                 srt_content = cached_srt
