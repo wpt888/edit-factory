@@ -168,6 +168,34 @@ export function SubtitleEditor({
   const previewOverlayText = previewText?.trim()
     || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
     || "Sample subtitle text";
+  const karaokePreviewWords = useMemo(
+    () => previewOverlayText
+      .replace(/\{\\k\d+\}/gi, "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean),
+    [previewOverlayText],
+  );
+  const karaokePreviewKey = karaokePreviewWords.join("\u0000");
+  const [karaokePreviewWordIndex, setKaraokePreviewWordIndex] = useState(0);
+
+  // A still FFmpeg frame cannot demonstrate word-level timing. Cycle the
+  // local overlay while Karaoke is enabled; final renders continue to use the
+  // real ElevenLabs timings embedded in the generated ASS file.
+  useEffect(() => {
+    if (!settings.karaoke || karaokePreviewWords.length === 0) {
+      setKaraokePreviewWordIndex(0);
+      return;
+    }
+
+    setKaraokePreviewWordIndex(0);
+    const timer = window.setInterval(() => {
+      setKaraokePreviewWordIndex((current) =>
+        current >= karaokePreviewWords.length - 1 ? 0 : current + 1
+      );
+    }, 600);
+    return () => window.clearInterval(timer);
+  }, [settings.karaoke, karaokePreviewKey, karaokePreviewWords.length]);
 
   // Legacy settings may store a full CSS font stack ("var(--font-x), X, sans-serif");
   // show the first real family name in the picker instead of the raw stack.
@@ -194,6 +222,14 @@ export function SubtitleEditor({
   // expensive FFmpeg preview shortly after the user stops moving.
   useEffect(() => {
     if (!pipelineId) return;
+
+    // Karaoke needs motion, so its preview uses the clean FFmpeg background
+    // plus the animated local overlay below instead of a baked still frame.
+    if (settings.karaoke) {
+      if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
+      setFfmpegLoading(false);
+      return;
+    }
 
     // Include visualVersion in the fingerprint so toggling between Meta
     // versions triggers a new preview render even when settings are identical.
@@ -419,8 +455,27 @@ export function SubtitleEditor({
         onPointerDown={previewInteractive ? (event) => { const preview = event.currentTarget.parentElement; if (preview) { event.currentTarget.setPointerCapture(event.pointerId); updatePositionFromPointer(event.clientY, preview); } } : undefined}
         onPointerMove={previewInteractive ? (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const preview = event.currentTarget.parentElement; if (preview) updatePositionFromPointer(event.clientY, preview); } : undefined}
       >
-        <p className="inline-block px-2 py-1 font-semibold leading-tight" style={textStyle}>
-          {previewOverlayText}
+        <p
+          className="inline-block px-2 py-1 font-semibold leading-tight"
+          style={textStyle}
+          data-testid={settings.karaoke ? "karaoke-preview-overlay" : undefined}
+        >
+          {settings.karaoke && karaokePreviewWords.length > 0
+            ? karaokePreviewWords.map((word, index) => (
+                <span
+                  key={`${index}-${word}`}
+                  data-karaoke-state={index <= karaokePreviewWordIndex ? "highlighted" : "pending"}
+                  style={{
+                    color: index <= karaokePreviewWordIndex
+                      ? settings.highlightColor ?? "#FFFF00"
+                      : settings.textColor,
+                    transition: "color 120ms linear",
+                  }}
+                >
+                  {index > 0 ? " " : ""}{word}
+                </span>
+              ))
+            : previewOverlayText}
         </p>
       </div>
     );
@@ -463,7 +518,20 @@ export function SubtitleEditor({
               : `${previewDimensions.height}px`,
           }}
         >
-          {!ffmpegLoading && ffmpegPreviewUrl ? (
+          {settings.karaoke ? (
+            <>
+              {ffmpegBackgroundUrl ? (
+                <img
+                  src={ffmpegBackgroundUrl}
+                  alt="Subtitle preview"
+                  className="absolute inset-0 w-full h-full object-contain rounded-lg"
+                />
+              ) : (
+                <div className="absolute inset-0 bg-muted" />
+              )}
+              {renderLocalSubtitleOverlay(measuredPreviewDimensions)}
+            </>
+          ) : !ffmpegLoading && ffmpegPreviewUrl ? (
             <img
               src={ffmpegPreviewUrl}
               alt="Subtitle preview"
@@ -519,7 +587,20 @@ export function SubtitleEditor({
               containerType: "size",
             }}
           >
-            {!ffmpegLoading && ffmpegPreviewUrl ? (
+            {settings.karaoke ? (
+              <>
+                {ffmpegBackgroundUrl ? (
+                  <img
+                    src={ffmpegBackgroundUrl}
+                    alt="Subtitle preview"
+                    className="absolute inset-0 w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-muted" />
+                )}
+                {renderLocalSubtitleOverlay({ height: 900 })}
+              </>
+            ) : !ffmpegLoading && ffmpegPreviewUrl ? (
               <img
                 src={ffmpegPreviewUrl}
                 alt="Subtitle preview"
@@ -553,7 +634,12 @@ export function SubtitleEditor({
           Font: {settings.fontSize}px | Outline: {settings.outlineWidth}px | Y: {settings.positionY}%
         </p>
         {pipelineId && (
-          ffmpegPreviewUrl ? (
+          settings.karaoke ? (
+            <Badge variant="outline" className="text-[10px] text-success border-success/30">
+              <CheckCircle2 className="size-3 mr-1" />
+              Animated Karaoke preview
+            </Badge>
+          ) : ffmpegPreviewUrl ? (
             <Badge variant="outline" className="text-[10px] text-success border-success/30">
               <CheckCircle2 className="size-3 mr-1" />
               Accurate preview
@@ -855,9 +941,28 @@ export function SubtitleEditor({
             <SelectItem value="3">Box Background</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+        </div>
 
-        {settings.karaoke && <ColorPicker label="Highlight Color" value={settings.highlightColor ?? "#FFFF00"} onChange={(value) => updateSetting("highlightColor", value)} />}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Karaoke Highlight</Label>
+              <p className="text-xs text-muted-foreground">Words light up in sync with the voice</p>
+            </div>
+            <Switch
+              checked={settings.karaoke ?? false}
+              onCheckedChange={(checked) => updateSetting("karaoke", checked)}
+            />
+          </div>
+
+          {settings.karaoke && (
+            <ColorPicker
+              label="Active Word Color"
+              value={settings.highlightColor ?? "#FFFF00"}
+              onChange={(value) => updateSetting("highlightColor", value)}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

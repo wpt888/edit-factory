@@ -140,6 +140,58 @@ class SubtitleStyleConfig:
 
         return ",".join(style_parts)
 
+    def to_ass_style_line(self, name: str = "Default") -> str:
+        """Render a full positional ASS ``Style:`` line for a real .ass file.
+
+        Used for karaoke burn-in: unlike ``force_style`` on an SRT (where libass
+        ignores embedded ``{\\k}`` tags), a proper ``[V4+ Styles]`` line with
+        distinct Primary/Secondary colours makes the word-level highlight sweep
+        actually render. Secondary is the base ("unsung") colour; Primary is the
+        highlight ("sung") colour.
+
+        ponytail: mirrors the karaoke colour math in to_force_style_string —
+        keep the alpha/glow/shadow rules here in sync with that method.
+        """
+        ass_alpha = int((100 - self.opacity) / 100 * 255)
+
+        def _with_alpha(color: str) -> str:
+            return f"&H{ass_alpha:02X}{color[4:]}" if color.startswith("&H") and len(color) >= 6 else color
+
+        # Karaoke: text starts in Secondary (base) and flips to Primary
+        # (highlight) as each word's \k clock elapses.
+        primary = _with_alpha(self.highlight_color)
+        secondary = _with_alpha(self.primary_color)
+
+        if self.enable_glow and self.glow_blur > 0:
+            outline_w = self.outline_width + self.glow_blur
+            oc = self.outline_color
+            if oc.startswith("&H") and len(oc) >= 10:
+                outline_colour = f"&H80{oc[4:]}"
+            elif oc.startswith("&H"):
+                outline_colour = f"&H80{oc[2:]}"
+            else:
+                outline_colour = "&H80000000"
+        else:
+            outline_w = self.outline_width
+            outline_colour = self.outline_color
+
+        if self.shadow_depth > 0:
+            shadow_v = self.shadow_depth
+            back_colour = self.shadow_color
+        else:
+            # Match the default subtle shadow the force_style path applies.
+            shadow_v = 1
+            back_colour = "&HE0000000"
+
+        bold = -1 if self.bold else 0  # ASS: -1 = true, 0 = false
+        return (
+            f"Style: {name},{self.font_family},{self.font_size},"
+            f"{primary},{secondary},{outline_colour},{back_colour},"
+            f"{bold},0,0,0,100,100,{self.letter_spacing},0,"
+            f"{self.border_style},{outline_w},{shadow_v},{self.alignment},"
+            f"60,60,{self.margin_v},1"
+        )
+
     @staticmethod
     def from_dict(settings: dict, video_width: int, video_height: int) -> 'SubtitleStyleConfig':
         """Create SubtitleStyleConfig from frontend subtitle_settings dict."""
@@ -333,6 +385,96 @@ def _inject_wrap_style_override_in_srt(srt_path: Path) -> None:
             logger.warning(f"Could not write SRT after wrap-style injection: {e}")
 
 
+def _timedelta_to_ass(td) -> str:
+    """Format a timedelta as an ASS timestamp ``H:MM:SS.cc`` (centiseconds)."""
+    total = max(0.0, td.total_seconds())
+    hours = int(total // 3600)
+    minutes = int((total % 3600) // 60)
+    secs = int(total % 60)
+    centis = int(round((total - int(total)) * 100))
+    if centis >= 100:  # rounding can push to 100 → roll into the next second
+        secs += 1
+        centis = 0
+        if secs >= 60:
+            secs = 0
+            minutes += 1
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
+
+
+def build_karaoke_ass_file(
+    srt_path: Path,
+    style_config: 'SubtitleStyleConfig',
+    video_width: int,
+    video_height: int,
+) -> 'Path | None':
+    """Convert a ``{\\k}``-tagged SRT into a real .ass file for karaoke burn-in.
+
+    libass ignores ``{\\k}`` karaoke tags embedded in an SRT fed through
+    FFmpeg's ``subtitles`` filter — the word-level highlight only sweeps from a
+    proper ``[V4+ Styles]`` karaoke Style in an actual .ass file (verified with
+    frame-by-frame FFmpeg tests). This reads the karaoke SRT the pipeline
+    already produced (``generate_srt_from_timestamps(..., karaoke=True)``) and
+    re-emits it as an .ass alongside the SRT.
+
+    Returns the .ass Path, or ``None`` if the SRT has no ``{\\k}`` tags or can't
+    be parsed — in which case the caller falls back to the static SRT burn.
+    """
+    try:
+        content = srt_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        content = srt_path.read_text(encoding="latin-1")
+    except Exception as e:
+        logger.warning(f"Karaoke ASS: could not read SRT ({e}) — static fallback")
+        return None
+
+    if "{\\k" not in content:
+        # No per-word timing tags present — nothing to sweep.
+        return None
+
+    try:
+        subs = list(srt.parse(content))
+    except Exception as e:
+        logger.warning(f"Karaoke ASS: SRT parse failed ({e}) — static fallback")
+        return None
+    if not subs:
+        return None
+
+    events = []
+    for sub in subs:
+        # ASS uses \N for hard line breaks; collapse any SRT newlines.
+        text = sub.content.replace("\r\n", "\n").replace("\n", "\\N")
+        events.append(
+            f"Dialogue: 0,{_timedelta_to_ass(sub.start)},{_timedelta_to_ass(sub.end)},"
+            f"Default,,0,0,0,,{text}"
+        )
+
+    ass_content = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {video_width}\n"
+        f"PlayResY: {video_height}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding\n"
+        f"{style_config.to_ass_style_line('Default')}\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        + "\n".join(events) + "\n"
+    )
+
+    ass_path = srt_path.with_suffix(".ass")
+    try:
+        ass_path.write_text(ass_content, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Karaoke ASS: could not write .ass ({e}) — static fallback")
+        return None
+    return ass_path
+
+
 def build_subtitle_filter(
     srt_path: Path,
     subtitle_settings: dict,
@@ -374,8 +516,31 @@ def build_subtitle_filter(
     )
 
     from app.services.font_manager import prepare_render_fonts
+    from app.services.video_processor import escape_srt_path_for_ffmpeg
     effective_family, fonts_dir, _warning = prepare_render_fonts(style_config.font_family)
     style_config.font_family = effective_family
+
+    # Karaoke (word-level highlight) MUST burn via a real .ass file — libass
+    # silently ignores {\k} tags embedded in an SRT via the `subtitles` filter,
+    # rendering the whole line static (verified with frame-by-frame tests). When
+    # karaoke is on and the SRT carries {\k} tags, emit an `ass=` filter built
+    # from the same style config; otherwise fall through to the static path.
+    if style_config.karaoke:
+        ass_path = build_karaoke_ass_file(srt_path, style_config, video_width, video_height)
+        if ass_path is not None:
+            ass_escaped = escape_srt_path_for_ffmpeg(ass_path)
+            fontsdir_clause = (
+                f":fontsdir='{escape_srt_path_for_ffmpeg(fonts_dir)}'" if fonts_dir else ""
+            )
+            filter_str = (
+                f"ass='{ass_escaped}'"
+                f"{fontsdir_clause}"
+                f":original_size={video_width}x{video_height}"
+            )
+            logger.info(f"Karaoke captions: burning word-highlight via ASS ({ass_path.name})")
+            return filter_str
+        logger.warning("Karaoke requested but SRT lacks {\\k} tags — using static style")
+
     force_style = style_config.to_force_style_string()
 
     # DEBUG: Log the complete subtitle style config to diagnose transparency bug
