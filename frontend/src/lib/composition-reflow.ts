@@ -5,9 +5,15 @@ import type { MatchPreview, IntroSegment, SegmentOption } from "@/components/tim
 // so the reflow math can be reused (and unit-reasoned about) without pulling in
 // the ~5000-line editor component. No behavior change.
 
+// Phase C: reflow/fit operate ONLY on magnetic clips (track absent/1). Overlay
+// clips (track >= 2) keep their absolute timeline_start/duration and are passed
+// through untouched, appended after the magnetic sequence in stable order.
+const isMagnetic = (clip: CompositionClip): boolean => (clip.track ?? 1) === 1;
+
 export const reflowComposition = (clips: CompositionClip[]): CompositionClip[] => {
+  const overlays = clips.filter((clip) => !isMagnetic(clip));
   let cursor = 0;
-  return clips.map((clip) => {
+  const magnetic = clips.filter(isMagnetic).map((clip) => {
     const next = {
       ...clip,
       timeline_start: cursor,
@@ -16,16 +22,19 @@ export const reflowComposition = (clips: CompositionClip[]): CompositionClip[] =
     cursor += next.timeline_duration;
     return next;
   });
+  return [...magnetic, ...overlays];
 };
 
 export const fitCompositionToDuration = (
   clips: CompositionClip[],
   duration: number,
 ): CompositionClip[] => {
-  if (clips.length === 0 || duration <= 0) return reflowComposition(clips);
+  const overlays = clips.filter((clip) => !isMagnetic(clip));
+  const magnetic = clips.filter(isMagnetic);
+  if (magnetic.length === 0 || duration <= 0) return [...reflowComposition(magnetic), ...overlays];
   const fitted: CompositionClip[] = [];
   let cursor = 0;
-  for (const clip of reflowComposition(clips)) {
+  for (const clip of reflowComposition(magnetic)) {
     if (cursor >= duration - 0.001) break;
     const visibleDuration = Math.min(clip.timeline_duration, duration - cursor);
     if (visibleDuration < 0.05 && fitted.length > 0) {
@@ -39,7 +48,7 @@ export const fitCompositionToDuration = (
   if (fitted.length > 0 && cursor < duration - 0.001) {
     fitted[fitted.length - 1].timeline_duration += duration - cursor;
   }
-  return reflowComposition(fitted);
+  return [...reflowComposition(fitted), ...overlays];
 };
 
 export const buildLegacyComposition = (
