@@ -2675,6 +2675,8 @@ class AssemblyService:
         voice_volume: float = 1.0,
         audio_fade_in: float = 0.0,
         audio_fade_out: float = 0.0,
+        # Background music (A2): dict with assetUrl/assetId + volume/ducking/fades.
+        music: Optional[dict] = None,
         shadow_depth: int = 0,
         enable_glow: bool = False,
         glow_blur: int = 0,
@@ -3219,6 +3221,17 @@ class AssemblyService:
             if subtitle_style_override:
                 subtitle_settings.update(subtitle_style_override)
 
+            # Resolve the music asset (URL or local path) to a local file. Reuses
+            # overlay_renderer's content-agnostic downloader; failure = no music.
+            music_local_path = None
+            if music and (music.get("assetUrl") or music.get("assetId")):
+                from app.services.video_effects.overlay_renderer import _download_image
+                _music_source = str(music.get("assetUrl") or music.get("assetId"))
+                if not _music_source.startswith("pending:"):
+                    music_local_path = await _download_image(_music_source, str(temp_dir))
+                    if not music_local_path:
+                        logger.warning("Background music asset could not be resolved: %s", _music_source)
+
             await _render_with_preset(
                 video_path=assembled_video_path,
                 audio_path=audio_path,
@@ -3237,6 +3250,12 @@ class AssemblyService:
                 voice_volume=voice_volume,
                 audio_fade_in=audio_fade_in,
                 audio_fade_out=audio_fade_out,
+                music_path=music_local_path,
+                music_volume=float((music or {}).get("volume", 0.3)),
+                music_ducking=bool((music or {}).get("ducking", True)),
+                music_fade_in=float((music or {}).get("fadeInMs", 0) or 0) / 1000.0,
+                music_fade_out=float((music or {}).get("fadeOutMs", 0) or 0) / 1000.0,
+                music_loop=bool((music or {}).get("loop", True)),
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
                 # Real encode progress fills the 85%->99% band (replaces the
@@ -3357,6 +3376,7 @@ class AssemblyService:
         voice_volume: float = 1.0,
         audio_fade_in: float = 0.0,
         audio_fade_out: float = 0.0,
+        music: Optional[dict] = None,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
     ) -> Path:
@@ -3419,6 +3439,7 @@ class AssemblyService:
             voice_volume=voice_volume,
             audio_fade_in=audio_fade_in,
             audio_fade_out=audio_fade_out,
+            music=music,
             # Pass through subtitle style params to match final render output
             shadow_depth=_ss.get("shadowDepth", 0),
             enable_glow=_ss.get("enableGlow", False),
