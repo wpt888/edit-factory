@@ -79,6 +79,7 @@ import {
   rollCompositionBoundary as rollCompositionBoundaryPure,
 } from "@/lib/composition-reflow";
 import { VideoLane } from "@/components/timeline/lanes/video-lane";
+import { ImageLane } from "@/components/timeline/lanes/image-lane";
 
 // Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
 const compactPreviewFrameStyle: React.CSSProperties = {
@@ -500,7 +501,7 @@ export function TimelineEditor({
     });
   }, [attentionAssetTarget, updateCueLayer]);
 
-  const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize") => {
+  const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize" | "resize-start") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     event.preventDefault();
     event.stopPropagation();
@@ -521,6 +522,12 @@ export function TimelineEditor({
       if (edge === "resize") {
         const end = snap(originalStart + originalDuration + deltaMs, moveEvent.altKey);
         updateCueTiming(cue.id, originalStart, end - originalStart);
+      } else if (edge === "resize-start") {
+        // Left-edge trim: move the start, keep the right edge (start+duration)
+        // fixed; never let the clip shrink below 100ms.
+        const rightEdge = originalStart + originalDuration;
+        const start = Math.min(snap(originalStart + deltaMs, moveEvent.altKey), rightEdge - 100);
+        updateCueTiming(cue.id, start, rightEdge - start);
       } else {
         const start = snap(originalStart + deltaMs, moveEvent.altKey);
         updateCueTiming(cue.id, start, originalDuration);
@@ -3565,35 +3572,19 @@ export function TimelineEditor({
                   </button>
                 ) : null,
                 content: (
-                  <>
-                    {attentionCues.length === 0 && (
-                      <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/60">
-                        No attention images — use the + on this lane to add one, then drag to position
-                      </div>
-                    )}
-                    {attentionCues.map(cue => (
-                      <button
-                        type="button"
-                        key={cue.id}
-                        data-timeline-block
-                        className="absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded bg-primary/70 px-1 text-left text-primary-foreground active:cursor-grabbing"
-                        style={{ left: pct(cue.startMs / 1000), width: widthPct(cue.durationMs / 1000) }}
-                        onPointerDown={(event) => beginCueTimingDrag(event, cue, "move")}
-                        onClick={() => {
-                          setSelectedSlideId(cue.id);
-                          setSelectedClipId(null);
-                          setSelectedBlockIndex(null);
-                        }}
-                        title="Drag to move. Hold Alt to disable subtitle snapping."
-                      >
-                        {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
-                        <span
-                          className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-black/20"
-                          onPointerDown={(event) => beginCueTimingDrag(event, cue, "resize")}
-                        />
-                      </button>
-                    ))}
-                  </>
+                  <ImageLane
+                    cues={attentionCues}
+                    trackIndex={2}
+                    pct={pct}
+                    widthPct={widthPct}
+                    onBeginTimingDrag={beginCueTimingDrag}
+                    onSelectCue={(cueId) => {
+                      setSelectedSlideId(cueId);
+                      setSelectedClipId(null);
+                      setSelectedBlockIndex(null);
+                    }}
+                    showEmptyHint
+                  />
                 ),
               },
               {
