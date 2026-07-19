@@ -254,7 +254,18 @@ function Wordmark({ className }: { className?: string }) {
 
 const SIDEBAR_STORAGE_KEY = "blipost.sidebar.collapsed";
 
+// Runtime Electron detection (same pattern as desktop-titlebar.tsx). The
+// build-time flag alone is not enough: the desktop standalone build can be
+// opened in a plain browser (localhost:3947), where the Electron titlebar —
+// and its workspace tabs — don't exist.
+const subscribeRuntime = () => () => {};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const isElectron = React.useSyncExternalStore(
+    subscribeRuntime,
+    () => DESKTOP_MODE && Boolean(window.editFactory?.isDesktop),
+    () => DESKTOP_MODE,
+  );
   const { currentProfile } = useProfile();
   const { user, signOut } = useAuth();
   const pathname = usePathname();
@@ -416,8 +427,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* content + mobile chrome */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Web-only workspace tabs — desktop gets the same strip inside its Electron titlebar. */}
-        {!DESKTOP_MODE && (
+        {/* Workspace tabs — hidden only when the Electron titlebar already shows them. */}
+        {!isElectron && (
           <div className="hidden md:block">
             <WorkspaceBar />
           </div>
