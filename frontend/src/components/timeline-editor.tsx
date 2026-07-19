@@ -80,6 +80,7 @@ import {
 } from "@/lib/composition-reflow";
 import { VideoLane } from "@/components/timeline/lanes/video-lane";
 import { ImageLane } from "@/components/timeline/lanes/image-lane";
+import { deriveTracks, cuesOnTrack } from "@/components/timeline/timeline-tracks";
 
 // Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
 const compactPreviewFrameStyle: React.CSSProperties = {
@@ -277,6 +278,7 @@ export interface InterstitialSlide {
   animation: "static" | "kenburns"; // Ken Burns or static (default "kenburns")
   kenBurnsDirection?: "zoom-in" | "zoom-out" | "pan-left" | "pan-right"; // Default "zoom-in"
   productTitle?: string;         // For display in timeline
+  track?: number;                // Attention timeline track (2 = V2, ...); legacy path ignores it
 }
 
 type AttentionAssetTarget = { kind: "layer"; cueId: string; layerId: string };
@@ -360,6 +362,7 @@ export function TimelineEditor({
         animation: preset === "static" ? "static" : "kenburns",
         kenBurnsDirection: preset === "zoom" ? "zoom-in" : undefined,
         productTitle: "Attention overlay",
+        track: cue.track,
       };
     });
   }, [attentionCues, attentionTimeline, legacyInterstitialSlides, cueBoundaryIndex]);
@@ -400,6 +403,7 @@ export function TimelineEditor({
           sfxVolumeDb: old?.sfxVolumeDb ?? 0,
           templateId: old?.templateId,
           zone: old?.zone ?? "behind",
+          track: slide.track ?? old?.track ?? 2,
         };
       });
       onAttentionTimelineChange({ ...attentionTimeline, cues });
@@ -680,6 +684,10 @@ export function TimelineEditor({
   const timelineSeekRafRef = useRef<number | null>(null);
   const pendingTimelineSeekRef = useRef<number | null>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
+  // ponytail: session-only; persist count if users ask. Extra image tracks the
+  // user added this session via "Add video track". deriveTracks also grows the
+  // count to fit any cue whose track exceeds the current max.
+  const [addedVideoTracks, setAddedVideoTracks] = useState(0);
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(TIMELINE_MIN_WIDTH + TIMELINE_LABEL_WIDTH);
 
   useEffect(() => {
@@ -2770,7 +2778,7 @@ export function TimelineEditor({
 
   // --- Interstitial slide handlers ---
 
-  const handleInsertSlide = (afterMatchIndex: number) => {
+  const handleInsertSlide = (afterMatchIndex: number, track?: number) => {
     if (!onInterstitialSlidesChange && !onAttentionTimelineChange) return;
     const newSlide: InterstitialSlide = {
       id: crypto.randomUUID(),
@@ -2780,6 +2788,7 @@ export function TimelineEditor({
       animation: "kenburns",
       kenBurnsDirection: "zoom-in",
       productTitle: "",
+      track,
     };
     const updated = [...interstitialSlides, newSlide];
     emitSlides(updated);
@@ -3512,10 +3521,81 @@ export function TimelineEditor({
             ) : null;
 
             const canInsertSlide = !!(onInterstitialSlidesChange || onAttentionTimelineChange);
-            const lanes: { label: string; height: string; attention?: boolean; action?: React.ReactNode; content: React.ReactNode; dragProps?: React.HTMLAttributes<HTMLDivElement> }[] = [
+            const tracks = deriveTracks(attentionCues, addedVideoTracks);
+            // Image tracks Vn..V2, top-to-bottom (V1 is the magnetic video lane).
+            const imageTracks = tracks.video.filter((track) => !track.magnetic);
+            type LaneDef = {
+              label: string;
+              height: string;
+              attention?: boolean;
+              trackIndex?: number;
+              stub?: boolean;
+              action?: React.ReactNode;
+              meta?: React.ReactNode;
+              content: React.ReactNode;
+              dragProps?: React.HTMLAttributes<HTMLDivElement>;
+            };
+            const lanes: LaneDef[] = [
+              // Subtitles — burned in above everything, always the top lane.
               {
-                label: "Video",
+                label: "Subtitles",
+                height: "h-8",
+                content: matches.map((match) => (
+                  <button
+                    type="button"
+                    key={match.srt_index}
+                    data-timeline-block
+                    className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1 text-left leading-tight hover:bg-foreground/10"
+                    style={{ left: pct(match.srt_start), width: widthPct(Math.max(0.05, match.srt_end - match.srt_start)) }}
+                    title={match.srt_text}
+                    onClick={() => { if (isPreviewActive) seekPreviewToTime(match.srt_start); }}
+                  >
+                    {match.srt_text}
+                  </button>
+                )),
+              },
+              // Image tracks Vn..V2 (z-order: higher track composites in front).
+              ...imageTracks.map((track): LaneDef => ({
+                label: `V${track.index}`,
+                height: "h-9",
+                attention: true,
+                trackIndex: track.index,
+                action: canInsertSlide ? (
+                  <button
+                    type="button"
+                    onClick={() => handleInsertSlide(selectedBlockIndex ?? -1, track.index)}
+                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
+                    title="Add attention image to this track (drag it on the lane to position)"
+                    aria-label={`Add attention image to ${track.id}`}
+                  >
+                    <Plus className="size-3" />
+                  </button>
+                ) : null,
+                content: (
+                  <ImageLane
+                    cues={cuesOnTrack(attentionCues, track.index)}
+                    trackIndex={track.index}
+                    pct={pct}
+                    widthPct={widthPct}
+                    onBeginTimingDrag={beginCueTimingDrag}
+                    onSelectCue={(cueId) => {
+                      setSelectedSlideId(cueId);
+                      setSelectedClipId(null);
+                      setSelectedBlockIndex(null);
+                    }}
+                    showEmptyHint={track.index === 2}
+                  />
+                ),
+              })),
+              // V1 — the magnetic main-video lane.
+              {
+                label: "V1",
                 height: "h-16",
+                meta: compositionIntroDuration > 0 ? (
+                  <span className="font-mono text-[8px] text-violet-300">
+                    intro {compositionIntroDuration.toFixed(1)}s
+                  </span>
+                ) : undefined,
                 dragProps: {
                   onDragOver: updateCompositionDropTarget,
                   onDrop: dropCompositionClipAtTarget,
@@ -3556,56 +3636,9 @@ export function TimelineEditor({
                   />
                 ),
               },
+              // A1 — the TTS voiceover waveform.
               {
-                label: "Attention images",
-                height: "h-9",
-                attention: true,
-                action: canInsertSlide ? (
-                  <button
-                    type="button"
-                    onClick={() => handleInsertSlide(selectedBlockIndex ?? -1)}
-                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
-                    title="Add attention image (drag it on the lane to position)"
-                    aria-label="Add attention image"
-                  >
-                    <Plus className="size-3" />
-                  </button>
-                ) : null,
-                content: (
-                  <ImageLane
-                    cues={attentionCues}
-                    trackIndex={2}
-                    pct={pct}
-                    widthPct={widthPct}
-                    onBeginTimingDrag={beginCueTimingDrag}
-                    onSelectCue={(cueId) => {
-                      setSelectedSlideId(cueId);
-                      setSelectedClipId(null);
-                      setSelectedBlockIndex(null);
-                    }}
-                    showEmptyHint
-                  />
-                ),
-              },
-              {
-                label: "Subtitles",
-                height: "h-8",
-                content: matches.map((match) => (
-                  <button
-                    type="button"
-                    key={match.srt_index}
-                    data-timeline-block
-                    className="absolute inset-y-1 overflow-hidden rounded border border-foreground/15 bg-foreground/5 px-1 text-left leading-tight hover:bg-foreground/10"
-                    style={{ left: pct(match.srt_start), width: widthPct(Math.max(0.05, match.srt_end - match.srt_start)) }}
-                    title={match.srt_text}
-                    onClick={() => { if (isPreviewActive) seekPreviewToTime(match.srt_start); }}
-                  >
-                    {match.srt_text}
-                  </button>
-                )),
-              },
-              {
-                label: "Voiceover",
+                label: "A1 Voiceover",
                 height: "h-10",
                 content: (
                   <>
@@ -3623,6 +3656,17 @@ export function TimelineEditor({
                   </>
                 ),
               },
+              // A2 — music track, wired up in a later phase.
+              {
+                label: "A2 Music",
+                height: "h-8",
+                stub: true,
+                content: (
+                  <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/40">
+                    Music — coming soon
+                  </div>
+                ),
+              },
               ...(sfxCues.length > 0 ? [{
                 label: "SFX",
                 height: "h-7",
@@ -3637,14 +3681,10 @@ export function TimelineEditor({
               }] : []),
             ];
 
-            // Lane order = visual stacking order, top lane = topmost layer
-            // (Premiere semantics): Subtitles > Attention images > Video, then
-            // the audio lanes. This matches the preview z-index (subtitles z-50 >
-            // attention z-10+ > video z-0/1) and the backend burn-in order.
-            const laneOrder = ["Subtitles", "Attention images", "Video", "Voiceover", "SFX"];
-            const orderedLanes = [...lanes].sort(
-              (a, b) => laneOrder.indexOf(a.label) - laneOrder.indexOf(b.label)
-            );
+            // Lane order top-to-bottom = z-order (top lane composites in front),
+            // built directly: Subtitles > Vn..V2 (image tracks) > V1 (magnetic
+            // video) > A1 voiceover > A2 music > SFX. Mirrors the preview z-index
+            // and the backend burn-in order.
 
             return (
               <MultiTrackTimeline
@@ -3676,23 +3716,22 @@ export function TimelineEditor({
                   setTimelineZoom(1);
                   if (multiTrackScrollRef.current) multiTrackScrollRef.current.scrollLeft = 0;
                 }}
-                lanes={orderedLanes.map(lane => ({
+                lanes={lanes.map(lane => ({
                   label: lane.label,
                   height: lane.height,
                   action: lane.action,
-                  meta: lane.label === "Video" && compositionIntroDuration > 0 ? (
-                    <span className="font-mono text-[8px] text-violet-300">
-                      intro {compositionIntroDuration.toFixed(1)}s
-                    </span>
-                  ) : undefined,
-                  axisClassName: `bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%] ${isPreviewActive ? "cursor-ew-resize" : ""}`,
-                  axisProps: {
+                  meta: lane.meta,
+                  axisClassName: lane.stub
+                    ? "opacity-60"
+                    : `bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%] ${isPreviewActive ? "cursor-ew-resize" : ""}`,
+                  axisProps: lane.stub ? {} : {
                     title: isPreviewActive ? "Drag to scrub" : undefined,
                     onPointerDown: beginMultiTrackScrub,
                     ...(lane.attention ? { "data-attention-track": "" } : {}),
+                    ...(lane.trackIndex != null ? { "data-track-index": lane.trackIndex } : {}),
                     ...(lane.dragProps ?? {}),
                   },
-                  showEndLine: true,
+                  showEndLine: !lane.stub,
                   content: (
                     <>
                       {lane.content}
