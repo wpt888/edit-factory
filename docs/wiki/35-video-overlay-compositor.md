@@ -109,3 +109,68 @@ overlay without error.
 
 The backend must be **restarted** to pick up the new validation, the assembly
 split, and `apply_overlay_timeline` (dev backend is not auto-reloading).
+
+## Frontend (timeline editor)
+
+The multi-track timeline (`timeline-editor.tsx`) now edits overlay clips end to
+end. Model: `CompositionClip` gains optional `track` + `overlay_box`
+(`composition-timeline.ts`), and `reflowComposition`/`fitCompositionToDuration`
+(`composition-reflow.ts`) reflow **only** magnetic clips (track absent/1),
+passing overlays through with their absolute `timeline_start`.
+
+The editor splits `video_timeline` into two derivations: a magnetic sequence
+(`composition`, what every existing V1 handler indexes) and `overlayClips`
+(track >= 2, never reflowed). The persist path re-joins them; `fit` self-separates
+so overlays always survive a save/undo round-trip.
+
+### Interactions
+
+- **Render** — overlay video clips render on the V2..Vn lanes (`overlay-lane.tsx`,
+  `overlay-clip-{id}`) as sky/cyan blocks with the segment thumbnail, alongside
+  the image cues on the same lane. V1 stays lime.
+- **Drag** — free pointer-drag (not V1's HTML5 drag): move horizontally + change
+  track by dragging vertically onto another image lane; edge handles trim in/out.
+  Snaps to subtitle boundaries + V1 cuts (Alt disables); clamps into the gap
+  around siblings so same-track overlays never overlap; min duration 0.05s.
+- **Inspector** — selecting an overlay opens `overlay-clip-inspector`: track
+  selector (V2..V4), placement presets (full-frame / four 40% corners /
+  center 50%) + x/y/width/height numeric fields, contain/cover toggle, the shared
+  transform panel, and remove.
+
+### Conversions (Premiere-style, both via the persist path — save/undo free)
+
+- **V1 → V2+**: drag a V1 clip block (HTML5 drag) onto a V2+ lane. It keeps its
+  current `timeline_start` as absolute, gains `track` + a full-frame contain
+  `overlay_box`, is forced `kind:"body"` with `transitionIn` stripped; V1 reflows
+  closed. The image lane's `onDrop` reads `compositionDragId`.
+- **V2+ → V1**: drag an overlay onto the V1 lane. Detected via
+  `elementFromPoint` on the `data-magnetic-lane` marker; the existing insertion
+  indicator (`composition-drop-indicator`) previews the boundary, and the drop
+  strips `track`/`overlay_box` and splices the clip into the magnetic sequence.
+
+Unification choice: V1 blocks keep native HTML5 drag; overlay blocks use pointer
+drag. Each drag system owns its own cross-lane target (V1's HTML5 `onDrop` on the
+image lanes; the overlay pointer handler detects the V1 lane by attribute). No
+shared drag layer was needed.
+
+### Preview approach
+
+**Fallback shipped**, not live video. The program monitor is a delicate V1-only
+double-buffer engine; syncing extra seeked `<video>` elements into it risked
+destabilizing playback. Instead `renderOverlayClipBoxes` draws a positioned box
+per overlay — a poster thumbnail when the playhead is inside the clip's window,
+a dashed outline when the clip is merely selected — placed by `overlay_box` and
+z-ordered by track. Full-fidelity motion comes from the server-rendered preview.
+
+### Constraints the UI pre-enforces (to avoid 422s)
+
+Overlay tracks 2..4 only; ≤50 free clips (convert is blocked past the cap); no
+same-track time overlap (drag clamps); box fields kept in `[0,1]` with
+width/height ≥ 0.01; overlays always `kind:"body"` with no transition.
+
+### Tests
+
+`frontend/tests/timeline-video-overlay.spec.ts` (route-mock): overlay renders on
+V2 and not in V1; V1→V2 PUT carries `track` + `overlay_box` while V1 reflows;
+V2→V1 PUT drops `track`/`overlay_box` and splices into the sequence; same-track
+overlap is clamped.

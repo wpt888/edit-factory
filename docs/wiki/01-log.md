@@ -1,5 +1,42 @@
 # Engineering Change Log
 
+## 2026-07-19 - Multi-track timeline Phase C (frontend): overlay clips + conversions
+
+- The timeline editor now edits video overlays. `CompositionClip` gains `track` +
+  `overlay_box`; `reflowComposition`/`fitCompositionToDuration` reflow only
+  magnetic clips (track absent/1) and pass overlays through at their absolute
+  `timeline_start`. The editor splits `video_timeline` into a magnetic sequence
+  (existing V1 handlers) + `overlayClips` (never reflowed); the persist path
+  re-joins them.
+- Overlay video clips render on V2..Vn (`overlay-lane.tsx`, cyan blocks) with
+  free pointer-drag move/track-change/trim: snap to subtitle + V1 boundaries,
+  clamp to no same-track overlap, min 0.05s. Selecting one opens an inspector
+  (track V2..V4, placement presets + x/y/w/h, contain/cover, transforms, remove).
+- Premiere-style conversions via the same save/undo path: drag a V1 block onto a
+  V2+ lane → overlay (keeps timeline_start, full-frame contain box, transition
+  stripped, V1 reflows); drag an overlay onto V1 → strips track/overlay_box and
+  splices into the sequence (reuses the insertion indicator).
+- Preview: fallback positioned boxes (poster thumbnail / dashed outline by
+  `overlay_box`), NOT live video — the V1 double-buffer engine is left untouched;
+  server render gives full fidelity. Spec `timeline-video-overlay.spec.ts`.
+  See wiki 35 (Frontend section).
+
+## 2026-07-19 - Multi-track timeline Phase C: video-on-video overlay compositor
+
+- Composition clips may now carry `track` (1..4) and, for track >= 2, a
+  fractional `overlay_box {x,y,width,height,fit}`. Track 1/absent = the magnetic
+  V1 base (unchanged). Track >= 2 = a free video overlay: absolute
+  `timeline_start`, excluded from cursor reflow + `intro_offset_sec`, no
+  transition, capped at 50, no same-track overlap.
+- `apply_attention_timeline` was generalized into `apply_overlay_timeline`
+  (image AND video items, applied ascending by z). Assembly extracts overlays
+  with the existing per-segment machinery (transforms v2 + segment cache reused,
+  `fade_spec=None`, excluded from xfade + concat) and composites them together
+  with behind-zone attention cues in one z-sorted pass; z = track*1000+index so
+  a V3 video sits above V2. Wired into both full and preview render (540x960).
+- Real ffmpeg: duration drift 0.0s, in-window pixel-mean diff ~51, out-of-window
+  ~0.006; xfade-on-V1 coexists with a video overlay. See wiki 35.
+
 ## 2026-07-19 - Multi-track timeline Phase B: background music (A2) with auto-ducking
 
 - The A2 lane is now live: pick a per-variant background track, it plays under
