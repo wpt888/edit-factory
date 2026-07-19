@@ -1,5 +1,16 @@
 # Engineering Change Log
 
+## 2026-07-19 - Multi-track timeline Phase A: generic tracks + images as clips
+
+- Step 3 timeline lanes are now generic Premiere-style tracks built dynamically:
+  Subtitles > Vn..V2 (image tracks, addable, cues draggable between them with a
+  new left-edge trim) > V1 (magnetic video) > A1 Voiceover > A2 Music (stub) >
+  SFX. Track order = z-order, mirrored in the preview overlay.
+- Attention cues gained one additive `track` field (frontend type + Pydantic
+  model — required server-side or PUTs strip it). Reflow helpers, the V1 lane
+  and the image lane were extracted into pure modules/components; existing
+  timeline specs pass unmodified. Details: page 33.
+
 ## 2026-07-19 - Karaoke highlight: three root-cause fixes + per-word box mode
 
 - Karaoke was invisible everywhere: preview reused tag-less Step-2 SRT,
