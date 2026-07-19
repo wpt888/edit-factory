@@ -268,6 +268,113 @@ def _fade_filter(start: float, end: float, animation: dict) -> str:
     return ("," + ",".join(parts)) if parts else ""
 
 
+async def _attention_cues_to_items(
+    timeline: dict, width: int, height: int, duration: float, tmp_dir: str
+) -> list:
+    """Resolve attention cues into apply_overlay_timeline items (image overlays).
+
+    Downloads each layer image into ``tmp_dir`` and computes its pixel box from
+    the fractional layer coords. ``z`` is the collection order (cue order, then
+    layer order) so the composite stacking is byte-for-byte what the pre-refactor
+    apply_attention_timeline produced.
+    """
+    items = []
+    z = 0
+    for cue in timeline.get("cues", []):
+        for layer in cue.get("layers", []):
+            source = layer.get("assetUrl") or layer.get("assetId")
+            if not source or str(source).startswith("pending:"):
+                continue
+            local = await _download_image(str(source), tmp_dir)
+            if not local:
+                continue
+            start = (float(cue.get("startMs", 0)) + float(layer.get("animation", {}).get("delayMs", 0))) / 1000
+            end = min(duration, (float(cue.get("startMs", 0)) + float(cue.get("durationMs", 0))) / 1000)
+            w = max(1, round(float(layer.get("width", .8)) * width))
+            h = max(1, round(float(layer.get("height", .8)) * height))
+            x = max(0, round(float(layer.get("x", .1)) * width))
+            y = max(0, round(float(layer.get("y", .1)) * height))
+            items.append({
+                "source_path": local, "is_video": False,
+                "start": start, "end": end,
+                "box_px": (x, y, w, h), "fit": layer.get("fit", "contain"),
+                "animation": layer.get("animation", {}), "z": z,
+            })
+            z += 1
+    return items
+
+
+async def apply_overlay_timeline(
+    base_path: Path,
+    items: list,
+    output_path: Path,
+    width: int,
+    height: int,
+    duration: float,
+    keep_audio: bool = False,
+) -> Path:
+    """Composite image and/or video overlay items onto a base video without
+    altering its timestamps.
+
+    Each item is a dict::
+
+        {source_path, is_video, start, end, box_px=(x,y,w,h), fit,
+         animation?, z}
+
+    Items are applied ascending by ``z`` (highest z overlaid last = in front).
+    Image items loop a still and fade alpha; video items are pre-trimmed clips
+    shifted to their absolute ``start`` with setpts. Callers must resolve
+    ``source_path`` to a local file first (see ``_attention_cues_to_items``).
+    The output is trimmed to ``duration`` so looped stills can never extend it.
+    """
+    items = sorted((it for it in items if it.get("source_path")), key=lambda it: it.get("z", 0))
+    if not items:
+        return base_path
+
+    cmd = ["ffmpeg", "-y", "-i", str(base_path)]
+    for it in items:
+        if it.get("is_video"):
+            cmd.extend(["-i", str(it["source_path"])])
+        else:
+            cmd.extend(["-loop", "1", "-i", str(it["source_path"])])
+
+    filters = []
+    previous = "0:v"
+    for index, it in enumerate(items, start=1):
+        start = float(it["start"])
+        end = min(duration, float(it["end"]))
+        if end <= start:
+            continue
+        x, y, w, h = it["box_px"]
+        w = max(1, int(round(w)))
+        h = max(1, int(round(h)))
+        x = max(0, int(round(x)))
+        y = max(0, int(round(y)))
+        if it.get("fit") == "cover":
+            sizing = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+        else:
+            sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+        fade = "" if it.get("is_video") else _fade_filter(start, end, it.get("animation", {}))
+        filters.append(f"[{index}:v]{sizing},format=rgba,setpts=PTS-STARTPTS+{start}/TB{fade}[ov{index}]")
+        output = f"vov{index}"
+        filters.append(
+            f"[{previous}][ov{index}]overlay={x}:{y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"
+        )
+        previous = output
+    filters.append(f"[{previous}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")
+    audio_args = ["-map", "0:a?", "-c:a", "copy"] if keep_audio else ["-an"]
+    cmd.extend([
+        "-filter_complex", ";".join(filters), "-map", "[vout]", *audio_args,
+        "-t", str(duration), *get_prep_codec_params(include_audio=False),
+        "-pix_fmt", "yuv420p", str(output_path),
+    ])
+    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "overlay timeline")
+    if result.returncode != 0:
+        logger.warning("Overlay timeline failed: %s", result.stderr[-2000:])
+        return base_path
+    return output_path
+
+
 async def apply_attention_timeline(
     video_path: Path,
     timeline: dict,
@@ -279,67 +386,16 @@ async def apply_attention_timeline(
 ) -> Path:
     """Overlay timeline images without changing the base video's timestamps.
 
-    Layers are enabled only inside their cue window. The resulting stream is
-    explicitly trimmed to the narration/video duration, so looped still-image
-    inputs can never extend or truncate the edit.
+    Thin wrapper over ``apply_overlay_timeline`` (image items only) — layers are
+    enabled inside their cue window and the stream is trimmed to ``duration``.
     """
-    layers = []
-    for cue in timeline.get("cues", []):
-        for layer in cue.get("layers", []):
-            source = layer.get("assetUrl") or layer.get("assetId")
-            if source and not str(source).startswith("pending:"):
-                layers.append((cue, layer, str(source)))
-    if not layers:
-        return video_path
-
     with tempfile.TemporaryDirectory() as tmp_dir:
-        local_layers = []
-        for cue, layer, source in layers:
-            local = await _download_image(source, tmp_dir)
-            if local:
-                local_layers.append((cue, layer, local))
-        if not local_layers:
+        items = await _attention_cues_to_items(timeline, width, height, duration, tmp_dir)
+        if not items:
             return video_path
-
-        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
-        for _cue, _layer, local in local_layers:
-            cmd.extend(["-loop", "1", "-i", local])
-
-        filters = []
-        previous = "0:v"
-        for index, (cue, layer, _local) in enumerate(local_layers, start=1):
-            start = (float(cue.get("startMs", 0)) + float(layer.get("animation", {}).get("delayMs", 0))) / 1000
-            end = min(duration, (float(cue.get("startMs", 0)) + float(cue.get("durationMs", 0))) / 1000)
-            if end <= start:
-                continue
-            w = max(1, round(float(layer.get("width", .8)) * width))
-            h = max(1, round(float(layer.get("height", .8)) * height))
-            x = max(0, round(float(layer.get("x", .1)) * width))
-            y = max(0, round(float(layer.get("y", .1)) * height))
-            fit = layer.get("fit", "contain")
-            if fit == "cover":
-                sizing = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
-            else:
-                sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
-            fade = _fade_filter(start, end, layer.get("animation", {}))
-            filters.append(f"[{index}:v]{sizing},format=rgba,setpts=PTS-STARTPTS+{start}/TB{fade}[att{index}]")
-            output = f"vatt{index}"
-            filters.append(
-                f"[{previous}][att{index}]overlay={x}:{y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"
-            )
-            previous = output
-        filters.append(f"[{previous}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")
-        audio_args = ["-map", "0:a?", "-c:a", "copy"] if keep_audio else ["-an"]
-        cmd.extend([
-            "-filter_complex", ";".join(filters), "-map", "[vout]", *audio_args,
-            "-t", str(duration), *get_prep_codec_params(include_audio=False),
-            "-pix_fmt", "yuv420p", str(output_path),
-        ])
-        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "attention overlay")
-        if result.returncode != 0:
-            logger.warning("Attention overlay failed: %s", result.stderr[-2000:])
-            return video_path
-        return output_path
+        return await apply_overlay_timeline(
+            video_path, items, output_path, width, height, duration, keep_audio
+        )
 
 
 async def mix_attention_sfx(video_path: Path, timeline: dict, output_path: Path) -> Path:
