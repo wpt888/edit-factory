@@ -2485,51 +2485,6 @@ class AssemblyService:
                 f"assembled video will be shorter than expected"
             )
 
-        # Generate and insert interstitial slide clips into segment list
-        # Disabled compatibility implementation: inserting image clips changed
-        # the edit duration and desynchronised narration/subtitles.
-        if False and interstitial_slides:
-            from app.services.video_effects.overlay_renderer import generate_interstitial_clip
-            # Sort slides by afterMatchIndex
-            sorted_slides = sorted(interstitial_slides, key=lambda s: s.get("afterMatchIndex", -1))
-            # Build insertion map: afterMatchIndex -> list of clip paths
-            slide_clips: Dict[int, List[Path]] = {}
-            for slide in sorted_slides:
-                idx = slide.get("afterMatchIndex", -1)
-                slide_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(slide.get('id', 'x')))
-                clip_path = temp_dir / f"interstitial_{slide_id}.mp4"
-                try:
-                    result = await generate_interstitial_clip(
-                        image_url_or_path=slide["imageUrl"],
-                        output_path=clip_path,
-                        duration=slide.get("duration", 2.0),
-                        animation=slide.get("animation", "static"),
-                        ken_burns_direction=slide.get("kenBurnsDirection", "zoom-in"),
-                        # Must match the extracted segments exactly — a 1080x1920
-                        # slide in a 540x960 preview concat corrupts the stream.
-                        width=target_w,
-                        height=target_h,
-                        fps=TARGET_FPS,
-                    )
-                    if result and result.exists():
-                        slide_clips.setdefault(idx, []).append(result)
-                        logger.info(f"Interstitial slide generated at afterMatchIndex={idx}: {clip_path.name}")
-                except Exception as e:
-                    logger.warning(f"Interstitial slide generation failed (afterMatchIndex={idx}): {e}")
-
-            # Rebuild segment_files list with interstitials inserted
-            if slide_clips:
-                new_files: List[Path] = []
-                # Insert slides before first segment (afterMatchIndex == -1)
-                for clip in slide_clips.get(-1, []):
-                    new_files.append(clip)
-                for i, seg_file in enumerate(segment_files):
-                    new_files.append(seg_file)
-                    # Insert slides after segment i
-                    for clip in slide_clips.get(i, []):
-                        new_files.append(clip)
-                segment_files = new_files
-                logger.info(f"Interstitial slides inserted: {len(segment_files)} total clips in concat list")
 
         if interstitial_slides and not attention_timeline:
             boundaries = [0.0]

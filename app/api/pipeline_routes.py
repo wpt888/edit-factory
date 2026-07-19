@@ -2754,7 +2754,6 @@ class PipelineRenderRequest(BaseModel):
     # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
     ultra_rapid_intro: bool = True
     # Interstitial product image slides: variant_index -> list of slide configs
-    # Phase 46 will implement FFmpeg rendering — this phase just stores the data
     interstitial_slides: Optional[Dict[str, List[dict]]] = None
     attention_timelines: Optional[Dict[str, dict]] = None
     # PiP overlay configs: segment_id -> { image_url, position, size, animation }
