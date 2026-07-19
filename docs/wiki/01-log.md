@@ -1,5 +1,29 @@
 # Engineering Change Log
 
+## 2026-07-19 - Consolidation: three work lots landed into main
+
+- `feat/attention-images` committed (6 grouped commits: karaoke ASS burn,
+  segment proximity, Step 1 attention picker, portable template settings,
+  pipeline-UI reshuffle, timeline polish) and fast-forwarded into `main`.
+- Timeline transitions V1 branch (`worktree-agent-a22083ccab05e3f25`,
+  14 commits) merged into `main`; 9 conflict blocks resolved keeping BOTH
+  features (attention two-pass overlay + proximity fuse kept; transitions
+  validators/fades auto-merged). Its wiki page renumbered 30 -> 31 because
+  attention images already claimed page 30.
+- `feat/caption-studio-runner` verified already an ancestor of `main` -
+  nothing to merge (tracking note was stale).
+- Dead `if False and interstitial_slides:` concat path + stale "Phase 46"
+  comment removed.
+- Verified on main: 728 passed / 1 skipped / 18 xfailed backend tests,
+  `tsc --noEmit` + `npm run build` green, real-render smoke (dip_black
+  boundary luma 2 vs 126 mid-clip, front attention overlay above karaoke
+  subs, 6.000s duration invariant), live Step 3 screenshot on pipeline
+  "hugo, test" (transition popover + attention lane + subtitle styles).
+- Gotcha: full pytest needs `.env` (ElevenLabs key) - a bare worktree fails
+  `test_preview_tts_provider_failure_refunds_and_restores_forced_audio`
+  with 400-instead-of-503. Port 3001 is now held by a WSL NestJS service;
+  web dev verification ran on :3000 against a second backend on :8001.
+
 ## 2026-07-19 - Attention Images: Pipeline Step 1 integration + per-variant stagger
 
 - Added a Step 1 picker (`attention-template-picker.tsx`) under Video Idea
