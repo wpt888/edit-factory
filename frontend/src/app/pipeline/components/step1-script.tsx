@@ -59,6 +59,7 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
 import { WorkspaceSplit } from "./workspace-split";
+import { AttentionTemplatePicker } from "@/components/attention-template-picker";
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
 // inline callbacks below are typed precisely; everything else stays `any`.
@@ -128,6 +129,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
     pipelineLayout,
     sourceVideos,
     selectedSourceIds,
+    attentionSelection,
+    handleAttentionSelectionChange,
   }: Step1Ctx = ctx;
   const workspaceLayout = pipelineLayout !== "guided";
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -188,6 +191,11 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     className="resize-y [field-sizing:fixed]"
                   />
                 </div>
+
+                <AttentionTemplatePicker
+                  selection={attentionSelection}
+                  onSelectionChange={handleAttentionSelectionChange}
+                />
 
                 <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
                   <CollapsibleTrigger asChild>

@@ -152,6 +152,8 @@ export interface PipelineScriptsResponse {
   codex_model?: string | null;
   variant_count?: number;
   meta_multiplication?: boolean;
+  attention_selection?: { templateId?: string; assetUrls?: string[]; staggerSeconds?: number; maxVariants?: number };
+  template_settings?: import("./pipeline-template").PipelineTemplateSettings | Record<string, never>;
   library_project_id?: string | null;
   generation_job?: Partial<AsyncJobState>;
   tts_jobs?: Record<string, Partial<AsyncJobState>>;

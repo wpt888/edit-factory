@@ -88,6 +88,66 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
         }
 
 
+def test_apply_template_start_offset_staggers_and_drops_overflow(monkeypatch):
+    profile_id = "profile-attention"
+    pipeline = {"id": "pipeline-attention", "profile_id": profile_id, "attention_timeline": {}}
+    template = {
+        "id": "personal-stack",
+        "profile_id": profile_id,
+        "name": "Personal Stack",
+        "config": {
+            "strategy": "count",
+            "count": 2,
+            "protectedStartMs": 0,
+            "protectedEndMs": 0,
+            "minimumGapMs": 0,
+            "durationMs": 900,
+        },
+    }
+    repository = _AttentionRepository(template)
+    monkeypatch.setattr(pipeline_routes, "_get_pipeline_or_load", lambda pipeline_id: pipeline)
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repository)
+
+    app = FastAPI()
+    app.include_router(pipeline_routes.router)
+    app.dependency_overrides[get_profile_context] = lambda: ProfileContext(
+        profile_id=profile_id,
+        user_id="user-attention",
+    )
+
+    body = {
+        "templateId": "personal-stack",
+        "assetUrls": ["a.png"],
+        "durationMs": 10000,
+        "revision": 0,
+        "mode": "replace",
+    }
+    with TestClient(app) as client:
+        baseline = client.post(
+            "/pipeline/pipeline-attention/attention-timeline/0/apply-template",
+            json=body,
+        )
+        assert baseline.status_code == 200, baseline.text
+        base_starts = [cue["startMs"] for cue in baseline.json()["cues"]]
+        assert len(base_starts) == 2
+
+        staggered = client.post(
+            "/pipeline/pipeline-attention/attention-timeline/0/apply-template",
+            json={**body, "revision": 1, "startOffsetMs": 2000},
+        )
+        assert staggered.status_code == 200, staggered.text
+        offset_starts = [cue["startMs"] for cue in staggered.json()["cues"]]
+        assert offset_starts == [start + 2000 for start in base_starts]
+
+        # A huge offset pushes every cue past the end -> all dropped, not clamped.
+        overflow = client.post(
+            "/pipeline/pipeline-attention/attention-timeline/0/apply-template",
+            json={**body, "revision": 2, "startOffsetMs": 9800},
+        )
+        assert overflow.status_code == 200, overflow.text
+        assert overflow.json()["cues"] == []
+
+
 def test_apply_system_template_appends_and_rejects_foreign_personal_template(monkeypatch):
     profile_id = "profile-attention"
     existing_cue = {

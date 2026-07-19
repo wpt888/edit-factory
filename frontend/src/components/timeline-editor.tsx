@@ -28,22 +28,19 @@ import {
   ImageIcon,
   Images,
   Layers3,
-  LayoutTemplate,
   Trash2,
   Loader2,
   Maximize2,
   Pin,
   ScanLine,
 } from "lucide-react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
 import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
-import type { AttentionTemplate } from "@/types/attention-template";
-import { normalizeAttentionTemplate } from "@/types/attention-template";
 import type { CompositionClip } from "@/types/composition-timeline";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
@@ -156,9 +153,7 @@ export interface InterstitialSlide {
   productTitle?: string;         // For display in timeline
 }
 
-type AttentionAssetTarget =
-  | { kind: "template" }
-  | { kind: "layer"; cueId: string; layerId: string };
+type AttentionAssetTarget = { kind: "layer"; cueId: string; layerId: string };
 
 const EMPTY_ATTENTION_CUES: AttentionCue[] = [];
 
@@ -293,7 +288,6 @@ interface TimelineEditorProps {
   onVideoTimelineChange?: (timeline: CompositionClip[]) => void;
   profileId?: string;
   pipelineId?: string;
-  previewKey?: string;
   variantIndex?: number;
   subtitleSettings?: SubtitleSettings;
   interstitialSlides?: InterstitialSlide[];
@@ -320,7 +314,6 @@ export function TimelineEditor({
   onVideoTimelineChange,
   profileId,
   pipelineId,
-  previewKey,
   variantIndex,
   subtitleSettings,
   interstitialSlides: legacyInterstitialSlides = [],
@@ -332,33 +325,8 @@ export function TimelineEditor({
 }: TimelineEditorProps) {
   const mediaApiUrl = useApiUrl();
   const attentionCues = attentionTimeline?.cues ?? EMPTY_ATTENTION_CUES;
-  const [attentionTemplates, setAttentionTemplates] = useState<AttentionTemplate[]>([]);
-  const [selectedAttentionTemplateId, setSelectedAttentionTemplateId] = useState("");
-  const [attentionTemplatesLoading, setAttentionTemplatesLoading] = useState(false);
-  const [attentionTemplateApplying, setAttentionTemplateApplying] = useState(false);
-  const [templateAssetUrls, setTemplateAssetUrls] = useState<string[]>([]);
   const [attentionAssetTarget, setAttentionAssetTarget] = useState<AttentionAssetTarget | null>(null);
 
-  useEffect(() => {
-    if (!pipelineId) return;
-    let cancelled = false;
-    setAttentionTemplatesLoading(true);
-    apiGet("/attention-templates")
-      .then(async (response) => {
-        const data = (await response.json()) as { templates?: AttentionTemplate[] };
-        if (cancelled) return;
-        const templates = data.templates ?? [];
-        setAttentionTemplates(templates);
-        setSelectedAttentionTemplateId((current) => current || templates[0]?.id || "");
-      })
-      .catch(() => {
-        if (!cancelled) setAttentionTemplates([]);
-      })
-      .finally(() => {
-        if (!cancelled) setAttentionTemplatesLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [pipelineId]);
   const cueBoundaryIndex = useCallback((startMs: number) => {
     let result = -1;
     matches.forEach((match, index) => {
@@ -515,53 +483,11 @@ export function TimelineEditor({
 
   const selectAttentionAsset = useCallback((url: string) => {
     if (!attentionAssetTarget) return;
-    if (attentionAssetTarget.kind === "template") {
-      setTemplateAssetUrls(current => current.includes(url) ? current : [...current, url]);
-      return;
-    }
     updateCueLayer(attentionAssetTarget.cueId, attentionAssetTarget.layerId, {
       assetId: url,
       assetUrl: url,
     });
   }, [attentionAssetTarget, updateCueLayer]);
-
-  const applyAttentionTemplate = useCallback(async () => {
-    if (!pipelineId || !previewKey || !attentionTimeline || !onAttentionTimelineChange) return;
-    if (!selectedAttentionTemplateId || templateAssetUrls.length === 0) return;
-    setAttentionTemplateApplying(true);
-    try {
-      await apiPost(`/pipeline/${pipelineId}/attention-timeline/${previewKey}/apply-template`, {
-        templateId: selectedAttentionTemplateId,
-        assetUrls: templateAssetUrls,
-        durationMs: Math.max(1, Math.round(audioDuration * 1000)),
-        subtitleBoundariesMs: Array.from(new Set(matches.flatMap(match => [
-          Math.round(match.srt_start * 1000),
-          Math.round(match.srt_end * 1000),
-        ]))).sort((a, b) => a - b),
-        revision: attentionTimeline.revision,
-        mode: "replace",
-      });
-      const response = await apiGet(`/pipeline/${pipelineId}/attention-timeline/${previewKey}`, {
-        cache: "no-store",
-      });
-      const document = (await response.json()) as AttentionTimeline;
-      onAttentionTimelineChange(document);
-      toast.success("Attention template applied");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not apply attention template");
-    } finally {
-      setAttentionTemplateApplying(false);
-    }
-  }, [
-    attentionTimeline,
-    audioDuration,
-    matches,
-    onAttentionTimelineChange,
-    pipelineId,
-    previewKey,
-    selectedAttentionTemplateId,
-    templateAssetUrls,
-  ]);
 
   const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
@@ -731,6 +657,8 @@ export function TimelineEditor({
   // footage timeline. A single scroll viewport and lane width drive every
   // track, so subtitles, attention assets, video and audio never drift apart.
   const multiTrackScrollRef = useRef<HTMLDivElement>(null);
+  const timelineDurationRef = useRef(0.05);
+  const timelineLaneWidthRef = useRef(TIMELINE_MIN_WIDTH);
   const timelineSeekRafRef = useRef<number | null>(null);
   const pendingTimelineSeekRef = useRef<number | null>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
@@ -770,6 +698,21 @@ export function TimelineEditor({
   const [isPreviewAudioLoading, setIsPreviewAudioLoading] = useState(false);
   const [previewAudioLoadFailed, setPreviewAudioLoadFailed] = useState(false);
   const [voiceoverPeaks, setVoiceoverPeaks] = useState<number[]>([]);
+
+  // Playback time is intentionally committed to React at only ~10 Hz because
+  // this editor is expensive to render. Move the timeline cursor separately on
+  // every animation frame so it remains visually continuous. A single inherited
+  // CSS variable drives the ruler and every lane without triggering React work.
+  const updateTimelinePlayheadDOM = useCallback((time: number) => {
+    const timeline = multiTrackScrollRef.current;
+    if (!timeline) return;
+    const duration = Math.max(0.001, timelineDurationRef.current);
+    const ratio = Math.max(0, Math.min(1, time / duration));
+    timeline.style.setProperty(
+      "--timeline-playhead-x",
+      `${ratio * timelineLaneWidthRef.current}px`,
+    );
+  }, []);
   const playbackMatches = useMemo<MatchPreview[]>(() => displayedComposition.map((clip, index) => ({
     srt_index: index,
     srt_text: clip.segment_keywords?.slice(0, 3).join(", ") || `${clip.kind === "intro" ? "Intro" : "Clip"} ${index + 1}`,
@@ -1363,6 +1306,7 @@ export function TimelineEditor({
       if (isPreviewIntroRef.current) {
         const heldTimelineTime = introHeldTimelineTimeRef.current;
         if (heldTimelineTime != null) {
+          updateTimelinePlayheadDOM(heldTimelineTime);
           setPreviewCurrentTime(heldTimelineTime);
           if (playIntroAt(heldTimelineTime + 0.001)) {
             introHeldTimelineTimeRef.current = null;
@@ -1378,6 +1322,7 @@ export function TimelineEditor({
         }
 
         const introTime = Math.min(introOffsetSec, audio.currentTime);
+        updateTimelinePlayheadDOM(introTime);
         const introMatchIndex = findActiveMatch(introTime);
         if (introMatchIndex !== previewActiveIndexRef.current) {
           setPreviewActiveIndex(introMatchIndex);
@@ -1396,6 +1341,7 @@ export function TimelineEditor({
           const holdAt = pendingSegment?.timeline_start ?? introTime;
           introHeldTimelineTimeRef.current = holdAt;
           audio.pause();
+          updateTimelinePlayheadDOM(holdAt);
           setPreviewCurrentTime(holdAt);
         }
         previewRafIdRef.current = requestAnimationFrame(loop);
@@ -1403,6 +1349,7 @@ export function TimelineEditor({
       }
       const time = audio.currentTime;
       const previewTime = time;
+      updateTimelinePlayheadDOM(previewTime);
       if (Math.abs(previewTime - lastReportedTimeRef.current) > 0.1) {
         lastReportedTimeRef.current = previewTime;
         setPreviewCurrentTime(previewTime);
@@ -1469,7 +1416,7 @@ export function TimelineEditor({
     };
     if (previewRafIdRef.current != null) cancelAnimationFrame(previewRafIdRef.current);
     previewRafIdRef.current = requestAnimationFrame(loop);
-  }, [findActiveMatch, commitTransition, findNextTransitionIndex, finishIntroPlayback, prepareSlot, introOffsetSec, introSegments, playIntroAt]);
+  }, [findActiveMatch, commitTransition, findNextTransitionIndex, finishIntroPlayback, prepareSlot, introOffsetSec, introSegments, playIntroAt, updateTimelinePlayheadDOM]);
 
   const stopPreviewRafLoop = useCallback(() => {
     if (previewRafIdRef.current != null) {
@@ -1775,6 +1722,11 @@ export function TimelineEditor({
     0,
   );
   const timelineDuration = Math.max(audioDuration, compositionEnd, subtitleEnd, attentionEnd, 0.05);
+  timelineDurationRef.current = timelineDuration;
+
+  useEffect(() => {
+    updateTimelinePlayheadDOM(previewCurrentTime);
+  }, [previewCurrentTime, timelineDuration, timelineZoom, updateTimelinePlayheadDOM]);
 
   const scheduleTimelineSeek = useCallback((time: number) => {
     pendingTimelineSeekRef.current = Math.max(0, Math.min(timelineDuration, time));
@@ -2131,6 +2083,22 @@ export function TimelineEditor({
     else activatePreview();
   }, [activatePreview, isPreviewActive, togglePreviewPlayPause]);
 
+  const handlePreviewSeekKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (
+      event.key !== " "
+      || event.altKey
+      || event.ctrlKey
+      || event.metaKey
+    ) return;
+
+    // A focused range input otherwise lets Space scroll the page. Keep focus on
+    // the seek control, but make the player shortcut behave like the Play button.
+    event.preventDefault();
+    if (event.repeat) return;
+    if (isPreviewActive) togglePreviewPlayPause();
+    else activatePreview();
+  }, [activatePreview, isPreviewActive, togglePreviewPlayPause]);
+
   // Expanding/collapsing moves the preview into a different DOM subtree, so the
   // two <video> slots remount blank. Re-seat the active slot + re-stage the idle
   // one after the new elements bind their refs.
@@ -2149,6 +2117,25 @@ export function TimelineEditor({
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPreviewExpanded]);
+
+  // Seat the current segment's first frame while the preview is idle, so the
+  // player shows a real frame instead of a black rectangle before Play. The
+  // thumbnail_path <img> overlay is best-effort — its JPG is often missing or
+  // still generating — so the paused video frame is the reliable poster.
+  // activatePreview() fully resets the slots, so this never fights playback.
+  // ponytail: eagerly loads one preview stream per visible card; if that ever
+  // costs too much, gate on an IntersectionObserver so only on-screen cards seat.
+  useEffect(() => {
+    if (isPreviewActive) return;
+    const match = playbackMatches[previewActiveIndex];
+    if (!match?.source_video_id || match.segment_start_time == null || !profileId) return;
+    const raf = requestAnimationFrame(() => {
+      if (isPreviewActiveRef.current) return;
+      activeSlotRef.current = activeSlot;
+      seatActiveSlot(previewActiveIndex, false);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isPreviewActive, playbackMatches, previewActiveIndex, profileId, activeSlot, seatActiveSlot]);
 
   // Filtered segments: proximity ±2 rule + source filter + keyword search
   const filteredSegments = useMemo(() => {
@@ -2821,94 +2808,6 @@ export function TimelineEditor({
     });
   };
 
-  const renderAttentionWorkflow = () => {
-    const selectedTemplate = attentionTemplates.find(template => template.id === selectedAttentionTemplateId);
-    const config = normalizeAttentionTemplate(selectedTemplate);
-    return (
-      <div className="w-full space-y-3 rounded-lg border border-lime-300/20 bg-[#111411] p-3 text-left text-white" data-testid="attention-template-workflow">
-        <div className="flex items-center gap-2">
-          <LayoutTemplate className="size-4 text-lime-300" />
-          <div>
-            <p className="text-sm font-medium">Attention template</p>
-            <p className="text-[11px] text-white/50">Choose images, then distribute them on the subtitle clock.</p>
-          </div>
-        </div>
-
-        <label className="block space-y-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
-          Template
-          <select
-            value={selectedAttentionTemplateId}
-            onChange={(event) => setSelectedAttentionTemplateId(event.target.value)}
-            disabled={attentionTemplatesLoading}
-            className="h-9 w-full rounded-md border border-white/15 bg-black/30 px-2 text-xs normal-case tracking-normal text-white outline-none focus:border-lime-300"
-          >
-            {attentionTemplates.length === 0 && <option value="">No templates available</option>}
-            {attentionTemplates.map(template => (
-              <option key={template.id} value={template.id}>
-                {template.name}{template.is_system ? " · System" : " · Personal"}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {selectedTemplate && (
-          <div className="grid grid-cols-3 gap-1.5 text-[10px] text-white/65">
-            <span className="rounded bg-white/5 px-2 py-1">{config.layers} layer{config.layers === 1 ? "" : "s"}</span>
-            <span className="rounded bg-white/5 px-2 py-1">{Math.round(config.size * 100)}% size</span>
-            <span className="rounded bg-white/5 px-2 py-1 capitalize">{config.zone}</span>
-          </div>
-        )}
-
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Source images</span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1 border-lime-300/35 bg-lime-300/5 px-2 text-xs text-lime-200 hover:bg-lime-300/10 hover:text-lime-100"
-              onClick={() => setAttentionAssetTarget({ kind: "template" })}
-            >
-              <Images className="size-3.5" />
-              Gallery / Upload
-            </Button>
-          </div>
-          {templateAssetUrls.length === 0 ? (
-            <p className="rounded border border-dashed border-white/15 px-3 py-3 text-center text-xs text-white/40">
-              Add at least one image. Three images make the stacked templates easiest to see.
-            </p>
-          ) : (
-            <div className="grid grid-cols-3 gap-2">
-              {templateAssetUrls.map((url, index) => (
-                <div key={url} className="group relative overflow-hidden rounded border border-white/15 bg-black/30">
-                  <img src={url} alt="" className="aspect-square w-full object-cover" />
-                  <button
-                    type="button"
-                    className="absolute right-1 top-1 rounded bg-black/75 px-1 text-[10px] text-white opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
-                    onClick={() => setTemplateAssetUrls(current => current.filter((_, itemIndex) => itemIndex !== index))}
-                    aria-label={`Remove source image ${index + 1}`}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <Button
-          type="button"
-          className="w-full bg-lime-300 text-black hover:bg-lime-200"
-          disabled={!selectedAttentionTemplateId || templateAssetUrls.length === 0 || attentionTemplateApplying}
-          onClick={() => void applyAttentionTemplate()}
-        >
-          {attentionTemplateApplying ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Layers3 className="mr-2 size-4" />}
-          {attentionTemplateApplying ? "Applying..." : "Apply template"}
-        </Button>
-      </div>
-    );
-  };
-
   return (
     /* In "full" mode the root is an NLE grid with two draggable splitters:
        inspector | program monitor above, timeline below. The nested containers
@@ -3034,7 +2933,7 @@ export function TimelineEditor({
                         onClick={activatePreview}
                         disabled={isPreviewAudioLoading || !previewAudioSrc}
                         aria-label="Play preview"
-                        title={previewAudioLoadFailed ? "Preview audio could not be loaded" : "Play preview"}
+                        title={previewAudioLoadFailed ? "Preview audio could not be loaded" : undefined}
                       >
                         {isPreviewAudioLoading
                           ? <Loader2 className="size-5 animate-spin" />
@@ -3087,11 +2986,14 @@ export function TimelineEditor({
                 {/* Progress bar */}
                 <input
                   type="range"
+                  aria-label="Preview position"
+                  aria-keyshortcuts="Space"
                   min={0}
                   max={previewTotalDuration || 1}
                   step={0.1}
                   value={previewCurrentTime}
                   onChange={handlePreviewSeek}
+                  onKeyDown={handlePreviewSeekKeyDown}
                   disabled={!isPreviewActive}
                   className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary disabled:cursor-default disabled:opacity-45"
                 />
@@ -3236,7 +3138,7 @@ export function TimelineEditor({
                             onClick={activatePreview}
                             disabled={isPreviewAudioLoading || !previewAudioSrc}
                             aria-label="Play preview"
-                            title={previewAudioLoadFailed ? "Preview audio could not be loaded" : "Play preview"}
+                            title={previewAudioLoadFailed ? "Preview audio could not be loaded" : undefined}
                           >
                             {isPreviewAudioLoading
                               ? <Loader2 className="size-6 animate-spin" />
@@ -3284,11 +3186,14 @@ export function TimelineEditor({
                   <div className="px-4 py-3 space-y-2">
                     <input
                       type="range"
+                      aria-label="Preview position"
+                      aria-keyshortcuts="Space"
                       min={0}
                       max={previewTotalDuration || 1}
                       step={0.1}
                       value={previewCurrentTime}
                       onChange={handlePreviewSeek}
+                      onKeyDown={handlePreviewSeekKeyDown}
                       disabled={!isPreviewActive}
                       className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary disabled:cursor-default disabled:opacity-45"
                     />
@@ -3378,16 +3283,12 @@ export function TimelineEditor({
           </div>
         )}
 
-      {displayMode === "card" && attentionTimeline && renderAttentionWorkflow()}
-
       {/* Full editor: left inspector placeholder when nothing is selected */}
       {displayMode === "full" &&
         (viewMode !== "timeline" ||
           (selectedSlideId === null && !selectedClip && (selectedBlockIndex === null || !selectedMatch))) && (
           <div className="col-start-1 row-start-2 min-h-0 overflow-y-auto bg-card p-4">
-            {attentionTimeline ? renderAttentionWorkflow() : (
-              <p className="text-center text-sm text-muted-foreground">Select a clip on the timeline to edit its settings here</p>
-            )}
+            <p className="text-center text-sm text-muted-foreground">Select a clip on the timeline to edit its settings here</p>
           </div>
         )}
 
@@ -3406,11 +3307,17 @@ export function TimelineEditor({
               timelineViewportWidth - TIMELINE_LABEL_WIDTH - TIMELINE_END_GUTTER,
             );
             const laneWidth = Math.round(fitLaneWidth * timelineZoom);
+            timelineLaneWidthRef.current = laneWidth;
+            const smoothPlayheadStyle: React.CSSProperties = {
+              left: 0,
+              transform: "translate3d(var(--timeline-playhead-x, 0px), 0, 0)",
+              willChange: "transform",
+            };
             const sfxCues = attentionCues.filter(cue => cue.sfxAssetId || cue.sfxUrl);
             const playhead = isPreviewActive ? (
               <div
                 className="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary"
-                style={{ left: pct(previewCurrentTime) }}
+                style={smoothPlayheadStyle}
               />
             ) : null;
 
@@ -3629,6 +3536,7 @@ export function TimelineEditor({
                 ruler={{
                   duration: totalDuration,
                   currentTime: isPreviewActive ? previewCurrentTime : undefined,
+                  playheadStyle: smoothPlayheadStyle,
                   className: isPreviewActive ? "cursor-ew-resize" : "",
                   onPointerDown: beginMultiTrackScrub,
                 }}
