@@ -3132,6 +3132,9 @@ export function TimelineEditor({
   const selectedClip = selectedClipId === null
     ? null
     : displayedComposition.find((clip) => clip.id === selectedClipId) ?? null;
+  const selectedOverlay = selectedClipId === null
+    ? null
+    : displayedOverlays.find((clip) => clip.id === selectedClipId) ?? null;
 
   const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
     const activeMatch = matches.find(
@@ -3232,6 +3235,44 @@ export function TimelineEditor({
           />
         );
       });
+    });
+  };
+
+  // Phase C preview: positioned box overlays for free video clips. Fallback
+  // variant — no live <video> (that would need syncing into the delicate V1
+  // double-buffer engine); a poster thumbnail + outline placed by overlay_box
+  // stands in, and the server-rendered preview gives full fidelity. The active
+  // clip (window contains the playhead) is filled; the selected clip always
+  // shows a dashed outline so its placement is visible while editing.
+  const renderOverlayClipBoxes = () => {
+    if (displayedOverlays.length === 0) return null;
+    const now = previewCurrentTime;
+    return displayedOverlays.map((clip) => {
+      const active = now >= clip.timeline_start && now < clip.timeline_start + clip.timeline_duration;
+      const isSelected = selectedClipId === clip.id;
+      if (!active && !isSelected) return null;
+      const box = clip.overlay_box ?? DEFAULT_OVERLAY_BOX;
+      const thumb = clip.thumbnail_path ? segmentFileUrl(mediaApiUrl, clip.thumbnail_path) : null;
+      return (
+        <div
+          key={`overlay-box-${clip.id}`}
+          data-testid={`overlay-preview-${clip.id}`}
+          className={`pointer-events-none absolute overflow-hidden ${
+            isSelected ? "ring-2 ring-sky-300" : "ring-1 ring-sky-300/50"
+          } ${active ? "" : "border border-dashed border-sky-300/70"}`}
+          style={{
+            left: `${box.x * 100}%`, top: `${box.y * 100}%`,
+            width: `${box.width * 100}%`, height: `${box.height * 100}%`,
+            // Composite over V1 (z 1) and behind-zone cues; higher track in front.
+            zIndex: 30 + ((clip.track ?? 2) - 2) * 2,
+            opacity: active ? 1 : 0.45,
+          }}
+        >
+          {active && thumb && (
+            <img src={thumb} alt="" className="h-full w-full" style={{ objectFit: box.fit }} onError={(e) => { e.currentTarget.style.display = "none"; }} />
+          )}
+        </div>
+      );
     });
   };
 
@@ -3398,6 +3439,7 @@ export function TimelineEditor({
                 )}
 
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
+                {renderOverlayClipBoxes()}
                 {renderAttentionOverlays()}
                 {showSafeArea && (
                   <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
@@ -3603,6 +3645,7 @@ export function TimelineEditor({
                       </div>
                     )}
 
+                    {renderOverlayClipBoxes()}
                     {renderAttentionOverlays()}
                     {showSafeArea && (
                       <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
@@ -3713,7 +3756,7 @@ export function TimelineEditor({
       {/* Full editor: left inspector placeholder when nothing is selected */}
       {displayMode === "full" &&
         (viewMode !== "timeline" ||
-          (selectedSlideId === null && !selectedClip && !selectedMusic && (selectedBlockIndex === null || !selectedMatch))) && (
+          (selectedSlideId === null && !selectedClip && !selectedOverlay && !selectedMusic && (selectedBlockIndex === null || !selectedMatch))) && (
           <div className="col-start-1 row-start-2 min-h-0 overflow-y-auto bg-card p-4">
             <p className="text-center text-sm text-muted-foreground">Select a clip on the timeline to edit its settings here</p>
           </div>
@@ -4224,6 +4267,139 @@ export function TimelineEditor({
                         clip.id === selectedClip.id ? { ...clip, transforms: next as unknown as Record<string, unknown> } : clip
                       ));
                     }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Overlay clip inspector (free video overlay on V2..Vn). */}
+          {selectedOverlay && (() => {
+            const box = selectedOverlay.overlay_box ?? DEFAULT_OVERLAY_BOX;
+            const setBox = (next: Partial<OverlayBox>) =>
+              updateOverlayClip(selectedOverlay.id, { overlay_box: { ...box, ...next } });
+            const presets: { label: string; box: OverlayBox }[] = [
+              { label: "Full frame", box: { x: 0, y: 0, width: 1, height: 1, fit: box.fit } },
+              { label: "Top left", box: { x: 0.03, y: 0.05, width: 0.4, height: 0.4, fit: box.fit } },
+              { label: "Top right", box: { x: 0.57, y: 0.05, width: 0.4, height: 0.4, fit: box.fit } },
+              { label: "Bottom left", box: { x: 0.03, y: 0.55, width: 0.4, height: 0.4, fit: box.fit } },
+              { label: "Bottom right", box: { x: 0.57, y: 0.55, width: 0.4, height: 0.4, fit: box.fit } },
+              { label: "Center 50%", box: { x: 0.25, y: 0.25, width: 0.5, height: 0.5, fit: box.fit } },
+            ];
+            return (
+              <div
+                className={displayMode === "full"
+                  ? "col-start-1 row-start-2 min-h-0 space-y-4 overflow-y-auto bg-[#0c1216] p-4 text-white"
+                  : "space-y-4 rounded-md border border-sky-300/25 bg-[#0c1216] p-4 text-white"}
+                data-testid="overlay-clip-inspector"
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-200/70">
+                      <Film className="size-3.5" />
+                      Video overlay
+                    </div>
+                    <p className="mt-1 truncate text-sm font-medium">
+                      {selectedOverlay.segment_keywords?.slice(0, 3).join(", ") || "Overlay clip"}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1 text-xs text-destructive hover:bg-destructive/10"
+                    onClick={() => removeOverlayClip(selectedOverlay.id)}
+                  >
+                    <Trash2 className="size-3" />
+                    Remove
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded border border-white/10 bg-black/20 p-2">
+                    <span className="block text-[9px] uppercase tracking-wide text-white/45">Output</span>
+                    <span className="font-mono text-white/85">
+                      {formatTime(selectedOverlay.timeline_start)}–{formatTime(selectedOverlay.timeline_start + selectedOverlay.timeline_duration)}
+                    </span>
+                  </div>
+                  <div className="rounded border border-white/10 bg-black/20 p-2">
+                    <span className="block text-[9px] uppercase tracking-wide text-white/45">Source</span>
+                    <span className="font-mono text-white/85">{selectedOverlay.start_time.toFixed(2)}–{selectedOverlay.end_time.toFixed(2)}s</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2 border-t border-white/10 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Track</span>
+                  <div className="flex gap-1">
+                    {OVERLAY_TRACKS.map((t) => (
+                      <Button
+                        key={t}
+                        variant="outline"
+                        size="sm"
+                        className={`h-7 flex-1 border-white/15 px-2 ${
+                          (selectedOverlay.track ?? 2) === t ? "bg-sky-400/30 text-white" : "bg-white/5 text-white/70"
+                        }`}
+                        onClick={() => updateOverlayClip(selectedOverlay.id, { track: t })}
+                      >
+                        V{t}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2 border-t border-white/10 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Placement</span>
+                  <div className="flex flex-wrap gap-1">
+                    {presets.map((preset) => (
+                      <Button
+                        key={preset.label}
+                        variant="outline"
+                        size="sm"
+                        className="h-7 border-white/15 bg-white/5 px-2 text-[11px] text-white/80 hover:bg-white/10"
+                        onClick={() => setBox(preset.box)}
+                      >
+                        {preset.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(["x", "y", "width", "height"] as const).map((field) => (
+                      <label key={field} className="space-y-0.5 text-[9px] uppercase text-white/45">
+                        {field}
+                        <Input
+                          type="number"
+                          min={field === "width" || field === "height" ? 0.01 : 0}
+                          max={1}
+                          step={0.01}
+                          className="h-7 bg-black/20 text-xs text-white"
+                          value={box[field]}
+                          onChange={(event) => setBox({
+                            [field]: Math.max(field === "width" || field === "height" ? 0.01 : 0, Math.min(1, Number(event.target.value))),
+                          })}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex rounded-md border border-white/15 bg-white/5 p-0.5">
+                    {(["contain", "cover"] as const).map((fit) => (
+                      <button
+                        key={fit}
+                        type="button"
+                        className={`flex-1 rounded px-2 py-1 text-[11px] capitalize transition ${
+                          box.fit === fit ? "bg-sky-400/30 text-white" : "text-white/60 hover:text-white"
+                        }`}
+                        onClick={() => setBox({ fit })}
+                      >
+                        {fit}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="dark border-t border-white/10 pt-3" data-testid="overlay-transform-panel">
+                  <SegmentTransformPanel
+                    transforms={{ ...DEFAULT_SEGMENT_TRANSFORM, ...(selectedOverlay.transforms as Partial<SegmentTransform> | null ?? {}) }}
+                    isOverride={!!selectedOverlay.transforms && Object.keys(selectedOverlay.transforms).length > 0}
+                    onChange={(next) => updateOverlayClip(selectedOverlay.id, { transforms: next as unknown as Record<string, unknown> })}
                   />
                 </div>
               </div>
