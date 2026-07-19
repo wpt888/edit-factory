@@ -412,7 +412,7 @@ export function TimelineEditor({
     onInterstitialSlidesChange?.(slides);
   }, [attentionCues, attentionTimeline, matches, onAttentionTimelineChange, onInterstitialSlidesChange]);
 
-  const updateCueTiming = useCallback((cueId: string, startMs: number, durationMs: number) => {
+  const updateCueTiming = useCallback((cueId: string, startMs: number, durationMs: number, track?: number) => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     const maxMs = Math.max(1, audioDuration * 1000);
     onAttentionTimelineChange({
@@ -421,6 +421,7 @@ export function TimelineEditor({
         ...cue,
         startMs: Math.max(0, Math.min(Math.round(startMs), maxMs - 100)),
         durationMs: Math.max(100, Math.min(Math.round(durationMs), maxMs)),
+        ...(track != null ? { track } : {}),
       } : cue),
     });
   }, [attentionCues, attentionTimeline, audioDuration, onAttentionTimelineChange]);
@@ -505,6 +506,9 @@ export function TimelineEditor({
     });
   }, [attentionAssetTarget, updateCueLayer]);
 
+  // Current displayed composition, for cue-drag snapping (this callback is
+  // defined above displayedComposition's declaration; assigned each render below).
+  const displayedCompositionRef = useRef<CompositionClip[]>([]);
   const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize" | "resize-start") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
     event.preventDefault();
@@ -515,12 +519,21 @@ export function TimelineEditor({
     const originalStart = cue.startMs;
     const originalDuration = cue.durationMs;
     const totalMs = Math.max(1, audioDuration * 1000);
-    const snapPoints = matches.flatMap(match => [match.srt_start * 1000, match.srt_end * 1000]);
+    // Snap to subtitle boundaries AND V1 clip boundaries. The composition is
+    // read through a ref because this callback is defined above its declaration.
+    const snapPoints = [
+      ...matches.flatMap(match => [match.srt_start * 1000, match.srt_end * 1000]),
+      ...displayedCompositionRef.current.flatMap(clip => [
+        clip.timeline_start * 1000,
+        (clip.timeline_start + clip.timeline_duration) * 1000,
+      ]),
+    ];
     const snap = (value: number, disabled: boolean) => {
       if (disabled) return value;
       const nearest = snapPoints.reduce((best, point) => Math.abs(point - value) < Math.abs(best - value) ? point : best, value);
       return Math.abs(nearest - value) <= 150 ? nearest : value;
     };
+    const originTrack = cue.track ?? 2;
     const onMove = (moveEvent: PointerEvent) => {
       const deltaMs = (moveEvent.clientX - startX) / Math.max(1, track.clientWidth) * totalMs;
       if (edge === "resize") {
@@ -534,7 +547,13 @@ export function TimelineEditor({
         updateCueTiming(cue.id, start, rightEdge - start);
       } else {
         const start = snap(originalStart + deltaMs, moveEvent.altKey);
-        updateCueTiming(cue.id, start, originalDuration);
+        // Vertical: whichever image lane the cursor is over sets the draft
+        // track; dropping outside any image lane keeps the origin track.
+        const laneEl = document
+          .elementFromPoint(moveEvent.clientX, moveEvent.clientY)
+          ?.closest("[data-track-index]") as HTMLElement | null;
+        const hovered = laneEl ? Number(laneEl.getAttribute("data-track-index")) : NaN;
+        updateCueTiming(cue.id, start, originalDuration, Number.isFinite(hovered) ? hovered : originTrack);
       }
     };
     const onUp = () => {
@@ -575,6 +594,7 @@ export function TimelineEditor({
   }, [audioDuration, availableSegments, introSegments, matches, videoTimeline]);
   const [compositionDraft, setCompositionDraft] = useState<CompositionClip[] | null>(null);
   const displayedComposition = compositionDraft ?? composition;
+  displayedCompositionRef.current = displayedComposition;
   const compositionIntroDuration = displayedComposition
     .filter((clip) => clip.kind === "intro")
     .reduce((sum, clip) => sum + clip.timeline_duration, 0);
