@@ -1,5 +1,26 @@
 # Engineering Change Log
 
+## 2026-07-19 - Multi-track timeline Phase B: background music (A2) with auto-ducking
+
+- The A2 lane is now live: pick a per-variant background track, it plays under
+  the voiceover and auto-ducks (sidechaincompress keyed on the voice) while the
+  voice speaks. Server-rendered, so the Step 3 preview and Step 4 render carry
+  the identical mix.
+- New pure helper `build_audio_mix_filter` (`app/services/audio/mix.py`): folds
+  the loudnorm-first voice chain into a `-filter_complex` and mixes ducked,
+  looped/trimmed music; `amix=duration=first` + the caller's `-t` keep output
+  duration identical. No music leaves the legacy `-af` path untouched. Wired
+  into both `_render_with_preset` encode branches.
+- `MusicSettings` model; music persisted additively in `preview_data['music']`
+  (no DB migration) and folded into both cache fingerprints with a file mtime.
+  Music source reuses the Blipost media library (`kind=audio`) + direct URL.
+- A2 lane block + Music inspector (volume, ducking toggle, fades). Backend
+  restart required for the new routes/models.
+- Tests: `tests/test_bgm_mix.py` (unit + ffmpeg ducking smoke),
+  `frontend/tests/timeline-music-track.spec.ts`.
+
+See [Background music (A2) with auto-ducking — Phase B](34-bgm-ducking.md).
+
 ## 2026-07-19 - Multi-track timeline Phase A: generic tracks + images as clips
 
 - Step 3 timeline lanes are now generic Premiere-style tracks built dynamically:

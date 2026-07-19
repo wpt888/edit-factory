@@ -30,3 +30,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Timeline transitions V1 — dip to black + flash white](31-timeline-transitions-v1.md)
 - [Karaoke highlight system — sweep + per-word background box](32-karaoke-highlight-system.md)
 - [Multi-track timeline — Phase A: generic tracks + images as clips](33-multitrack-timeline.md)
+- [Background music (A2) with auto-ducking — Phase B](34-bgm-ducking.md)
