@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -50,6 +50,7 @@ import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
 import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
+import { stripAssTags, computeKaraokeWordTimings, activeKaraokeWordIndex } from "@/lib/karaoke-word-timing";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
@@ -72,9 +73,10 @@ import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
 
+// Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
 const compactPreviewFrameStyle: React.CSSProperties = {
   aspectRatio: "9 / 16",
-  width: "min(180px, 100%)",
+  width: "min(100%, calc(45vh * 9 / 16))",
   maxWidth: "100%",
 };
 
@@ -134,6 +136,109 @@ export interface MatchPreview {
   explanation?: string;  // Human-readable reason this segment was assigned
   pinned?: boolean;  // User manually locked this assignment — assembly won't reassign it
 }
+
+interface PreviewSubtitleOverlayTextProps {
+  match: MatchPreview;
+  subtitleSettings?: SubtitleSettings;
+  /** Coarse clock (throttled to >0.1s), used only while paused/scrubbing. */
+  previewCurrentTime: number;
+  /** Master clock ref — read directly at rAF rate while karaoke+playing. */
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+  isPlaying: boolean;
+  /** Shared style (font, outline, shadow, letter-spacing, opacity...) minus color. */
+  textStyle: React.CSSProperties;
+}
+
+// Renders the active subtitle phrase. When karaoke is enabled AND the audio
+// is playing, this component runs its OWN rAF loop reading audio.currentTime
+// directly so per-word highlighting is smooth — WITHOUT forcing the ~5000
+// line parent TimelineEditor to re-render at 60fps (only this small subtree
+// re-renders, and only when the active word index actually changes). When
+// karaoke is off, no rAF loop runs at all — behavior is identical to before.
+const PreviewSubtitleOverlayText = memo(function PreviewSubtitleOverlayText({
+  match,
+  subtitleSettings,
+  previewCurrentTime,
+  audioRef,
+  isPlaying,
+  textStyle,
+}: PreviewSubtitleOverlayTextProps) {
+  const karaoke = subtitleSettings?.karaoke ?? false;
+  const karaokeStyle = subtitleSettings?.karaokeStyle ?? "color";
+  const textColor = subtitleSettings?.textColor ?? "#FFFFFF";
+  const highlightColor = subtitleSettings?.highlightColor ?? "#FFFF00";
+  const highlightBgColor = subtitleSettings?.highlightBgColor ?? "#A3E635";
+
+  const cleanedText = useMemo(() => stripAssTags(match.srt_text), [match.srt_text]);
+  const wordTimings = useMemo(
+    () => (karaoke ? computeKaraokeWordTimings(cleanedText, match.srt_start, match.srt_end) : []),
+    [karaoke, cleanedText, match.srt_start, match.srt_end]
+  );
+
+  const [rafWordIndex, setRafWordIndex] = useState(-1);
+  useEffect(() => {
+    if (!karaoke || !isPlaying || wordTimings.length === 0) return;
+    let rafId: number;
+    const tick = () => {
+      const time = audioRef.current?.currentTime ?? 0;
+      const idx = activeKaraokeWordIndex(wordTimings, time);
+      setRafWordIndex((prev) => (prev === idx ? prev : idx));
+      rafId = requestAnimationFrame(tick);
+    };
+    tick(); // compute immediately — avoid a 1-frame flash of stale state
+    return () => cancelAnimationFrame(rafId);
+  }, [karaoke, isPlaying, wordTimings, audioRef]);
+
+  if (!karaoke || wordTimings.length === 0) {
+    return (
+      <p className="inline-block px-2 py-1 font-semibold leading-tight" style={{ ...textStyle, color: textColor }}>
+        {cleanedText}
+      </p>
+    );
+  }
+
+  // While paused/scrubbing the rAF loop above doesn't run — fall back to the
+  // parent's (coarser but accurate-when-static) clock instead.
+  const activeIndex = isPlaying ? rafWordIndex : activeKaraokeWordIndex(wordTimings, previewCurrentTime);
+
+  return (
+    <p className="inline-block px-2 py-1 font-semibold leading-tight" style={textStyle}>
+      {wordTimings.map((timing, index) => {
+        if (karaokeStyle === "box") {
+          const isActive = index === activeIndex;
+          return (
+            <React.Fragment key={index}>
+              {index > 0 ? " " : ""}
+              <span
+                style={{
+                  color: isActive ? highlightColor : textColor,
+                  backgroundColor: isActive ? highlightBgColor : "transparent",
+                  padding: "0.08em 0.18em",
+                  borderRadius: "2px",
+                  transition: "color 120ms linear, background-color 120ms linear",
+                }}
+              >
+                {timing.word}
+              </span>
+            </React.Fragment>
+          );
+        }
+        const isSung = index <= activeIndex;
+        return (
+          <span
+            key={index}
+            style={{
+              color: isSung ? highlightColor : textColor,
+              transition: "color 120ms linear",
+            }}
+          >
+            {index > 0 ? " " : ""}{timing.word}
+          </span>
+        );
+      })}
+    </p>
+  );
+});
 
 export interface SegmentOption {
   id: string;
@@ -700,6 +805,9 @@ export function TimelineEditor({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [compositionDragId, setCompositionDragId] = useState<string | null>(null);
+  // Premiere-style insertion point while dragging a clip: index in
+  // displayedComposition + the boundary time where the indicator line sits.
+  const [compositionDropTarget, setCompositionDropTarget] = useState<{ index: number; time: number } | null>(null);
 
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
@@ -786,9 +894,23 @@ export function TimelineEditor({
   const registerTransitionOverlay = useCallback((el: HTMLDivElement | null) => {
     if (el) transitionOverlayElsRef.current.add(el);
   }, []);
+  // "fade" (cross dissolve) preview: true when the tick has dimmed the active
+  // video slot over the idle one, so it knows to restore opacities afterwards.
+  const crossfadeActiveRef = useRef(false);
   useEffect(() => {
     const els = transitionOverlayElsRef.current;
-    const clear = () => els.forEach((el) => { el.style.opacity = "0"; });
+    const restoreSlots = () => {
+      if (!crossfadeActiveRef.current) return;
+      const activeEl = previewSlotRefs.current[activeSlotRef.current];
+      const idleEl = previewSlotRefs.current[activeSlotRef.current ^ 1];
+      if (activeEl) activeEl.style.opacity = "1";
+      if (idleEl) idleEl.style.opacity = "0";
+      crossfadeActiveRef.current = false;
+    };
+    const clear = () => {
+      els.forEach((el) => { el.style.opacity = "0"; });
+      restoreSlots();
+    };
     if (!isPreviewActive || transitionBoundaries.length === 0) {
       clear();
       return;
@@ -800,15 +922,47 @@ export function TimelineEditor({
       const t = previewAudioRef.current?.currentTime ?? 0;
       let opacity = 0;
       let color = "#000";
+      let crossfade: { progress: number; clipIndex: number } | null = null;
       for (const boundary of transitionBoundaries) {
-        const half = boundary.durationMs / 2000;
-        if (t >= boundary.time - half && t <= boundary.time + half) {
-          opacity = t < boundary.time
-            ? (t - (boundary.time - half)) / half
-            : 1 - (t - boundary.time) / half;
-          color = boundary.kind === "flash_white" ? "#fff" : "#000";
-          break;
+        if (boundary.kind === "fade") {
+          // Cross dissolve: no color overlay. Fade the ACTIVE slot out over the
+          // idle slot, which the ping-pong player keeps paused on the incoming
+          // clip's first frame. ponytail: the preview dissolves in the window
+          // BEFORE the boundary (where the prepared idle frame exists); the
+          // render dissolves just after it — imperceptible at 150–600ms.
+          const d = boundary.durationMs / 1000;
+          if (t >= boundary.time - d && t < boundary.time) {
+            crossfade = {
+              progress: (t - (boundary.time - d)) / d,
+              clipIndex: boundary.clipIndex,
+            };
+            break;
+          }
+        } else {
+          const half = boundary.durationMs / 2000;
+          if (t >= boundary.time - half && t <= boundary.time + half) {
+            opacity = t < boundary.time
+              ? (t - (boundary.time - half)) / half
+              : 1 - (t - boundary.time) / half;
+            color = boundary.kind === "flash_white" ? "#fff" : "#000";
+            break;
+          }
         }
+      }
+      const idleSlot = activeSlotRef.current ^ 1;
+      const idleState = slotStateRef.current[idleSlot];
+      if (crossfade && idleState.ready && idleState.preparedForIndex === crossfade.clipIndex) {
+        const activeEl = previewSlotRefs.current[activeSlotRef.current];
+        const idleEl = previewSlotRefs.current[idleSlot];
+        if (activeEl && idleEl) {
+          activeEl.style.opacity = String(1 - crossfade.progress);
+          idleEl.style.opacity = "1"; // revealed behind (z-index stays below)
+          crossfadeActiveRef.current = true;
+        }
+      } else {
+        // Idle slot not prepared for this boundary (e.g. scrubbed here while
+        // paused) → hard cut in the preview; the render still dissolves.
+        restoreSlots();
       }
       const clamped = String(Math.max(0, Math.min(1, opacity)));
       els.forEach((el) => {
@@ -2455,25 +2609,45 @@ export function TimelineEditor({
     commitComposition(updated);
   }, [commitComposition, displayedComposition]);
 
-  const dropCompositionClip = (targetId: string) => {
-    if (!compositionDragId || compositionDragId === targetId) {
-      setCompositionDragId(null);
-      return;
-    }
+  // Premiere-style clip move: while a clip drags anywhere over the Video lane,
+  // compute the insertion boundary from the cursor X and show a live indicator;
+  // dropping inserts the clip at that boundary. Intros stay before body clips.
+  const updateCompositionDropTarget = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!compositionDragId) return;
     const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
-    const targetIndex = displayedComposition.findIndex((clip) => clip.id === targetId);
-    if (
-      sourceIndex < 0 ||
-      targetIndex < 0 ||
-      displayedComposition[sourceIndex].kind !== displayedComposition[targetIndex].kind
-    ) {
-      setCompositionDragId(null);
-      return;
-    }
+    if (sourceIndex < 0) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const total = displayedComposition.reduce(
+      (sum, clip) => Math.max(sum, clip.timeline_start + clip.timeline_duration),
+      0,
+    );
+    const time = Math.min(total, Math.max(0, ((event.clientX - rect.left) / Math.max(1, rect.width)) * total));
+    const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
+    let index = displayedComposition.filter(
+      (clip) => clip.timeline_start + clip.timeline_duration / 2 < time,
+    ).length;
+    index = displayedComposition[sourceIndex].kind === "intro"
+      ? Math.min(index, introCount)
+      : Math.max(index, introCount);
+    const boundaryTime = index >= displayedComposition.length
+      ? total
+      : displayedComposition[index].timeline_start;
+    setCompositionDropTarget({ index, time: boundaryTime });
+  };
+
+  const dropCompositionClipAtTarget = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const target = compositionDropTarget;
+    const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
+    setCompositionDragId(null);
+    setCompositionDropTarget(null);
+    if (!target || sourceIndex < 0) return;
+    if (target.index === sourceIndex || target.index === sourceIndex + 1) return;
     const updated = [...displayedComposition];
     const [moved] = updated.splice(sourceIndex, 1);
-    updated.splice(targetIndex, 0, moved);
-    setCompositionDragId(null);
+    updated.splice(target.index > sourceIndex ? target.index - 1 : target.index, 0, moved);
     commitComposition(updated);
   };
 
@@ -2523,6 +2697,75 @@ export function TimelineEditor({
     });
     commitComposition(updated);
   }, [commitComposition, displayedComposition]);
+
+  // Premiere-style transition move: drag a boundary's transition block to
+  // another boundary. The origin becomes an explicit cut so the transition
+  // visibly *moves* (not duplicates) even when it came from the variant
+  // default. A sub-threshold drag is treated as a click → popover opens.
+  const [transitionDragTarget, setTransitionDragTarget] = useState<number | null>(null);
+  const suppressTransitionClickRef = useRef(false);
+  const beginTransitionDrag = (
+    event: React.PointerEvent,
+    originIdx: number,
+    spec: TransitionSpec,
+  ) => {
+    if (event.button !== 0) return;
+    const axis = (event.currentTarget as HTMLElement).closest("[data-timeline-axis]") as HTMLElement | null;
+    if (!axis || timelineDuration <= 0) return;
+    const startX = event.clientX;
+    const rect = axis.getBoundingClientRect();
+    const eligible = displayedComposition
+      .map((clip, idx) => ({ idx, time: clip.timeline_start, kind: clip.kind }))
+      .filter((b) => b.idx > 0 && b.kind !== "intro");
+    if (eligible.length === 0) return;
+    let target = originIdx;
+    let engaged = false;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    const update = (clientX: number) => {
+      if (!engaged && Math.abs(clientX - startX) < 5) return;
+      if (!engaged) {
+        engaged = true;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      const t = ((clientX - rect.left) / Math.max(1, rect.width)) * timelineDuration;
+      let best = eligible[0];
+      for (const b of eligible) {
+        if (Math.abs(b.time - t) < Math.abs(best.time - t)) best = b;
+      }
+      target = best.idx;
+      setTransitionDragTarget(best.idx);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setTransitionDragTarget(null);
+    };
+    const finish = (upEvent: PointerEvent) => {
+      update(upEvent.clientX);
+      cleanup();
+      if (!engaged) return; // plain click → let the popover open
+      suppressTransitionClickRef.current = true;
+      if (target === originIdx) return;
+      const fromId = displayedComposition[originIdx].id;
+      const toId = displayedComposition[target].id;
+      commitComposition(displayedComposition.map((candidate) => {
+        if (candidate.id === fromId) return { ...candidate, transitionIn: null };
+        if (candidate.id === toId) return { ...candidate, transitionIn: spec };
+        return candidate;
+      }));
+    };
+    const cancel = () => cleanup();
+    const move = (moveEvent: PointerEvent) => update(moveEvent.clientX);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+  };
 
   // --- Drag-and-drop handlers ---
 
@@ -2796,10 +3039,10 @@ export function TimelineEditor({
     : displayedComposition.find((clip) => clip.id === selectedClipId) ?? null;
 
   const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
-    const subtitleText = matches.find(
+    const activeMatch = matches.find(
       (match) => match.srt_start <= previewCurrentTime && previewCurrentTime < match.srt_end,
-    )?.srt_text;
-    if (!subtitleText || containerHeight <= 0) return null;
+    ) ?? null;
+    if (!activeMatch?.srt_text || containerHeight <= 0) return null;
 
     const fontSize = scaleSubtitleFontPx(
       subtitleSettings?.fontSize ?? 48,
@@ -2843,12 +3086,15 @@ export function TimelineEditor({
         className="absolute left-2 right-2 z-[50] pointer-events-none"
         style={{ ...positionStyle, textAlign: subtitleSettings?.horizontalAlignment ?? "center" }}
       >
-        <p
-          className="inline-block px-2 py-1 font-semibold leading-tight"
-          style={{
+        <PreviewSubtitleOverlayText
+          match={activeMatch}
+          subtitleSettings={subtitleSettings}
+          previewCurrentTime={previewCurrentTime}
+          audioRef={previewAudioRef}
+          isPlaying={isPreviewPlaying}
+          textStyle={{
             fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
             fontSize: `${fontSize}px`,
-            color: subtitleSettings?.textColor ?? "#FFFFFF",
             opacity,
             textShadow: `${baseShadow}${glowShadow}`,
             WebkitTextStroke: outlineWidth > 0
@@ -2857,9 +3103,7 @@ export function TimelineEditor({
             paintOrder: "stroke fill",
             letterSpacing: `${letterSpacing}px`,
           }}
-        >
-          {subtitleText}
-        </p>
+        />
       </div>
     );
   };
@@ -3418,10 +3662,19 @@ export function TimelineEditor({
             ) : null;
 
             const canInsertSlide = !!(onInterstitialSlidesChange || onAttentionTimelineChange);
-            const lanes: { label: string; height: string; attention?: boolean; action?: React.ReactNode; content: React.ReactNode }[] = [
+            const lanes: { label: string; height: string; attention?: boolean; action?: React.ReactNode; content: React.ReactNode; dragProps?: React.HTMLAttributes<HTMLDivElement> }[] = [
               {
                 label: "Video",
                 height: "h-16",
+                dragProps: {
+                  onDragOver: updateCompositionDropTarget,
+                  onDrop: dropCompositionClipAtTarget,
+                  onDragLeave: (event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      setCompositionDropTarget(null);
+                    }
+                  },
+                },
                 content: (
                   <>
                     {displayedComposition.map((clip, idx) => {
@@ -3455,15 +3708,10 @@ export function TimelineEditor({
                             event.dataTransfer.effectAllowed = "move";
                             event.dataTransfer.setData("text/plain", clip.id);
                           }}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
+                          onDragEnd={() => {
+                            setCompositionDragId(null);
+                            setCompositionDropTarget(null);
                           }}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            dropCompositionClip(clip.id);
-                          }}
-                          onDragEnd={() => setCompositionDragId(null)}
                         >
                           <div className="absolute inset-0 flex items-center justify-center bg-black/20 text-white/25">
                             <Film className="size-4" />
@@ -3502,9 +3750,11 @@ export function TimelineEditor({
                         </TimelineClipShell>
                       );
                     })}
-                    {/* Transitions V1: one popover marker per body-clip boundary. Skips
-                        the first clip (no previous clip) and any boundary INTO an intro
-                        clip — intro micro-clips never take a transition. */}
+                    {/* Transitions: one marker per body-clip boundary. A boundary with
+                        an effective transition renders as a Premiere-style block sitting
+                        across the cut (width ∝ duration, draggable to another boundary);
+                        a cut boundary keeps the small dot. Skips the first clip (no
+                        previous clip) and any boundary INTO an intro clip. */}
                     {displayedComposition.map((clip, idx) => {
                       if (idx === 0 || clip.kind === "intro") return null;
                       const effective = transitionBoundaries.find((b) => b.clipIndex === idx) ?? null;
@@ -3512,12 +3762,31 @@ export function TimelineEditor({
                         <BoundaryTransitionMarker
                           key={`boundary-${clip.id}`}
                           left={pct(clip.timeline_start)}
+                          width={effective ? widthPct(effective.durationMs / 1000) : null}
                           override={clip.transitionIn}
                           effective={effective}
                           onChange={(next) => setBoundaryTransition(clip.id, next)}
+                          onDragStart={effective
+                            ? (e) => beginTransitionDrag(e, idx, { kind: effective.kind, durationMs: effective.durationMs })
+                            : undefined}
+                          suppressClickRef={suppressTransitionClickRef}
                         />
                       );
                     })}
+                    {transitionDragTarget !== null && displayedComposition[transitionDragTarget] && (
+                      <span
+                        className="pointer-events-none absolute inset-y-0 z-50 w-0.5 -translate-x-1/2 bg-primary"
+                        style={{ left: pct(displayedComposition[transitionDragTarget].timeline_start) }}
+                      />
+                    )}
+                    {/* Premiere-style insertion indicator while dragging a clip. */}
+                    {compositionDragId !== null && compositionDropTarget !== null && (
+                      <span
+                        data-testid="composition-drop-indicator"
+                        className="pointer-events-none absolute inset-y-0 z-50 w-0.5 -translate-x-1/2 bg-primary shadow-[0_0_6px_rgba(190,242,100,0.9)]"
+                        style={{ left: pct(compositionDropTarget.time) }}
+                      />
+                    )}
                   </>
                 ),
               },
@@ -3596,9 +3865,6 @@ export function TimelineEditor({
                     >
                       <TimelineWaveform peaks={voiceoverPeaks} className="inset-y-1 opacity-90" />
                     </div>
-                    <span className="pointer-events-none absolute left-1 top-1/2 z-10 -translate-y-1/2 text-[9px] font-medium text-emerald-100 drop-shadow">
-                      TTS voiceover · {formatTime(audioDuration)}
-                    </span>
                     <span
                       className="absolute inset-y-0 w-px bg-emerald-200"
                       style={{ left: pct(audioDuration) }}
@@ -3674,6 +3940,7 @@ export function TimelineEditor({
                     title: isPreviewActive ? "Drag to scrub" : undefined,
                     onPointerDown: beginMultiTrackScrub,
                     ...(lane.attention ? { "data-attention-track": "" } : {}),
+                    ...(lane.dragProps ?? {}),
                   },
                   showEndLine: true,
                   content: (
@@ -4640,23 +4907,37 @@ const TRANSITION_DURATION_PRESETS: { value: number; label: string }[] = [
   { value: 500, label: "Slow" },
 ];
 
+const TRANSITION_LABELS: Record<TransitionKind, string> = {
+  fade: "Fade (dissolve)",
+  dip_black: "Dip to black",
+  flash_white: "Flash white",
+};
+
 /**
- * Transitions V1: clickable marker on a body-clip boundary. `override` is the
- * clip's raw `transitionIn` (undefined = inherits the variant default, null =
- * explicit cut, object = explicit transition); `effective` is the same
- * boundary post-guard from `effectiveBoundaryTransitions` (what will actually
- * render — may be null even with an override, e.g. either side too short).
+ * Marker on a body-clip boundary. `override` is the clip's raw `transitionIn`
+ * (undefined = inherits the variant default, null = explicit cut, object =
+ * explicit transition); `effective` is the same boundary post-guard from
+ * `effectiveBoundaryTransitions` (what will actually render — may be null even
+ * with an override, e.g. either side too short). A boundary with an effective
+ * transition renders as a Premiere-style block across the cut (drag via
+ * `onDragStart` to move it to another boundary); otherwise a small dot.
  */
 function BoundaryTransitionMarker({
   left,
+  width,
   override,
   effective,
   onChange,
+  onDragStart,
+  suppressClickRef,
 }: {
   left: string;
+  width: string | null;
   override: TransitionSpec | null | undefined;
   effective: EffectiveBoundaryTransition | null;
   onChange: (next: TransitionSpec | null | undefined) => void;
+  onDragStart?: (event: React.PointerEvent) => void;
+  suppressClickRef?: React.MutableRefObject<boolean>;
 }) {
   const isOverride = override !== undefined;
   const isCut = override === null;
@@ -4673,6 +4954,19 @@ function BoundaryTransitionMarker({
       ? "border-primary bg-primary/30" // inherited default, resolves to a transition
       : "border-white/40 bg-transparent"; // inherited default, resolves to a cut (or no default set)
 
+  const title = isOverride
+    ? (isCut ? "Cut (override)" : `${override ? TRANSITION_LABELS[override.kind] : ""} (override)`)
+    : (effective ? `${TRANSITION_LABELS[effective.kind]} (variant default)` : "Cut (variant default)");
+  // A pointer drag that engaged sets suppressClickRef; swallow the click that
+  // follows pointerup so the popover only opens on a plain click.
+  const onClickCapture = (event: React.MouseEvent) => {
+    if (suppressClickRef?.current) {
+      suppressClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+
   return (
     <Popover
       onOpenChange={(open) => {
@@ -4682,15 +4976,33 @@ function BoundaryTransitionMarker({
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`absolute top-1/2 z-40 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition hover:scale-125 ${dotClass}`}
-          style={{ left }}
-          title={isOverride
-            ? (isCut ? "Cut (override)" : `${override?.kind === "flash_white" ? "Flash white" : "Dip to black"} (override)`)
-            : (effective ? "Uses variant default" : "Cut (variant default)")}
-          aria-label="Edit transition at this boundary"
-        />
+        {effective ? (
+          <button
+            type="button"
+            // Premiere-style block straddling the cut: width ∝ duration, sits
+            // above the trim handle (z-40 > z-30). Drag moves it to another
+            // boundary; click opens the popover.
+            className="absolute inset-y-1 z-40 flex -translate-x-1/2 cursor-grab items-center justify-center overflow-hidden rounded border border-primary bg-primary/70 text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:cursor-grabbing"
+            style={{ left, width: width ?? undefined, minWidth: 16 }}
+            title={`${title} · ${effective.durationMs}ms — drag to another boundary`}
+            aria-label="Edit or move transition at this boundary"
+            onPointerDown={onDragStart}
+            onClickCapture={onClickCapture}
+          >
+            <span className="text-[10px] leading-none">⋈</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            // Sits at the TOP of the cut, NLE-style — centering it vertically put it
+            // exactly over the trim handle's natural grab point and swallowed the
+            // pointerdown, making boundary resize appear broken.
+            className={`absolute top-1 z-40 size-2.5 -translate-x-1/2 rounded-full border transition hover:scale-125 ${dotClass}`}
+            style={{ left }}
+            title={title}
+            aria-label="Edit transition at this boundary"
+          />
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-64 space-y-3" align="center">
         <div className="space-y-1.5">
@@ -4708,6 +5020,7 @@ function BoundaryTransitionMarker({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="cut">Cut</SelectItem>
+              <SelectItem value="fade">Fade (dissolve)</SelectItem>
               <SelectItem value="dip_black">Dip to black</SelectItem>
               <SelectItem value="flash_white">Flash white</SelectItem>
             </SelectContent>
