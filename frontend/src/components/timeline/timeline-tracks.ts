@@ -18,10 +18,7 @@ export interface TimelineTrack {
 }
 
 // A cue with no explicit track belongs to V2 (the first image track).
-// (The `track` field is added to AttentionCue in the same commit as the backend
-// model; read it defensively so this module compiles ahead of that.)
-const trackOf = (cue: AttentionCue): number =>
-  (cue as { track?: number }).track ?? 2;
+const trackOf = (cue: AttentionCue): number => cue.track ?? 2;
 
 export function cuesOnTrack(cues: AttentionCue[], trackIndex: number): AttentionCue[] {
   return cues.filter((cue) => trackOf(cue) === trackIndex);

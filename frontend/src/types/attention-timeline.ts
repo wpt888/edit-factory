@@ -37,6 +37,9 @@ export type AttentionCue = {
   templateId?: string;
   /** Composite behind (default) or in front of the burned-in subtitles. */
   zone?: "behind" | "front";
+  /** Timeline track this cue lives on: 2 = first image track (V2), 3 = V3, ...
+   *  Absent = V2. Additive; drives lane placement and preview z-order. */
+  track?: number;
 };
 
 export type AttentionTimeline = {

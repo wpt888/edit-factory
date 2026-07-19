@@ -3655,6 +3655,8 @@ class AttentionCue(BaseModel):
     sfxVolumeDb: float = Field(default=0.0, ge=-60.0, le=12.0)
     templateId: Optional[str] = Field(default=None, max_length=100)
     zone: Literal["behind", "front"] = "behind"
+    # Timeline track: 2 = first image track (V2), 3 = V3, ... Absent = V2.
+    track: int = Field(default=2, ge=2, le=99)
 
 
 class AttentionTimelineRequest(BaseModel):
