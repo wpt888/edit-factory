@@ -516,8 +516,8 @@ async def upload_cloud_media(
         or "source-video"
     )
     content_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    if not content_type.startswith("video/") and not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Upload an image or video file.")
+    if not any(content_type.startswith(prefix) for prefix in ("video/", "image/", "audio/")):
+        raise HTTPException(status_code=400, detail="Upload an image, video, or audio file.")
     temp_dir = get_settings().base_dir / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_path = temp_dir / f"platform-{uuid.uuid4().hex}-{filename}"

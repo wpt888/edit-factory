@@ -599,6 +599,25 @@ def clear_pipeline_cancelled(pipeline_id: str):
         _cancelled_pipelines.pop(pipeline_id, None)
 
 
+def _music_asset_mtime(music) -> str:
+    """Local mtime of a music asset (mirrors the TTS audio_mtime pattern) so an
+    in-place file swap invalidates the cache. Remote/pending assets return '0';
+    their assetUrl/assetId already covers change detection via the settings dict."""
+    if not music:
+        return "0"
+    src = None
+    if isinstance(music, dict):
+        src = music.get("assetUrl") or music.get("assetId")
+    else:
+        src = getattr(music, "assetUrl", None) or getattr(music, "assetId", None)
+    if not src or str(src).startswith(("http", "pending:")):
+        return "0"
+    try:
+        return str(Path(str(src)).stat().st_mtime)
+    except OSError:
+        return "0"
+
+
 def _compute_render_fingerprint(
     render_request,
     variant_index: int,
@@ -640,6 +659,15 @@ def _compute_render_fingerprint(
         composition_variant = composition_overrides.get(lookup_key) or []
         if not composition_variant and lookup_key != str(variant_index):
             composition_variant = composition_overrides.get(str(variant_index)) or []
+
+    music_variant = None
+    music_overrides = getattr(render_request, "music_overrides", None)
+    if music_overrides:
+        mv = music_overrides.get(lookup_key)
+        if not mv and lookup_key != str(variant_index):
+            mv = music_overrides.get(str(variant_index))
+        if mv is not None:
+            music_variant = mv.model_dump() if hasattr(mv, "model_dump") else dict(mv)
 
     interstitial = []
     if render_request.interstitial_slides:
@@ -719,6 +747,8 @@ def _compute_render_fingerprint(
         "attention_timeline": attention_timeline,
         "pip_overlays": render_request.pip_overlays or {},
         "source_video_ids": sorted(render_request.source_video_ids or []),
+        "music": music_variant,
+        "music_mtime": _music_asset_mtime(music_variant),
     }
     return hashlib.sha256(
         _json.dumps(key_data, sort_keys=True, default=str).encode()
@@ -2678,6 +2708,20 @@ def _validate_composition_transitions(clips):
     return clips
 
 
+class MusicSettings(BaseModel):
+    """Per-variant background music (A2 lane). Persisted additively in
+    preview_data['music']; resolved to a local file at render time. Fades are
+    milliseconds to match the frontend MusicSettings type exactly."""
+    assetId: Optional[str] = Field(default=None, max_length=512)
+    assetUrl: Optional[str] = Field(default=None, max_length=2048)
+    label: Optional[str] = Field(default=None, max_length=256)
+    volume: float = Field(default=0.3, ge=0.0, le=3.0)
+    ducking: bool = True
+    fadeInMs: int = Field(default=0, ge=0, le=10000)
+    fadeOutMs: int = Field(default=0, ge=0, le=10000)
+    loop: bool = True
+
+
 class PipelineRenderRequest(BaseModel):
     """Request model for batch render."""
     variant_indices: List[int] = Field(..., min_length=1, max_length=10)  # Which variants to render (BUG-PR-13)
@@ -2688,6 +2732,8 @@ class PipelineRenderRequest(BaseModel):
     match_overrides: Optional[Dict[str, List[dict]]] = None
     # Canonical post-merge editor clips, keyed exactly like match_overrides.
     composition_overrides: Optional[Dict[str, List[dict]]] = None
+    # Per-variant background music, keyed exactly like composition_overrides.
+    music_overrides: Optional[Dict[str, MusicSettings]] = None
 
     @field_validator("composition_overrides")
     @classmethod
@@ -6853,6 +6899,17 @@ async def render_variants(
                         _composition_key,
                     )
 
+            # Background music for this variant (keyed exactly like composition).
+            variant_music = None
+            if render_request.music_overrides:
+                _music_key = str(job_key) if job_key is not None else str(vid)
+                _mv = (
+                    render_request.music_overrides.get(_music_key)
+                    or render_request.music_overrides.get(str(vid))
+                )
+                if _mv is not None:
+                    variant_music = _mv.model_dump()
+
             # PIP-07: Removed dead first assignment of variant_interstitial_slides
             # (was overwritten later in the function). The actual lookup is below.
 
@@ -7069,6 +7126,7 @@ async def render_variants(
                         source_video_ids=render_request.source_video_ids,
                         match_overrides=variant_match_overrides,
                         composition_override=variant_composition_override,
+                        music=variant_music,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
                         enable_sharpen=render_request.enable_sharpen,
@@ -7789,6 +7847,15 @@ async def remake_variant(
 
             variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
 
+            _remake_music = None
+            if render_request.music_overrides:
+                _rm = (
+                    render_request.music_overrides.get(str(job_key))
+                    or render_request.music_overrides.get(str(vid))
+                )
+                if _rm is not None:
+                    _remake_music = _rm.model_dump()
+
             # Render with NO match_overrides → auto-matching with strong avoid set
             try:
                 final_video_path, raw_assembly_path, _seg_composition = await asyncio.wait_for(
@@ -7801,6 +7868,7 @@ async def remake_variant(
                         voice_id=render_request.voice_id,
                         source_video_ids=render_request.source_video_ids,
                         match_overrides=None,  # Force auto-matching with new segments
+                        music=_remake_music,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
                         enable_sharpen=render_request.enable_sharpen,
@@ -8968,6 +9036,8 @@ async def restore_previews(
             "video_timeline": video_timeline,
             # Transitions V1: camelCase to land directly in PreviewData.
             "defaultTransition": pd.get("default_transition"),
+            # Background music (A2), stored additively; lands directly in PreviewData.
+            "music": pd.get("music"),
         }
 
         # Grab available_segments from the first preview that has them
@@ -9041,6 +9111,9 @@ class SaveCompositionRequest(BaseModel):
     # Transitions V1: this variant's default transition (None = hard cuts).
     # Sent with every composition save; validated like any transitionIn.
     default_transition: Optional[dict] = None
+    # Background music (A2). Additive: stored in preview_data['music'], no DB
+    # migration. Absent key leaves any existing music untouched; explicit null clears it.
+    music: Optional[MusicSettings] = None
 
 
 @router.put("/{pipeline_id}/composition/{variant_index}")
@@ -9143,6 +9216,8 @@ async def save_composition(
         preview_data["video_timeline"] = normalized_timeline
         preview_data["timeline"] = normalized_timeline
         preview_data["default_transition"] = default_transition
+        # Music travels with every composition save (like default_transition).
+        preview_data["music"] = body.music.model_dump() if body.music else None
         intro_segments = [
             clip for clip in normalized_timeline if clip.get("kind") == "intro"
         ]
@@ -9254,6 +9329,8 @@ class PreviewRenderRequest(BaseModel):
     voice_volume: float = Field(default=1.0, ge=0.0, le=3.0)
     audio_fade_in: float = Field(default=0.0, ge=0.0, le=10.0)
     audio_fade_out: float = Field(default=0.0, ge=0.0, le=10.0)
+    # Background music for this variant's preview render.
+    music: Optional[MusicSettings] = None
     visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
@@ -9430,6 +9507,8 @@ async def render_preview(
             "audio_fade_out": render_request.audio_fade_out,
         },
         "audio_mtime": audio_mtime,
+        "music": render_request.music.model_dump() if render_request.music else None,
+        "music_mtime": _music_asset_mtime(render_request.music),
     }
     matches_fingerprint = hashlib.sha256(_json.dumps(
         preview_fingerprint_payload,
@@ -9554,6 +9633,7 @@ async def render_preview(
                         voice_volume=render_request.voice_volume,
                         audio_fade_in=render_request.audio_fade_in,
                         audio_fade_out=render_request.audio_fade_out,
+                        music=render_request.music.model_dump() if render_request.music else None,
                         subtitle_style_override=subtitle_style_override,
                         visual_version_label=normalized_visual_version,
                     ),
