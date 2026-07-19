@@ -1,5 +1,37 @@
 # Engineering Change Log
 
+## 2026-07-19 - Attention Images: Pipeline Step 1 integration + per-variant stagger
+
+- Added a Step 1 picker (`attention-template-picker.tsx`) under Video Idea
+  to choose a template + source images once for the whole pipeline, with
+  a **Stagger / variant (s)** control (variant *N* shifts by
+  `N × staggerSeconds`) and a **Variants (0 = all)** cap.
+- Added `PUT /api/v1/pipeline/{id}/attention-selection`, persisted under a
+  reserved `_selection` key in `editai_pipelines.attention_timeline`
+  (can't collide with numeric preview keys); restored via
+  `attention_selection` on `GET /pipeline/scripts/{id}`, including history
+  restore and import.
+- Added an auto-apply effect in `pipeline/page.tsx`: once a variant has a
+  preview and an empty attention timeline, it calls apply-template with
+  `startOffsetMs = variantIndex × staggerSeconds × 1000`; hand-edited
+  (non-empty) timelines are never overwritten.
+- `ApplyAttentionTemplateRequest` gained `startOffsetMs` (0–60000); cues
+  are shifted after `distribute_attention_cues` and any cue overflowing
+  `durationMs` is dropped.
+- Verified: `test_apply_template_start_offset_staggers_and_drops_overflow`
+  (backend, 3/3 in file) + `attention-step1-picker.spec.ts` (frontend,
+  2/2). Screenshot `attention-step1-picker.png`.
+- Gotchas recorded: frontend serves from a standalone Next.js build on
+  :3947 (needs `npm run build`, EBUSY if the server process still holds
+  `.next/standalone`); backend (:8000) runs without `--reload`; the
+  Step 1 + stagger diff is uncommitted, interleaved in `page.tsx` /
+  `pipeline_routes.py` with unrelated parallel-session work (segment
+  proximity scoring, karaoke `subtitle_styler.py`) and needs hunk-level
+  staging plus the mixed-EOL rebuild recipe from
+  `goals/attention-images-details.md`.
+
+See [Attention Images: Pipeline Step 1 integration + per-variant stagger](30-attention-images-pipeline-integration.md).
+
 ## 2026-07-18 - Shell parity pack — X1 (web ↔ desktop)
 
 - Cross-repo follow-up to S2 (`social-scheduler/goals/design-x1-parity.md`),

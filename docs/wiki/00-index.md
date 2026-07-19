@@ -26,3 +26,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Step 3 "Variant Previews" timeline editor rework](25-step3-variant-timeline-editor.md)
 - [Pipeline toolbar overlap + heading-consistency fix pack](28-pipeline-toolbar-heading-fixes.md)
 - [Shell, spacing, and icon-sizing sweep](29-shell-spacing-sweep.md)
+- [Attention Images: Pipeline Step 1 integration + per-variant stagger](30-attention-images-pipeline-integration.md)
