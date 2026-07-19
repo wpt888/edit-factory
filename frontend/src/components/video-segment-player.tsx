@@ -290,12 +290,18 @@ export function VideoSegmentPlayer({
     }
   }, [duration]);
 
+  // Last DOM-driven playhead position, so the throttled play-time re-render can
+  // re-apply the *current* value instead of a stale one (prevents a 10 Hz snap
+  // back while updatePlayheadDOM drives the line at the monitor's refresh rate).
+  const playheadPosRef = useRef(0);
+
   // Direct DOM playhead update — zero React re-renders
   const updatePlayheadDOM = useCallback((time: number) => {
     currentTimeRef.current = time;
+    const pos = ((time - visibleStartRef.current) / visibleDurationRef.current) * 100;
+    const clamped = Math.max(-1, Math.min(101, pos));
+    playheadPosRef.current = clamped;
     if (playheadRef.current) {
-      const pos = ((time - visibleStartRef.current) / visibleDurationRef.current) * 100;
-      const clamped = Math.max(-1, Math.min(101, pos));
       playheadRef.current.style.left = `${clamped}%`;
       playheadRef.current.style.display = (clamped >= 0 && clamped <= 100) ? '' : 'none';
     }
@@ -571,11 +577,21 @@ export function VideoSegmentPlayer({
     if (!video) return;
 
     let animationFrameId: number | null = null;
+    let lastStateSync = 0;
 
-    // Use requestAnimationFrame for smooth playhead updates during playback
+    // The playhead line is driven straight to the DOM every frame so it glides
+    // at the monitor's refresh rate, independent of React. Re-rendering this
+    // large component 60×/s only produced ~2 playhead updates per second, which
+    // read as a stuttering cursor. React state is refreshed at ~10 Hz — enough
+    // for the time readout, transform preview and auto-scroll, cheap for the DOM.
     const updateTimeSmooth = () => {
       if (video && !video.paused) {
-        setCurrentTime(video.currentTime);
+        updatePlayheadDOM(video.currentTime);
+        const now = performance.now();
+        if (now - lastStateSync >= 100) {
+          lastStateSync = now;
+          setCurrentTime(video.currentTime);
+        }
         animationFrameId = requestAnimationFrame(updateTimeSmooth);
       }
     };
@@ -634,7 +650,7 @@ export function VideoSegmentPlayer({
       video.removeEventListener("seeking", handleSeeking);
       video.removeEventListener("seeked", handleSeeked);
     };
-  }, [throttledSeek]);
+  }, [throttledSeek, updatePlayheadDOM]);
 
   // Auto-scroll timeline to follow the playhead when zoomed in during playback
   useEffect(() => {
@@ -1144,11 +1160,13 @@ export function VideoSegmentPlayer({
         }
       }
 
+      // Emerald base to match the pipeline Step-3 voiceover lane; saved ranges
+      // read as a brighter emerald, voice regions stay amber.
       ctx.fillStyle = isVoice
-        ? "rgba(245, 158, 11, 0.7)"  // amber for voice
+        ? "rgba(245, 158, 11, 0.75)"  // amber for voice
         : isSavedSegment
-          ? "rgba(231, 255, 75, 0.78)" // lime only inside saved ranges
-          : "rgba(161, 161, 170, 0.62)"; // neutral waveform elsewhere
+          ? "rgba(110, 231, 183, 0.95)" // emerald-300, brighter inside saved ranges
+          : "rgba(110, 231, 183, 0.5)"; // emerald-300, dim elsewhere
 
       ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
     }
@@ -1403,19 +1421,27 @@ export function VideoSegmentPlayer({
                           {formatTime(displayStart)} – {formatTime(displayEnd)}
                         </span>
                       )}
-                      {/* Resize drag handles */}
+                      {/* Resize drag handles — hidden until the segment is hovered,
+                          then a clear grip appears at each edge (mirrors the
+                          pipeline clip trim affordance). */}
                       {onSegmentResize && segment.id && (
                         <>
                           <div
-                            className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
+                            className="absolute inset-y-0 left-0 z-30 flex w-2.5 cursor-col-resize items-center justify-center rounded-l-sm bg-lime-300/25 opacity-0 transition group-hover:opacity-100 hover:bg-lime-300/60"
                             onMouseDown={(e) => startResize(e, segment, 'start')}
                             onClick={(e) => e.stopPropagation()}
-                          />
+                            title="Drag to trim start"
+                          >
+                            <span className="h-1/2 w-px bg-white/80" />
+                          </div>
                           <div
-                            className="absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize hover:bg-white/20"
+                            className="absolute inset-y-0 right-0 z-30 flex w-2.5 cursor-col-resize items-center justify-center rounded-r-sm bg-lime-300/25 opacity-0 transition group-hover:opacity-100 hover:bg-lime-300/60"
                             onMouseDown={(e) => startResize(e, segment, 'end')}
                             onClick={(e) => e.stopPropagation()}
-                          />
+                            title="Drag to trim end"
+                          >
+                            <span className="h-1/2 w-px bg-white/80" />
+                          </div>
                         </>
                       )}
                       {/* Time tooltip during move/resize */}
@@ -1469,9 +1495,13 @@ export function VideoSegmentPlayer({
                   ref={playheadRef}
                   className="absolute -top-1 -bottom-1 z-40 w-px bg-white shadow-[0_0_4px_rgba(255,255,255,0.8)]"
                   style={{
-                    left: `${getPlayheadPosition()}%`,
+                    // While playing, the rAF loop owns this via updatePlayheadDOM;
+                    // re-apply its latest value so the throttled re-render never
+                    // yanks the line back to a stale position.
+                    left: `${isPlaying ? playheadPosRef.current : getPlayheadPosition()}%`,
                     pointerEvents: 'none',
-                    display: (getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100) ? '' : 'none',
+                    display: (isPlaying ? playheadPosRef.current : getPlayheadPosition()) >= 0
+                      && (isPlaying ? playheadPosRef.current : getPlayheadPosition()) <= 100 ? '' : 'none',
                   }}
                 >
                   <button

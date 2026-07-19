@@ -168,6 +168,13 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
   await page.locator('button[title^="Maximize editor"]').first().click();
   const editor = page.getByTestId("step3-full-editor");
   await expect(editor).toBeVisible();
+  await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0);
+
+  // Maximizing is a workspace layout mode, not an app-wide modal: controls
+  // outside the editor must remain interactive and must not dismiss it.
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+  await expect(editor).toBeVisible();
 
   const clipLocators = COMPOSITION.map((clip) => editor.getByTestId(`composition-clip-${clip.id}`));
   for (const clip of clipLocators) await expect(clip).toBeVisible();
@@ -207,4 +214,21 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
       5,
     );
   }
+
+  const previewPosition = editor.getByRole("slider", { name: "Preview position" });
+  await editor.getByTitle("Play", { exact: true }).click();
+  await expect(previewPosition).toBeEnabled();
+  await expect(editor.getByTitle("Pause", { exact: true })).toBeVisible({ timeout: 5_000 });
+  await previewPosition.click();
+  await expect(previewPosition).toBeFocused();
+
+  const scrollBeforeSpace = await page.evaluate(() => window.scrollY);
+  await page.keyboard.press("Space");
+  await expect(editor.getByTitle("Play", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollBeforeSpace);
+
+  await page.keyboard.press("Space");
+  await expect(editor.getByTitle("Pause", { exact: true })).toBeVisible();
+  await page.keyboard.press("Space");
+  await expect(editor.getByTitle("Play", { exact: true })).toBeVisible();
 });

@@ -50,6 +50,7 @@ export interface MultiTrackTimelineProps {
     startTime?: number;
     duration: number;
     currentTime?: number;
+    playheadStyle?: CSSProperties;
     className?: string;
     style?: CSSProperties;
     onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
@@ -89,7 +90,7 @@ export function MultiTrackTimeline({
         {/* Time ruler and zoom controls for the shared track scale. */}
         <div className="flex">
           <div
-            className="sticky left-0 z-30 flex shrink-0 items-center justify-center border-r border-white/10 bg-[#111411] px-1"
+            className="sticky left-0 z-40 flex shrink-0 items-center justify-center border-r border-white/10 bg-[#111411] px-1"
             style={{ width: labelWidth }}
           >
             <TimelineZoomControls
@@ -104,6 +105,7 @@ export function MultiTrackTimeline({
             startTime={ruler.startTime}
             duration={ruler.duration}
             currentTime={ruler.currentTime}
+            playheadStyle={ruler.playheadStyle}
             className={cn("shrink-0", ruler.className)}
             style={{ width: laneWidth, ...ruler.style }}
             onPointerDown={ruler.onPointerDown}
@@ -118,7 +120,7 @@ export function MultiTrackTimeline({
         {lanes.map((lane) => (
           <div key={lane.label} className="flex border-t border-white/5 bg-[#0d0f0d]">
             <div
-              className="sticky left-0 z-30 flex shrink-0 items-center justify-between gap-1 border-r border-white/10 bg-[#111411] px-3 font-medium text-white/75"
+              className="sticky left-0 z-40 flex shrink-0 items-center justify-between gap-1 border-r border-white/10 bg-[#111411] px-3 font-medium text-white/75"
               style={{ width: labelWidth }}
             >
               <span className="truncate">{lane.label}</span>
