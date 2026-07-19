@@ -1,6 +1,6 @@
 import { SegmentOption } from "@/components/timeline-editor";
 import { SubtitleSettings } from "@/types/video-processing";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -41,6 +41,8 @@ export interface PreviewData {
   // Populated by the P1 Assembly Settings UI; resolved to concrete per-boundary
   // values via resolveCompositionTransitions() before any request is built.
   defaultTransition?: TransitionSpec | null;
+  // A2 background music (null/absent = none). Persisted via the composition save.
+  music?: MusicSettings | null;
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;

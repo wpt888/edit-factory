@@ -1,5 +1,20 @@
 export type CompositionClipKind = "intro" | "body";
 
+/**
+ * Background music for the A2 lane. Mirrors the backend MusicSettings pydantic
+ * model field-for-field (fades in ms). `loop` stays backend-default true and has
+ * no UI toggle. Persisted additively in the composition save; absent = no music.
+ */
+export interface MusicSettings {
+  assetId: string;
+  assetUrl?: string;
+  label?: string;
+  volume: number;
+  ducking: boolean;
+  fadeInMs: number;
+  fadeOutMs: number;
+}
+
 /** Transition kinds: V1 no-overlap fades + "fade" (true cross dissolve, xfade). */
 export type TransitionKind = "dip_black" | "flash_white" | "fade";
 

@@ -45,6 +45,7 @@ import {
   Maximize2,
   Pin,
   ScanLine,
+  Music,
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
@@ -56,8 +57,9 @@ import type { SubtitleSettings, SegmentTransform } from "@/types/video-processin
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { effectiveBoundaryTransitions } from "@/types/composition-timeline";
+import { MusicInspector } from "@/components/timeline/music-inspector";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
   TimelineWaveform,
@@ -307,6 +309,9 @@ interface TimelineEditorProps {
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
   attentionTimeline?: AttentionTimeline;
   onAttentionTimelineChange?: (timeline: AttentionTimeline) => void;
+  /** A2 background music for this variant (null/absent = none). */
+  music?: MusicSettings | null;
+  onMusicChange?: (music: MusicSettings | null) => void;
   /** Open the server-rendered preview for this exact variant. */
   onRenderPreview?: () => void;
   // "card" = compact in-card editor; "full" = the maximized modal editor
@@ -334,6 +339,8 @@ export function TimelineEditor({
   onInterstitialSlidesChange,
   attentionTimeline,
   onAttentionTimelineChange,
+  music = null,
+  onMusicChange,
   onRenderPreview,
   displayMode = "card",
 }: TimelineEditorProps) {
@@ -691,6 +698,8 @@ export function TimelineEditor({
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
+  // A2 music selection — mutually exclusive with clip/slide/block selection.
+  const [selectedMusic, setSelectedMusic] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSourceVideoId = useRef<string | null>(null);
   const lastStartTime = useRef<number | null>(null);
@@ -3507,7 +3516,7 @@ export function TimelineEditor({
       {/* Full editor: left inspector placeholder when nothing is selected */}
       {displayMode === "full" &&
         (viewMode !== "timeline" ||
-          (selectedSlideId === null && !selectedClip && (selectedBlockIndex === null || !selectedMatch))) && (
+          (selectedSlideId === null && !selectedClip && !selectedMusic && (selectedBlockIndex === null || !selectedMatch))) && (
           <div className="col-start-1 row-start-2 min-h-0 overflow-y-auto bg-card p-4">
             <p className="text-center text-sm text-muted-foreground">Select a clip on the timeline to edit its settings here</p>
           </div>
@@ -3617,6 +3626,7 @@ export function TimelineEditor({
                       setSelectedSlideId(cueId);
                       setSelectedClipId(null);
                       setSelectedBlockIndex(null);
+                      setSelectedMusic(false);
                     }}
                     showEmptyHint={track.index === 2}
                   />
@@ -3658,6 +3668,7 @@ export function TimelineEditor({
                       setSelectedClipId(clipId === selectedClipId ? null : clipId);
                       setSelectedBlockIndex(null);
                       setSelectedSlideId(null);
+                      setSelectedMusic(false);
                     }}
                     onJumpToIndex={jumpToIndex}
                     onClipDragStart={setCompositionDragId}
@@ -3691,15 +3702,70 @@ export function TimelineEditor({
                   </>
                 ),
               },
-              // A2 — music track, wired up in a later phase.
+              // A2 — background music. A single full-width block spanning the
+              // whole timeline when a track is set; empty lane + "+" otherwise.
               {
                 label: "A2 Music",
                 height: "h-8",
-                stub: true,
-                content: (
+                stub: !onMusicChange,
+                action: onMusicChange && !music ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMusic(true);
+                      setSelectedClipId(null);
+                      setSelectedSlideId(null);
+                      setSelectedBlockIndex(null);
+                    }}
+                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
+                    title="Add background music"
+                    aria-label="Add background music"
+                  >
+                    <Plus className="size-3" />
+                  </button>
+                ) : undefined,
+                content: !onMusicChange ? (
                   <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/40">
                     Music — coming soon
                   </div>
+                ) : music ? (
+                  <button
+                    type="button"
+                    data-testid="music-block"
+                    onClick={() => {
+                      setSelectedMusic(true);
+                      setSelectedClipId(null);
+                      setSelectedSlideId(null);
+                      setSelectedBlockIndex(null);
+                    }}
+                    className={`absolute inset-y-1 left-0 flex items-center gap-1 overflow-hidden rounded-sm border px-1.5 text-left text-[9px] text-amber-100 transition ${
+                      selectedMusic ? "border-amber-300 ring-1 ring-amber-300" : "border-amber-300/40"
+                    }`}
+                    style={{
+                      width: "100%",
+                      // Fade ramps drawn as amber gradients at each end.
+                      background:
+                        "linear-gradient(90deg, rgba(251,191,36,0.05), rgba(251,191,36,0.22) 6%, rgba(251,191,36,0.22) 94%, rgba(251,191,36,0.05)), rgba(251,191,36,0.10)",
+                    }}
+                    title={music.label || "Background music"}
+                  >
+                    <Music className="size-3 shrink-0 text-amber-300" />
+                    <span className="truncate">{music.label || "Music"}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="music-lane-empty"
+                    onClick={() => {
+                      setSelectedMusic(true);
+                      setSelectedClipId(null);
+                      setSelectedSlideId(null);
+                      setSelectedBlockIndex(null);
+                    }}
+                    className="absolute inset-0 flex items-center px-2 text-left text-[9px] text-muted-foreground/50 hover:text-amber-200"
+                  >
+                    Add background music
+                  </button>
                 ),
               },
               ...(sfxCues.length > 0 ? [{
@@ -3777,6 +3843,14 @@ export function TimelineEditor({
               />
             );
           })()}
+
+          {selectedMusic && onMusicChange && (
+            <MusicInspector
+              music={music}
+              onChange={onMusicChange}
+              displayMode={displayMode}
+            />
+          )}
 
           {selectedClip && (() => {
             const clipIndex = displayedComposition.findIndex((clip) => clip.id === selectedClip.id);
