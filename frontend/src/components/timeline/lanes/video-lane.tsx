@@ -174,8 +174,9 @@ export function VideoLane({
           style={{ left: pct(clips[transitionDragTarget].timeline_start) }}
         />
       )}
-      {/* Premiere-style insertion indicator while dragging a clip. */}
-      {compositionDragId !== null && compositionDropTarget !== null && (
+      {/* Premiere-style insertion indicator while dragging a clip (V1 reorder)
+          or while an overlay clip is dragged over V1 to be inserted. */}
+      {compositionDropTarget !== null && (
         <span
           data-testid="composition-drop-indicator"
           className="pointer-events-none absolute inset-y-0 z-50 w-0.5 -translate-x-1/2 bg-primary shadow-[0_0_6px_rgba(190,242,100,0.9)]"

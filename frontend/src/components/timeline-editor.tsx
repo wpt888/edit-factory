@@ -57,8 +57,8 @@ import type { SubtitleSettings, SegmentTransform } from "@/types/video-processin
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
-import { effectiveBoundaryTransitions } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec, OverlayBox } from "@/types/composition-timeline";
+import { effectiveBoundaryTransitions, DEFAULT_OVERLAY_BOX, isOverlayClip } from "@/types/composition-timeline";
 import { MusicInspector } from "@/components/timeline/music-inspector";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
 import {
@@ -82,6 +82,7 @@ import {
 } from "@/lib/composition-reflow";
 import { VideoLane } from "@/components/timeline/lanes/video-lane";
 import { ImageLane } from "@/components/timeline/lanes/image-lane";
+import { OverlayLane } from "@/components/timeline/lanes/overlay-lane";
 import { deriveTracks, cuesOnTrack } from "@/components/timeline/timeline-tracks";
 
 // Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
@@ -571,15 +572,16 @@ export function TimelineEditor({
     window.addEventListener("pointerup", onUp);
   }, [attentionTimeline, audioDuration, matches, onAttentionTimelineChange, updateCueTiming]);
 
-  const composition = useMemo(() => {
+  // Full source, thumbnail-enriched, before the magnetic/overlay split.
+  // Composition clips ship without thumbnail_path (old saved timelines never
+  // had one; the backend serializer resolves it by source-path equality, which
+  // yields null). Backfill from the segment pool — by segment_id when present,
+  // else by same source video + nearest source start — so the lanes show
+  // previews instead of bare Film icons.
+  const enrichedTimeline = useMemo(() => {
     const source = videoTimeline.length > 0
-      ? [...videoTimeline].sort((a, b) => a.timeline_start - b.timeline_start)
+      ? videoTimeline
       : buildLegacyComposition(matches, introSegments, availableSegments, audioDuration);
-    // Composition clips ship without thumbnail_path (old saved timelines never
-    // had one; the backend serializer resolves it by source-path equality, which
-    // yields null). Backfill from the segment pool — by segment_id when present,
-    // else by same source video + nearest source start — so the Video lane shows
-    // previews instead of bare Film icons.
     const thumbFor = (clip: CompositionClip): string | null | undefined => {
       if (clip.thumbnail_path) return clip.thumbnail_path;
       if (clip.segment_id) {
@@ -593,14 +595,32 @@ export function TimelineEditor({
           - Math.abs((b.start_time ?? 0) - clip.start_time))[0];
       return nearest?.thumbnail_path ?? clip.thumbnail_path;
     };
-    const enriched = source.map((clip) => {
+    return source.map((clip) => {
       const thumbnail_path = thumbFor(clip);
       return thumbnail_path === clip.thumbnail_path ? clip : { ...clip, thumbnail_path };
     });
-    return fitCompositionToDuration(enriched, audioDuration);
   }, [audioDuration, availableSegments, introSegments, matches, videoTimeline]);
+
+  // The magnetic V1 sequence: track absent/1, sorted by output time then reflowed
+  // to fill the voiceover clock. This is what every existing V1 handler indexes.
+  const composition = useMemo(() => {
+    const magnetic = enrichedTimeline
+      .filter((clip) => !isOverlayClip(clip))
+      .sort((a, b) => a.timeline_start - b.timeline_start);
+    return fitCompositionToDuration(magnetic, audioDuration);
+  }, [audioDuration, enrichedTimeline]);
+
+  // Free video overlays (track >= 2): absolute timeline_start, never reflowed.
+  const overlayClips = useMemo(() =>
+    enrichedTimeline
+      .filter(isOverlayClip)
+      .sort((a, b) => (a.track ?? 2) - (b.track ?? 2) || a.timeline_start - b.timeline_start),
+    [enrichedTimeline]);
+
   const [compositionDraft, setCompositionDraft] = useState<CompositionClip[] | null>(null);
+  const [overlayDraft, setOverlayDraft] = useState<CompositionClip[] | null>(null);
   const displayedComposition = compositionDraft ?? composition;
+  const displayedOverlays = overlayDraft ?? overlayClips;
   displayedCompositionRef.current = displayedComposition;
   const compositionIntroDuration = displayedComposition
     .filter((clip) => clip.kind === "intro")
@@ -608,13 +628,22 @@ export function TimelineEditor({
 
   useEffect(() => {
     setCompositionDraft(null);
+    setOverlayDraft(null);
   }, [videoTimeline]);
 
-  const commitComposition = useCallback((next: CompositionClip[]) => {
-    const normalized = fitCompositionToDuration(next, audioDuration);
+  // Persist the full timeline (magnetic + overlays). fit self-separates: it
+  // reflows only magnetic clips and passes overlays through untouched.
+  const emitTimeline = useCallback((clips: CompositionClip[]) => {
     setCompositionDraft(null);
-    onVideoTimelineChange?.(normalized);
+    setOverlayDraft(null);
+    onVideoTimelineChange?.(fitCompositionToDuration(clips, audioDuration));
   }, [audioDuration, onVideoTimelineChange]);
+
+  // V1 edits hand a magnetic-only array; append the current overlays so they
+  // survive the save/undo round-trip.
+  const commitComposition = useCallback((nextMagnetic: CompositionClip[]) => {
+    emitTimeline([...nextMagnetic, ...overlayClips]);
+  }, [emitTimeline, overlayClips]);
 
   // Legacy restored previews may contain only an absolute source path. Those
   // paths are intentionally forbidden by the backend file endpoint, so never
@@ -2548,6 +2577,174 @@ export function TimelineEditor({
     commitComposition(updated);
   };
 
+  // ── Phase C: free video overlays (V2..Vn) ──────────────────────────────────
+  const MAX_FREE_OVERLAYS = 50;
+  const OVERLAY_TRACKS = [2, 3, 4] as const;
+  const clampOverlayTrack = (track: number) => Math.min(4, Math.max(2, Math.round(track)));
+
+  // Boundary index in the magnetic sequence for an absolute output time (used
+  // when converting an overlay back into V1). Mirrors updateCompositionDropTarget.
+  const magneticInsertionAt = (timeSec: number) => {
+    const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
+    const raw = displayedComposition.filter(
+      (clip) => clip.timeline_start + clip.timeline_duration / 2 < timeSec,
+    ).length;
+    return Math.max(raw, introCount);
+  };
+
+  // V1 clip block → overlay track: keep its absolute timeline_start, default the
+  // box to full-frame contain, force body/no-transition; V1 reflows closed.
+  const convertClipToOverlay = (clipId: string, trackIndex: number) => {
+    const clip = displayedComposition.find((candidate) => candidate.id === clipId);
+    if (!clip) return;
+    if (overlayClips.length >= MAX_FREE_OVERLAYS) {
+      toast.error(`Overlay limit reached (${MAX_FREE_OVERLAYS} free clips).`);
+      return;
+    }
+    const { transitionIn: _drop, ...rest } = clip;
+    const overlay: CompositionClip = {
+      ...rest,
+      kind: "body",
+      track: clampOverlayTrack(trackIndex),
+      overlay_box: { ...DEFAULT_OVERLAY_BOX },
+    };
+    const nextMagnetic = displayedComposition.filter((candidate) => candidate.id !== clipId);
+    emitTimeline([...nextMagnetic, ...overlayClips, overlay]);
+    setSelectedClipId(overlay.id);
+  };
+
+  // Overlay clip → V1: strip overlay fields, splice into the magnetic sequence at
+  // the boundary the cursor is over, reflow closed.
+  const convertOverlayToMagnetic = (clipId: string, insertIndex: number) => {
+    const clip = overlayClips.find((candidate) => candidate.id === clipId);
+    if (!clip) return;
+    const { track: _t, overlay_box: _b, transitionIn: _tr, ...rest } = clip;
+    const magnetic: CompositionClip = { ...rest, kind: "body" };
+    const nextMagnetic = [...displayedComposition];
+    nextMagnetic.splice(Math.min(insertIndex, nextMagnetic.length), 0, magnetic);
+    const nextOverlays = overlayClips.filter((candidate) => candidate.id !== clipId);
+    emitTimeline([...nextMagnetic, ...nextOverlays]);
+    setSelectedClipId(magnetic.id);
+  };
+
+  // Inspector writes for a selected overlay (box/fit/track). Routed through the
+  // same persist path as every other edit.
+  const updateOverlayClip = (clipId: string, patch: Partial<CompositionClip>) => {
+    emitTimeline([
+      ...displayedComposition,
+      ...overlayClips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+    ]);
+  };
+  const removeOverlayClip = (clipId: string) => {
+    emitTimeline([...displayedComposition, ...overlayClips.filter((clip) => clip.id !== clipId)]);
+    if (selectedClipId === clipId) setSelectedClipId(null);
+  };
+
+  // Pointer-drag an overlay clip: move (with vertical track change / drop-to-V1),
+  // or trim either edge. Snaps to subtitle boundaries + V1 cuts (Alt disables);
+  // clamps to no-overlap with siblings on the target track; min duration 0.05s.
+  const beginOverlayTimingDrag = (
+    event: React.PointerEvent,
+    clip: CompositionClip,
+    edge: "move" | "resize" | "resize-start",
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const laneEl = (event.currentTarget as HTMLElement).closest("[data-track-index]") as HTMLElement | null;
+    if (!laneEl) return;
+    const startX = event.clientX;
+    const total = Math.max(0.05, timelineDurationRef.current);
+    const originStart = clip.timeline_start;
+    const originDur = clip.timeline_duration;
+    const originSrcStart = clip.start_time;
+    const originSrcEnd = clip.end_time;
+    const originTrack = clip.track ?? 2;
+    const snapPts = [
+      ...matches.flatMap((m) => [m.srt_start, m.srt_end]),
+      ...displayedComposition.flatMap((c) => [c.timeline_start, c.timeline_start + c.timeline_duration]),
+    ];
+    const snap = (value: number, disabled: boolean) => {
+      if (disabled) return value;
+      const nearest = snapPts.reduce((best, p) => (Math.abs(p - value) < Math.abs(best - value) ? p : best), value);
+      return Math.abs(nearest - value) <= 0.15 ? nearest : value;
+    };
+    // Clamp `start` (for `dur`) into the gap around the origin on `trackIdx` so a
+    // moved/trimmed overlay never overlaps a sibling.
+    const clampStart = (start: number, dur: number, trackIdx: number) => {
+      let lo = 0;
+      let hi = Math.max(0, total - dur);
+      for (const s of displayedOverlays) {
+        if (s.id === clip.id || (s.track ?? 2) !== trackIdx) continue;
+        const sStart = s.timeline_start;
+        const sEnd = s.timeline_start + s.timeline_duration;
+        if (sEnd <= originStart) lo = Math.max(lo, sEnd);
+        else if (sStart >= originStart + originDur) hi = Math.min(hi, sStart - dur);
+      }
+      return Math.max(lo, Math.min(hi, Math.max(0, start)));
+    };
+
+    let pendingV1: { index: number; time: number } | null = null;
+    let draftTrack = originTrack;
+    let latest: CompositionClip[] = displayedOverlays;
+    const setClip = (patch: Partial<CompositionClip>) => {
+      latest = displayedOverlays.map((o) => (o.id === clip.id ? { ...o, ...patch } : o));
+      setOverlayDraft(latest);
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const deltaSec = (moveEvent.clientX - startX) / Math.max(1, laneEl.clientWidth) * total;
+      // Which lane is the cursor over? Magnetic V1 → convert target; image track → track change.
+      const el = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null;
+      const overV1 = el?.closest("[data-magnetic-lane]") as HTMLElement | null;
+      const overImage = el?.closest("[data-track-index]") as HTMLElement | null;
+
+      if (edge === "move" && overV1) {
+        // Hovering the V1 lane: show the magnetic insertion indicator instead of
+        // repositioning the overlay; a drop here converts it into V1.
+        const rect = overV1.getBoundingClientRect();
+        const t = Math.min(total, Math.max(0, ((moveEvent.clientX - rect.left) / Math.max(1, rect.width)) * total));
+        const index = magneticInsertionAt(t);
+        const time = index >= displayedComposition.length ? total : displayedComposition[index].timeline_start;
+        pendingV1 = { index, time };
+        setCompositionDropTarget({ index, time });
+        return;
+      }
+      pendingV1 = null;
+      setCompositionDropTarget(null);
+
+      if (edge === "resize") {
+        const dur = Math.max(0.05, snap(originStart + originDur + deltaSec, moveEvent.altKey) - originStart);
+        const start = clampStart(originStart, dur, draftTrack);
+        setClip({ timeline_start: start, timeline_duration: dur, end_time: originSrcStart + dur, track: draftTrack });
+      } else if (edge === "resize-start") {
+        const rightEdge = originStart + originDur;
+        const start = Math.max(0, Math.min(snap(originStart + deltaSec, moveEvent.altKey), rightEdge - 0.05));
+        const srcStart = Math.max(0, originSrcStart + (start - originStart));
+        setClip({ timeline_start: start, timeline_duration: rightEdge - start, start_time: srcStart, end_time: originSrcEnd, track: draftTrack });
+      } else {
+        // move: horizontal reposition + vertical track change over an image lane.
+        if (overImage) {
+          const hovered = Number(overImage.getAttribute("data-track-index"));
+          if (Number.isFinite(hovered) && hovered >= 2) draftTrack = clampOverlayTrack(hovered);
+        }
+        const start = clampStart(snap(originStart + deltaSec, moveEvent.altKey), originDur, draftTrack);
+        setClip({ timeline_start: start, track: draftTrack });
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setCompositionDropTarget(null);
+      if (pendingV1) {
+        convertOverlayToMagnetic(clip.id, pendingV1.index);
+        return;
+      }
+      emitTimeline([...displayedComposition, ...latest]);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   const nudgeCompositionSource = (clipId: string, edge: "in" | "out", delta: number) => {
     const clip = displayedComposition.find((candidate) => candidate.id === clipId);
     if (!clip) return;
@@ -3560,6 +3757,7 @@ export function TimelineEditor({
               height: string;
               attention?: boolean;
               trackIndex?: number;
+              magneticLane?: boolean;
               stub?: boolean;
               action?: React.ReactNode;
               meta?: React.ReactNode;
@@ -3615,27 +3813,61 @@ export function TimelineEditor({
                     </button>
                   </div>
                 ) : null,
+                // Accept a V1 clip block (HTML5 drag) dropped here → convert it
+                // into a free video overlay on this track.
+                dragProps: {
+                  onDragOver: (event) => {
+                    if (!compositionDragId) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  },
+                  onDrop: (event) => {
+                    if (!compositionDragId) return;
+                    event.preventDefault();
+                    const id = compositionDragId;
+                    setCompositionDragId(null);
+                    setCompositionDropTarget(null);
+                    convertClipToOverlay(id, track.index);
+                  },
+                },
                 content: (
-                  <ImageLane
-                    cues={cuesOnTrack(attentionCues, track.index)}
-                    trackIndex={track.index}
-                    pct={pct}
-                    widthPct={widthPct}
-                    onBeginTimingDrag={beginCueTimingDrag}
-                    onSelectCue={(cueId) => {
-                      setSelectedSlideId(cueId);
-                      setSelectedClipId(null);
-                      setSelectedBlockIndex(null);
-                      setSelectedMusic(false);
-                    }}
-                    showEmptyHint={track.index === 2}
-                  />
+                  <>
+                    <ImageLane
+                      cues={cuesOnTrack(attentionCues, track.index)}
+                      trackIndex={track.index}
+                      pct={pct}
+                      widthPct={widthPct}
+                      onBeginTimingDrag={beginCueTimingDrag}
+                      onSelectCue={(cueId) => {
+                        setSelectedSlideId(cueId);
+                        setSelectedClipId(null);
+                        setSelectedBlockIndex(null);
+                        setSelectedMusic(false);
+                      }}
+                      showEmptyHint={track.index === 2 && displayedOverlays.every((o) => (o.track ?? 2) !== 2)}
+                    />
+                    <OverlayLane
+                      clips={displayedOverlays.filter((o) => (o.track ?? 2) === track.index)}
+                      mediaApiUrl={mediaApiUrl}
+                      pct={pct}
+                      widthPct={widthPct}
+                      selectedClipId={selectedClipId}
+                      onSelectClip={(clipId) => {
+                        setSelectedClipId(clipId === selectedClipId ? null : clipId);
+                        setSelectedSlideId(null);
+                        setSelectedBlockIndex(null);
+                        setSelectedMusic(false);
+                      }}
+                      onBeginTimingDrag={beginOverlayTimingDrag}
+                    />
+                  </>
                 ),
               })),
               // V1 — the magnetic main-video lane.
               {
                 label: "V1",
                 height: "h-16",
+                magneticLane: true,
                 meta: compositionIntroDuration > 0 ? (
                   <span className="font-mono text-[8px] text-violet-300">
                     intro {compositionIntroDuration.toFixed(1)}s
@@ -3830,6 +4062,7 @@ export function TimelineEditor({
                     onPointerDown: beginMultiTrackScrub,
                     ...(lane.attention ? { "data-attention-track": "" } : {}),
                     ...(lane.trackIndex != null ? { "data-track-index": lane.trackIndex } : {}),
+                    ...(lane.magneticLane ? { "data-magnetic-lane": "" } : {}),
                     ...(lane.dragProps ?? {}),
                   },
                   showEndLine: !lane.stub,
