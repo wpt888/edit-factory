@@ -381,13 +381,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="mt-3">
               <ProductSwitcher activeProduct="studio" />
             </div>
+            {/* Desktop picks workspaces from the titlebar tabs; web gets a dropdown here. */}
+            {!DESKTOP_MODE && (
+              <div className="mt-3">
+                <ProfileSwitcher />
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto px-3 pt-2">
             <AppNav />
           </div>
           <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
             <CreditBalance />
-            <ProfileSwitcher />
+            {DESKTOP_MODE && <ProfileSwitcher />}
             <div className="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-sidebar-accent/50 p-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
                 {initial}
