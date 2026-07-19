@@ -52,7 +52,9 @@ import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { stripAssTags, computeKaraokeWordTimings, activeKaraokeWordIndex } from "@/lib/karaoke-word-timing";
 import { formatTimeShort as formatTime } from "@/lib/utils";
-import type { SubtitleSettings } from "@/types/video-processing";
+import type { SubtitleSettings, SegmentTransform } from "@/types/video-processing";
+import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
+import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import type { AttentionCue, AttentionTimeline } from "@/types/attention-timeline";
 import type { CompositionClip, EffectiveBoundaryTransition, TransitionKind, TransitionSpec } from "@/types/composition-timeline";
 import { effectiveBoundaryTransitions } from "@/types/composition-timeline";
@@ -3262,21 +3264,11 @@ export function TimelineEditor({
                         onError={(event) => { event.currentTarget.style.display = "none"; }}
                       />
                     )}
-                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/35">
-                      <Button
-                        variant="secondary"
-                        size="icon"
-                        className="size-12 rounded-full shadow-lg"
-                        onClick={activatePreview}
-                        disabled={isPreviewAudioLoading || !previewAudioSrc}
-                        aria-label="Play preview"
-                        title={previewAudioLoadFailed ? "Preview audio could not be loaded" : undefined}
-                      >
-                        {isPreviewAudioLoading
-                          ? <Loader2 className="size-5 animate-spin" />
-                          : <Play className="size-5 fill-current" />}
-                      </Button>
-                    </div>
+                    {isPreviewAudioLoading && (
+                      <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/20">
+                        <Loader2 className="size-6 animate-spin text-white" />
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -3369,7 +3361,7 @@ export function TimelineEditor({
                       className="size-8"
                       onClick={isPreviewActive ? togglePreviewPlayPause : activatePreview}
                       disabled={!isPreviewActive && (isPreviewAudioLoading || !previewAudioSrc)}
-                      title={isPreviewPlaying ? "Pause" : "Play"}
+                      title={previewAudioLoadFailed ? "Preview audio could not be loaded" : isPreviewPlaying ? "Pause" : "Play"}
                       aria-label={isPreviewPlaying ? "Pause preview" : "Play preview"}
                     >
                       {isPreviewPlaying ? (
@@ -4082,6 +4074,18 @@ export function TimelineEditor({
                       </div>
                     </div>
                   ))}
+                </div>
+
+                <div className="dark border-t border-white/10 pt-3" data-testid="clip-transform-panel">
+                  <SegmentTransformPanel
+                    transforms={{ ...DEFAULT_SEGMENT_TRANSFORM, ...(selectedClip.transforms as Partial<SegmentTransform> | null ?? {}) }}
+                    isOverride={!!selectedClip.transforms && Object.keys(selectedClip.transforms).length > 0}
+                    onChange={(next) => {
+                      commitComposition(displayedComposition.map((clip) =>
+                        clip.id === selectedClip.id ? { ...clip, transforms: next as unknown as Record<string, unknown> } : clip
+                      ));
+                    }}
+                  />
                 </div>
               </div>
             );

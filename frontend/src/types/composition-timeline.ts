@@ -1,7 +1,7 @@
 export type CompositionClipKind = "intro" | "body";
 
-/** Transition kinds for V1 — the no-overlap fade family only (P0 data model). */
-export type TransitionKind = "dip_black" | "flash_white";
+/** Transition kinds: V1 no-overlap fades + "fade" (true cross dissolve, xfade). */
+export type TransitionKind = "dip_black" | "flash_white" | "fade";
 
 /**
  * The transition *into* a clip (boundary between the previous clip and this one).

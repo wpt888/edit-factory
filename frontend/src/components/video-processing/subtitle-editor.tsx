@@ -48,6 +48,7 @@ import {
   SUBTITLE_REFERENCE_HEIGHT,
   useSubtitlePreviewHeight,
 } from "@/lib/subtitle-preview-scale";
+import { stripAssTags } from "@/lib/karaoke-word-timing";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
 const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: SUBTITLE_REFERENCE_HEIGHT, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
@@ -169,8 +170,7 @@ export function SubtitleEditor({
     || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
     || "Sample subtitle text";
   const karaokePreviewWords = useMemo(
-    () => previewOverlayText
-      .replace(/\{\\k\d+\}/gi, "")
+    () => stripAssTags(previewOverlayText)
       .trim()
       .split(/\s+/)
       .filter(Boolean),
@@ -461,20 +461,41 @@ export function SubtitleEditor({
           data-testid={settings.karaoke ? "karaoke-preview-overlay" : undefined}
         >
           {settings.karaoke && karaokePreviewWords.length > 0
-            ? karaokePreviewWords.map((word, index) => (
-                <span
-                  key={`${index}-${word}`}
-                  data-karaoke-state={index <= karaokePreviewWordIndex ? "highlighted" : "pending"}
-                  style={{
-                    color: index <= karaokePreviewWordIndex
-                      ? settings.highlightColor ?? "#FFFF00"
-                      : settings.textColor,
-                    transition: "color 120ms linear",
-                  }}
-                >
-                  {index > 0 ? " " : ""}{word}
-                </span>
-              ))
+            ? karaokePreviewWords.map((word, index) => {
+                const isActive = index === karaokePreviewWordIndex;
+                if (settings.karaokeStyle === "box") {
+                  return (
+                    <span key={`${index}-${word}`} data-karaoke-state={isActive ? "highlighted" : "pending"}>
+                      {index > 0 ? " " : ""}
+                      <span
+                        style={{
+                          color: isActive ? settings.highlightColor ?? "#FFFF00" : settings.textColor,
+                          backgroundColor: isActive ? settings.highlightBgColor ?? "#A3E635" : "transparent",
+                          padding: "0.08em 0.18em",
+                          borderRadius: "2px",
+                          transition: "color 120ms linear, background-color 120ms linear",
+                        }}
+                      >
+                        {word}
+                      </span>
+                    </span>
+                  );
+                }
+                return (
+                  <span
+                    key={`${index}-${word}`}
+                    data-karaoke-state={index <= karaokePreviewWordIndex ? "highlighted" : "pending"}
+                    style={{
+                      color: index <= karaokePreviewWordIndex
+                        ? settings.highlightColor ?? "#FFFF00"
+                        : settings.textColor,
+                      transition: "color 120ms linear",
+                    }}
+                  >
+                    {index > 0 ? " " : ""}{word}
+                  </span>
+                );
+              })
             : previewOverlayText}
         </p>
       </div>
@@ -661,7 +682,6 @@ export function SubtitleEditor({
       <div className="space-y-3">
         <div>
           <h3 className="font-semibold text-sm">Style Presets</h3>
-          <p className="text-xs text-muted-foreground">Click a preset to apply</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {[
@@ -956,11 +976,37 @@ export function SubtitleEditor({
           </div>
 
           {settings.karaoke && (
-            <ColorPicker
-              label="Active Word Color"
-              value={settings.highlightColor ?? "#FFFF00"}
-              onChange={(value) => updateSetting("highlightColor", value)}
-            />
+            <>
+              <div className="space-y-2">
+                <Label>Highlight Style</Label>
+                <Select
+                  value={settings.karaokeStyle ?? "color"}
+                  onValueChange={(value) => updateSetting("karaokeStyle", value as "color" | "box")}
+                >
+                  <SelectTrigger className="bg-muted/50">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="color">Color sweep</SelectItem>
+                    <SelectItem value="box">Background box</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <ColorPicker
+                label="Active Word Color"
+                value={settings.highlightColor ?? "#FFFF00"}
+                onChange={(value) => updateSetting("highlightColor", value)}
+              />
+
+              {settings.karaokeStyle === "box" && (
+                <ColorPicker
+                  label="Highlight Background"
+                  value={settings.highlightBgColor ?? "#A3E635"}
+                  onChange={(value) => updateSetting("highlightBgColor", value)}
+                />
+              )}
+            </>
           )}
         </div>
       </div>

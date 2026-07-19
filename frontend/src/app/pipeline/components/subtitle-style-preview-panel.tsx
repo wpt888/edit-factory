@@ -53,7 +53,7 @@ export function SubtitleStylePreviewPanel({
       : `Live Preview — ${styleKey} (${styleKey === "A" ? "Instagram" : "Facebook"})`;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border bg-muted/10 p-3">
+    <div className="flex flex-col gap-2 rounded-lg bg-muted/10 p-3">
       <span className="text-xs font-medium text-foreground">
         {label}
       </span>

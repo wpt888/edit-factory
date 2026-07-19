@@ -31,6 +31,8 @@ export interface SubtitleSettings {
   // voice via per-word ASS {\k} timing tags. Pairs with highlightColor.
   karaoke?: boolean;            // Default false
   highlightColor?: string;      // Hex of the "sung"/active word, default "#FFFF00"
+  karaokeStyle?: "color" | "box"; // "color" = sweep (default), "box" = CapCut-style filled bg on active word only
+  highlightBgColor?: string;    // Box background color (karaokeStyle "box"), default "#A3E635"
 }
 
 // User-saved named preset (distinct from hardcoded CAPTION_PRESETS).

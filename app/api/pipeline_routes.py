@@ -188,6 +188,14 @@ def _resolve_pipeline_audio_path(raw_path: str | Path) -> Path:
     appdata_path = get_settings().base_dir / path
     if appdata_path.exists():
         return appdata_path
+    # Cross-environment fallback: a dev backend (base_dir = repo root) serving a
+    # pipeline whose media was written by the desktop app under %APPDATA%.
+    from app.config import get_desktop_data_dir
+    desktop_dir = get_desktop_data_dir()
+    if desktop_dir is not None:
+        desktop_path = desktop_dir / path
+        if desktop_path.exists():
+            return desktop_path
     # Backward compatibility for older builds that wrote media/ under the CWD.
     return path
 
@@ -668,6 +676,8 @@ def _compute_render_fingerprint(
         "letterSpacing": render_request.letter_spacing,
         "karaoke": render_request.karaoke,
         "highlightColor": render_request.highlight_color,
+        "karaokeStyle": render_request.karaoke_style,
+        "highlightBgColor": render_request.highlight_bg_color,
     }
     effective_subtitle, _ = _get_subtitle_settings_for_key(
         render_request, lookup_key, _default_subtitle
@@ -1791,6 +1801,8 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         "letterSpacing": render_request.letter_spacing,
         "karaoke": render_request.karaoke,
         "highlightColor": render_request.highlight_color,
+        "karaokeStyle": render_request.karaoke_style,
+        "highlightBgColor": render_request.highlight_bg_color,
     }
 
     return preset_data, default_subtitle_settings
@@ -2714,6 +2726,8 @@ class PipelineRenderRequest(BaseModel):
     letter_spacing: float = 0
     karaoke: bool = False
     highlight_color: str = "#FFFF00"
+    karaoke_style: Literal["color", "box"] = "color"
+    highlight_bg_color: str = "#A3E635"
     # Video filters
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -2777,7 +2791,8 @@ class PipelineRenderRequest(BaseModel):
     # frontend-side: "0", "1", "0_A", "0_B". Values are SubtitleSettings-shaped
     # dicts in camelCase (fontSize, textColor, outlineColor, outlineWidth,
     # positionY, shadowDepth, enableGlow, glowBlur, adaptiveSizing, opacity,
-    # fontFamily, karaoke, highlightColor). When a key is present, it REPLACES
+    # fontFamily, karaoke, highlightColor, karaokeStyle, highlightBgColor). When
+    # a key is present, it REPLACES
     # the flat subtitle fields
     # for that variant and SUPPRESSES any Meta profile override. When absent,
     # the flat fields above are used as default, and Meta profile overrides

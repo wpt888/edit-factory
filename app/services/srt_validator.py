@@ -8,6 +8,26 @@ from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
 
+_ASS_OVERRIDE_BLOCK_RE = re.compile(
+    r"(?<!\\)\{(?:\\[A-Za-z0-9]+[^{}\\\r\n]*)+\}"
+)
+
+
+def _escape_srt_text_line(line: str) -> str:
+    """Escape literal text while preserving machine-generated ASS overrides."""
+    parts = []
+    cursor = 0
+    for match in _ASS_OVERRIDE_BLOCK_RE.finditer(line):
+        literal = line[cursor:match.start()]
+        parts.append(literal.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}'))
+        parts.append(match.group(0))
+        cursor = match.end()
+
+    literal = line[cursor:]
+    parts.append(literal.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}'))
+    return ''.join(parts)
+
+
 def sanitize_srt_text(srt_content: str) -> str:
     """Strip HTML/script tags from SRT content to prevent XSS.
 
@@ -27,9 +47,10 @@ def sanitize_srt_text(srt_content: str) -> str:
 def sanitize_srt_for_ffmpeg(srt_content: str) -> str:
     """Escape special characters in SRT text content for safe FFmpeg/libass rendering.
 
-    Prevents ASS override tag injection and control sequence interpretation
-    in subtitle text. Only processes text lines — SRT structure (timestamps,
-    sequence numbers, blank lines) is preserved.
+    Prevents control sequence interpretation in literal subtitle text. Only
+    processes text lines — SRT structure (timestamps, sequence numbers, blank
+    lines) is preserved. Valid, unescaped ASS override blocks are retained so
+    machine-generated karaoke timing tags survive the shared sanitization path.
 
     Characters escaped:
     - Backslashes: \\ -> \\\\ (prevents \\N, \\n, \\h interpretation as ASS control sequences)
@@ -73,12 +94,9 @@ def sanitize_srt_for_ffmpeg(srt_content: str) -> str:
             i += 1
             continue
 
-        # Text line — sanitize it
-        # Order matters: escape backslashes FIRST, then braces
-        sanitized = line.replace('\\', '\\\\')
-        sanitized = sanitized.replace('{', '\\{')
-        sanitized = sanitized.replace('}', '\\}')
-        result.append(sanitized)
+        # Text line — preserve generator-owned override blocks such as {\k50}
+        # while escaping literal backslashes and stray braces around them.
+        result.append(_escape_srt_text_line(line))
         i += 1
 
     return '\n'.join(result)

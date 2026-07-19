@@ -10,6 +10,8 @@ import subprocess
 
 import pytest
 
+from app.services.srt_validator import sanitize_srt_full
+from app.services.video_effects import subtitle_styler
 from app.services.video_effects.subtitle_styler import (
     SubtitleStyleConfig,
     build_karaoke_ass_file,
@@ -66,6 +68,67 @@ def test_build_ass_from_karaoke_srt(tmp_path: Path):
     # The per-word {\k} timing tags must survive into the Dialogue line.
     assert "Dialogue:" in body
     assert "{\\k60}KARAOKE" in body
+
+
+def test_sanitize_srt_full_preserves_karaoke_tags():
+    content = (
+        "1\n00:00:00,000 --> 00:00:01,000\n"
+        "{\\an8}{\\k50}Hello {\\k50}world {literal}\n"
+    )
+
+    sanitized = sanitize_srt_full(content)
+
+    assert "{\\an8}{\\k50}Hello {\\k50}world" in sanitized
+    assert "\\{literal\\}" in sanitized
+
+
+def test_box_mode_builds_per_word_layered_events(tmp_path: Path, monkeypatch):
+    image_font = pytest.importorskip("PIL.ImageFont")
+    test_font = image_font.truetype("DejaVuSans.ttf", 24)
+    monkeypatch.setattr(
+        subtitle_styler,
+        "_resolve_karaoke_font_file",
+        lambda _family: Path(test_font.path),
+    )
+    srt_path = tmp_path / "box.srt"
+    srt_path.write_text(_KARAOKE_SRT, encoding="utf-8")
+    config = _karaoke_config()
+    config.karaoke_style = "box"
+    config.highlight_bg_color = "&H0035E6A3"
+
+    ass_path = build_karaoke_ass_file(srt_path, config, 1080, 1920)
+
+    assert ass_path is not None
+    body = ass_path.read_text(encoding="utf-8")
+    assert "WrapStyle: 2" in body
+    assert "Style: Box," in body
+    assert ",3,8,0,5,0,0,0,1" in body
+    box_events = [line for line in body.splitlines() if line.startswith("Dialogue: 0,")]
+    line_events = [line for line in body.splitlines() if line.startswith("Dialogue: 1,")]
+    assert len(box_events) == 4
+    assert len(line_events) == 4
+    assert all(",Box,," in line and "\\1a&HFF&" in line and "\\pos(" in line for line in box_events)
+    assert all(",Line,," in line and "\\pos(" in line for line in line_events)
+    assert all(all(word in line for word in ("KARAOKE", "TEST", "WORDS", "HERE")) for line in line_events)
+
+
+def test_box_mode_missing_font_falls_back_to_color_bytes(tmp_path: Path, monkeypatch):
+    srt_path = tmp_path / "fallback.srt"
+    srt_path.write_text(_KARAOKE_SRT, encoding="utf-8")
+    color_config = _karaoke_config()
+    color_config.font_family = "Missing Font"
+    color_path = build_karaoke_ass_file(srt_path, color_config, 1080, 1920)
+    assert color_path is not None
+    color_bytes = color_path.read_bytes()
+
+    monkeypatch.setattr(subtitle_styler, "_resolve_karaoke_font_file", lambda _family: None)
+    box_config = _karaoke_config()
+    box_config.font_family = "Missing Font"
+    box_config.karaoke_style = "box"
+    box_path = build_karaoke_ass_file(srt_path, box_config, 1080, 1920)
+
+    assert box_path is not None
+    assert box_path.read_bytes() == color_bytes
 
 
 def test_plain_srt_returns_none(tmp_path: Path):

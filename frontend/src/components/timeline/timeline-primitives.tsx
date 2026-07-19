@@ -90,10 +90,18 @@ export function TimelineWaveform({
   className?: string;
   colorClassName?: string;
 }) {
-  const visiblePeaks = peaks.length > 0 ? peaks : Array.from({ length: 96 }, () => 0.08);
+  // Not-yet-decoded state: a solid strip, not placeholder bars — dozens of
+  // flat rounded bars read as a broken dotted line at lane height.
+  if (peaks.length === 0) {
+    return (
+      <div className={cn("absolute inset-0 flex items-center overflow-hidden", className)} aria-hidden="true">
+        <div className={cn("h-0.5 w-full rounded-full opacity-40", colorClassName)} />
+      </div>
+    );
+  }
   return (
     <div className={cn("absolute inset-0 flex items-center gap-px overflow-hidden", className)} aria-hidden="true">
-      {visiblePeaks.map((peak, index) => (
+      {peaks.map((peak, index) => (
         <span
           key={index}
           className={cn("min-w-px flex-1 rounded-full", colorClassName)}

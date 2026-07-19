@@ -131,3 +131,39 @@ def test_duration_invariant_and_fast_path(cache_env, source_video, tmp_path):
     assert len(faded_vfs) == n  # first has fade-out, last has fade-in, middle both
     assert sum("fade=t=in:st=0:d=0.150:color=black" in vf for vf in vf_args) == n - 1
     assert sum("fade=t=out:st=0.850:d=0.150:color=black" in vf for vf in vf_args) == n - 1
+
+
+def test_cross_dissolve_duration_invariant(cache_env, source_video, tmp_path):
+    """"fade" boundaries: tpad+xfade merge preserves total duration exactly and
+    the final concat keeps -c copy (merged runs are pre-encoded)."""
+    service = AssemblyService.__new__(AssemblyService)
+    n = 5  # 4 fade boundaries → one merged run of all 5 segments
+
+    def fade_timeline():
+        entries = _timeline(source_video, n, with_transitions=False)
+        for i, e in enumerate(entries):
+            if i > 0:
+                e.transition_in = {"kind": "fade", "durationMs": 400}
+        return entries
+
+    plain_cmds, fade_cmds = [], []
+    out_plain = _render(service, tmp_path, "xf_plain",
+                        _timeline(source_video, n, with_transitions=False), plain_cmds)
+    out_fade = _render(service, tmp_path, "xf_fade", fade_timeline(), fade_cmds)
+    assert out_plain.exists() and out_fade.exists()
+
+    d_plain = _ffprobe_duration(out_plain)
+    d_fade = _ffprobe_duration(out_fade)
+    assert abs(d_plain - d_fade) <= 0.034, f"{d_plain} vs {d_fade}"
+    assert abs(d_plain - n) <= 0.1
+
+    # No per-segment fade= filters for cross dissolve (cache keys untouched)…
+    assert not any("fade=" in arg for cmd in fade_cmds for arg in cmd if "xfade" not in arg)
+    # …the merge pass ran one tpad+xfade filter_complex over the run…
+    fc_args = [cmd[cmd.index("-filter_complex") + 1] for cmd in fade_cmds if "-filter_complex" in cmd]
+    assert len(fc_args) == 1
+    assert fc_args[0].count("xfade=transition=fade:duration=0.400") == n - 1
+    assert fc_args[0].count("tpad=stop_mode=clone:stop_duration=0.400") == n - 1
+    # …and concat still uses -c copy.
+    (concat,) = [c for c in fade_cmds if "-f" in c and "concat" in c]
+    assert concat[concat.index("-c") + 1] == "copy"

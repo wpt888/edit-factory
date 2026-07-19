@@ -2497,6 +2497,8 @@ function PipelinePage() {
       letter_spacing: subtitleSettings.letterSpacing ?? 0,
       karaoke: subtitleSettings.karaoke ?? false,
       highlight_color: subtitleSettings.highlightColor ?? "#FFFF00",
+      karaoke_style: subtitleSettings.karaokeStyle ?? "color",
+      highlight_bg_color: subtitleSettings.highlightBgColor ?? "#A3E635",
       // Per-Meta-version overrides. Only non-empty entries are sent — the
       // backend's PUT regex rejects `{}` entries, so we filter them out to
       // match the same contract when we POST to /render. When no overrides

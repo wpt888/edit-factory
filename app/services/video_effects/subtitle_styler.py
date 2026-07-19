@@ -3,13 +3,29 @@ Subtitle style builder for FFmpeg ASS force_style parameter.
 Implements shadow depth, glow effects, and adaptive font sizing.
 """
 import logging
+import os
 import re
 import srt
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+KARAOKE_WIDTH_CALIBRATION = 1.0
+
+_KARAOKE_TAG_RE = re.compile(r"\{\\k(\d+)\}")
+_COMMON_WINDOWS_FONT_FILES = {
+    "arial": ("arialbd.ttf", "arial.ttf"),
+    "impact": ("impact.ttf",),
+    "calibri": ("calibrib.ttf", "calibri.ttf"),
+    "times new roman": ("timesbd.ttf", "times.ttf"),
+    "verdana": ("verdanab.ttf", "verdana.ttf"),
+    "georgia": ("georgiab.ttf", "georgia.ttf"),
+    "comic sans ms": ("comicbd.ttf", "comic.ttf"),
+    "trebuchet ms": ("trebucbd.ttf", "trebuc.ttf"),
+}
 
 
 @dataclass
@@ -61,6 +77,8 @@ class SubtitleStyleConfig:
     # SecondaryColour is the base colour words start in.
     karaoke: bool = False
     highlight_color: str = "&H0000FFFF"  # Yellow (ASS &H00BBGGRR) — sung word
+    karaoke_style: str = "color"
+    highlight_bg_color: str = "&H0035E6A3"
 
     # Video resolution
     video_width: int = 1080
@@ -257,6 +275,10 @@ class SubtitleStyleConfig:
             opacity=int(settings.get('opacity', 100)),
             karaoke=bool(settings.get('karaoke', False)),
             highlight_color=hex_to_ass(settings.get('highlightColor', '#FFFF00')),
+            karaoke_style=(
+                'box' if str(settings.get('karaokeStyle', 'color')).lower() == 'box' else 'color'
+            ),
+            highlight_bg_color=hex_to_ass(settings.get('highlightBgColor', '#A3E635')),
             video_width=video_width,
             video_height=video_height,
         )
@@ -401,11 +423,230 @@ def _timedelta_to_ass(td) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
 
+def _resolve_karaoke_font_file(font_family: str) -> 'Path | None':
+    """Resolve the actual font file Pillow needs for box positioning."""
+    requested = font_family.strip().strip("'\"")
+    family_key = requested.casefold()
+
+    if os.name == "nt":
+        windows_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        for filename in _COMMON_WINDOWS_FONT_FILES.get(family_key, ()):
+            candidate = windows_fonts / filename
+            if candidate.is_file():
+                return candidate
+
+    try:
+        from app.services.font_manager import bundled_fonts_dir, installed_font_index
+
+        bundled = bundled_fonts_dir()
+        if bundled.is_dir():
+            normalized_family = re.sub(r"[^a-z0-9]", "", family_key)
+            bundled_candidates = sorted(
+                bundled.iterdir(),
+                key=lambda path: ("700" not in path.stem and "bold" not in path.stem.casefold(), path.name),
+            )
+            for candidate in bundled_candidates:
+                normalized_stem = re.sub(r"[^a-z0-9]", "", candidate.stem.casefold())
+                if (
+                    candidate.is_file()
+                    and candidate.suffix.casefold() in {".ttf", ".otf", ".ttc"}
+                    and normalized_stem.startswith(normalized_family)
+                ):
+                    return candidate
+
+        installed = installed_font_index().get(family_key)
+        if installed and installed.is_file():
+            return installed
+    except Exception as e:
+        logger.debug("Karaoke box font lookup failed for %s: %s", requested, e)
+
+    return None
+
+
+def _font_file_from_dir(fonts_dir: 'Path | None') -> 'Path | None':
+    if not fonts_dir or not fonts_dir.is_dir():
+        return None
+    return next(
+        (
+            path for path in fonts_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() in {".ttf", ".otf", ".ttc"}
+        ),
+        None,
+    )
+
+
+def _ass_color_with_opacity(color: str, opacity: int) -> str:
+    ass_alpha = int((100 - opacity) / 100 * 255)
+    if color.startswith("&H") and len(color) >= 10:
+        return f"&H{ass_alpha:02X}{color[4:]}"
+    return color
+
+
+def _opaque_ass_color(color: str) -> str:
+    if color.startswith("&H") and len(color) >= 10:
+        return f"&H00{color[4:]}"
+    return color
+
+
+def _inline_ass_color(color: str) -> str:
+    return color if color.endswith("&") else f"{color}&"
+
+
+def _box_mode_style_lines(style_config: 'SubtitleStyleConfig') -> tuple[str, str]:
+    line_fields = style_config.to_ass_style_line("Line")[len("Style: "):].split(",")
+    base_color = _ass_color_with_opacity(style_config.primary_color, style_config.opacity)
+    line_fields[3] = base_color
+    line_fields[4] = base_color
+    line_fields[15] = "1"
+    line_fields[18] = "5"
+    line_fields[19:22] = ["0", "0", "0"]
+
+    box_fields = list(line_fields)
+    box_fields[0] = "Box"
+    box_fields[5] = _opaque_ass_color(style_config.highlight_bg_color)
+    box_fields[6] = "&H00000000"
+    box_fields[15] = "3"
+    box_fields[16] = str(max(8, style_config.font_size // 6))
+    box_fields[17] = "0"
+
+    return "Style: " + ",".join(box_fields), "Style: " + ",".join(line_fields)
+
+
+def _box_mode_center_y(style_config: 'SubtitleStyleConfig', video_height: int) -> float:
+    half_line = style_config.font_size / 2
+    if style_config.alignment in {7, 8, 9}:
+        return min(video_height - half_line, style_config.margin_v + half_line)
+    if style_config.alignment in {1, 2, 3}:
+        return max(half_line, video_height - style_config.margin_v - half_line)
+    return video_height / 2
+
+
+def _format_ass_coord(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _parse_karaoke_words(text: str) -> 'list[tuple[int, str]] | None':
+    matches = list(_KARAOKE_TAG_RE.finditer(text))
+    if not matches:
+        return None
+
+    words = []
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        word = text[match.end():next_start].strip()
+        if not word:
+            return None
+        words.append((int(match.group(1)), word))
+    return words
+
+
+def _build_box_karaoke_ass_content(
+    subs: list,
+    style_config: 'SubtitleStyleConfig',
+    video_width: int,
+    video_height: int,
+    font_file: 'Path | None' = None,
+) -> 'str | None':
+    font_file = font_file or _resolve_karaoke_font_file(style_config.font_family)
+    if font_file is None:
+        logger.warning(
+            "Karaoke box: no font file resolved for '%s'; using color sweep",
+            style_config.font_family,
+        )
+        return None
+
+    try:
+        from PIL import ImageFont
+
+        font = ImageFont.truetype(str(font_file), style_config.font_size)
+    except Exception as e:
+        logger.warning("Karaoke box: Pillow could not load %s (%s); using color sweep", font_file, e)
+        return None
+
+    box_style, line_style = _box_mode_style_lines(style_config)
+    center_x = video_width / 2
+    center_y = _box_mode_center_y(style_config, video_height)
+    center_x_text = _format_ass_coord(center_x)
+    center_y_text = _format_ass_coord(center_y)
+    highlight = _inline_ass_color(
+        _ass_color_with_opacity(style_config.highlight_color, style_config.opacity)
+    )
+    base = _inline_ass_color(
+        _ass_color_with_opacity(style_config.primary_color, style_config.opacity)
+    )
+    events = []
+
+    for sub in subs:
+        tagged_words = _parse_karaoke_words(sub.content.replace("\r\n", "\n").replace("\n", " "))
+        if not tagged_words:
+            logger.warning("Karaoke box: cue has invalid {\\k} text; using color sweep")
+            return None
+
+        words = [word for _, word in tagged_words]
+        widths = [float(font.getlength(word)) * KARAOKE_WIDTH_CALIBRATION for word in words]
+        space_width = float(font.getlength(" ")) * KARAOKE_WIDTH_CALIBRATION
+        total_width = sum(widths) + space_width * max(0, len(words) - 1)
+        left = center_x - total_width / 2
+        word_centers = []
+        cursor_x = left
+        for width in widths:
+            word_centers.append(cursor_x + width / 2)
+            cursor_x += width + space_width
+
+        cursor_time = sub.start
+        for index, ((duration_cs, word), word_center) in enumerate(zip(tagged_words, word_centers)):
+            event_end = cursor_time + timedelta(seconds=duration_cs / 100)
+            if index == len(tagged_words) - 1 and abs((event_end - sub.end).total_seconds()) <= 0.05:
+                event_end = sub.end
+            if event_end > sub.end or event_end <= cursor_time:
+                logger.warning("Karaoke box: cue timing exceeds its SRT interval; using color sweep")
+                return None
+
+            phrase_parts = []
+            for word_index, phrase_word in enumerate(words):
+                if word_index == index:
+                    phrase_parts.append(f"{{\\c{highlight}}}{phrase_word}{{\\c{base}}}")
+                else:
+                    phrase_parts.append(phrase_word)
+            phrase = " ".join(phrase_parts)
+            start_text = _timedelta_to_ass(cursor_time)
+            end_text = _timedelta_to_ass(event_end)
+            word_x_text = _format_ass_coord(word_center)
+            events.append(
+                f"Dialogue: 0,{start_text},{end_text},Box,,0,0,0,,"
+                f"{{\\an5\\pos({word_x_text},{center_y_text})\\1a&HFF&}}{word}"
+            )
+            events.append(
+                f"Dialogue: 1,{start_text},{end_text},Line,,0,0,0,,"
+                f"{{\\an5\\pos({center_x_text},{center_y_text})}}{phrase}"
+            )
+            cursor_time = event_end
+
+    return (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {video_width}\n"
+        f"PlayResY: {video_height}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding\n"
+        f"{box_style}\n{line_style}\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        + "\n".join(events) + "\n"
+    )
+
+
 def build_karaoke_ass_file(
     srt_path: Path,
     style_config: 'SubtitleStyleConfig',
     video_width: int,
     video_height: int,
+    font_file: 'Path | None' = None,
 ) -> 'Path | None':
     """Convert a ``{\\k}``-tagged SRT into a real .ass file for karaoke burn-in.
 
@@ -439,32 +680,39 @@ def build_karaoke_ass_file(
     if not subs:
         return None
 
-    events = []
-    for sub in subs:
-        # ASS uses \N for hard line breaks; collapse any SRT newlines.
-        text = sub.content.replace("\r\n", "\n").replace("\n", "\\N")
-        events.append(
-            f"Dialogue: 0,{_timedelta_to_ass(sub.start)},{_timedelta_to_ass(sub.end)},"
-            f"Default,,0,0,0,,{text}"
+    ass_content = None
+    if style_config.karaoke_style == "box":
+        ass_content = _build_box_karaoke_ass_content(
+            subs, style_config, video_width, video_height, font_file
         )
 
-    ass_content = (
-        "[Script Info]\n"
-        "ScriptType: v4.00+\n"
-        f"PlayResX: {video_width}\n"
-        f"PlayResY: {video_height}\n"
-        "WrapStyle: 2\n"
-        "ScaledBorderAndShadow: yes\n\n"
-        "[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
-        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
-        "MarginL, MarginR, MarginV, Encoding\n"
-        f"{style_config.to_ass_style_line('Default')}\n\n"
-        "[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        + "\n".join(events) + "\n"
-    )
+    if ass_content is None:
+        events = []
+        for sub in subs:
+            # ASS uses \N for hard line breaks; collapse any SRT newlines.
+            text = sub.content.replace("\r\n", "\n").replace("\n", "\\N")
+            events.append(
+                f"Dialogue: 0,{_timedelta_to_ass(sub.start)},{_timedelta_to_ass(sub.end)},"
+                f"Default,,0,0,0,,{text}"
+            )
+
+        ass_content = (
+            "[Script Info]\n"
+            "ScriptType: v4.00+\n"
+            f"PlayResX: {video_width}\n"
+            f"PlayResY: {video_height}\n"
+            "WrapStyle: 2\n"
+            "ScaledBorderAndShadow: yes\n\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+            "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+            "MarginL, MarginR, MarginV, Encoding\n"
+            f"{style_config.to_ass_style_line('Default')}\n\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            + "\n".join(events) + "\n"
+        )
 
     ass_path = srt_path.with_suffix(".ass")
     try:
@@ -517,8 +765,26 @@ def build_subtitle_filter(
 
     from app.services.font_manager import prepare_render_fonts
     from app.services.video_processor import escape_srt_path_for_ffmpeg
-    effective_family, fonts_dir, _warning = prepare_render_fonts(style_config.font_family)
-    style_config.font_family = effective_family
+    requested_family = style_config.font_family
+    box_font_file = (
+        _resolve_karaoke_font_file(requested_family)
+        if style_config.karaoke and style_config.karaoke_style == "box"
+        else None
+    )
+    if box_font_file is not None:
+        # Keep ASS and Pillow on the same resolved family/file. This also covers
+        # systems where optional font name-table indexing is unavailable.
+        style_config.font_family = requested_family
+        fonts_dir = box_font_file.parent
+    else:
+        effective_family, fonts_dir, _warning = prepare_render_fonts(requested_family)
+        style_config.font_family = effective_family
+        if style_config.karaoke and style_config.karaoke_style == "box":
+            box_font_file = _font_file_from_dir(fonts_dir) or _resolve_karaoke_font_file(
+                effective_family
+            )
+            if fonts_dir is None and box_font_file is not None:
+                fonts_dir = box_font_file.parent
 
     # Karaoke (word-level highlight) MUST burn via a real .ass file — libass
     # silently ignores {\k} tags embedded in an SRT via the `subtitles` filter,
@@ -526,7 +792,9 @@ def build_subtitle_filter(
     # karaoke is on and the SRT carries {\k} tags, emit an `ass=` filter built
     # from the same style config; otherwise fall through to the static path.
     if style_config.karaoke:
-        ass_path = build_karaoke_ass_file(srt_path, style_config, video_width, video_height)
+        ass_path = build_karaoke_ass_file(
+            srt_path, style_config, video_width, video_height, box_font_file
+        )
         if ass_path is not None:
             ass_escaped = escape_srt_path_for_ffmpeg(ass_path)
             fontsdir_clause = (

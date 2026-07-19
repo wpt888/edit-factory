@@ -52,7 +52,7 @@ import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip, TransitionKind, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
@@ -159,7 +159,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
-    getDefaultTransitionChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
@@ -394,7 +393,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
             <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
-              <CardHeader className="pb-4 min-[1280px]:px-4">
+              <CardHeader className="pb-1 min-[1280px]:px-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1">
                     <CardTitle className="flex items-center gap-2 text-sm">
@@ -577,7 +576,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </header>
 
             {/* Variant preview grid */}
-            <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border min-[1480px]:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border">
               {previewCards.map((card) => {
                 const preview = previews[card.key];
                 if (!preview) return null;
@@ -689,60 +688,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               >
                                 Change
                               </Button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Transitions V1: this variant's default transition, applied to
-                          every body-clip boundary unless a boundary has its own override. */}
-                      {(() => {
-                        const spec = preview.defaultTransition ?? null;
-                        const setSpec = getDefaultTransitionChangeHandler(card.key);
-                        return (
-                          <div className="flex items-center justify-between gap-4 pb-2 border-b">
-                            <div className="flex items-center gap-1">
-                              <Label htmlFor={`default-transition-${card.key}`}>Default transition</Label>
-                              <InlineInfo label="About default transition">
-                                Applied to every cut between clips in this variant, unless a boundary marker on the timeline overrides it.
-                              </InlineInfo>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Select
-                                value={spec?.kind ?? "none"}
-                                onValueChange={(value) => {
-                                  if (value === "none") { setSpec(null); return; }
-                                  const kind = value as TransitionKind;
-                                  setSpec({
-                                    kind,
-                                    durationMs: spec?.kind === kind ? spec.durationMs : kind === "flash_white" ? 200 : 350,
-                                  });
-                                }}
-                              >
-                                <SelectTrigger id={`default-transition-${card.key}`} className="w-36">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="none">None</SelectItem>
-                                  <SelectItem value="dip_black">Dip to black</SelectItem>
-                                  <SelectItem value="flash_white">Flash white</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              {spec && (
-                                <Select
-                                  value={String(spec.durationMs)}
-                                  onValueChange={(value) => setSpec({ kind: spec.kind, durationMs: Number(value) })}
-                                >
-                                  <SelectTrigger className="w-28" aria-label="Transition duration">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="200">Fast</SelectItem>
-                                    <SelectItem value="350">Normal</SelectItem>
-                                    <SelectItem value="500">Slow</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              )}
                             </div>
                           </div>
                         );

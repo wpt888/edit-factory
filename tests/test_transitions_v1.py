@@ -65,6 +65,11 @@ def test_normalize_valid_passthrough():
         "kind": "dip_black",
         "durationMs": 350,
     }
+    # Cross dissolve is a first-class kind at every validation ingress.
+    assert normalize_transition_in({"kind": "fade", "durationMs": 350}) == {
+        "kind": "fade",
+        "durationMs": 350,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -121,6 +126,54 @@ def test_resolve_fade_spec_strips_short_boundary():
 # --------------------------------------------------------------------------- #
 # _fade_filters — filter strings built only from the enum + clamped int         #
 # --------------------------------------------------------------------------- #
+
+def test_resolve_fade_spec_ignores_cross_dissolve():
+    """"fade" boundaries are handled by the xfade merge pass, never by the
+    per-segment fade= filters — so they must not touch fade specs (or the
+    segment cache keys derived from them)."""
+    from app.services.assembly_service import resolve_fade_spec
+
+    t = {"kind": "fade", "durationMs": 300}
+    timeline = [_entry(), _entry(t), _entry()]
+    assert resolve_fade_spec(timeline, 0) is None
+    assert resolve_fade_spec(timeline, 1) is None
+
+    # Mixed boundaries: the dip side still gets its per-segment filter.
+    dip = {"kind": "dip_black", "durationMs": 200}
+    timeline = [_entry(), _entry(t), _entry(dip)]
+    assert resolve_fade_spec(timeline, 1) == {"out": {"kind": "dip_black", "ms": 200}}
+    assert resolve_fade_spec(timeline, 2) == {"in": {"kind": "dip_black", "ms": 200}}
+
+
+# --------------------------------------------------------------------------- #
+# plan_xfade_runs — grouping for the cross-dissolve merge pass                  #
+# --------------------------------------------------------------------------- #
+
+def test_plan_xfade_runs():
+    from app.services.assembly_service import plan_xfade_runs
+
+    fade = {"kind": "fade", "durationMs": 300}
+    dip = {"kind": "dip_black", "durationMs": 300}
+
+    # No fades → every index is its own run (dip stays per-segment).
+    timeline = [_entry(), _entry(dip), _entry()]
+    assert plan_xfade_runs(timeline, [True] * 3) == [[0], [1], [2]]
+
+    # A fade boundary joins its two sides; consecutive fades chain.
+    timeline = [_entry(), _entry(fade), _entry(fade), _entry()]
+    assert plan_xfade_runs(timeline, [True] * 4) == [[0, 1, 2], [3]]
+
+    # First-clip and too-short guards apply (shared _boundary_transition).
+    timeline = [_entry(fade), _entry()]
+    assert plan_xfade_runs(timeline, [True] * 2) == [[0], [1]]
+    timeline = [_entry(duration=0.4), _entry(fade)]
+    assert plan_xfade_runs(timeline, [True] * 2) == [[0], [1]]
+
+    # A missing side degrades the boundary to a hard cut.
+    timeline = [_entry(), _entry(fade), _entry(fade)]
+    assert plan_xfade_runs(timeline, [False, True, True]) == [[1, 2]]
+    assert plan_xfade_runs(timeline, [True, False, True]) == [[0], [2]]
+
 
 def test_fade_filters_strings():
     from app.services.assembly_service import _fade_filters

@@ -1,5 +1,15 @@
 # Engineering Change Log
 
+## 2026-07-19 - Karaoke highlight: three root-cause fixes + per-word box mode
+
+- Karaoke was invisible everywhere: preview reused tag-less Step-2 SRT,
+  `sanitize_srt_for_ffmpeg` destroyed `{\k}` tags on every render path, and the
+  inline Step-3 player had no karaoke rendering at all. All three fixed at the
+  shared roots (incl. self-healing of poisoned SRT cache entries).
+- New `karaokeStyle: "color" | "box"` + `highlightBgColor` — CapCut-style
+  per-word background box, burned via two-layer per-word ASS events and mirrored
+  live in the inline player + settings mock. Details: page 32.
+
 ## 2026-07-19 - Consolidation: three work lots landed into main
 
 - `feat/attention-images` committed (6 grouped commits: karaoke ASS burn,

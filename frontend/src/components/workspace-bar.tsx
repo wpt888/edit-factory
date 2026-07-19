@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type DragEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { BriefcaseBusiness, GripVertical, Plus } from "lucide-react";
+import { BriefcaseBusiness, Plus } from "lucide-react";
 import { CreateProfileDialog } from "@/components/dialogs/create-profile-dialog";
 import { useProfile, type Profile } from "@/contexts/profile-context";
 import { cn } from "@/lib/utils";
@@ -177,7 +177,6 @@ export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
                 )}
                 <BriefcaseBusiness className={cn("size-3.5", active && "text-lime")} />
                 <span className="min-w-0 flex-1 truncate text-left">{profile.name}</span>
-                <GripVertical className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-50" />
                 {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-lime" />}
               </button>
             );

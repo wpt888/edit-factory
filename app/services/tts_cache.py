@@ -204,6 +204,12 @@ def srt_cache_lookup(key_data: dict, provider_dir: str = "elevenlabs") -> Option
 
     try:
         content = srt_path.read_text(encoding="utf-8")
+        # Karaoke validity: a key that asked for karaoke must return SRT with
+        # {\k} tags. Entries stored without them (pre-fix cache poisoning) are
+        # treated as a miss; the next store overwrites the same file.
+        if key_data.get("karaoke") and "{\\k" not in content:
+            logger.info(f"SRT cache MISS [{provider_dir}]: {h[:12]}... (karaoke entry lacks {{\\k}} tags)")
+            return None
         logger.info(f"SRT cache HIT [{provider_dir}]: {h[:12]}...")
         return content
     except Exception as e:

@@ -68,6 +68,24 @@ def _get_app_base_dir() -> Path:
     return base
 
 
+def get_desktop_data_dir() -> Optional[Path]:
+    """The desktop app's user-data dir for this platform, regardless of DESKTOP_MODE.
+
+    Used as a media fallback so pipelines created in the desktop app still
+    resolve their audio when served by a dev backend (base_dir = repo root).
+    Returns None when the platform dir can't be determined. Never creates dirs.
+    """
+    if sys.platform == "win32":
+        appdata = os.getenv("APPDATA")
+        return Path(appdata) / "EditFactory" if appdata else None
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "EditFactory"
+    if sys.platform.startswith("linux"):
+        xdg = os.getenv("XDG_CONFIG_HOME")
+        return (Path(xdg) if xdg else Path.home() / ".config") / "EditFactory"
+    return None
+
+
 def get_base_dir() -> Path:
     """Public accessor for the resolved base dir. Re-evaluates each call (does NOT cache).
 

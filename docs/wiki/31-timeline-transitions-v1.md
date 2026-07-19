@@ -1,4 +1,35 @@
-# Timeline transitions V1 — dip to black + flash white
+# Timeline transitions — dip to black, flash white + fade (cross dissolve)
+
+## V1.1 (2026-07-19) — "fade" kind + Premiere-style timeline blocks
+
+- New `kind: "fade"` = true cross dissolve. Render: an **xfade merge pass**
+  between extraction and concat (`plan_xfade_runs()` + tpad+xfade in
+  `_assemble_video`). The outgoing clip's last frame is frozen
+  (`tpad=stop_mode=clone`) for the dissolve window, then
+  `xfade=transition=fade:offset=<accumulated length>` — total duration is
+  preserved by construction (ffprobe-verified in
+  `test_cross_dissolve_duration_invariant`). Fade boundaries are **excluded**
+  from `resolve_fade_spec()` so per-segment filters and segment-cache keys are
+  untouched; merged runs are re-encoded once, concat keeps `-c copy`. A run
+  side that failed extraction degrades that boundary to a hard cut.
+- Timeline UI: a boundary with an effective transition now renders as a
+  **Premiere-style block** (⋈, width ∝ duration, `BoundaryTransitionMarker`)
+  instead of the dot; cut boundaries keep the dot. **Dragging the block moves
+  the transition to another boundary** (`beginTransitionDrag`) — the origin
+  becomes an explicit cut override, the target gets the spec; a sub-5px drag
+  is a click and opens the popover.
+- Instant preview: "fade" crossfades the two ping-pong video slots (active
+  fades out over the idle slot's prepared first frame) in the window before
+  the boundary; falls back to a hard cut if the idle slot isn't prepared
+  (e.g. paused scrub). Dip/flash keep the color overlay.
+- Verification: pytest transitions files 25/25 (incl. 2 real-FFmpeg), assembly
+  + cache 54/54, `tsc --noEmit` clean, Playwright
+  `timeline-transitions-fade.spec.ts` 2/2 on :3005
+  (`screenshots/transitions-fade-*.png`).
+
+---
+
+# V1 — dip to black + flash white
 
 Step 3 timeline boundaries can now carry a transition: **Dip to black** or
 **Flash white**, with three duration presets (Fast 200ms / Normal 350ms /
