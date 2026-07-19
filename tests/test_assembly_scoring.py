@@ -184,6 +184,57 @@ def test_small_cluster_pool_records_variety_relaxation(service):
     assert service._last_match_variety["unique_clusters"] == 1
 
 
+# --- Segment proximity: separate vs merge ------------------------------------
+
+def test_separate_keeps_near_adjacent_apart(service):
+    from app.services.assembly_service import CLUSTER_MERGE_GAP_SECONDS
+
+    segs = [
+        _seg("near-a", "shared", 0.0, 2.0),
+        _seg("near-b", "shared", 2.5, 4.5),  # 0.5s source gap — same cluster once merge_gap applies
+        _seg("other-a", "other-a", 0.0, 10.0),
+        _seg("other-b", "other-b", 0.0, 10.0),
+        _seg("other-c", "other-c", 0.0, 10.0),
+    ]
+    srt = _srt(8)
+    matches, _groups = service.match_srt_groups(
+        srt, segs, min_segment_duration=1.0, cluster_merge_gap=CLUSTER_MERGE_GAP_SECONDS,
+    )
+    ids = [m.segment_id for m in matches]
+    near_pair = {"near-a", "near-b"}
+    for i in range(len(ids) - 1):
+        assert {ids[i], ids[i + 1]} != near_pair, f"near-adjacent segments placed back-to-back at slot {i}"
+
+
+def test_merge_fuses_near_adjacent():
+    from app.services.assembly_service import CLUSTER_MERGE_GAP_SECONDS, TimelineEntry, _fuse_adjacent_entries
+
+    timeline = [
+        TimelineEntry("/fake/shared.mp4", 10.0, 12.0, 2.0, 2.0),
+        TimelineEntry("/fake/shared.mp4", 12.5, 14.0, 4.0, 1.5),  # 0.5s source gap — fuses into the entry above
+        TimelineEntry("/fake/shared.mp4", 14.0, 15.0, 5.5, 1.0, pinned=True),  # pinned — never fused
+        TimelineEntry("/fake/shared2.mp4", 0.0, 2.0, 6.5, 1.0),
+        TimelineEntry("/fake/shared2.mp4", 5.0, 7.0, 7.5, 1.0),  # 3.0s source gap > CLUSTER_MERGE_GAP_SECONDS
+    ]
+
+    fused = _fuse_adjacent_entries(timeline, CLUSTER_MERGE_GAP_SECONDS)
+
+    assert len(fused) == 4
+    merged = fused[0]
+    assert merged.start_time == pytest.approx(10.0)
+    assert merged.end_time == pytest.approx(14.0)
+    assert merged.timeline_start == pytest.approx(2.0)
+    assert merged.timeline_duration == pytest.approx(3.5)
+
+    # Pinned entry survives untouched, not absorbed into the fused clip.
+    assert fused[1].pinned
+    assert fused[1].start_time == pytest.approx(14.0)
+
+    # Gap beyond CLUSTER_MERGE_GAP_SECONDS — stays two separate entries.
+    assert fused[2].start_time == pytest.approx(0.0)
+    assert fused[3].start_time == pytest.approx(5.0)
+
+
 # --- F1/F2: build_timeline invariants ----------------------------------------
 
 @pytest.fixture

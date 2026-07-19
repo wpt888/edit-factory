@@ -58,6 +58,7 @@ MATCH_PRESETS: Dict[str, Dict[str, float]] = {
 }
 _SHUFFLE_EPSILON = 0.25  # scores within this of the max are tie-broken by seeded RNG
 MAX_CLUSTER_COOLDOWN_SECONDS = 10.0
+CLUSTER_MERGE_GAP_SECONDS = 2.0  # two same-source segments within this many source-seconds count as one visual shot
 
 # ponytail: warned-once set never resets (cleared on restart) — fine for a log dedup
 _warned_missing_sources: set = set()
@@ -386,8 +387,8 @@ def _merge_srt_groups(srt_entries: List[dict], min_segment_duration: float) -> L
     return groups
 
 
-def _segment_visual_clusters(segments_data: List[dict]) -> Dict[str, str]:
-    """Cluster transitively overlapping intervals from the same source video."""
+def _segment_visual_clusters(segments_data: List[dict], merge_gap: float = 0.0) -> Dict[str, str]:
+    """Cluster overlapping — or, with merge_gap>0, near-adjacent — intervals from the same source video."""
     clusters: Dict[str, str] = {}
     by_source: Dict[str, List[dict]] = {}
     for segment in segments_data:
@@ -397,13 +398,53 @@ def _segment_visual_clusters(segments_data: List[dict]) -> Dict[str, str]:
         cluster_end: Optional[float] = None
         for segment in sorted(source_segments, key=lambda s: (s.get("start_time", 0.0), s["id"])):
             start, end = segment.get("start_time", 0.0), segment.get("end_time", 0.0)
-            if cluster_end is None or start >= cluster_end:
+            if cluster_end is None or start >= cluster_end + merge_gap:
                 cluster_index += 1
                 cluster_end = end
             else:
                 cluster_end = max(cluster_end, end)
             clusters[segment["id"]] = f"{source_id}:{cluster_index}"
     return clusters
+
+
+def _fuse_adjacent_entries(
+    timeline: List["TimelineEntry"],
+    merge_gap: float,
+    intro_duration_sec: float = 0.0,
+) -> List["TimelineEntry"]:
+    """Unește: fuse consecutive same-source body entries that are near-adjacent
+    in the source into one continuous clip, so the jump-cut between two moments
+    sitting close together in the original video disappears (one extraction,
+    played straight through). Intro micro-segments (timeline_start <
+    intro_duration_sec) and pinned entries are never fused. Cumulative
+    timeline_start of later entries is preserved because the fused duration is
+    the sum of the two, so no repositioning pass is needed."""
+    if merge_gap <= 0 or len(timeline) < 2:
+        return timeline
+    fused: List[TimelineEntry] = []
+    for entry in timeline:
+        prev = fused[-1] if fused else None
+        both_body = (
+            prev is not None
+            and prev.timeline_start >= intro_duration_sec - 0.001
+            and entry.timeline_start >= intro_duration_sec - 0.001
+        )
+        if (both_body and not prev.pinned and not entry.pinned
+                and prev.source_video_path == entry.source_video_path):
+            gap = entry.start_time - prev.end_time
+            if -0.05 <= gap <= merge_gap:
+                fused[-1] = TimelineEntry(
+                    source_video_path=prev.source_video_path,
+                    start_time=prev.start_time,
+                    end_time=max(prev.end_time, entry.end_time),
+                    timeline_start=prev.timeline_start,
+                    timeline_duration=prev.timeline_duration + entry.timeline_duration,
+                    transforms=prev.transforms,
+                    pinned=prev.pinned,
+                )
+                continue
+        fused.append(entry)
+    return fused
 
 
 def strip_product_group_tags(text: str) -> str:
@@ -997,6 +1038,7 @@ class AssemblyService:
         pinned_assignments: Optional[Dict[int, str]] = None,
         ai_assignments: Optional[Dict[int, str]] = None,
         cooldown_seconds: Optional[float] = None,
+        cluster_merge_gap: float = 0.0,
     ) -> List[MatchResult]:
         """
         Assign one library segment to each SRT phrase via a transparent scoring
@@ -1044,7 +1086,7 @@ class AssemblyService:
         n = len(segments_data)
         segment_lookup: Dict[str, dict] = {s["id"]: s for s in segments_data}
         groups_present = {s.get("product_group") for s in segments_data}
-        cluster_by_segment = _segment_visual_clusters(segments_data)
+        cluster_by_segment = _segment_visual_clusters(segments_data, merge_gap=cluster_merge_gap)
         unique_clusters = len(set(cluster_by_segment.values()))
         if cooldown_seconds is None:
             audio_end = max((entry.get("end_time", 0.0) for entry in srt_entries), default=0.0)
@@ -2483,6 +2525,7 @@ class AssemblyService:
         strict_segments: bool = True,
         preset: str = "balanced",
         pinned_assignments: Optional[Dict[int, str]] = None,
+        segment_proximity: str = "separate",
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -2886,6 +2929,7 @@ class AssemblyService:
                     _ai_assignments = await asyncio.to_thread(
                         self._ai_match_segments, srt_entries, segments_data, profile_id
                     )
+                cluster_merge_gap = CLUSTER_MERGE_GAP_SECONDS if segment_proximity == "separate" else 0.0
                 match_results, _ = self.match_srt_groups(
                     srt_entries=srt_entries,
                     segments_data=segments_data,
@@ -2897,6 +2941,7 @@ class AssemblyService:
                     preset=preset,
                     pinned_assignments=pinned_assignments,
                     ai_assignments=_ai_assignments,
+                    cluster_merge_gap=cluster_merge_gap,
                 )
                 duration_overrides = None
 
@@ -2934,6 +2979,8 @@ class AssemblyService:
                     min_segment_duration=min_segment_duration,
                     ultra_rapid_intro=ultra_rapid_intro
                 )
+                if segment_proximity == "merge":
+                    timeline = _fuse_adjacent_entries(timeline, CLUSTER_MERGE_GAP_SECONDS, _intro_duration_sec)
 
             # Log final render timeline for debugging
             for t_idx, t_entry in enumerate(timeline):
@@ -3234,7 +3281,8 @@ class AssemblyService:
         ultra_rapid_intro: bool = True,
         reuse_srt_content: Optional[str] = None,
         subtitle_settings: Optional[dict] = None,
-        preset: str = "balanced"
+        preset: str = "balanced",
+        segment_proximity: str = "separate",
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -3363,6 +3411,7 @@ class AssemblyService:
             _ai_assignments = await asyncio.to_thread(
                 self._ai_match_segments, srt_entries, segments_data, profile_id
             )
+        cluster_merge_gap = CLUSTER_MERGE_GAP_SECONDS if segment_proximity == "separate" else 0.0
         match_results, merge_groups = self.match_srt_groups(
             srt_entries=srt_entries,
             segments_data=segments_data,
@@ -3373,6 +3422,7 @@ class AssemblyService:
             avoid_segment_ids=avoid_segment_ids,
             preset=preset,
             ai_assignments=_ai_assignments,
+            cluster_merge_gap=cluster_merge_gap,
         )
 
         timeline, intro_duration_sec = self.build_timeline(
@@ -3383,6 +3433,8 @@ class AssemblyService:
             min_segment_duration=min_segment_duration,
             ultra_rapid_intro=ultra_rapid_intro
         )
+        if segment_proximity == "merge":
+            timeline = _fuse_adjacent_entries(timeline, CLUSTER_MERGE_GAP_SECONDS, intro_duration_sec)
 
         # Count matched vs unmatched
         matched_count = sum(1 for m in match_results if m.segment_id is not None)
