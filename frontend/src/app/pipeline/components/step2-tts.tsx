@@ -158,6 +158,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     setMinSegmentDuration,
     ultraRapidIntro,
     setUltraRapidIntro,
+    assemblyPreset,
+    setAssemblyPreset,
     approvedScripts,
     setApprovedScripts,
     pipelineId,
@@ -198,6 +200,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     pipelineLayout,
   }: Step2Ctx = ctx;
   const workspaceLayout = pipelineLayout !== "guided";
+  const assemblyPresetHelp = ({
+    keyword_strict: "Only uses clips whose keywords match the phrase, leaving uncertain phrases unmatched.",
+    balanced: "Prefers keyword matches and safely rotates through the remaining footage.",
+    max_variety: "Spreads usage across the full clip pool, including keyword matches.",
+    shuffle: "Randomizes clip assignment per variant for stronger A/B variation.",
+    ai_smart: "Uses Gemini to choose the best-fitting clip and falls back to keyword matching.",
+  } as Record<string, string>)[String(assemblyPreset)] ?? "Controls how clips are assigned to phrases.";
 
   // Voice audition: play the selected voice's ElevenLabs preview sample inline,
   // so users can hear a voice BEFORE generating TTS (was: no preview at all).
@@ -757,7 +766,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         value={script}
                         onCommit={(nextValue) => handleScriptCommit(index, nextValue)}
                         rows={10}
-                        className="resize-y border-0 bg-muted/45 font-mono text-sm shadow-none [field-sizing:fixed] focus-visible:bg-muted/55 focus-visible:ring-1"
+                        className="resize-y border-0 bg-muted/45 font-sans text-sm shadow-none [field-sizing:fixed] focus-visible:bg-muted/55 focus-visible:ring-1"
                       />
 
                       {/* Insert Group Tag — searchable button grid */}
@@ -1017,7 +1026,35 @@ export function Step2TTS({ ctx }: { ctx: any }) {
 
               return (
                 <Card className="gap-0 overflow-hidden py-0" data-testid="step2-action-panel">
-                  <CardContent className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                  <CardContent className="grid gap-3 p-3 lg:grid-cols-2 2xl:grid-cols-[minmax(15rem,0.9fr)_minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                    <div
+                      className="rounded-md border bg-background/60 px-3 py-2.5"
+                      data-testid="step2-assembly-preset"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor="assembly-preset-step2" className="text-sm font-medium">
+                          Assembly Preset
+                        </Label>
+                        <Select
+                          value={assemblyPreset}
+                          onValueChange={(value) => setAssemblyPreset(value as typeof assemblyPreset)}
+                        >
+                          <SelectTrigger id="assembly-preset-step2" className="w-40 shrink-0">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="keyword_strict">Keyword strict</SelectItem>
+                            <SelectItem value="balanced">Balanced</SelectItem>
+                            <SelectItem value="max_variety">Max variety</SelectItem>
+                            <SelectItem value="shuffle">Shuffle per variant</SelectItem>
+                            <SelectItem value="ai_smart">AI smart match</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                        {assemblyPresetHelp} Applied when previews are generated.
+                      </p>
+                    </div>
                     <div className="rounded-md border bg-background/60 px-3 py-2.5">
                       <div className="flex items-center gap-2">
                         <Checkbox
@@ -1035,7 +1072,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                           : "Enable this to preview Instagram and Facebook separately before rendering."}
                       </p>
                     </div>
-                    <div className="flex min-w-0 flex-col justify-center gap-1.5 rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
+                    <div className="flex min-w-0 flex-col justify-center gap-1.5 rounded-md border bg-muted/20 px-3 py-2.5 text-sm lg:col-span-2 2xl:col-span-1">
                       <div className={`flex items-center gap-2 font-medium ${allTtsReady ? "text-success" : "text-muted-foreground"}`}>
                         {allTtsReady ? <CheckCircle className="size-4 shrink-0" /> : <Volume2 className="size-4 shrink-0" />}
                         <span>

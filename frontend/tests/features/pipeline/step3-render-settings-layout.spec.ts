@@ -11,7 +11,7 @@ async function enterAdvancedMode(page: import("@playwright/test").Page) {
   }
 }
 
-test("Step 3 keeps assembly controls left and render controls right", async ({ page }) => {
+test("Step 3 keeps live timing controls left and render controls right", async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 900 });
   await page.goto(`/pipeline?step=3&id=${PIPELINE_WITH_PREVIEWS}`);
   await page.waitForLoadState("networkidle");
@@ -19,14 +19,14 @@ test("Step 3 keeps assembly controls left and render controls right", async ({ p
 
   const inspector = page.getByTestId("step3-inspector");
   const canvas = page.getByTestId("step3-variant-canvas");
-  const assemblySettings = inspector.getByTestId("step3-assembly-settings");
+  const previewTiming = inspector.getByTestId("step3-preview-timing");
   const renderSettings = canvas.getByTestId("step3-render-settings");
 
-  await expect(assemblySettings).toBeVisible({ timeout: 10_000 });
+  await expect(previewTiming).toBeVisible({ timeout: 10_000 });
   await expect(renderSettings).toBeVisible({ timeout: 10_000 });
-  await expect(assemblySettings.getByText("Assembly Settings", { exact: true })).toBeVisible();
-  await expect(assemblySettings.getByText("Assembly Preset", { exact: true })).toBeVisible();
-  await expect(assemblySettings.getByText("Pacing", { exact: true })).toBeVisible();
+  await expect(previewTiming.getByText("Preview Timing", { exact: true })).toBeVisible();
+  await expect(previewTiming.getByText("Pacing", { exact: true })).toBeVisible();
+  await expect(inspector.getByText("Assembly Preset", { exact: true })).toHaveCount(0);
 
   await expect(inspector.getByText("Export Preset", { exact: true })).toHaveCount(0);
   await expect(inspector.getByText("Voice volume", { exact: true })).toHaveCount(0);
@@ -40,4 +40,21 @@ test("Step 3 keeps assembly controls left and render controls right", async ({ p
   await expect(renderSettings.getByText("Voice volume", { exact: true })).toBeVisible();
   await expect(renderSettings.getByText("Fade in", { exact: true })).toBeVisible();
   await expect(renderSettings.getByText("Fade out", { exact: true })).toBeVisible();
+});
+
+test("Scripts exposes the assembly preset before preview generation", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto(`/pipeline?step=2&id=${PIPELINE_WITH_PREVIEWS}`);
+  await page.waitForLoadState("networkidle");
+  await enterAdvancedMode(page);
+
+  const preset = page.getByTestId("step2-assembly-preset");
+  await expect(preset).toBeVisible({ timeout: 10_000 });
+  await expect(preset.getByText("Assembly Preset", { exact: true })).toBeVisible();
+  await expect(preset.getByText(/Applied when previews are generated\./)).toBeVisible();
+
+  const trigger = preset.getByRole("combobox");
+  await trigger.click();
+  await page.getByRole("option", { name: "Max variety" }).click();
+  await expect(trigger).toContainText("Max variety");
 });

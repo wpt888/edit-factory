@@ -165,8 +165,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     wordsPerSubtitle,
     ultraRapidIntro,
     setUltraRapidIntro,
-    assemblyPreset,
-    setAssemblyPreset,
+    segmentProximity,
+    setSegmentProximity,
     renderAdjust,
     setRenderAdjust,
     scheduleReassemblePreviews,
@@ -267,14 +267,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     subtitleOverrides[activeSubtitleStyleKey]
       && Object.keys(subtitleOverrides[activeSubtitleStyleKey] ?? {}).length > 0
   );
-  const assemblyPresetHelp = ({
-    keyword_strict: "Only uses clips whose keywords match the phrase, leaving uncertain phrases unmatched.",
-    balanced: "Prefers keyword matches and safely rotates through the remaining footage.",
-    max_variety: "Spreads usage across the full clip pool, including keyword matches.",
-    shuffle: "Randomizes clip assignment per variant for stronger A/B variation.",
-    ai_smart: "Uses Gemini to choose the best-fitting clip and falls back to keyword matching.",
-  } as Record<string, string>)[String(assemblyPreset)] ?? "Controls how clips are assigned to phrases.";
-
   return (
           <div className="space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0">
             <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
@@ -318,54 +310,16 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               </CardContent>
             </Card>
 
-            {/* Assembly controls affect clip selection, not final-file rendering. */}
+            {/* Timing controls can reassemble the previews from inside the editor. */}
             <Card
               className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
-              data-testid="step3-assembly-settings"
+              data-testid="step3-preview-timing"
             >
               <CardHeader className="min-[1280px]:px-4">
-                <CardTitle className="text-lg">Assembly Settings</CardTitle>
+                <CardTitle className="text-lg">Preview Timing</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 min-[1280px]:px-4">
-                {/* Assembly controls — how library segments get auto-assigned to phrases */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1">
-                    <Label htmlFor="assembly-preset">Assembly Preset</Label>
-                    <InlineInfo label="About assembly presets">
-                      {assemblyPresetHelp}
-                    </InlineInfo>
-                  </div>
-                  <Select
-                    value={assemblyPreset}
-                    onValueChange={(v) => {
-                      setAssemblyPreset(v as typeof assemblyPreset);
-                      scheduleReassemblePreviews();
-                    }}
-                  >
-                    <SelectTrigger id="assembly-preset">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="keyword_strict" title="Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing">
-                        Keyword strict
-                      </SelectItem>
-                      <SelectItem value="balanced" title="Match by keyword when possible, fall back to rotation for the rest — the default">
-                        Balanced
-                      </SelectItem>
-                      <SelectItem value="max_variety" title="Favor spreading usage across the whole segment pool, even for keyword matches">
-                        Max variety
-                      </SelectItem>
-                      <SelectItem value="shuffle" title="Randomize segment assignment per variant, for maximum A/B difference">
-                        Shuffle per variant
-                      </SelectItem>
-                      <SelectItem value="ai_smart" title="Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable">
-                        AI smart match
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-3 border-t pt-4">
+                <div className="space-y-3">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-1">
                     <Label htmlFor="pacing">Pacing</Label>
@@ -387,6 +341,30 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       <SelectItem value="2">Fast (2s)</SelectItem>
                       <SelectItem value="3">Normal (3s)</SelectItem>
                       <SelectItem value="5">Slow (5s)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-1">
+                    <Label htmlFor="segment-proximity">Segment proximity</Label>
+                    <InlineInfo label="About segment proximity">
+                      Separate: keep clips cut from nearby moments of the same source apart. Merge: fuse them into one continuous shot to avoid a jump-cut.
+                    </InlineInfo>
+                  </div>
+                  <Select
+                    value={segmentProximity}
+                    onValueChange={(value) => {
+                      setSegmentProximity(value as typeof segmentProximity);
+                      scheduleReassemblePreviews();
+                    }}
+                  >
+                    <SelectTrigger id="segment-proximity" className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="separate">Separate</SelectItem>
+                      <SelectItem value="merge">Merge</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -451,39 +429,59 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3 min-[1280px]:px-4">
-                {metaMultiplication && (
-                  <div
-                    role="tablist"
-                    aria-label="Subtitle version"
-                    className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/30 p-1"
-                    data-testid="subtitle-version-switch"
-                  >
-                    {(["A", "B"] as const).map((styleKey) => {
-                      const isSelected = activeSubtitleStyleKey === styleKey;
-                      const platform = styleKey === "A" ? "Instagram" : "Facebook";
-                      return (
-                        <Button
-                          key={styleKey}
-                          type="button"
-                          role="tab"
-                          aria-selected={isSelected}
-                          aria-controls="subtitle-style-preview"
-                          variant={isSelected ? "default" : "ghost"}
-                          size="sm"
-                          className="h-9 gap-2"
-                          onClick={() => setActiveStyleKey(styleKey)}
-                        >
-                          <span className="font-semibold">{styleKey}</span>
-                          <span className={isSelected ? "opacity-80" : "text-muted-foreground"}>
-                            {platform}
-                          </span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Variant switch + live preview stay pinned to the very top of
+                    the inspector; everything below scrolls under them. */}
+                <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background">
+                  {metaMultiplication && (
+                    <div
+                      role="tablist"
+                      aria-label="Subtitle version"
+                      className="flex gap-1"
+                      data-testid="subtitle-version-switch"
+                    >
+                      {(["A", "B"] as const).map((styleKey) => {
+                        const isSelected = activeSubtitleStyleKey === styleKey;
+                        const platform = styleKey === "A" ? "Instagram" : "Facebook";
+                        return (
+                          <Button
+                            key={styleKey}
+                            type="button"
+                            role="tab"
+                            aria-selected={isSelected}
+                            aria-controls="subtitle-style-preview"
+                            variant={isSelected ? "default" : "ghost"}
+                            size="sm"
+                            className="h-9 gap-1.5 px-3"
+                            onClick={() => setActiveStyleKey(styleKey)}
+                          >
+                            <span className="font-semibold">{styleKey}</span>
+                            <span className={`text-xs ${isSelected ? "opacity-80" : "text-muted-foreground"}`}>
+                              {platform}
+                            </span>
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                {/* Auxiliary controls for the active tab */}
+                  <div
+                    id="subtitle-style-preview"
+                    role="tabpanel"
+                    data-testid="subtitle-sticky-preview"
+                  >
+                    <SubtitleStylePreviewPanel
+                      key={activeSubtitleStyleKey}
+                      styleKey={activeSubtitleStyleKey}
+                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
+                      hasOverride={activeSubtitleStyleHasOverride}
+                      pipelineId={pipelineId ?? undefined}
+                      previewCards={previewCards}
+                      previewText={getStylePreviewText(activeSubtitleStyleKey)}
+                    />
+                  </div>
+                </div>
+
+                {/* Auxiliary controls — below the preview so they don't push it down */}
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Copy from the other Meta version (only when Meta ON) */}
                   {metaMultiplication && (
@@ -523,23 +521,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </div>
 
                 <div className="space-y-4">
-                  <div
-                    id="subtitle-style-preview"
-                    role="tabpanel"
-                    className="sticky top-0 z-10 bg-card pb-1"
-                    data-testid="subtitle-sticky-preview"
-                  >
-                    <SubtitleStylePreviewPanel
-                      key={activeSubtitleStyleKey}
-                      styleKey={activeSubtitleStyleKey}
-                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-                      hasOverride={activeSubtitleStyleHasOverride}
-                      pipelineId={pipelineId ?? undefined}
-                      previewCards={previewCards}
-                      previewText={getStylePreviewText(activeSubtitleStyleKey)}
-                    />
-                  </div>
-
                   <div
                     data-testid="subtitle-style-variant-editor"
                   >
@@ -722,7 +703,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
-                        previewKey={card.key}
                         variantIndex={card.baseIndex}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
@@ -809,21 +789,34 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               );
             })()}
 
-            {/* The full editor must be a real modal surface. Keeping it inside
-                the right workspace panel leaves the two card editors painted
-                underneath it; their sticky lane headers use z-30 and can rise
-                above a panel-local overlay. Dialog portals the active editor
-                above the whole application and also owns focus, Escape, and
-                scroll locking while the variant is maximized. */}
+            {/* Portal the full editor above the workspace cards, but keep it
+                non-modal: the app sidebar and desktop window controls remain
+                visible and interactive while the editor is maximized. */}
             {maximizedKey !== null && (() => {
               const card = previewCards.find((c) => c.key === maximizedKey);
               const preview = card ? previews[card.key] : null;
               if (!card || !preview) return null;
+              // Confine the editor to the measured work area, but fall back to
+              // full-screen whenever that rect is missing or too small to lay
+              // out the NLE grid. A null/degenerate <main> rect leaves
+              // DialogContent without a definite height, which collapses the
+              // grid's `minmax(0, 1fr)` row (inspector + program monitor) to
+              // ~0px — the "left panel and settings vanished" regression. The
+              // full-screen floor keeps the editor usable no matter what the
+              // measurement returns; confinement is the enhancement on top.
+              const editorStyle =
+                maximizedBounds &&
+                maximizedBounds.width >= 400 &&
+                maximizedBounds.height >= 400
+                  ? maximizedBounds
+                  : { top: 0, left: 0, width: "100vw", height: "100dvh" };
               return (
-                <Dialog open onOpenChange={(open) => { if (!open) setMaximizedKey(null); }}>
+                <Dialog modal={false} open onOpenChange={(open) => { if (!open) setMaximizedKey(null); }}>
                   <DialogContent
                     showCloseButton={false}
-                    style={maximizedBounds ?? undefined}
+                    showOverlay={false}
+                    onInteractOutside={(event) => event.preventDefault()}
+                    style={editorStyle}
                     className="flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
                     data-testid="step3-full-editor"
                   >
@@ -862,7 +855,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
-                        previewKey={card.key}
                         variantIndex={card.baseIndex}
                         subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
