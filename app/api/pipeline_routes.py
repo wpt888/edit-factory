@@ -2696,7 +2696,18 @@ def _validate_composition_transitions(clips):
     if not isinstance(clips, list):
         return clips
     for clip in clips:
-        if not isinstance(clip, dict) or "transitionIn" not in clip:
+        if not isinstance(clip, dict):
+            continue
+        # Phase C: free video overlays (track >= 2) never carry a transition —
+        # strip any that slipped through rather than validate it.
+        try:
+            track = int(float(clip.get("track") or 1))
+        except (TypeError, ValueError):
+            track = 1
+        if track >= 2:
+            clip.pop("transitionIn", None)
+            continue
+        if "transitionIn" not in clip:
             continue
         normalized = normalize_transition_in(
             clip.get("transitionIn"), clip_kind=clip.get("kind")
@@ -2706,6 +2717,64 @@ def _validate_composition_transitions(clips):
         else:
             clip["transitionIn"] = normalized
     return clips
+
+
+def _validate_overlay_box(raw_box, clip_index: int) -> dict:
+    """Validate a free video-overlay's fractional box (Phase C).
+
+    Mirrors the AttentionLayer bounds: x,y in [0,1]; width,height in (0,1];
+    fit in {contain,cover}. Absent/partial -> full-frame contain default. Raises
+    HTTPException(422) on out-of-range or non-finite values.
+    """
+    default = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0, "fit": "contain"}
+    if raw_box is None:
+        return default
+    if not isinstance(raw_box, dict):
+        raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} has an invalid overlay_box")
+
+    def _coord(key: str, fallback: float, *, allow_zero: bool) -> float:
+        if raw_box.get(key) is None:
+            return fallback
+        try:
+            value = float(raw_box.get(key))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.{key} is not a number")
+        low = 0.0 if allow_zero else None
+        if not math.isfinite(value) or value < 0.0 or value > 1.0 or (low is None and value <= 0.0):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.{key} out of range")
+        return value
+
+    fit = raw_box.get("fit", "contain")
+    if fit not in ("contain", "cover"):
+        raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.fit must be contain|cover")
+    return {
+        "x": _coord("x", 0.0, allow_zero=True),
+        "y": _coord("y", 0.0, allow_zero=True),
+        "width": _coord("width", 1.0, allow_zero=False),
+        "height": _coord("height", 1.0, allow_zero=False),
+        "fit": fit,
+    }
+
+
+def _reject_overlapping_overlays(free_clips: List[dict]) -> None:
+    """Reject overlapping free overlays on the SAME track (Phase C, 422).
+
+    Free clips are absolutely positioned; two overlapping in time on one track
+    would fight for the same z-slot. Different tracks may overlap freely (that's
+    the whole point of stacking lanes).
+    """
+    by_track: Dict[int, List[dict]] = {}
+    for clip in free_clips:
+        by_track.setdefault(int(clip.get("track") or 2), []).append(clip)
+    for track, clips in by_track.items():
+        ordered = sorted(clips, key=lambda c: float(c["timeline_start"]))
+        for prev, cur in zip(ordered, ordered[1:]):
+            prev_end = float(prev["timeline_start"]) + float(prev["timeline_duration"])
+            if float(cur["timeline_start"]) < prev_end - 1e-6:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Overlay clips overlap on track {track}",
+                )
 
 
 class MusicSettings(BaseModel):
@@ -9144,8 +9213,12 @@ async def save_composition(
         "transforms",
         "pinned",
         "transitionIn",
+        # Phase C: video-on-video overlay clips (composition track >= 2).
+        "track",
+        "overlay_box",
     }
     normalized_timeline: List[dict] = []
+    free_clips: List[dict] = []  # Phase C: free video overlays, for overlap check
     cursor = 0.0
     for clip_index, raw_clip in enumerate(body.video_timeline):
         if not isinstance(raw_clip, dict):
@@ -9169,13 +9242,53 @@ async def save_composition(
                 detail=f"Clip {clip_index + 1} has invalid timing",
             )
 
+        # Phase C: track selects the lane. 1/absent = magnetic V1 base (reflowed
+        # by cursor). 2..4 = free video overlay (absolute position, own z-order).
+        try:
+            track = int(raw_clip["track"]) if raw_clip.get("track") is not None else 1
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} has an invalid track")
+        if track < 1 or track > 4:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {clip_index + 1} has track {track} out of range (1-4)",
+            )
+
         clip = {key: raw_clip.get(key) for key in allowed_fields if key in raw_clip}
         clip["id"] = str(raw_clip.get("id") or f"clip-{clip_index}-{cursor:.3f}")
-        clip["kind"] = "intro" if raw_clip.get("kind") == "intro" else "body"
         clip["start_time"] = source_start
         clip["end_time"] = source_end
-        clip["timeline_start"] = cursor
         clip["timeline_duration"] = duration
+
+        if track >= 2:
+            # Free video overlay: honor timeline_start as absolute, excluded from
+            # the cursor reflow and intro_offset. No transition on this lane.
+            clip["kind"] = "body"
+            clip["track"] = track
+            clip["overlay_box"] = _validate_overlay_box(raw_clip.get("overlay_box"), clip_index)
+            clip.pop("transitionIn", None)
+            try:
+                free_start = float(raw_clip.get("timeline_start"))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Clip {clip_index + 1} (overlay) has an invalid timeline_start",
+                )
+            if not math.isfinite(free_start) or free_start < 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Clip {clip_index + 1} (overlay) has an invalid timeline_start",
+                )
+            clip["timeline_start"] = free_start
+            normalized_timeline.append(clip)
+            free_clips.append(clip)
+            continue
+
+        # Magnetic base clip (track 1): reflow by cursor exactly as before.
+        clip.pop("track", None)
+        clip.pop("overlay_box", None)
+        clip["kind"] = "intro" if raw_clip.get("kind") == "intro" else "body"
+        clip["timeline_start"] = cursor
         # Transitions V1 (P0): validate against the allowlist / clamp duration /
         # strip on intro clips before it is ever persisted or reaches ffmpeg.
         try:
@@ -9193,6 +9306,14 @@ async def save_composition(
             clip["transitionIn"] = transition_in
         normalized_timeline.append(clip)
         cursor += duration
+
+    # Phase C: cap and reject overlapping free overlays on the same track.
+    if len(free_clips) > 50:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many overlay clips ({len(free_clips)}); max 50",
+        )
+    _reject_overlapping_overlays(free_clips)
 
     try:
         default_transition = normalize_transition_in(body.default_transition)
