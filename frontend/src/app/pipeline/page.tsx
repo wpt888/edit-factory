@@ -35,7 +35,7 @@ import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderAdjustments, RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
 import { EMPTY_ATTENTION_SELECTION, type AttentionSelection } from "@/components/attention-template-picker";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
 import {
   MatchPreview,
@@ -728,6 +728,7 @@ function PipelinePage() {
             video_timeline: videoTimeline,
             visual_version: visualVersion,
             default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
+            music: previewsRef.current[previewKey]?.music ?? null,
           }).catch((error) => {
             console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
           });
@@ -735,6 +736,30 @@ function PipelinePage() {
       };
     }
     return videoTimelineChangeHandlers.current[previewKey];
+  }, []);
+
+  // A2 background music — updates PreviewData and persists via the same
+  // debounced composition save (which now carries `music`), mirroring the
+  // default-transition handler exactly.
+  const musicChangeHandlers = useRef<Record<string, (music: MusicSettings | null) => void>>({});
+  const getMusicChangeHandler = useCallback((previewKey: string) => {
+    if (!musicChangeHandlers.current[previewKey]) {
+      musicChangeHandlers.current[previewKey] = (music: MusicSettings | null) => {
+        setPreviews((previous) => {
+          const current = previous[previewKey];
+          if (!current) return previous;
+          return { ...previous, [previewKey]: { ...current, music } };
+        });
+        const timeline = previewsRef.current[previewKey]?.video_timeline;
+        if (timeline?.length) {
+          // Reuse the debounced composition save so timeline + music persist
+          // together. previewsRef is updated by the state commit above.
+          getVideoTimelineChangeHandler(previewKey)(timeline);
+        }
+      };
+    }
+    return musicChangeHandlers.current[previewKey];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Transitions V1: per-variant default transition. Updates the PreviewData blob
@@ -2383,8 +2408,12 @@ function PipelinePage() {
   const buildRenderPayload = () => {
     const matchOverrides: Record<string, MatchPreview[]> = {};
     const compositionOverrides: Record<string, CompositionClip[]> = {};
+    const musicOverrides: Record<string, MusicSettings> = {};
     const selectedPreviewCards = previewCards.filter(card => selectedVariants.has(card.baseIndex));
     for (const card of selectedPreviewCards) {
+      if (previews[card.key]?.music) {
+        musicOverrides[card.key] = previews[card.key].music!;
+      }
       if (previews[card.key]?.matches && previews[card.key].matches.length > 0) {
         matchOverrides[card.key] = previews[card.key].matches;
       } else {
@@ -2443,6 +2472,9 @@ function PipelinePage() {
       match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
       composition_overrides: Object.keys(compositionOverrides).length > 0
         ? compositionOverrides
+        : undefined,
+      music_overrides: Object.keys(musicOverrides).length > 0
+        ? musicOverrides
         : undefined,
       interstitial_slides: filteredInterstitialSlides,
       attention_timelines: Object.fromEntries(
@@ -4725,6 +4757,7 @@ function PipelinePage() {
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
     getDefaultTransitionChangeHandler,
+    getMusicChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     savePresetName,

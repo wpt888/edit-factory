@@ -159,6 +159,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
+    getMusicChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
@@ -713,6 +714,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                         defaultTransition={preview.defaultTransition ?? null}
+                        music={preview.music ?? null}
+                        onMusicChange={getMusicChangeHandler(card.key)}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </CardContent>
@@ -767,6 +770,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   matches={previews[previewVariant]?.matches ?? []}
                   videoTimeline={previews[previewVariant]?.video_timeline ?? []}
                   defaultTransition={previews[previewVariant]?.defaultTransition ?? null}
+                  music={previews[previewVariant]?.music ?? null}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
                   visualVersion={activeCard.visualVersion}
