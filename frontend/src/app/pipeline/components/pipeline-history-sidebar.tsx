@@ -68,6 +68,8 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     setVariantCount,
     setTargetScriptDuration,
     historyContextProducts,
+    historyTemplateSettings,
+    applyPipelineTemplateSettings,
     setContextProducts,
     setSelectedSourceIds,
     restoreSourceSelection,
@@ -262,6 +264,9 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                       if (histItem.target_script_duration) setTargetScriptDuration(histItem.target_script_duration);
                                     }
                                     setContextProducts(historyContextProducts);
+                                    if (historyTemplateSettings) {
+                                      applyPipelineTemplateSettings(historyTemplateSettings, selectedHistoryId);
+                                    }
                                     // Restore source video selection so product groups load
                                     setSelectedSourceIds(new Set());
                                     restoreSourceSelection(selectedHistoryId);

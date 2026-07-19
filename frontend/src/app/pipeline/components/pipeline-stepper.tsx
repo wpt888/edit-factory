@@ -1,8 +1,8 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, CheckCircle, Film, Sparkles } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
+import { ArrowLeft, CheckCircle, Download, Film, Loader2, Sparkles, Upload } from "lucide-react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 
 // Mirrors the inline confirmDialog state shape in PipelinePage (page.tsx).
 type ConfirmDialogState = {
@@ -61,7 +61,11 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     previewCards,
     selectedVariants,
     variantCount,
+    templateTransferBusy,
+    handleExportPipelineTemplate,
+    handleImportPipelineTemplate,
   }: PipelineStepperCtx = ctx;
+  const templateInputRef = useRef<HTMLInputElement>(null);
 
   // Step 2 -> 3 is unlocked by ready voice-overs, not previews: matching can
   // run on demand (handlePreviewAll reuses the audio and auto-advances).
@@ -202,6 +206,48 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       </div>
 
       <div className="ml-auto flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
+        <input
+          ref={templateInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          data-testid="pipeline-template-file-input"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void handleImportPipelineTemplate(file);
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-9 px-2.5 text-sm"
+          disabled={!!templateTransferBusy}
+          onClick={() => templateInputRef.current?.click()}
+          title="Import a complete pipeline template"
+          data-testid="pipeline-template-import"
+        >
+          {templateTransferBusy === "import"
+            ? <Loader2 className="mr-1.5 size-4 animate-spin" />
+            : <Upload className="mr-1.5 size-4" />}
+          <span className="hidden min-[1450px]:inline">Import Template</span>
+          <span className="min-[1450px]:hidden">Import</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-9 px-2.5 text-sm"
+          disabled={!pipelineId || !!templateTransferBusy}
+          onClick={() => void handleExportPipelineTemplate()}
+          title={pipelineId ? "Export every pipeline setting as JSON" : "Create or load a pipeline before exporting"}
+          data-testid="pipeline-template-export"
+        >
+          {templateTransferBusy === "export"
+            ? <Loader2 className="mr-1.5 size-4 animate-spin" />
+            : <Download className="mr-1.5 size-4" />}
+          <span className="hidden min-[1450px]:inline">Export Template</span>
+          <span className="min-[1450px]:hidden">Export</span>
+        </Button>
         {step === 3 && (
           <Button
             variant="ghost"

@@ -32,8 +32,9 @@ import { SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailSelection } from "@/components/thumbnail-picker";
 import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
-import type { RenderSettings } from "@/components/render-settings-panel";
+import type { RenderAdjustments, RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
+import { EMPTY_ATTENTION_SELECTION, type AttentionSelection } from "@/components/attention-template-picker";
 import type { CompositionClip } from "@/types/composition-timeline";
 import {
   MatchPreview,
@@ -53,6 +54,13 @@ import {
   AsyncJobState,
   META_SUBTITLE_STYLE_BY_VERSION,
 } from "./pipeline-types";
+import {
+  isPipelineTemplateSettings,
+  pipelineTemplateFilename,
+  type PipelineTemplateDocument,
+  type PipelineTemplateImportResponse,
+  type PipelineTemplateSettings,
+} from "./pipeline-template";
 import { PipelineErrorBoundary } from "./components/pipeline-error-boundary";
 import { Step1Script } from "./components/step1-script";
 import { Step2TTS } from "./components/step2-tts";
@@ -268,6 +276,9 @@ function PipelinePage() {
   const [assemblyPreset, setAssemblyPreset] = useState<
     "keyword_strict" | "balanced" | "max_variety" | "shuffle" | "ai_smart"
   >("balanced");
+  // Segment proximity — near-adjacent same-source clips: keep them apart
+  // (default, avoids a visible jump-cut) or merge them into one continuous shot.
+  const [segmentProximity, setSegmentProximity] = useState<"separate" | "merge">("separate");
   // Render-time picture & audio adjustments (Step 3 "Render Settings" card).
   // Applied by the render engine (eq / volume / afade), not by segment matching.
   const [renderAdjust, setRenderAdjust] = useState({
@@ -313,6 +324,8 @@ function PipelinePage() {
   const [historyTtsInfo, setHistoryTtsInfo] = useState<NonNullable<PipelineScriptsResponse["tts_info"]>>({});
   const [historyTtsJobs, setHistoryTtsJobs] = useState<Record<string, Partial<AsyncJobState>>>({});
   const [historyContextProducts, setHistoryContextProducts] = useState<ContextProduct[]>([]);
+  const [historyAttentionSelection, setHistoryAttentionSelection] = useState<AttentionSelection | null>(null);
+  const [historyTemplateSettings, setHistoryTemplateSettings] = useState<PipelineTemplateSettings | null>(null);
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
@@ -433,6 +446,15 @@ function PipelinePage() {
   // Interstitial slides: keyed by variant index
   const [interstitialSlides, setInterstitialSlides] = useState<Record<PreviewKey, InterstitialSlide[]>>({});
   const [attentionTimelines, setAttentionTimelines] = useState<Record<PreviewKey, AttentionTimeline>>({});
+  // Timeline bindings imported from a template are merged into freshly
+  // generated previews, after audio/SRT data exists for the recipient.
+  const importedTemplateTimelineRef = useRef<PipelineTemplateSettings["timeline"] | null>(null);
+  const activeTemplatePipelineIdRef = useRef<string | null>(null);
+  const [templatePipOverlays, setTemplatePipOverlays] = useState<PipelineTemplateSettings["timeline"]["pipOverlays"]>({});
+
+  // Step 1 attention-template pick; auto-applied per variant once previews exist.
+  const [attentionSelection, setAttentionSelection] = useState<AttentionSelection>(EMPTY_ATTENTION_SELECTION);
+  const attentionSelectionRef = useRef<AttentionSelection>(EMPTY_ATTENTION_SELECTION);
 
   // Per-variant thumbnail selection (becomes first frame of rendered video)
   const [variantThumbnails, setVariantThumbnails] = useState<Record<PreviewKey, ThumbnailSelection>>({});
@@ -474,6 +496,70 @@ function PipelinePage() {
   const [savePresetName, setSavePresetName] = useState("");
   const [savePresetSubmitting, setSavePresetSubmitting] = useState(false);
   const [savePresetError, setSavePresetError] = useState<string | null>(null);
+  const [templateTransferBusy, setTemplateTransferBusy] = useState<"export" | "import" | null>(null);
+
+  const applyPipelineTemplateSettings = useCallback((
+    settings: PipelineTemplateSettings,
+    targetPipelineId?: string,
+  ) => {
+    const { generation, content, voice, assembly, timeline, subtitles, render } = settings;
+    activeTemplatePipelineIdRef.current = targetPipelineId || pipelineIdRef.current;
+    setPipelineName(generation.name || "Imported template");
+    setIdea(generation.idea || "");
+    setContext(generation.context || "");
+    setContextProducts(generation.contextProducts || []);
+    setVariantCount(Math.max(1, Math.min(10, generation.variantCount || content.scripts.length || 1)));
+    setTargetScriptDuration(generation.targetScriptDuration || 30);
+    setProvider(generation.provider || DEFAULT_SCRIPT_AI_PROVIDER);
+    setCodexModel(generation.codexModel || DEFAULT_CODEX_MODEL);
+    setAiInstructions(generation.aiInstructions || "");
+
+    setScripts((content.scripts || []).map((script) => script.text));
+    setScriptNames((content.scripts || []).map((script, index) => script.name || `Script ${index + 1}`));
+    setApprovedScripts(new Set(content.approvedScriptIndices || []));
+    setGeneratedCaptions(content.generatedCaptions || {});
+    setGeneratedYoutubeTitles(content.generatedYoutubeTitles || {});
+
+    setElevenlabsModel(voice.model || "eleven_flash_v2_5");
+    setVoiceId(voice.voice?.id || "");
+    setVoiceStability(voice.stability ?? 0.5);
+    setVoiceSimilarity(voice.similarity ?? 0.75);
+    setVoiceStyle(voice.style ?? 0);
+    setVoiceSpeed(voice.speed ?? 1);
+    setVoiceSpeakerBoost(voice.speakerBoost ?? true);
+    setWordsPerSubtitle(voice.wordsPerSubtitle ?? 2);
+
+    setMinSegmentDuration(assembly.minSegmentDuration ?? 3);
+    setUltraRapidIntro(assembly.ultraRapidIntro ?? true);
+    setAssemblyPreset(assembly.preset || "balanced");
+    setSegmentProximity(assembly.segmentProximity || "separate");
+    setSelectedSourceIds(new Set((assembly.sourceVideos || []).map((source) => source.id).filter(Boolean)));
+
+    importedTemplateTimelineRef.current = timeline;
+    setSelectedVariants(new Set(timeline.selectedVariantIndices || []));
+    setInterstitialSlides(timeline.interstitialSlides || {});
+    const selection = timeline.attentionSelection || EMPTY_ATTENTION_SELECTION;
+    setAttentionSelection(selection);
+    attentionSelectionRef.current = selection;
+    setAttentionTimelines(timeline.attentionTimelines || {});
+    setVariantThumbnails(timeline.variantThumbnails || {});
+    setTemplatePipOverlays(timeline.pipOverlays || {});
+
+    setSubtitleSettings(subtitles.default || { ...DEFAULT_SUBTITLE_SETTINGS });
+    setSubtitleOverrides(subtitles.overrides || {});
+    setPresetName(render.presetName || "TikTok");
+    setRenderSettings(render.encoding || { ...DEFAULT_RENDER_SETTINGS });
+    setRenderAdjust(render.adjustments || {
+      enableColor: false,
+      brightness: 0,
+      contrast: 1,
+      saturation: 1,
+      voiceVolume: 1,
+      audioFadeIn: 0,
+      audioFadeOut: 0,
+    });
+    setMetaMultiplication(render.metaMultiplication ?? true);
+  }, [setProvider]);
 
   const markSubtitleSaveSuccess = useCallback(() => {
     setSubtitleSaveState("saved");
@@ -683,9 +769,32 @@ function PipelinePage() {
     };
   }, []);
 
+  const handleAttentionSelectionChange = useCallback((selection: AttentionSelection) => {
+    setAttentionSelection(selection);
+    attentionSelectionRef.current = selection;
+    const pid = pipelineIdRef.current;
+    if (pid) void apiPut(`/pipeline/${pid}/attention-selection`, selection).catch(() => {});
+  }, []);
+
+  // A template picked in Step 1 before the pipeline exists is persisted as
+  // soon as script generation creates one.
+  useEffect(() => {
+    if (pipelineId && attentionSelectionRef.current.templateId) {
+      void apiPut(`/pipeline/${pipelineId}/attention-selection`, attentionSelectionRef.current).catch(() => {});
+    }
+  }, [pipelineId]);
+
   // Keep pipelineIdRef in sync with state + URL
   useEffect(() => {
     pipelineIdRef.current = pipelineId;
+    if (
+      activeTemplatePipelineIdRef.current
+      && activeTemplatePipelineIdRef.current !== pipelineId
+    ) {
+      activeTemplatePipelineIdRef.current = null;
+      importedTemplateTimelineRef.current = null;
+      setTemplatePipOverlays({});
+    }
     // Sync pipeline ID to URL so it's always visible and shareable
     updateUrlParams(step, pipelineId);
   }, [pipelineId]); // eslint-disable-line react-hooks/exhaustive-deps -- step read intentionally from current value
@@ -814,6 +923,19 @@ function PipelinePage() {
         if (data.codex_model) setCodexModel(data.codex_model);
         if (data.variant_count) setVariantCount(data.variant_count);
         setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
+        if (isPipelineTemplateSettings(data.template_settings)) {
+          applyPipelineTemplateSettings(data.template_settings, data.pipeline_id);
+        }
+        if (data.attention_selection?.templateId) {
+          const restoredSelection: AttentionSelection = {
+            templateId: data.attention_selection.templateId,
+            assetUrls: data.attention_selection.assetUrls || [],
+            staggerSeconds: data.attention_selection.staggerSeconds ?? 1,
+            maxVariants: data.attention_selection.maxVariants ?? 0,
+          };
+          setAttentionSelection(restoredSelection);
+          attentionSelectionRef.current = restoredSelection;
+        }
         if (data.library_project_id) setLibraryProjectId(data.library_project_id);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
@@ -1222,6 +1344,48 @@ function PipelinePage() {
         });
     }
   }, [pipelineId, previewCards, attentionTimelines]);
+
+  // Auto-apply the Step 1 attention-template pick: once a variant has a
+  // preview (audio duration + subtitle boundaries exist) and its timeline is
+  // still empty, distribute the template. Manual timeline edits in Step 3 are
+  // never overwritten because non-empty timelines are skipped.
+  const attentionAutoApplied = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!pipelineId || !attentionSelection.templateId || attentionSelection.assetUrls.length === 0) return;
+    for (const card of previewCards) {
+      const timeline = attentionTimelines[card.key];
+      const preview = previews[card.key];
+      if (!timeline || timeline.cues.length > 0) continue;
+      if (!preview?.matches?.length || !(preview.audio_duration > 0)) continue;
+      // card.key is "<variantIndex>" or "<variantIndex>_<style>"; the variant
+      // index drives the stagger and the apply-to-first-N-variants cutoff.
+      const variantIndex = parseInt(card.key, 10) || 0;
+      if (attentionSelection.maxVariants > 0 && variantIndex >= attentionSelection.maxVariants) continue;
+      const applyKey = `${pipelineId}:${card.key}`;
+      if (attentionAutoApplied.current.has(applyKey)) continue;
+      attentionAutoApplied.current.add(applyKey);
+      apiPost(`/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`, {
+        templateId: attentionSelection.templateId,
+        assetUrls: attentionSelection.assetUrls,
+        durationMs: Math.max(1, Math.round(preview.audio_duration * 1000)),
+        subtitleBoundariesMs: Array.from(new Set(preview.matches.flatMap(match => [
+          Math.round(match.srt_start * 1000),
+          Math.round(match.srt_end * 1000),
+        ]))).sort((a, b) => a - b),
+        revision: timeline.revision,
+        mode: "replace",
+        startOffsetMs: Math.round(variantIndex * (attentionSelection.staggerSeconds || 0) * 1000),
+      })
+        .then(async response => {
+          const document = await response.json() as AttentionTimeline;
+          setAttentionTimelines(prev => ({ ...prev, [card.key]: document }));
+        })
+        .catch(() => {
+          // Allow a retry on the next state change (e.g. after a 409 reload).
+          attentionAutoApplied.current.delete(applyKey);
+        });
+    }
+  }, [pipelineId, attentionSelection, previewCards, attentionTimelines, previews]);
 
   // Keep activeStyleKey consistent with metaMultiplication. When Meta is ON
   // the user picks between A and B; when OFF, there's only "default". This
@@ -1828,15 +1992,45 @@ function PipelinePage() {
             ultra_rapid_intro: ultraRapidIntro,
             visual_version: previewCard.visualVersion,
             preset: assemblyPreset,
+            segment_proximity: segmentProximity,
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
           if (abortController.signal.aborted || !isMountedRef.current) { setPreviewingIndex(null); return; }
 
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
-          const data = await res.json();
+          const responseData = await res.json() as PreviewData;
+          const importedTimeline = importedTemplateTimelineRef.current;
+          const importedMatches = importedTimeline?.matches?.[previewCard.key];
+          const importedComposition = importedTimeline?.compositions?.[previewCard.key];
+          const data: PreviewData = {
+            ...responseData,
+            ...(Array.isArray(importedMatches) ? {
+              matches: importedMatches,
+              matched_count: importedMatches.filter((match) => !!match.segment_id).length,
+              unmatched_count: importedMatches.filter((match) => !match.segment_id).length,
+            } : {}),
+            ...(Array.isArray(importedComposition) && importedComposition.length > 0 ? {
+              video_timeline: importedComposition,
+              intro_offset_sec: importedComposition
+                .filter((clip) => clip.kind === "intro")
+                .reduce((sum, clip) => sum + clip.timeline_duration, 0),
+            } : {}),
+          };
           if (!isMountedRef.current) return;
           newPreviews[previewCard.key] = data;
           setPreviews(prev => ({ ...prev, [previewCard.key]: data }));
+          if (Array.isArray(importedMatches)) {
+            void apiPut(`/pipeline/${pipelineId}/matches/${previewCard.baseIndex}`, {
+              matches: importedMatches,
+              visual_version: previewCard.visualVersion,
+            }).catch(() => {});
+          }
+          if (Array.isArray(importedComposition) && importedComposition.length > 0) {
+            void apiPut(`/pipeline/${pipelineId}/composition/${previewCard.baseIndex}`, {
+              video_timeline: importedComposition,
+              visual_version: previewCard.visualVersion,
+            }).catch(() => {});
+          }
           // Sync ttsResults from preview response — TTS is generated as part of preview
           if (data.audio_duration > 0) {
             setTtsResults(prev => ({
@@ -1985,6 +2179,170 @@ function PipelinePage() {
     return pipOverlays;
   };
 
+  const capturePipelineTemplateSettings = (): PipelineTemplateSettings => {
+    const matches: PipelineTemplateSettings["timeline"]["matches"] = {};
+    const compositions: PipelineTemplateSettings["timeline"]["compositions"] = {};
+    const pipOverlays: PipelineTemplateSettings["timeline"]["pipOverlays"] = {
+      ...templatePipOverlays,
+    };
+    for (const [key, preview] of Object.entries(previews)) {
+      if (Array.isArray(preview.matches)) matches[key] = preview.matches;
+      if (Array.isArray(preview.video_timeline)) compositions[key] = preview.video_timeline;
+      Object.assign(pipOverlays, buildPipOverlaysForMatches(preview.matches));
+    }
+    const adjustments: RenderAdjustments = { ...renderAdjust };
+
+    // This object is intentionally exhaustive against PipelineTemplateSettings.
+    // Adding a setting to the contract without capturing it fails type-checking.
+    return {
+      generation: {
+        name: pipelineName,
+        idea,
+        context: stripEmbeddedProductBlocks(context),
+        contextProducts,
+        variantCount,
+        targetScriptDuration,
+        provider,
+        codexModel,
+        aiInstructions,
+      },
+      content: {
+        scripts: scripts.map((text, index) => ({
+          name: scriptNames[index] || `Script ${index + 1}`,
+          text,
+        })),
+        approvedScriptIndices: Array.from(approvedScripts).sort((a, b) => a - b),
+        generatedCaptions,
+        generatedYoutubeTitles,
+      },
+      voice: {
+        model: elevenlabsModel,
+        voice: {
+          id: voiceId,
+          name: voices.find((voice) => voice.voice_id === voiceId)?.name || "",
+        },
+        stability: voiceStability,
+        similarity: voiceSimilarity,
+        style: voiceStyle,
+        speed: voiceSpeed,
+        speakerBoost: voiceSpeakerBoost,
+        wordsPerSubtitle,
+      },
+      assembly: {
+        minSegmentDuration,
+        ultraRapidIntro,
+        preset: assemblyPreset,
+        segmentProximity,
+        sourceVideos: Array.from(selectedSourceIds).map((id) => ({
+          id,
+          name: sourceVideos.find((video) => video.id === id)?.name || "",
+        })),
+      },
+      timeline: {
+        selectedVariantIndices: Array.from(selectedVariants).sort((a, b) => a - b),
+        matches,
+        compositions,
+        interstitialSlides,
+        attentionSelection,
+        attentionTimelines,
+        variantThumbnails,
+        pipOverlays,
+      },
+      subtitles: {
+        default: subtitleSettings,
+        overrides: subtitleOverrides,
+      },
+      render: {
+        presetName,
+        encoding: renderSettings,
+        adjustments,
+        metaMultiplication,
+      },
+    };
+  };
+
+  const handleExportPipelineTemplate = async () => {
+    if (!pipelineId || templateTransferBusy) return;
+    setTemplateTransferBusy("export");
+    try {
+      const settings = capturePipelineTemplateSettings();
+      await apiPut(`/pipeline/${pipelineId}/template-settings`, { settings });
+      const response = await apiGet(`/pipeline/${pipelineId}/template`, {
+        cache: "no-store",
+        memoryCache: false,
+      });
+      const document = await response.json() as PipelineTemplateDocument;
+      const blobUrl = URL.createObjectURL(new Blob(
+        [JSON.stringify(document, null, 2)],
+        { type: "application/json" },
+      ));
+      const anchor = window.document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = pipelineTemplateFilename(pipelineName || "pipeline");
+      window.document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(blobUrl);
+      toast.success("Pipeline template exported");
+    } catch (exportError) {
+      handleApiError(exportError, "Pipeline template export failed");
+    } finally {
+      setTemplateTransferBusy(null);
+    }
+  };
+
+  const handleImportPipelineTemplate = async (file: File) => {
+    if (templateTransferBusy) return;
+    if (isRendering) {
+      toast.error("Stop the active render before importing a template");
+      return;
+    }
+    if (file.size > 2_500_000) {
+      toast.error("Template file is larger than 2 MB");
+      return;
+    }
+    setTemplateTransferBusy("import");
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const response = await apiPost("/pipeline/template/import", parsed, { timeout: 60_000 });
+      const imported = await response.json() as PipelineTemplateImportResponse;
+
+      stopRenderPolling();
+      setGenerationJob(null);
+      setIsGenerating(false);
+      setPreviews({});
+      setTtsResults({});
+      setLibraryMatches({});
+      setVariantStatuses([]);
+      setIsRendering(false);
+      setPreviewError(null);
+      applyPipelineTemplateSettings(imported.settings, imported.pipeline_id);
+      setScripts(imported.scripts);
+      setScriptNames(imported.script_names);
+      setPipelineId(imported.pipeline_id);
+      pipelineIdRef.current = imported.pipeline_id;
+      setStep(2);
+      await fetchHistory();
+
+      if (imported.warnings?.length) {
+        toast.warning(
+          `${imported.warnings.length} media binding${imported.warnings.length === 1 ? "" : "s"} could not be restored`,
+          { description: imported.warnings.slice(0, 3).join("; ") },
+        );
+      } else {
+        toast.success("Pipeline template imported");
+      }
+    } catch (importError) {
+      if (importError instanceof SyntaxError) {
+        toast.error("The selected file is not valid JSON");
+      } else {
+        handleApiError(importError, "Pipeline template import failed");
+      }
+    } finally {
+      setTemplateTransferBusy(null);
+    }
+  };
+
   // Build the render payload (shared between check-render and render calls)
   const buildRenderPayload = () => {
     const matchOverrides: Record<string, MatchPreview[]> = {};
@@ -2028,7 +2386,9 @@ function PipelinePage() {
       ? mergedInterstitialSlides
       : undefined;
 
-    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
+    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {
+      ...templatePipOverlays,
+    };
     for (const card of selectedPreviewCards) {
       Object.assign(pipOverlays, buildPipOverlaysForMatches(previews[card.key]?.matches));
     }
@@ -2067,6 +2427,7 @@ function PipelinePage() {
       min_segment_duration: minSegmentDuration,
       ultra_rapid_intro: ultraRapidIntro,
       preset: assemblyPreset,
+      segment_proximity: segmentProximity,
       meta_multiplication: metaMultiplication,
       // Picture & audio adjustments (Step 3 Render Settings)
       enable_color: renderAdjust.enableColor,
@@ -2093,6 +2454,8 @@ function PipelinePage() {
       opacity: subtitleSettings.opacity ?? 100,
       horizontal_alignment: subtitleSettings.horizontalAlignment ?? "center",
       letter_spacing: subtitleSettings.letterSpacing ?? 0,
+      karaoke: subtitleSettings.karaoke ?? false,
+      highlight_color: subtitleSettings.highlightColor ?? "#FFFF00",
       // Per-Meta-version overrides. Only non-empty entries are sent — the
       // backend's PUT regex rejects `{}` entries, so we filter them out to
       // match the same contract when we POST to /render. When no overrides
@@ -2296,6 +2659,14 @@ function PipelinePage() {
     setScripts([]);
     setScriptNames([]);
     setPreviews({});
+    importedTemplateTimelineRef.current = null;
+    activeTemplatePipelineIdRef.current = null;
+    setTemplatePipOverlays({});
+    setInterstitialSlides({});
+    setAttentionTimelines({});
+    setAttentionSelection(EMPTY_ATTENTION_SELECTION);
+    attentionSelectionRef.current = EMPTY_ATTENTION_SELECTION;
+    setVariantThumbnails({});
     setPreviewError(null);
     setSelectedVariants(new Set());
     setMetaMultiplication(true);
@@ -2444,6 +2815,19 @@ function PipelinePage() {
       setHistoryTtsJobs(data.tts_jobs || {});
       // Store context products for restore
       setHistoryContextProducts(data.context_products || []);
+      setHistoryAttentionSelection(
+        data.attention_selection?.templateId
+          ? {
+              templateId: data.attention_selection.templateId,
+              assetUrls: data.attention_selection.assetUrls || [],
+              staggerSeconds: data.attention_selection.staggerSeconds ?? 1,
+              maxVariants: data.attention_selection.maxVariants ?? 0,
+            }
+          : null,
+      );
+      setHistoryTemplateSettings(
+        isPipelineTemplateSettings(data.template_settings) ? data.template_settings : null,
+      );
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
     } finally {
@@ -2594,6 +2978,7 @@ function PipelinePage() {
     setHistoryPreviewInfo({});
     setHistoryTtsInfo({});
     setHistoryTtsJobs({});
+    setHistoryTemplateSettings(null);
   }, [currentProfile?.id, fetchHistory, fetchTtsLibrary]);
 
   // Fetch source videos on mount
@@ -2635,8 +3020,11 @@ function PipelinePage() {
         if (savedVoiceId) {
           setDefaultVoiceId(savedVoiceId);
           // Pre-select if user hasn't manually chosen yet
-          setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
+          if (!activeTemplatePipelineIdRef.current) {
+            setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
+          }
         }
+        if (activeTemplatePipelineIdRef.current) return;
         // Hydrate voice settings from profile (overrides localStorage defaults)
         if (tts?.voice_stability !== undefined) setVoiceStability(tts.voice_stability);
         if (tts?.voice_similarity !== undefined) setVoiceSimilarity(tts.voice_similarity);
@@ -2662,7 +3050,9 @@ function PipelinePage() {
       try {
         const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-settings`);
         const data = await res.json();
-        setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
+        if (!activeTemplatePipelineIdRef.current) {
+          setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
+        }
       } catch {
         // Use defaults
       } finally {
@@ -3121,6 +3511,12 @@ function PipelinePage() {
       if (restored.approved.size > 0) setApprovedScripts(restored.approved);
       // Restore context products from history
       setContextProducts(historyContextProducts);
+      if (historyTemplateSettings) {
+        applyPipelineTemplateSettings(historyTemplateSettings, selectedHistoryId || undefined);
+      }
+      const restoredSelection = historyAttentionSelection ?? EMPTY_ATTENTION_SELECTION;
+      setAttentionSelection(restoredSelection);
+      attentionSelectionRef.current = restoredSelection;
       // Restore pipeline metadata for "Back to Input"
       const histItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
       if (histItem) {
@@ -3212,6 +3608,11 @@ function PipelinePage() {
       // apiPost throws on non-OK responses (FE-01)
       const data = await res.json();
       const pid = data.pipeline_id;
+      // Carry the attention pick into the imported pipeline; the pipelineId
+      // effect persists attentionSelectionRef to the new pipeline.
+      const importedSelection = historyAttentionSelection ?? EMPTY_ATTENTION_SELECTION;
+      setAttentionSelection(importedSelection);
+      attentionSelectionRef.current = importedSelection;
       setPipelineId(pid);
       setScripts((data.scripts || []).map(formatScript));
       const importedNames = selectedNames.length === selected.length
@@ -3364,6 +3765,10 @@ function PipelinePage() {
   // Load voice settings from localStorage after hydration
   useEffect(() => {
     if (!currentProfile?.id) return;
+    if (activeTemplatePipelineIdRef.current) {
+      setVoiceSettingsLoaded(true);
+      return;
+    }
     try {
       const stability = readWorkspaceStorage(currentProfile.id, "pipeline.voice.stability", "ef_voice_stability");
       const similarity = readWorkspaceStorage(currentProfile.id, "pipeline.voice.similarity", "ef_voice_similarity");
@@ -3385,8 +3790,12 @@ function PipelinePage() {
       const uri = readWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", "ef_ultra_rapid_intro");
       if (uri !== null) setUltraRapidIntro(uri === "true");
       const preset = readWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", "ef_assembly_preset");
-      if (preset === "keyword_strict" || preset === "balanced" || preset === "max_variety" || preset === "shuffle") {
+      if (preset === "keyword_strict" || preset === "balanced" || preset === "max_variety" || preset === "shuffle" || preset === "ai_smart") {
         setAssemblyPreset(preset);
+      }
+      const proximity = readWorkspaceStorage(currentProfile.id, "pipeline.segment-proximity", "ef_segment_proximity");
+      if (proximity === "separate" || proximity === "merge") {
+        setSegmentProximity(proximity);
       }
       // If no voice values were stored, hydration won't trigger a re-render,
       // so pre-mark as hydrated to avoid skipping the first real user change
@@ -3415,7 +3824,8 @@ function PipelinePage() {
     writeWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", String(ultraRapidIntro));
     writeWorkspaceStorage(currentProfile.id, "pipeline.elevenlabs-model", elevenlabsModel);
     writeWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", assemblyPreset);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset, currentProfile?.id]);
+    writeWorkspaceStorage(currentProfile.id, "pipeline.segment-proximity", segmentProximity);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset, segmentProximity, currentProfile?.id]);
 
   // Debounced auto-save voice settings to profile.
   // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
@@ -3879,6 +4289,7 @@ function PipelinePage() {
         visual_version: visualVersion,
         force_regenerate_tts: true,
         preset: assemblyPreset,
+        segment_proximity: segmentProximity,
       }, { timeout: 300_000 });
 
       const data = await res.json();
@@ -4165,12 +4576,17 @@ function PipelinePage() {
     setUltraRapidIntro,
     assemblyPreset,
     setAssemblyPreset,
+    segmentProximity,
+    setSegmentProximity,
     renderAdjust,
     setRenderAdjust,
     scheduleReassemblePreviews,
     approvedScripts,
     setApprovedScripts,
     pipelineId,
+    templateTransferBusy,
+    handleExportPipelineTemplate,
+    handleImportPipelineTemplate,
     saveScriptsToBackend,
     libraryMatches,
     setLibraryMatches,
@@ -4254,6 +4670,8 @@ function PipelinePage() {
     getPreviewSubtitleSettingsFor,
     interstitialSlides,
     attentionTimelines,
+    attentionSelection,
+    handleAttentionSelectionChange,
     EMPTY_SLIDES,
     getInterstitialSlidesChangeHandler,
     getAttentionTimelineChangeHandler,
@@ -4317,6 +4735,8 @@ function PipelinePage() {
     historyTtsJobs,
     historyPreviewInfo,
     historyContextProducts,
+    historyTemplateSettings,
+    applyPipelineTemplateSettings,
     setSelectedSourceIds,
     restoreSourceSelection,
     setHistorySelectedScripts,

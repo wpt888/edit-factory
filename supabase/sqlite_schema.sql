@@ -467,6 +467,9 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     -- Versioned attention overlay documents, keyed by PreviewKey.
     attention_timeline TEXT NOT NULL DEFAULT '{}',
 
+    -- Complete, versioned export/import configuration for this pipeline.
+    template_settings TEXT NOT NULL DEFAULT '{}',
+
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',
 

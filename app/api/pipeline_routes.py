@@ -39,7 +39,14 @@ from app.services.assembly_service import get_assembly_service, strip_product_gr
 from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.services.elevenlabs_governance import ElevenLabsGovernanceError
-from app.config import get_settings
+from app.services.pipeline_template_bundle import (
+    PipelineTemplateValidationError,
+    build_pipeline_template_document,
+    fallback_pipeline_template_settings,
+    normalize_pipeline_template_settings,
+    validate_pipeline_template_document,
+)
+from app.config import APP_VERSION, get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
 from app.services.ffmpeg_semaphore import acquire_preview_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
@@ -65,6 +72,11 @@ def _clamp_min_segment_duration(value: Optional[float]) -> float:
         return max(1.0, min(8.0, float(value)))
     except (TypeError, ValueError):
         return 3.0
+
+
+def _sanitize_segment_proximity(value: Optional[str]) -> str:
+    """Same-source near-adjacent clip handling: separate (default) or merge."""
+    return value if value in ("separate", "merge") else "separate"
 
 
 def _increment_segment_usage(supabase_client, segment_ids: list):
@@ -650,6 +662,8 @@ def _compute_render_fingerprint(
         "opacity": render_request.opacity,
         "horizontalAlignment": render_request.horizontal_alignment,
         "letterSpacing": render_request.letter_spacing,
+        "karaoke": render_request.karaoke,
+        "highlightColor": render_request.highlight_color,
     }
     effective_subtitle, _ = _get_subtitle_settings_for_key(
         render_request, lookup_key, _default_subtitle
@@ -912,6 +926,12 @@ def _promote_temp_audio_paths_to_library(pipeline_id: str, pipeline_dict: dict) 
 
 _PIPELINE_SCHEMA_FALLBACKS = (
     (
+        ("template_settings",),
+        ("template_settings",),
+        "template_settings column missing; run migration 056. "
+        "Retrying without portable template state.",
+    ),
+    (
         ("generation_job", "tts_jobs"),
         ("generation_job", "tts_jobs"),
         "Async pipeline job columns missing; run migration 054. "
@@ -1037,6 +1057,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "meta_multiplication": pipeline_dict.get("meta_multiplication", True),
                 "subtitle_settings_by_key": subtitle_overrides_json,
                 "attention_timeline": attention_timeline_json,
+                "template_settings": copy.deepcopy(pipeline_dict.get("template_settings") or {}),
             }
             try:
                 _upsert_pipeline_with_schema_fallback(repo, row)
@@ -1764,6 +1785,8 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         "opacity": render_request.opacity,
         "horizontalAlignment": render_request.horizontal_alignment,
         "letterSpacing": render_request.letter_spacing,
+        "karaoke": render_request.karaoke,
+        "highlightColor": render_request.highlight_color,
     }
 
     return preset_data, default_subtitle_settings
@@ -2451,6 +2474,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "meta_multiplication": row.get("meta_multiplication", True),
             "subtitle_settings_by_key": subtitle_settings_by_key,
             "attention_timeline": row.get("attention_timeline") or {},
+            "template_settings": row.get("template_settings") or {},
         }
 
         if _mark_interrupted_regeneration_attempts(pipeline):
@@ -2654,6 +2678,8 @@ class PipelineRenderRequest(BaseModel):
     opacity: int = 100
     horizontal_alignment: str = "center"
     letter_spacing: float = 0
+    karaoke: bool = False
+    highlight_color: str = "#FFFF00"
     # Video filters
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -2684,6 +2710,13 @@ class PipelineRenderRequest(BaseModel):
         return None if value is None else _clamp_min_segment_duration(value)
     # F8: segment-selection scoring preset (keyword_strict|balanced|max_variety|shuffle)
     preset: Optional[str] = "balanced"
+    # Same-source near-adjacent clips: separate (default) or merge into one shot
+    segment_proximity: Optional[str] = "separate"
+
+    @field_validator("segment_proximity", mode="before")
+    @classmethod
+    def _sanitize_proximity(cls, value):
+        return _sanitize_segment_proximity(value)
     # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
     ultra_rapid_intro: bool = True
     # Interstitial product image slides: variant_index -> list of slide configs
@@ -2711,7 +2744,8 @@ class PipelineRenderRequest(BaseModel):
     # frontend-side: "0", "1", "0_A", "0_B". Values are SubtitleSettings-shaped
     # dicts in camelCase (fontSize, textColor, outlineColor, outlineWidth,
     # positionY, shadowDepth, enableGlow, glowBlur, adaptiveSizing, opacity,
-    # fontFamily). When a key is present, it REPLACES the flat subtitle fields
+    # fontFamily, karaoke, highlightColor). When a key is present, it REPLACES
+    # the flat subtitle fields
     # for that variant and SUPPRESSES any Meta profile override. When absent,
     # the flat fields above are used as default, and Meta profile overrides
     # (if meta_multiplication) apply on top as today.
@@ -2833,6 +2867,163 @@ class SourceSelectionRequest(BaseModel):
     source_video_ids: List[str]
 
 
+class PipelineTemplateSettingsRequest(BaseModel):
+    """The one persistence boundary for every user-configurable pipeline option."""
+    settings: Dict[str, Any]
+
+
+def _resolve_template_source_bindings(
+    settings: Dict[str, Any],
+    profile_id: str,
+) -> tuple[Dict[str, Any], List[str], List[str]]:
+    """Rebind source-video references without granting cross-profile access."""
+    resolved_settings = copy.deepcopy(settings)
+    assembly = resolved_settings.setdefault("assembly", {})
+    raw_references = assembly.get("sourceVideos") or assembly.get("sourceVideoIds") or []
+    if not isinstance(raw_references, list):
+        raw_references = []
+
+    references: List[dict] = []
+    for raw_reference in raw_references:
+        if isinstance(raw_reference, str):
+            references.append({"id": raw_reference, "name": ""})
+        elif isinstance(raw_reference, dict):
+            references.append({
+                "id": str(raw_reference.get("id") or ""),
+                "name": str(raw_reference.get("name") or ""),
+            })
+
+    available: List[dict] = []
+    try:
+        result = get_repository().table_query(
+            "editai_source_videos",
+            "select",
+            filters=QueryFilters(
+                select="id, name",
+                eq={"profile_id": profile_id},
+                limit=1000,
+            ),
+        )
+        available = list(result.data or [])
+    except Exception as exc:
+        logger.warning("Could not resolve template source-video bindings: %s", exc)
+
+    by_id = {str(row.get("id")): row for row in available if row.get("id")}
+    by_name = {
+        str(row.get("name") or "").strip().casefold(): row
+        for row in available
+        if str(row.get("name") or "").strip()
+    }
+    id_map: Dict[str, str] = {}
+    bound: List[dict] = []
+    unresolved: List[dict] = []
+    warnings: List[str] = []
+    for reference in references:
+        old_id = reference["id"]
+        name = reference["name"].strip()
+        row = by_id.get(old_id)
+        if row is None and name:
+            row = by_name.get(name.casefold())
+        if row is None:
+            unresolved.append(reference)
+            label = name or old_id or "unnamed source video"
+            warnings.append(f'Source video "{label}" is not available for this profile')
+            continue
+        new_id = str(row["id"])
+        if old_id:
+            id_map[old_id] = new_id
+        bound.append({"id": new_id, "name": str(row.get("name") or name)})
+
+    assembly["sourceVideos"] = bound
+    assembly.pop("sourceVideoIds", None)
+    if unresolved:
+        # Preserve what the original template requested without activating a
+        # foreign binding in the imported pipeline.
+        assembly["unresolvedSourceVideos"] = unresolved
+    else:
+        assembly.pop("unresolvedSourceVideos", None)
+
+    timeline = resolved_settings.get("timeline")
+    if isinstance(timeline, dict):
+        raw_matches = timeline.get("matches")
+        if isinstance(raw_matches, dict):
+            for raw_list in raw_matches.values():
+                if not isinstance(raw_list, list):
+                    continue
+                for match in raw_list:
+                    if not isinstance(match, dict):
+                        continue
+                    old_source_id = str(match.get("source_video_id") or "")
+                    if not old_source_id:
+                        continue
+                    new_source_id = id_map.get(old_source_id)
+                    if not new_source_id:
+                        match["source_video_id"] = None
+                        match["segment_id"] = None
+                        continue
+                    match["source_video_id"] = new_source_id
+                    if new_source_id != old_source_id:
+                        match["segment_id"] = None
+
+        raw_compositions = timeline.get("compositions")
+        if isinstance(raw_compositions, dict):
+            for key, raw_list in list(raw_compositions.items()):
+                if not isinstance(raw_list, list):
+                    raw_compositions[key] = []
+                    continue
+                rebound_clips: List[dict] = []
+                for clip in raw_list:
+                    if not isinstance(clip, dict):
+                        continue
+                    old_source_id = str(clip.get("source_video_id") or "")
+                    if old_source_id:
+                        new_source_id = id_map.get(old_source_id)
+                        if not new_source_id:
+                            continue
+                        clip["source_video_id"] = new_source_id
+                        if new_source_id != old_source_id:
+                            clip["segment_id"] = None
+                    rebound_clips.append(clip)
+                raw_compositions[key] = rebound_clips
+
+    return resolved_settings, [reference["id"] for reference in bound], warnings
+
+
+def _template_script_content(settings: Dict[str, Any]) -> tuple[List[str], List[str]]:
+    content = settings.get("content") or {}
+    raw_scripts = content.get("scripts") or []
+    if not isinstance(raw_scripts, list):
+        raise PipelineTemplateValidationError("settings.content.scripts must be an array")
+    if len(raw_scripts) > 10:
+        raise PipelineTemplateValidationError("A template can contain at most 10 scripts")
+
+    scripts: List[str] = []
+    names: List[str] = []
+    for index, raw_script in enumerate(raw_scripts):
+        if isinstance(raw_script, str):
+            text = raw_script
+            name = f"Script {index + 1}"
+        elif isinstance(raw_script, dict):
+            text = str(raw_script.get("text") or "")
+            name = str(raw_script.get("name") or f"Script {index + 1}")
+        else:
+            raise PipelineTemplateValidationError(f"Script {index + 1} is invalid")
+        if len(text) > 5000:
+            raise PipelineTemplateValidationError(f"Script {index + 1} exceeds 5000 characters")
+        scripts.append(text)
+        names.append(name.strip()[:80] or f"Script {index + 1}")
+
+    if not scripts:
+        generation = settings.get("generation") or {}
+        try:
+            count = max(1, min(10, int(generation.get("variantCount") or 1)))
+        except (TypeError, ValueError):
+            count = 1
+        scripts = [""] * count
+        names = [f"Script {index + 1}" for index in range(count)]
+    return scripts, names
+
+
 # ============== ENDPOINTS ==============
 
 @router.get("/list", response_model=PipelineListResponse)
@@ -2924,6 +3115,149 @@ async def list_pipelines(
         ))
 
     return PipelineListResponse(pipelines=items, total=len(items))
+
+
+@router.put("/{pipeline_id}/template-settings")
+async def update_pipeline_template_settings(
+    pipeline_id: str,
+    request: PipelineTemplateSettingsRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Persist the complete live configuration before export or navigation."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    try:
+        settings = normalize_pipeline_template_settings(request.settings)
+    except PipelineTemplateValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    with _get_pipeline_state_lock(pipeline_id):
+        pipeline["template_settings"] = settings
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+    _db_save_pipeline(pipeline_id, pipeline)
+    return {"status": "saved", "schema_version": 1}
+
+
+@router.get("/{pipeline_id}/template")
+async def export_pipeline_template(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Return a portable JSON manifest containing every pipeline setting."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    settings = pipeline.get("template_settings") or fallback_pipeline_template_settings(pipeline)
+    try:
+        return build_pipeline_template_document(
+            pipeline_id=pipeline_id,
+            pipeline_name=str(pipeline.get("name") or "Untitled pipeline"),
+            settings=settings,
+            app_version=APP_VERSION,
+        )
+    except PipelineTemplateValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/template/import")
+async def import_pipeline_template(
+    document: Dict[str, Any] = Body(...),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Validate a shared template and create a new profile-owned pipeline."""
+    try:
+        normalized_document = validate_pipeline_template_document(document)
+        settings, source_video_ids, warnings = _resolve_template_source_bindings(
+            normalized_document["settings"],
+            profile.profile_id,
+        )
+        settings = normalize_pipeline_template_settings(settings)
+        scripts, script_names = _template_script_content(settings)
+    except PipelineTemplateValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    generation = settings.get("generation") or {}
+    content = settings.get("content") or {}
+    assembly = settings.get("assembly") or {}
+    timeline = settings.get("timeline") or {}
+    subtitles = settings.get("subtitles") or {}
+    render = settings.get("render") or {}
+
+    name = str(generation.get("name") or "Imported template")
+    idea = str(generation.get("idea") or "Imported template")
+    context = str(generation.get("context") or "")
+    if len(name) > 200 or len(idea) > 2000 or len(context) > 5000:
+        raise HTTPException(status_code=422, detail="Template generation text exceeds supported limits")
+
+    context_products = generation.get("contextProducts") or []
+    if not isinstance(context_products, list):
+        raise HTTPException(status_code=422, detail="settings.generation.contextProducts must be an array")
+
+    attention_timelines = timeline.get("attentionTimelines") or {}
+    if not isinstance(attention_timelines, dict):
+        attention_timelines = {}
+    attention_selection = timeline.get("attentionSelection") or {}
+    if isinstance(attention_selection, dict) and attention_selection:
+        attention_timelines = {**attention_timelines, ATTENTION_SELECTION_KEY: attention_selection}
+
+    provider = str(generation.get("provider") or "imported")
+    pipeline_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    pipeline = {
+        "pipeline_id": pipeline_id,
+        "profile_id": profile.profile_id,
+        "name": name,
+        "idea": idea,
+        "context": context,
+        "context_products": context_products,
+        "provider": provider,
+        "codex_model": generation.get("codexModel"),
+        "variant_count": len(scripts),
+        "keyword_count": 0,
+        "scripts": scripts,
+        "script_names": script_names,
+        "previews": {},
+        "render_jobs": {},
+        "tts_previews": {},
+        "generation_job": {},
+        "tts_jobs": {},
+        "preview_renders": {},
+        "segment_usage": {},
+        "captions": content.get("generatedCaptions") or {},
+        "selected_captions": {},
+        "source_video_ids": source_video_ids,
+        "target_script_duration": generation.get("targetScriptDuration"),
+        "min_segment_duration": _clamp_min_segment_duration(assembly.get("minSegmentDuration")),
+        "meta_multiplication": bool(render.get("metaMultiplication", True)),
+        "subtitle_settings_by_key": _normalize_overrides(subtitles.get("overrides") or {}),
+        "attention_timeline": attention_timelines,
+        "template_settings": settings,
+        "created_at": now,
+    }
+
+    _evict_old_pipelines()
+    with _pipelines_lock:
+        _pipelines[pipeline_id] = pipeline
+    _db_save_pipeline(pipeline_id, pipeline)
+    logger.info(
+        "[Profile %s] Imported pipeline template into %s with %s scripts",
+        profile.profile_id,
+        pipeline_id,
+        len(scripts),
+    )
+    return {
+        "pipeline_id": pipeline_id,
+        "settings": settings,
+        "scripts": scripts,
+        "script_names": script_names,
+        "warnings": warnings,
+    }
 
 
 @router.delete("/{pipeline_id}")
@@ -3287,6 +3621,24 @@ class ApplyAttentionTemplateRequest(BaseModel):
     subtitleBoundariesMs: List[int] = Field(default_factory=list)
     revision: int = Field(ge=0)
     mode: Literal["replace", "append"] = "replace"
+    # Per-variant stagger: shift every cue later by this much so variant N's
+    # images never land on the same second as variant N-1's.
+    startOffsetMs: int = Field(default=0, ge=0, le=60_000)
+
+
+class AttentionSelectionRequest(BaseModel):
+    """Step 1 template pick, stored until previews exist to apply it to."""
+    templateId: str = Field(default="", max_length=100)
+    assetUrls: List[str] = Field(default_factory=list, max_length=100)
+    # Seconds of stagger between consecutive variants (0 = same placement).
+    staggerSeconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    # Apply to the first N variants only; 0 = all variants.
+    maxVariants: int = Field(default=0, ge=0, le=100)
+
+
+# Reserved key inside the attention_timeline JSON dict. Never collides with
+# real timelines because _validate_preview_key only admits "\d+(_[A-J])?".
+ATTENTION_SELECTION_KEY = "_selection"
 
 
 def _validate_preview_key(preview_key: str) -> None:
@@ -3387,6 +3739,12 @@ async def apply_attention_template(
         template=resolved,
         asset_ids=request.assetUrls,
     )
+    if request.startOffsetMs:
+        new_cues = [
+            {**cue, "startMs": cue["startMs"] + request.startOffsetMs}
+            for cue in new_cues
+            if cue["startMs"] + request.startOffsetMs + cue["durationMs"] <= request.durationMs
+        ]
 
     with _get_pipeline_state_lock(pipeline_id):
         timelines = dict(pipeline.get("attention_timeline") or {})
@@ -3408,6 +3766,38 @@ async def apply_attention_template(
         except Exception:
             _db_save_pipeline(pipeline_id, pipeline)
     return document
+
+
+@router.put("/{pipeline_id}/attention-selection")
+async def update_attention_selection(
+    pipeline_id: str,
+    request: AttentionSelectionRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Persist the Step 1 attention-template pick (applied later, at preview)."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    selection = {
+        "templateId": request.templateId,
+        "assetUrls": request.assetUrls,
+        "staggerSeconds": request.staggerSeconds,
+        "maxVariants": request.maxVariants,
+    }
+    with _get_pipeline_state_lock(pipeline_id):
+        timelines = dict(pipeline.get("attention_timeline") or {})
+        timelines[ATTENTION_SELECTION_KEY] = selection
+        pipeline["attention_timeline"] = timelines
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+        try:
+            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
+        except Exception:
+            _db_save_pipeline(pipeline_id, pipeline)
+    return selection
 
 
 @router.get("/{pipeline_id}/meta-multiplication")
@@ -5299,6 +5689,7 @@ async def preview_variant(
     min_segment_duration: float = Body(3.0, embed=True),
     ultra_rapid_intro: bool = Body(True, embed=True),
     preset: str = Body("balanced", embed=True),  # F8: scoring preset
+    segment_proximity: str = Body("separate", embed=True),  # near-adjacent same-source clips: separate|merge
     visual_version: Optional[str] = Body(None, embed=True),
     force_regenerate_tts: bool = Body(False, embed=True),
     current_user: AuthUser = Depends(get_current_user),
@@ -5332,6 +5723,7 @@ async def preview_variant(
     script_text = pipeline["scripts"][variant_index]
     cleaned_text = strip_product_group_tags(script_text)
     min_segment_duration = _clamp_min_segment_duration(min_segment_duration)
+    segment_proximity = _sanitize_segment_proximity(segment_proximity)
 
     logger.info(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
@@ -5590,6 +5982,7 @@ async def preview_variant(
             ultra_rapid_intro=ultra_rapid_intro,
             reuse_srt_content=reuse_srt_content,
             preset=preset,
+            segment_proximity=segment_proximity,
         )
 
         if preview_tts_metered and _tts_job_cancelled(pipeline_id, variant_index):
@@ -6650,6 +7043,7 @@ async def render_variants(
                         max_words_per_phrase=render_request.words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
+                        segment_proximity=render_request.segment_proximity or "separate",
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
                         attention_timeline=variant_attention_timeline,
@@ -7381,6 +7775,7 @@ async def remake_variant(
                         max_words_per_phrase=render_request.words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
+                        segment_proximity=render_request.segment_proximity or "separate",
                         pinned_assignments=remake_pinned_assignments or None,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
@@ -8004,6 +8399,8 @@ async def get_pipeline_scripts(pipeline_id: str):
         ),
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
         "meta_multiplication": bool(pipeline.get("meta_multiplication", True)),
+        "attention_selection": (pipeline.get("attention_timeline") or {}).get(ATTENTION_SELECTION_KEY) or {},
+        "template_settings": pipeline.get("template_settings") or {},
         "library_project_id": pipeline.get("library_project_id"),
         "generation_job": pipeline.get("generation_job") or {},
         "tts_jobs": {str(k): v for k, v in (pipeline.get("tts_jobs") or {}).items()},

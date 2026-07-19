@@ -12,6 +12,7 @@ These tests cover:
 import logging
 
 from app.api.pipeline_routes import (
+    _fetch_preset_and_settings,
     _get_subtitle_settings_for_key,
     _normalize_overrides,
     _style_key_for_lookup,
@@ -45,10 +46,16 @@ def _default_settings() -> dict:
         "outlineWidth": 3,
         "positionY": 85,
         "shadowDepth": 0,
+        "shadowColor": "#000000",
+        "borderStyle": 1,
         "enableGlow": False,
         "glowBlur": 0,
         "adaptiveSizing": False,
         "opacity": 100,
+        "horizontalAlignment": "center",
+        "letterSpacing": 0,
+        "karaoke": False,
+        "highlightColor": "#FFFF00",
     }
 
 
@@ -87,6 +94,17 @@ def test_no_overrides_returns_default_and_no_user_override_flag():
     assert has_user_override is False
     # Helper must return a copy, not the same dict reference
     assert settings is not defaults
+
+
+def test_flat_karaoke_fields_reach_default_render_settings(monkeypatch):
+    """Karaoke must work without a per-style override entry."""
+    monkeypatch.setattr("app.api.pipeline_routes.get_repository", lambda: None)
+    request = _make_request(karaoke=True, highlight_color="#12AB34")
+
+    _, settings = _fetch_preset_and_settings(request)
+
+    assert settings["karaoke"] is True
+    assert settings["highlightColor"] == "#12AB34"
 
 
 def test_override_present_for_version_wins_and_sets_flag():

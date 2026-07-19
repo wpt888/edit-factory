@@ -38,7 +38,8 @@ _JSON_COLUMNS = frozenset({
     "generation_job", "tts_jobs",
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
-    "selected_captions", "subtitle_settings_by_key", "attention_timeline", "config",
+    "selected_captions", "subtitle_settings_by_key", "attention_timeline",
+    "template_settings", "config",
     # F5 — segment columns written as JSON by segment CRUD routes
     "keywords", "transforms",
 })
@@ -140,6 +141,7 @@ class SQLiteRepository(DataRepository):
             "attention_timeline": "TEXT DEFAULT '{}'",
             "generation_job": "TEXT DEFAULT '{}'",
             "tts_jobs": "TEXT DEFAULT '{}'",
+            "template_settings": "TEXT DEFAULT '{}'",
         }
         try:
             cur = self._conn.execute('PRAGMA table_info("editai_pipelines")')
