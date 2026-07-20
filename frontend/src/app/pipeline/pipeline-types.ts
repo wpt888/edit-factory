@@ -74,8 +74,8 @@ export interface AsyncJobState {
  * Meta version (instead of being per-(script × version)). With Meta
  * Multiplication ON there are exactly two styles to pick: "A" (Instagram)
  * and "B" (Facebook). With Meta OFF there is just "default" — one style
- * shared by every variant. The backend PUT endpoint accepts only these
- * three values as override keys; anything else is rejected.
+ * shared by every variant. The persistence endpoint also accepts PreviewKey
+ * entries as the final card-local layer used by subtitle-template rotation.
  */
 export type StyleKey = "A" | "B" | "default";
 
