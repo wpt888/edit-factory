@@ -61,6 +61,15 @@
 - Real ffmpeg: duration drift 0.0s, in-window pixel-mean diff ~51, out-of-window
   ~0.006; xfade-on-V1 coexists with a video overlay. See wiki 35.
 
+## 2026-07-19 - Maximize editor: tabbed settings column (Subtitles / Timing / Adjust)
+
+- The "Maximize editor" dialog in Step 3 now embeds the full preview-settings
+  surface as a right-hand tabbed column, reusing the existing cards (Subtitle
+  Style incl. karaoke controls, Preview Timing, RenderSettingsPanel) with the
+  SAME state as the compact inspector — no copies. Karaoke already rendered in
+  both maximize surfaces (verified); the gap was settings access only.
+- Spec: `karaoke-maximized-preview.spec.ts` (live highlight + shared state).
+
 ## 2026-07-19 - Multi-track timeline Phase B: background music (A2) with auto-ducking
 
 - The A2 lane is now live: pick a per-variant background track, it plays under
