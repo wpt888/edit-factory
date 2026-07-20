@@ -1,5 +1,19 @@
 # Engineering Change Log
 
+## 2026-07-20 - Consolidation: subtitle rotation + inspector + parallel WIP into main
+
+- Triaged and committed the parallel WIP that was blocking goal 08: track-based
+  attention templates (with legacy strategy fallback), timeline opt-in wheel
+  zoom + sticky-header stacking, maximize-editor tabbed settings column, and an
+  electron/package.json duplicate `prestart` key fix.
+- Merged `feat/subtitle-inspector` (which stacks subtitle-template rotation,
+  the collapsible inspector, and the multitrack/BGM/overlay stack) into `main`
+  with no conflicts.
+- Verified on main: 778 backend tests passed (1 skipped, 18 xfailed) and
+  `tsc --noEmit` clean. `npm run build` could not be verified in-session — the
+  running desktop shell holds `.next/standalone` (EBUSY); rebuild after closing
+  the app.
+
 ## 2026-07-20 - Subtitle inspector: collapsible settings sections
 
 - Step 3 subtitle settings now use a multi-open shadcn Accordion with compact
