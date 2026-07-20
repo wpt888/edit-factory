@@ -1979,6 +1979,10 @@ export function TimelineEditor({
     const viewport = multiTrackScrollRef.current;
     if (!viewport || viewMode !== "timeline") return;
     const handleWheel = (event: WheelEvent) => {
+      // Merely crossing the timeline while scrolling the preview page must not
+      // hijack the page scroll. A pointer-down focuses this viewport (or one of
+      // its controls), explicitly opting the user into timeline wheel controls.
+      if (!viewport.contains(document.activeElement)) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
@@ -4072,7 +4076,7 @@ export function TimelineEditor({
                   tabIndex: 0,
                   "aria-label": "Multi-track timeline",
                   "aria-keyshortcuts": "Space",
-                  title: "Drag to scrub. Space plays or pauses. Scroll to zoom around the cursor. Shift+scroll to pan.",
+                  title: "Click to activate timeline controls. Then scroll to zoom around the cursor or Shift+scroll to pan.",
                   onPointerDownCapture: focusTimelineKeyboardScope,
                   onKeyDown: handleTimelineKeyDown,
                 }}

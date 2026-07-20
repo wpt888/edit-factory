@@ -263,6 +263,29 @@ test("card mode renders the generic lanes with a scrollable, sticky-ruler timeli
   await page.screenshot({ path: "screenshots/timeline-tracks-card.png", fullPage: false });
 });
 
+test("card timeline stays behind the sticky Variant Previews header while scrolling", async ({ page }) => {
+  const { editor: canvas } = await openFullEditor(page, { maximize: false });
+  const header = page.getByTestId("step3-variant-header");
+  const timeline = canvas.locator('[aria-label="Multi-track timeline"]');
+
+  await expect(header).toBeVisible();
+  await expect(timeline).toBeVisible();
+
+  await canvas.evaluate((element) => {
+    const headerElement = element.querySelector<HTMLElement>('[data-testid="step3-variant-header"]');
+    const timelineElement = element.querySelector<HTMLElement>('[aria-label="Multi-track timeline"]');
+    if (!headerElement || !timelineElement) throw new Error("Step 3 header or timeline is missing");
+    element.scrollTop += timelineElement.getBoundingClientRect().top - headerElement.getBoundingClientRect().top;
+  });
+
+  await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const topmost = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return topmost === element || element.contains(topmost);
+  })).toBe(true);
+});
+
 test("left-edge trim moves the cue start later", async ({ page }) => {
   const { editor } = await openFullEditor(page);
   const cue = editor.locator('[data-cue-id="cue-a"]');

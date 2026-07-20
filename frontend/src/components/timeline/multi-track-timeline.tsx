@@ -85,7 +85,7 @@ export function MultiTrackTimeline({
   lanes,
 }: MultiTrackTimelineProps) {
   return (
-    <div ref={scrollRef} className={className} {...containerProps}>
+    <div ref={scrollRef} className={cn("isolate", className)} {...containerProps}>
       <div className="w-max min-w-full">
         {/* Time ruler and zoom controls for the shared track scale. Sticky so it
             stays pinned when the lane stack scrolls vertically (card mode). */}
