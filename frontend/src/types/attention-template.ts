@@ -1,53 +1,62 @@
 import type { AttentionAnimationPreset } from "@/types/attention-timeline";
 
-export type AttentionTemplateStrategy = "count" | "everySeconds";
+/** One authored image slot on a template track. Coordinates are 0..1 frame fractions. */
+export type AttentionTemplateImage = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  startMs: number;
+  durationMs: number;
+};
 
+/** Track-based template: tracks[i] maps to timeline lane V(2+i). */
 export type AttentionTemplatePayload = {
   name: string;
-  strategy: AttentionTemplateStrategy;
-  count: number;
-  everySeconds: number;
-  minimumGapMs: number;
-  protectedStartMs: number;
-  protectedEndMs: number;
-  durationMs: number;
-  animation: AttentionAnimationPreset;
-  layers: number;
-  size: number;
   zone: "behind" | "front";
-  sfx: string | null;
-  assetPool: string[];
+  animation: AttentionAnimationPreset;
+  tracks: AttentionTemplateImage[][];
 };
 
-export type AttentionTemplate = Partial<AttentionTemplatePayload> & {
-  id: string;
-  name: string;
-  is_system: boolean;
+/** Legacy strategy-based config still stored on old rows / system templates. */
+export type LegacyAttentionTemplateConfig = {
+  layers?: number;
+  size?: number;
+  durationMs?: number;
+  zone?: "behind" | "front";
+  animation?: AttentionAnimationPreset;
 };
+
+export type AttentionTemplate = Partial<AttentionTemplatePayload> &
+  LegacyAttentionTemplateConfig & {
+    id: string;
+    name: string;
+    is_system: boolean;
+  };
 
 export const DEFAULT_ATTENTION_TEMPLATE: AttentionTemplatePayload = {
   name: "New attention template",
-  strategy: "count",
-  count: 3,
-  everySeconds: 6,
-  minimumGapMs: 1800,
-  protectedStartMs: 1500,
-  protectedEndMs: 1500,
-  durationMs: 1200,
-  animation: "pop",
-  layers: 1,
-  size: 0.8,
   zone: "behind",
-  sfx: null,
-  assetPool: [],
+  animation: "pop",
+  tracks: [[]],
 };
 
-export function normalizeAttentionTemplate(
-  template?: Partial<AttentionTemplatePayload>,
-): AttentionTemplatePayload {
-  return { ...DEFAULT_ATTENTION_TEMPLATE, ...template };
+let imageIdCounter = 0;
+export function newTemplateImage(partial?: Partial<AttentionTemplateImage>): AttentionTemplateImage {
+  return {
+    id: `img-${Date.now()}-${imageIdCounter++}`,
+    x: 0.1,
+    y: 0.1,
+    width: 0.8,
+    height: 0.8,
+    startMs: 0,
+    durationMs: 1200,
+    ...partial,
+  };
 }
 
+/** Legacy diagonal cascade — kept only to visualize old strategy-based templates. */
 export function attentionLayoutPositions(layerCount: number, size: number) {
   const base = (1 - size) / 2;
   const step = 0.03;
@@ -55,4 +64,33 @@ export function attentionLayoutPositions(layerCount: number, size: number) {
     x: Number((base + index * step).toFixed(4)),
     y: Number((base + index * step).toFixed(4)),
   }));
+}
+
+/** Normalize any stored template (new track-based or legacy strategy-based) into
+ *  the track-based editor shape. Legacy templates become one stacked moment at t=0. */
+export function normalizeAttentionTemplate(
+  template?: Partial<AttentionTemplate>,
+): AttentionTemplatePayload {
+  const zone = template?.zone === "front" ? "front" : "behind";
+  const animation = template?.animation ?? "pop";
+  if (template?.tracks?.length) {
+    return { name: template.name ?? "", zone, animation, tracks: template.tracks };
+  }
+  const layers = Math.max(1, Math.min(10, template?.layers ?? 1));
+  const size = template?.size ?? 0.8;
+  const durationMs = template?.durationMs ?? 1200;
+  const positions = attentionLayoutPositions(layers, size);
+  return {
+    name: template?.name ?? DEFAULT_ATTENTION_TEMPLATE.name,
+    zone,
+    animation,
+    tracks: template
+      ? positions.map((position, index) =>
+          [newTemplateImage({ id: `legacy-${index}`, x: position.x, y: position.y, width: size, height: size, startMs: 0, durationMs })])
+      : [[]],
+  };
+}
+
+export function templateEndMs(tracks: AttentionTemplateImage[][]): number {
+  return Math.max(0, ...tracks.flat().map((image) => image.startMs + image.durationMs));
 }

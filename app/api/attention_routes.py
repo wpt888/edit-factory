@@ -12,21 +12,23 @@ from app.services.attention_templates import SYSTEM_TEMPLATES
 router = APIRouter(prefix="/attention-templates", tags=["Attention Hooks"])
 
 
-class AttentionTemplateBody(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    strategy: Literal["count", "everySeconds"] = "count"
-    count: int = Field(default=3, ge=0, le=100)
-    everySeconds: float = Field(default=6, ge=1, le=3600)
-    minimumGapMs: int = Field(default=1800, ge=0)
-    protectedStartMs: int = Field(default=1500, ge=0)
-    protectedEndMs: int = Field(default=1500, ge=0)
+class AttentionTemplateImage(BaseModel):
+    id: str = Field(default="", max_length=80)
+    x: float = Field(default=0.1, ge=0.0, le=1.0)
+    y: float = Field(default=0.1, ge=0.0, le=1.0)
+    width: float = Field(default=0.8, gt=0.0, le=1.0)
+    height: float = Field(default=0.8, gt=0.0, le=1.0)
+    startMs: int = Field(default=0, ge=0, le=600000)
     durationMs: int = Field(default=1200, ge=100, le=600000)
-    animation: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "pop"
-    layers: int = Field(default=1, ge=1, le=10)
-    size: float = Field(default=0.8, gt=0.0, le=1.0)
+
+
+class AttentionTemplateBody(BaseModel):
+    """Track-based template: tracks[i] = images on lane V(2+i)."""
+    name: str = Field(min_length=1, max_length=80)
     zone: Literal["behind", "front"] = "behind"
+    animation: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "pop"
     sfx: Optional[str] = Field(default=None, max_length=500)
-    assetPool: list[str] = Field(default_factory=list, max_length=100)
+    tracks: list[list[AttentionTemplateImage]] = Field(default_factory=lambda: [[]], max_length=10)
 
 
 def _owned(repo, template_id: str, profile_id: str) -> Dict[str, Any]:

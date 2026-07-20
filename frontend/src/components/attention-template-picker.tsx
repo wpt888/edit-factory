@@ -91,8 +91,8 @@ export function AttentionTemplatePicker({
 
       {selectedTemplate && (
         <div className="grid grid-cols-3 gap-1.5 text-[10px] text-muted-foreground">
-          <span className="rounded bg-muted px-2 py-1">{config.layers} layer{config.layers === 1 ? "" : "s"}</span>
-          <span className="rounded bg-muted px-2 py-1">{Math.round(config.size * 100)}% size</span>
+          <span className="rounded bg-muted px-2 py-1">{config.tracks.length} track{config.tracks.length === 1 ? "" : "s"}</span>
+          <span className="rounded bg-muted px-2 py-1">{config.tracks.reduce((sum, track) => sum + track.length, 0)} images</span>
           <span className="rounded bg-muted px-2 py-1 capitalize">{config.zone}</span>
         </div>
       )}

@@ -40,7 +40,7 @@ from app.services.assembly_service import (
     normalize_transition_in,
     strip_product_group_tags,
 )
-from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues
+from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues, template_track_cues
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.services.pipeline_template_bundle import (
@@ -3902,12 +3902,20 @@ async def apply_attention_template(
             "name": row["name"],
         }
 
-    new_cues = distribute_attention_cues(
-        duration_ms=request.durationMs,
-        subtitle_boundaries_ms=request.subtitleBoundariesMs,
-        template=resolved,
-        asset_ids=request.assetUrls,
-    )
+    if resolved.get("tracks"):
+        new_cues = template_track_cues(
+            template=resolved,
+            asset_ids=request.assetUrls,
+            duration_ms=request.durationMs,
+        )
+    else:
+        # ponytail: legacy strategy-based templates (system + pre-refactor rows)
+        new_cues = distribute_attention_cues(
+            duration_ms=request.durationMs,
+            subtitle_boundaries_ms=request.subtitleBoundariesMs,
+            template=resolved,
+            asset_ids=request.assetUrls,
+        )
     if request.startOffsetMs:
         new_cues = [
             {**cue, "startMs": cue["startMs"] + request.startOffsetMs}
