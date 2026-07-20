@@ -139,13 +139,15 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/85"
       data-testid="pipeline-toolbar"
     >
-      <div className="flex min-w-0 shrink-0 items-center gap-2.5" data-testid="pipeline-toolbar-context">
-        <Film className="size-5 shrink-0 text-primary" />
-        <span className="truncate text-sm font-semibold min-[1500px]:text-base">
+      {/* Matches the EditorHeader recipe: size-4 icon, text-sm title, "/ item" breadcrumb. */}
+      <div className="flex min-w-0 shrink-0 items-center gap-3" data-testid="pipeline-toolbar-context">
+        <Film className="size-4 shrink-0 text-primary" />
+        <span className="truncate text-sm font-semibold">
           Multi-Variant Pipeline
         </span>
-        <span className="hidden truncate text-sm text-muted-foreground min-[1600px]:inline">
-          / {STEP_CONTEXT_LABELS[step]}
+        <span className="hidden text-muted-foreground/40 min-[1600px]:inline">/</span>
+        <span className="hidden truncate text-xs text-muted-foreground min-[1600px]:inline">
+          {STEP_CONTEXT_LABELS[step]}
         </span>
         <span className="hidden shrink-0 rounded border px-2 py-0.5 text-xs tabular-nums text-muted-foreground min-[1800px]:inline">
           {contextCount}
