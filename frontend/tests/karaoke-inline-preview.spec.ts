@@ -154,7 +154,7 @@ test("karaoke background-box style: settings mock + live inline preview", async 
     await route.fulfill({ json: {} });
   });
 
-  await page.setViewportSize({ width: 1900, height: 1080 });
+  await page.setViewportSize({ width: 1900, height: 1400 });
   await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
 
   // --- Work package B: settings panel + animated mock -------------------
@@ -165,11 +165,20 @@ test("karaoke background-box style: settings mock + live inline preview", async 
   await page.waitForTimeout(500);
   await inspector.screenshot({ path: "screenshots/subtitle-inspector-collapsed.png" });
 
-  await inspector.getByRole("button", { name: /^Karaoke/ }).click();
+  await inspector.getByRole("button", { name: /^Karaoke/ }).evaluate((element) => {
+    (element as HTMLElement).click();
+  });
   await expect(settingsEditor.getByText("Karaoke Highlight")).toBeVisible();
+  await page.waitForTimeout(300);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByTestId("step3-inspector").evaluate((element) => { element.scrollTop = 0; });
-  await inspector.screenshot({ path: "screenshots/subtitle-inspector-two-expanded.png" });
+  await page.waitForTimeout(100);
+  const expandedInspectorBox = await inspector.boundingBox();
+  expect(expandedInspectorBox).not.toBeNull();
+  await page.screenshot({
+    path: "screenshots/subtitle-inspector-two-expanded.png",
+    clip: expandedInspectorBox!,
+  });
 
   const karaokeRow = settingsEditor.locator("div.flex.items-center.justify-between").filter({ hasText: "Karaoke Highlight" });
   await karaokeRow.getByRole("switch").click();
@@ -180,6 +189,7 @@ test("karaoke background-box style: settings mock + live inline preview", async 
 
   const livePreview = page.getByTestId("subtitle-sticky-preview");
   await expect(livePreview.getByTestId("karaoke-preview-overlay")).toBeVisible();
+  await page.waitForTimeout(500);
   await livePreview.screenshot({ path: "screenshots/karaoke-settings-box-mode.png" });
 
   // --- Work package A: the real inline preview player --------------------
