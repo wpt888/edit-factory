@@ -159,13 +159,23 @@ test("karaoke background-box style: settings mock + live inline preview", async 
 
   // --- Work package B: settings panel + animated mock -------------------
   const settingsEditor = page.getByTestId("subtitle-style-variant-editor");
+  const inspector = settingsEditor.getByTestId("subtitle-settings-accordion");
+  await expect(inspector.getByText("Font Size")).toBeVisible();
+  await expect(inspector.getByText("Karaoke Highlight")).toBeHidden();
+  await page.waitForTimeout(500);
+  await inspector.screenshot({ path: "screenshots/subtitle-inspector-collapsed.png" });
+
+  await inspector.getByRole("button", { name: /^Karaoke/ }).click();
   await expect(settingsEditor.getByText("Karaoke Highlight")).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.getByTestId("step3-inspector").evaluate((element) => { element.scrollTop = 0; });
+  await inspector.screenshot({ path: "screenshots/subtitle-inspector-two-expanded.png" });
 
   const karaokeRow = settingsEditor.locator("div.flex.items-center.justify-between").filter({ hasText: "Karaoke Highlight" });
   await karaokeRow.getByRole("switch").click();
 
-  const styleSection = settingsEditor.locator("div.space-y-2").filter({ hasText: "Highlight Style" });
-  await styleSection.getByRole("combobox").click();
+  const karaokeSection = settingsEditor.getByTestId("subtitle-section-karaoke");
+  await karaokeSection.getByRole("combobox").click();
   await page.getByRole("option", { name: "Background box" }).click();
 
   const livePreview = page.getByTestId("subtitle-sticky-preview");
