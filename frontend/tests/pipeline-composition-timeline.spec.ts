@@ -188,9 +188,23 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
   }
   await expect(editor.getByText("0:04", { exact: true }).first()).toBeVisible();
 
+  const timeline = editor.locator('[aria-label="Multi-track timeline"]');
+  const zoomLevel = editor.getByRole("button", { name: "Fit the full timeline" });
+
+  // Hovering over the timeline while scrolling the preview page must not zoom.
+  await timeline.hover();
+  await page.mouse.wheel(0, -100);
+  await expect(zoomLevel).toHaveText("1.00x");
+
+  // A click explicitly activates wheel controls for the timeline.
+  await timeline.locator("[data-timeline-axis]").first().click({ position: { x: 8, y: 8 } });
+  await page.mouse.wheel(0, -100);
+  await expect(zoomLevel).toHaveText("1.10x");
+  await zoomLevel.click();
+
   const zoomOut = editor.getByRole("button", { name: "Zoom timeline out" });
   for (let count = 0; count < 4; count += 1) await zoomOut.click();
-  await expect(editor.getByRole("button", { name: "Fit the full timeline" })).toHaveText("0.50x");
+  await expect(zoomLevel).toHaveText("0.50x");
   await expect(zoomOut).toBeDisabled();
 
   await editor.getByTestId("composition-clip-intro-a").click();

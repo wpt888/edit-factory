@@ -40,7 +40,7 @@ from app.services.assembly_service import (
     normalize_transition_in,
     strip_product_group_tags,
 )
-from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues
+from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues, template_track_cues
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.services.elevenlabs_governance import ElevenLabsGovernanceError
 from app.services.pipeline_template_bundle import (
@@ -50,6 +50,7 @@ from app.services.pipeline_template_bundle import (
     normalize_pipeline_template_settings,
     validate_pipeline_template_document,
 )
+from app.services.subtitle_rotation import words_per_subtitle_for_key
 from app.config import APP_VERSION, get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -599,6 +600,25 @@ def clear_pipeline_cancelled(pipeline_id: str):
         _cancelled_pipelines.pop(pipeline_id, None)
 
 
+def _music_asset_mtime(music) -> str:
+    """Local mtime of a music asset (mirrors the TTS audio_mtime pattern) so an
+    in-place file swap invalidates the cache. Remote/pending assets return '0';
+    their assetUrl/assetId already covers change detection via the settings dict."""
+    if not music:
+        return "0"
+    src = None
+    if isinstance(music, dict):
+        src = music.get("assetUrl") or music.get("assetId")
+    else:
+        src = getattr(music, "assetUrl", None) or getattr(music, "assetId", None)
+    if not src or str(src).startswith(("http", "pending:")):
+        return "0"
+    try:
+        return str(Path(str(src)).stat().st_mtime)
+    except OSError:
+        return "0"
+
+
 def _compute_render_fingerprint(
     render_request,
     variant_index: int,
@@ -640,6 +660,15 @@ def _compute_render_fingerprint(
         composition_variant = composition_overrides.get(lookup_key) or []
         if not composition_variant and lookup_key != str(variant_index):
             composition_variant = composition_overrides.get(str(variant_index)) or []
+
+    music_variant = None
+    music_overrides = getattr(render_request, "music_overrides", None)
+    if music_overrides:
+        mv = music_overrides.get(lookup_key)
+        if not mv and lookup_key != str(variant_index):
+            mv = music_overrides.get(str(variant_index))
+        if mv is not None:
+            music_variant = mv.model_dump() if hasattr(mv, "model_dump") else dict(mv)
 
     interstitial = []
     if render_request.interstitial_slides:
@@ -689,7 +718,11 @@ def _compute_render_fingerprint(
         "voice_id": render_request.voice_id,
         "elevenlabs_model": render_request.elevenlabs_model,
         "voice_settings": render_request.voice_settings or {},
-        "words_per_subtitle": render_request.words_per_subtitle,
+        "words_per_subtitle": words_per_subtitle_for_key(
+            lookup_key,
+            getattr(render_request, "words_per_subtitle_by_key", None),
+            render_request.words_per_subtitle,
+        ),
         "min_segment_duration": render_request.min_segment_duration,
         "ultra_rapid_intro": render_request.ultra_rapid_intro,
         # Effective subtitle settings for THIS specific job_key — captures both
@@ -719,6 +752,8 @@ def _compute_render_fingerprint(
         "attention_timeline": attention_timeline,
         "pip_overlays": render_request.pip_overlays or {},
         "source_video_ids": sorted(render_request.source_video_ids or []),
+        "music": music_variant,
+        "music_mtime": _music_asset_mtime(music_variant),
     }
     return hashlib.sha256(
         _json.dumps(key_data, sort_keys=True, default=str).encode()
@@ -1828,46 +1863,29 @@ def _style_key_for_lookup(key: str) -> str:
 
 
 def _normalize_overrides(raw: Any) -> Dict[str, Any]:
-    """Collapse legacy per-script override keys ("0_A", "1_B") to per-Meta-version
-    keys ("A", "B", "default"). Idempotent on already-canonical data.
+    """Keep canonical Meta layers and explicit per-variant overrides.
 
-    Sort order: legacy keys are processed before canonical ones so that if the
-    dict already contains a canonical "A" alongside legacy "0_A", the canonical
-    value wins (last-wins via sorted iteration — "0_A" < "A" alphabetically).
-
-    Logs a WARNING when two legacy keys would map to the same target with
-    different values, so operators have forensic evidence of the collapse when
-    a user reports "my script-3 A style disappeared".
+    ``A``/``B`` remain orthogonal Meta layers. Keys such as ``0_A`` and ``2``
+    are intentionally preserved because they identify the final variant layer
+    applied after a rotated base template and the matching Meta layer.
     """
     if not isinstance(raw, dict) or not raw:
         return {}
 
     normalized: Dict[str, Any] = {}
-    sources: Dict[str, str] = {}  # tracks which legacy key produced each target
     for k in sorted(raw.keys()):
         v = raw[k]
         if not isinstance(v, dict):
             continue
         if k in ("A", "B", "default"):
             target = k
-        elif k.endswith("_A"):
-            target = "A"
-        elif k.endswith("_B"):
-            target = "B"
-        elif k.isdigit():
-            target = "default"
+        elif _re.fullmatch(r"\d+(?:_[A-J])?", str(k)):
+            target = str(k)
         else:
             # Unknown shape — ignore silently; the PUT regex rejects these,
             # and the resolver's fallback handles any in-flight weirdness.
             continue
-        if target in normalized and normalized[target] != v:
-            logger.warning(
-                "_normalize_overrides: collapsing %r over %r into key %r — "
-                "values differ, last-wins (forensic note for user reports).",
-                k, sources.get(target), target
-            )
         normalized[target] = v
-        sources[target] = k
     return normalized
 
 
@@ -1895,19 +1913,17 @@ def _get_subtitle_settings_for_key(
     """
     overrides = render_request.subtitle_settings_by_key or {}
     style_key = _style_key_for_lookup(key)
-    raw_override = overrides.get(style_key)
-    if not isinstance(raw_override, dict) or not raw_override:
-        # Legacy fallback: older stored shapes may still have the full key.
-        raw_override = overrides.get(key)
-    if not isinstance(raw_override, dict) or not raw_override:
-        return dict(default_subtitle_settings), False
-
-    # Shallow merge: start from default, then let override replace matching
-    # keys. This is robust against override dicts that only contain a subset
-    # of fields (e.g. only textColor changed).
     merged = dict(default_subtitle_settings)
-    merged.update(raw_override)
-    return merged, True
+    style_override = overrides.get(style_key)
+    direct_override = overrides.get(key)
+    has_override = False
+    # Keep the render boundary identical to the browser: rotation template
+    # base -> Meta A/B layer -> one explicit variant override.
+    for candidate in (style_override, direct_override):
+        if isinstance(candidate, dict) and candidate:
+            merged.update(candidate)
+            has_override = True
+    return merged, has_override
 
 
 def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
@@ -2666,7 +2682,18 @@ def _validate_composition_transitions(clips):
     if not isinstance(clips, list):
         return clips
     for clip in clips:
-        if not isinstance(clip, dict) or "transitionIn" not in clip:
+        if not isinstance(clip, dict):
+            continue
+        # Phase C: free video overlays (track >= 2) never carry a transition —
+        # strip any that slipped through rather than validate it.
+        try:
+            track = int(float(clip.get("track") or 1))
+        except (TypeError, ValueError):
+            track = 1
+        if track >= 2:
+            clip.pop("transitionIn", None)
+            continue
+        if "transitionIn" not in clip:
             continue
         normalized = normalize_transition_in(
             clip.get("transitionIn"), clip_kind=clip.get("kind")
@@ -2676,6 +2703,78 @@ def _validate_composition_transitions(clips):
         else:
             clip["transitionIn"] = normalized
     return clips
+
+
+def _validate_overlay_box(raw_box, clip_index: int) -> dict:
+    """Validate a free video-overlay's fractional box (Phase C).
+
+    Mirrors the AttentionLayer bounds: x,y in [0,1]; width,height in (0,1];
+    fit in {contain,cover}. Absent/partial -> full-frame contain default. Raises
+    HTTPException(422) on out-of-range or non-finite values.
+    """
+    default = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0, "fit": "contain"}
+    if raw_box is None:
+        return default
+    if not isinstance(raw_box, dict):
+        raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} has an invalid overlay_box")
+
+    def _coord(key: str, fallback: float, *, allow_zero: bool) -> float:
+        if raw_box.get(key) is None:
+            return fallback
+        try:
+            value = float(raw_box.get(key))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.{key} is not a number")
+        low = 0.0 if allow_zero else None
+        if not math.isfinite(value) or value < 0.0 or value > 1.0 or (low is None and value <= 0.0):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.{key} out of range")
+        return value
+
+    fit = raw_box.get("fit", "contain")
+    if fit not in ("contain", "cover"):
+        raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} overlay_box.fit must be contain|cover")
+    return {
+        "x": _coord("x", 0.0, allow_zero=True),
+        "y": _coord("y", 0.0, allow_zero=True),
+        "width": _coord("width", 1.0, allow_zero=False),
+        "height": _coord("height", 1.0, allow_zero=False),
+        "fit": fit,
+    }
+
+
+def _reject_overlapping_overlays(free_clips: List[dict]) -> None:
+    """Reject overlapping free overlays on the SAME track (Phase C, 422).
+
+    Free clips are absolutely positioned; two overlapping in time on one track
+    would fight for the same z-slot. Different tracks may overlap freely (that's
+    the whole point of stacking lanes).
+    """
+    by_track: Dict[int, List[dict]] = {}
+    for clip in free_clips:
+        by_track.setdefault(int(clip.get("track") or 2), []).append(clip)
+    for track, clips in by_track.items():
+        ordered = sorted(clips, key=lambda c: float(c["timeline_start"]))
+        for prev, cur in zip(ordered, ordered[1:]):
+            prev_end = float(prev["timeline_start"]) + float(prev["timeline_duration"])
+            if float(cur["timeline_start"]) < prev_end - 1e-6:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Overlay clips overlap on track {track}",
+                )
+
+
+class MusicSettings(BaseModel):
+    """Per-variant background music (A2 lane). Persisted additively in
+    preview_data['music']; resolved to a local file at render time. Fades are
+    milliseconds to match the frontend MusicSettings type exactly."""
+    assetId: Optional[str] = Field(default=None, max_length=512)
+    assetUrl: Optional[str] = Field(default=None, max_length=2048)
+    label: Optional[str] = Field(default=None, max_length=256)
+    volume: float = Field(default=0.3, ge=0.0, le=3.0)
+    ducking: bool = True
+    fadeInMs: int = Field(default=0, ge=0, le=10000)
+    fadeOutMs: int = Field(default=0, ge=0, le=10000)
+    loop: bool = True
 
 
 class PipelineRenderRequest(BaseModel):
@@ -2688,6 +2787,8 @@ class PipelineRenderRequest(BaseModel):
     match_overrides: Optional[Dict[str, List[dict]]] = None
     # Canonical post-merge editor clips, keyed exactly like match_overrides.
     composition_overrides: Optional[Dict[str, List[dict]]] = None
+    # Per-variant background music, keyed exactly like composition_overrides.
+    music_overrides: Optional[Dict[str, MusicSettings]] = None
 
     @field_validator("composition_overrides")
     @classmethod
@@ -2749,6 +2850,7 @@ class PipelineRenderRequest(BaseModel):
     voice_settings: Optional[Dict[str, Any]] = None
     # Subtitle word grouping — BUG-PR-19: bounded
     words_per_subtitle: int = Field(default=2, ge=1, le=20)
+    words_per_subtitle_by_key: Optional[Dict[str, int]] = None
     # Minimum video segment duration (seconds) — groups short SRT phrases
     min_segment_duration: Optional[float] = None
 
@@ -3283,7 +3385,10 @@ async def import_pipeline_template(
         "target_script_duration": generation.get("targetScriptDuration"),
         "min_segment_duration": _clamp_min_segment_duration(assembly.get("minSegmentDuration")),
         "meta_multiplication": bool(render.get("metaMultiplication", True)),
-        "subtitle_settings_by_key": _normalize_overrides(subtitles.get("overrides") or {}),
+        "subtitle_settings_by_key": _normalize_overrides({
+            **(subtitles.get("overrides") or {}),
+            **(subtitles.get("variantOverrides") or {}),
+        }),
         "attention_timeline": attention_timelines,
         "template_settings": settings,
         "created_at": now,
@@ -3624,6 +3729,20 @@ class SubtitleOverridesRequest(BaseModel):
     overrides: Dict[str, Dict[str, Any]]
 
 
+class SubtitleRotationRequest(BaseModel):
+    """Ordered profile-preset rotation stored inside portable template state."""
+    enabled: bool = False
+    presetIds: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("presetIds")
+    @classmethod
+    def validate_preset_ids(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value).strip() for value in values if str(value).strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Subtitle rotation cannot contain duplicate templates")
+        return cleaned
+
+
 class AttentionAnimation(BaseModel):
     preset: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "static"
     enterMs: int = Field(default=250, ge=0, le=10000)
@@ -3655,6 +3774,8 @@ class AttentionCue(BaseModel):
     sfxVolumeDb: float = Field(default=0.0, ge=-60.0, le=12.0)
     templateId: Optional[str] = Field(default=None, max_length=100)
     zone: Literal["behind", "front"] = "behind"
+    # Timeline track: 2 = first image track (V2), 3 = V3, ... Absent = V2.
+    track: int = Field(default=2, ge=2, le=99)
 
 
 class AttentionTimelineRequest(BaseModel):
@@ -3781,12 +3902,20 @@ async def apply_attention_template(
             "name": row["name"],
         }
 
-    new_cues = distribute_attention_cues(
-        duration_ms=request.durationMs,
-        subtitle_boundaries_ms=request.subtitleBoundariesMs,
-        template=resolved,
-        asset_ids=request.assetUrls,
-    )
+    if resolved.get("tracks"):
+        new_cues = template_track_cues(
+            template=resolved,
+            asset_ids=request.assetUrls,
+            duration_ms=request.durationMs,
+        )
+    else:
+        # ponytail: legacy strategy-based templates (system + pre-refactor rows)
+        new_cues = distribute_attention_cues(
+            duration_ms=request.durationMs,
+            subtitle_boundaries_ms=request.subtitleBoundariesMs,
+            template=resolved,
+            asset_ids=request.assetUrls,
+        )
     if request.startOffsetMs:
         new_cues = [
             {**cue, "startMs": cue["startMs"] + request.startOffsetMs}
@@ -3890,9 +4019,8 @@ async def get_subtitle_overrides(
 ):
     """Return per-Meta-version subtitle style overrides for a pipeline.
 
-    Response shape: {"A": {...}, "B": {...}, "default": {...}} — only keys
-    with actual overrides are present. Legacy data is normalized on read so
-    the frontend always receives the canonical shape.
+    Response shape includes Meta keys plus card-local PreviewKey entries; only keys
+    with actual overrides are present, including direct PreviewKey deltas.
     """
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -3903,6 +4031,59 @@ async def get_subtitle_overrides(
     # or racing legacy writes that bypassed _get_pipeline_or_load's path.
     normalized = _normalize_overrides(pipeline.get("subtitle_settings_by_key") or {})
     return {"overrides": normalized}
+
+
+@router.get("/{pipeline_id}/subtitle-rotation")
+async def get_subtitle_rotation(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Return the pipeline's ordered subtitle-template rotation."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    settings = pipeline.get("template_settings") or {}
+    rotation = ((settings.get("subtitles") or {}).get("rotation") or {})
+    return {
+        "enabled": bool(rotation.get("enabled", False)),
+        "presetIds": list(rotation.get("presetIds") or []),
+    }
+
+
+@router.put("/{pipeline_id}/subtitle-rotation")
+async def update_subtitle_rotation(
+    pipeline_id: str,
+    request: SubtitleRotationRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Persist rotation in the same JSON envelope exported by pipeline templates."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    profile_row = get_repository().get_profile(profile.profile_id) or {}
+    owned_ids = {
+        str(preset.get("id"))
+        for preset in (profile_row.get("user_subtitle_presets") or [])
+        if isinstance(preset, dict) and preset.get("id")
+    }
+    missing = [preset_id for preset_id in request.presetIds if preset_id not in owned_ids]
+    if missing:
+        raise HTTPException(status_code=400, detail="Subtitle rotation contains an unavailable template")
+
+    rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
+    with _get_pipeline_state_lock(pipeline_id):
+        settings = copy.deepcopy(pipeline.get("template_settings") or {})
+        settings.setdefault("subtitles", {})["rotation"] = rotation
+        pipeline["template_settings"] = settings
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+    _db_save_pipeline(pipeline_id, pipeline)
+    return rotation
 
 
 @router.put("/{pipeline_id}/subtitle-overrides")
@@ -3924,11 +4105,9 @@ async def update_subtitle_overrides(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    # Validate key shape — after the per-Meta-version refactor, the only
-    # legal keys are "A", "B", and "default". Reject anything else so stale
-    # browser tabs sending legacy "0_A"/"1_B" keys fail loudly instead of
-    # silently poisoning the stored shape.
-    _key_pattern = _re.compile(r"^(A|B|default)$")
+    # Validate key shape — rotation adds one optional card-local layer, so
+    # legal keys include Meta A/B/default and direct PreviewKey deltas.
+    _key_pattern = _re.compile(r"^(?:A|B|default|\d+(?:_[A-J])?)$")
     for key in request.overrides.keys():
         if not isinstance(key, str) or not _key_pattern.match(key):
             raise HTTPException(status_code=400, detail=f"Invalid override key: {key!r}")
@@ -5257,6 +5436,7 @@ async def _generate_variant_tts_work(
                 "voice_settings": request.voice_settings,
                 "words_per_subtitle": request.words_per_subtitle,
                 "srt_content": srt_content,
+                "tts_timestamps": _timestamps,
                 "script_word_count": script_word_count,
                 "srt_word_count": srt_word_count,
             }
@@ -5793,6 +5973,7 @@ async def preview_variant(
     reuse_audio_path = None
     reuse_audio_duration = None
     reuse_srt_content = None
+    reuse_timestamps = None
     if existing_tts:
         # Verify script hasn't changed since TTS was generated
         # TTS hashes use cleaned text (tags stripped) so tag edits don't invalidate
@@ -5825,6 +6006,7 @@ async def preview_variant(
                 # Also grab SRT content from Step 2 to avoid TTS regeneration
                 stored_srt = existing_tts.get("srt_content")
                 stored_wpf = existing_tts.get("words_per_subtitle")
+                reuse_timestamps = existing_tts.get("tts_timestamps")
                 if stored_srt and stored_wpf == words_per_subtitle:
                     reuse_srt_content = stored_srt
                 logger.info(
@@ -6029,6 +6211,7 @@ async def preview_variant(
             avoid_segment_ids=avoid_ids if avoid_ids else None,
             ultra_rapid_intro=ultra_rapid_intro,
             reuse_srt_content=reuse_srt_content,
+            reuse_timestamps=reuse_timestamps,
             preset=preset,
             segment_proximity=segment_proximity,
         )
@@ -6054,7 +6237,7 @@ async def preview_variant(
                 cleaned_text=cleaned_text,
                 audio_path=str(_fresh_audio_path),
                 srt_content=preview_data.get("srt_content"),
-                timestamps=None,
+                timestamps=preview_data.get("tts_timestamps"),
                 model=elevenlabs_model,
                 duration=preview_data.get("audio_duration", 0.0),
                 voice_id=voice_id,
@@ -6084,6 +6267,8 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index] = {}
             pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
             pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
+            if preview_data.get("tts_timestamps"):
+                pipeline["tts_previews"][variant_index]["tts_timestamps"] = preview_data["tts_timestamps"]
             # Freshly billed audio replaces stale/forced audio even when an old
             # path existed. Reused Step 2 audio remains untouched.
             if preview_tts_metered:
@@ -6851,6 +7036,17 @@ async def render_variants(
                         _composition_key,
                     )
 
+            # Background music for this variant (keyed exactly like composition).
+            variant_music = None
+            if render_request.music_overrides:
+                _music_key = str(job_key) if job_key is not None else str(vid)
+                _mv = (
+                    render_request.music_overrides.get(_music_key)
+                    or render_request.music_overrides.get(str(vid))
+                )
+                if _mv is not None:
+                    variant_music = _mv.model_dump()
+
             # PIP-07: Removed dead first assignment of variant_interstitial_slides
             # (was overwritten later in the function). The actual lookup is below.
 
@@ -6858,6 +7054,12 @@ async def render_variants(
             reuse_audio_path = None
             reuse_audio_duration = None
             reuse_srt_content = None
+            reuse_timestamps = None
+            _job_words_per_subtitle = words_per_subtitle_for_key(
+                str(job_key),
+                render_request.words_per_subtitle_by_key,
+                render_request.words_per_subtitle,
+            )
 
             # Hash comparison uses cleaned text (tags stripped) to match stored hash
             cleaned_render_text = strip_product_group_tags(script_text)
@@ -6878,6 +7080,7 @@ async def render_variants(
                         if resolved_audio_path:
                             reuse_audio_path = str(resolved_audio_path)
                             reuse_audio_duration = existing_tts.get("audio_duration")
+                            reuse_timestamps = existing_tts.get("tts_timestamps")
 
                             # ── SRT reuse guard ──────────────────────────────
                             # Only reuse cached SRT if words_per_subtitle hasn't
@@ -6885,7 +7088,7 @@ async def render_variants(
                             # groups words into subtitle phrases using this param;
                             # reusing a stale SRT would show wrong subtitle grouping.
                             cached_wpf = existing_tts.get("words_per_subtitle")
-                            render_wpf = render_request.words_per_subtitle
+                            render_wpf = _job_words_per_subtitle
                             if cached_wpf is not None and cached_wpf != render_wpf:
                                 logger.info(
                                     f"[RENDER {_render_fingerprint}] SRT reuse BLOCKED: "
@@ -7067,6 +7270,7 @@ async def render_variants(
                         source_video_ids=render_request.source_video_ids,
                         match_overrides=variant_match_overrides,
                         composition_override=variant_composition_override,
+                        music=variant_music,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
                         enable_sharpen=render_request.enable_sharpen,
@@ -7087,8 +7291,9 @@ async def render_variants(
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         on_progress=on_progress,
-                        max_words_per_phrase=render_request.words_per_subtitle,
+                        max_words_per_phrase=_job_words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
                         segment_proximity=render_request.segment_proximity or "separate",
@@ -7534,6 +7739,12 @@ async def remake_variant(
     reuse_audio_path = None
     reuse_audio_duration = None
     reuse_srt_content = None
+    reuse_timestamps = None
+    _remake_words_per_subtitle = words_per_subtitle_for_key(
+        str(job_key),
+        render_request.words_per_subtitle_by_key,
+        render_request.words_per_subtitle,
+    )
 
     if existing_tts:
         audio_path_str = existing_tts.get("audio_path")
@@ -7541,7 +7752,9 @@ async def remake_variant(
         if resolved_audio_path:
             reuse_audio_path = str(resolved_audio_path)
             reuse_audio_duration = existing_tts.get("audio_duration")
-            reuse_srt_content = existing_tts.get("srt_content")
+            reuse_timestamps = existing_tts.get("tts_timestamps")
+            if existing_tts.get("words_per_subtitle") == _remake_words_per_subtitle:
+                reuse_srt_content = existing_tts.get("srt_content")
         else:
             raise HTTPException(
                 status_code=400,
@@ -7787,6 +8000,15 @@ async def remake_variant(
 
             variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
 
+            _remake_music = None
+            if render_request.music_overrides:
+                _rm = (
+                    render_request.music_overrides.get(str(job_key))
+                    or render_request.music_overrides.get(str(vid))
+                )
+                if _rm is not None:
+                    _remake_music = _rm.model_dump()
+
             # Render with NO match_overrides → auto-matching with strong avoid set
             try:
                 final_video_path, raw_assembly_path, _seg_composition = await asyncio.wait_for(
@@ -7799,6 +8021,7 @@ async def remake_variant(
                         voice_id=render_request.voice_id,
                         source_video_ids=render_request.source_video_ids,
                         match_overrides=None,  # Force auto-matching with new segments
+                        music=_remake_music,
                         enable_denoise=render_request.enable_denoise,
                         denoise_strength=render_request.denoise_strength,
                         enable_sharpen=render_request.enable_sharpen,
@@ -7819,8 +8042,9 @@ async def remake_variant(
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         on_progress=on_progress,
-                        max_words_per_phrase=render_request.words_per_subtitle,
+                        max_words_per_phrase=_remake_words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
                         segment_proximity=render_request.segment_proximity or "separate",
@@ -8966,6 +9190,8 @@ async def restore_previews(
             "video_timeline": video_timeline,
             # Transitions V1: camelCase to land directly in PreviewData.
             "defaultTransition": pd.get("default_transition"),
+            # Background music (A2), stored additively; lands directly in PreviewData.
+            "music": pd.get("music"),
         }
 
         # Grab available_segments from the first preview that has them
@@ -9039,6 +9265,9 @@ class SaveCompositionRequest(BaseModel):
     # Transitions V1: this variant's default transition (None = hard cuts).
     # Sent with every composition save; validated like any transitionIn.
     default_transition: Optional[dict] = None
+    # Background music (A2). Additive: stored in preview_data['music'], no DB
+    # migration. Absent key leaves any existing music untouched; explicit null clears it.
+    music: Optional[MusicSettings] = None
 
 
 @router.put("/{pipeline_id}/composition/{variant_index}")
@@ -9069,8 +9298,12 @@ async def save_composition(
         "transforms",
         "pinned",
         "transitionIn",
+        # Phase C: video-on-video overlay clips (composition track >= 2).
+        "track",
+        "overlay_box",
     }
     normalized_timeline: List[dict] = []
+    free_clips: List[dict] = []  # Phase C: free video overlays, for overlap check
     cursor = 0.0
     for clip_index, raw_clip in enumerate(body.video_timeline):
         if not isinstance(raw_clip, dict):
@@ -9094,13 +9327,53 @@ async def save_composition(
                 detail=f"Clip {clip_index + 1} has invalid timing",
             )
 
+        # Phase C: track selects the lane. 1/absent = magnetic V1 base (reflowed
+        # by cursor). 2..4 = free video overlay (absolute position, own z-order).
+        try:
+            track = int(raw_clip["track"]) if raw_clip.get("track") is not None else 1
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Clip {clip_index + 1} has an invalid track")
+        if track < 1 or track > 4:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {clip_index + 1} has track {track} out of range (1-4)",
+            )
+
         clip = {key: raw_clip.get(key) for key in allowed_fields if key in raw_clip}
         clip["id"] = str(raw_clip.get("id") or f"clip-{clip_index}-{cursor:.3f}")
-        clip["kind"] = "intro" if raw_clip.get("kind") == "intro" else "body"
         clip["start_time"] = source_start
         clip["end_time"] = source_end
-        clip["timeline_start"] = cursor
         clip["timeline_duration"] = duration
+
+        if track >= 2:
+            # Free video overlay: honor timeline_start as absolute, excluded from
+            # the cursor reflow and intro_offset. No transition on this lane.
+            clip["kind"] = "body"
+            clip["track"] = track
+            clip["overlay_box"] = _validate_overlay_box(raw_clip.get("overlay_box"), clip_index)
+            clip.pop("transitionIn", None)
+            try:
+                free_start = float(raw_clip.get("timeline_start"))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Clip {clip_index + 1} (overlay) has an invalid timeline_start",
+                )
+            if not math.isfinite(free_start) or free_start < 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Clip {clip_index + 1} (overlay) has an invalid timeline_start",
+                )
+            clip["timeline_start"] = free_start
+            normalized_timeline.append(clip)
+            free_clips.append(clip)
+            continue
+
+        # Magnetic base clip (track 1): reflow by cursor exactly as before.
+        clip.pop("track", None)
+        clip.pop("overlay_box", None)
+        clip["kind"] = "intro" if raw_clip.get("kind") == "intro" else "body"
+        clip["timeline_start"] = cursor
         # Transitions V1 (P0): validate against the allowlist / clamp duration /
         # strip on intro clips before it is ever persisted or reaches ffmpeg.
         try:
@@ -9118,6 +9391,14 @@ async def save_composition(
             clip["transitionIn"] = transition_in
         normalized_timeline.append(clip)
         cursor += duration
+
+    # Phase C: cap and reject overlapping free overlays on the same track.
+    if len(free_clips) > 50:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many overlay clips ({len(free_clips)}); max 50",
+        )
+    _reject_overlapping_overlays(free_clips)
 
     try:
         default_transition = normalize_transition_in(body.default_transition)
@@ -9141,6 +9422,8 @@ async def save_composition(
         preview_data["video_timeline"] = normalized_timeline
         preview_data["timeline"] = normalized_timeline
         preview_data["default_transition"] = default_transition
+        # Music travels with every composition save (like default_transition).
+        preview_data["music"] = body.music.model_dump() if body.music else None
         intro_segments = [
             clip for clip in normalized_timeline if clip.get("kind") == "intro"
         ]
@@ -9252,6 +9535,8 @@ class PreviewRenderRequest(BaseModel):
     voice_volume: float = Field(default=1.0, ge=0.0, le=3.0)
     audio_fade_in: float = Field(default=0.0, ge=0.0, le=10.0)
     audio_fade_out: float = Field(default=0.0, ge=0.0, le=10.0)
+    # Background music for this variant's preview render.
+    music: Optional[MusicSettings] = None
     visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
@@ -9428,6 +9713,8 @@ async def render_preview(
             "audio_fade_out": render_request.audio_fade_out,
         },
         "audio_mtime": audio_mtime,
+        "music": render_request.music.model_dump() if render_request.music else None,
+        "music_mtime": _music_asset_mtime(render_request.music),
     }
     matches_fingerprint = hashlib.sha256(_json.dumps(
         preview_fingerprint_payload,
@@ -9507,6 +9794,7 @@ async def render_preview(
     else:
         reuse_srt_content = tts_data.get("srt_content")
     reuse_audio_duration = tts_data.get("audio_duration")
+    reuse_timestamps = tts_data.get("tts_timestamps")
 
     _profile_id = profile.profile_id
 
@@ -9533,6 +9821,7 @@ async def render_preview(
                         reuse_audio_path=audio_path_str,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         subtitle_settings=render_request.subtitle_settings,
                         min_segment_duration=render_request.min_segment_duration,
                         on_progress=on_progress,
@@ -9552,6 +9841,7 @@ async def render_preview(
                         voice_volume=render_request.voice_volume,
                         audio_fade_in=render_request.audio_fade_in,
                         audio_fade_out=render_request.audio_fade_out,
+                        music=render_request.music.model_dump() if render_request.music else None,
                         subtitle_style_override=subtitle_style_override,
                         visual_version_label=normalized_visual_version,
                     ),

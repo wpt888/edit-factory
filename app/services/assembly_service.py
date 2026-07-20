@@ -390,24 +390,20 @@ def _serialize_preview_timeline(
     return serialized
 
 
-def _timeline_from_composition(
-    composition: List[dict],
-    segments_data: List[dict],
-    audio_duration: float,
-) -> List[TimelineEntry]:
-    """Validate an edited composition and convert it to a gapless render timeline.
+def _finite_number(value, fallback: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if math.isfinite(number) else fallback
 
-    Paths supplied by the browser are deliberately ignored.  Every clip is
-    resolved against the already profile-scoped segment library, source ranges
-    are clamped to that segment, and output positions are recomputed
-    cumulatively.  This makes black-frame gaps impossible while preserving the
-    user's clip order and roll edits.
+
+def _build_segment_resolver(segments_data: List[dict]):
+    """Return a resolver mapping a raw composition clip -> its library segment.
+
+    Shared by the magnetic base timeline and the free video-overlay path so both
+    resolve against the same already profile-scoped segment library.
     """
-    if not isinstance(composition, list) or not composition:
-        raise ValueError("The video composition must contain at least one clip")
-    if len(composition) > 500:
-        raise ValueError("The video composition contains too many clips")
-
     segment_by_id = {
         str(segment.get("id")): segment
         for segment in segments_data
@@ -419,18 +415,10 @@ def _timeline_from_composition(
         if source_video_id:
             segments_by_source.setdefault(str(source_video_id), []).append(segment)
 
-    def _finite_number(value, fallback: float) -> float:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return fallback
-        return number if math.isfinite(number) else fallback
-
-    def _resolve_segment(raw: dict) -> Optional[dict]:
+    def resolve(raw: dict) -> Optional[dict]:
         segment_id = raw.get("segment_id")
         if segment_id and str(segment_id) in segment_by_id:
             return segment_by_id[str(segment_id)]
-
         source_video_id = raw.get("source_video_id")
         candidates = segments_by_source.get(str(source_video_id), []) if source_video_id else []
         if not candidates:
@@ -442,6 +430,145 @@ def _timeline_from_composition(
                 _finite_number(segment.get("start_time"), 0.0) - requested_start
             ),
         )
+
+    return resolve
+
+
+def _resolve_and_clamp_clip(raw: dict, segment: Optional[dict], index: int):
+    """Clamp a composition clip's source window to its segment.
+
+    Shared by the base (magnetic) and video-overlay (free) paths. Paths supplied
+    by the browser are deliberately ignored — only the resolved library segment's
+    path and range are trusted. Raises ``ValueError`` (→ 4xx upstream) on a
+    missing segment or an out-of-range output duration. Returns
+    ``(source_video_path, source_start, source_end, timeline_duration)``.
+    """
+    if not segment or not segment.get("source_video_path"):
+        raise ValueError(
+            f"Composition clip {index + 1} no longer exists in the segment library"
+        )
+    segment_start = _finite_number(segment.get("start_time"), 0.0)
+    segment_end = _finite_number(segment.get("end_time"), segment_start)
+    if segment_end <= segment_start + 0.001:
+        raise ValueError(f"Composition clip {index + 1} has no usable source range")
+    requested_start = _finite_number(raw.get("start_time"), segment_start)
+    requested_end = _finite_number(raw.get("end_time"), segment_end)
+    source_start = min(max(requested_start, segment_start), segment_end - 0.001)
+    source_end = min(max(requested_end, source_start + 0.001), segment_end)
+    timeline_duration = _finite_number(raw.get("timeline_duration"), 0.0)
+    if timeline_duration < 0.05 or timeline_duration > 3600:
+        raise ValueError(
+            f"Composition clip {index + 1} has an invalid output duration"
+        )
+    return str(segment["source_video_path"]), source_start, source_end, timeline_duration
+
+
+def _build_video_overlay_clips(
+    overlay_raw: List[dict],
+    segments_data: List[dict],
+) -> Optional[List[dict]]:
+    """Resolve free video-overlay clips (composition track >= 2) into specs the
+    assembler extracts and composites over the sequential base.
+
+    Each spec = ``{entry: TimelineEntry, box: {x,y,width,height}, fit, z}``.
+    ``entry.timeline_start`` is the clip's ABSOLUTE position (free-positioned,
+    never reflowed). ``z`` derives from the track (``track*1000 + index``) so a
+    V3 video sits above a V2 video/image. Box stays fractional here; pixels are
+    computed against the render target dims inside ``assemble_video``.
+    """
+    if not overlay_raw:
+        return None
+    resolve = _build_segment_resolver(segments_data)
+    specs: List[dict] = []
+    for original_index, raw in enumerate(overlay_raw):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Overlay clip {original_index + 1} is invalid")
+        segment = resolve(raw)
+        source_video_path, source_start, source_end, timeline_duration = _resolve_and_clamp_clip(
+            raw, segment, original_index
+        )
+        track = int(_finite_number(raw.get("track"), 2))
+        start = max(0.0, _finite_number(raw.get("timeline_start"), 0.0))
+        box = raw.get("overlay_box") if isinstance(raw.get("overlay_box"), dict) else {}
+        entry = TimelineEntry(
+            source_video_path=source_video_path,
+            start_time=source_start,
+            end_time=source_end,
+            timeline_start=start,
+            timeline_duration=timeline_duration,
+            transforms=raw.get("transforms") if isinstance(raw.get("transforms"), dict) else segment.get("transforms"),
+            pinned=False,
+            transition_in=None,
+        )
+        fit = box.get("fit") if box.get("fit") in ("contain", "cover") else "contain"
+        specs.append({
+            "entry": entry,
+            "box": {
+                "x": _finite_number(box.get("x"), 0.0),
+                "y": _finite_number(box.get("y"), 0.0),
+                "width": _finite_number(box.get("width"), 1.0),
+                "height": _finite_number(box.get("height"), 1.0),
+            },
+            "fit": fit,
+            "z": track * 1000 + original_index,
+        })
+    return specs
+
+
+def _overlay_items_from_specs(
+    overlay_specs: List[dict],
+    overlay_paths: List[Optional[Path]],
+    target_w: int,
+    target_h: int,
+) -> List[dict]:
+    """Convert extracted free-overlay specs into apply_overlay_timeline items.
+
+    Fractional boxes are scaled to the render target dims here (so the same
+    spec works at 1080x1920 and the 540x960 preview). Specs whose extraction
+    failed (path is None/missing) are dropped.
+    """
+    items: List[dict] = []
+    for k, spec in enumerate(overlay_specs):
+        path = overlay_paths[k] if k < len(overlay_paths) else None
+        if not path or not Path(path).exists():
+            continue
+        entry = spec["entry"]
+        box = spec.get("box") or {}
+        bx = max(0.0, min(1.0, _finite_number(box.get("x"), 0.0)))
+        by = max(0.0, min(1.0, _finite_number(box.get("y"), 0.0)))
+        bw = max(0.0, min(1.0, _finite_number(box.get("width"), 1.0)))
+        bh = max(0.0, min(1.0, _finite_number(box.get("height"), 1.0)))
+        start = max(0.0, float(entry.timeline_start))
+        items.append({
+            "source_path": str(path), "is_video": True,
+            "start": start, "end": start + float(entry.timeline_duration),
+            "box_px": (bx * target_w, by * target_h, bw * target_w, bh * target_h),
+            "fit": spec.get("fit", "contain"), "z": int(spec.get("z", 0)),
+        })
+    return items
+
+
+def _timeline_from_composition(
+    composition: List[dict],
+    segments_data: List[dict],
+    audio_duration: float,
+) -> List[TimelineEntry]:
+    """Validate an edited composition and convert it to a gapless render timeline.
+
+    Paths supplied by the browser are deliberately ignored.  Every clip is
+    resolved against the already profile-scoped segment library, source ranges
+    are clamped to that segment, and output positions are recomputed
+    cumulatively.  This makes black-frame gaps impossible while preserving the
+    user's clip order and roll edits. Callers pass ONLY magnetic base clips here
+    (composition track 1 / absent); free video-overlay clips are handled
+    separately by ``_build_video_overlay_clips``.
+    """
+    if not isinstance(composition, list) or not composition:
+        raise ValueError("The video composition must contain at least one clip")
+    if len(composition) > 500:
+        raise ValueError("The video composition contains too many clips")
+
+    resolve = _build_segment_resolver(segments_data)
 
     for original_index, raw in enumerate(composition):
         if not isinstance(raw, dict):
@@ -457,27 +584,10 @@ def _timeline_from_composition(
     timeline: List[TimelineEntry] = []
     cursor = 0.0
     for original_index, raw in ordered:
-        segment = _resolve_segment(raw)
-        if not segment or not segment.get("source_video_path"):
-            raise ValueError(
-                f"Composition clip {original_index + 1} no longer exists in the segment library"
-            )
-
-        segment_start = _finite_number(segment.get("start_time"), 0.0)
-        segment_end = _finite_number(segment.get("end_time"), segment_start)
-        if segment_end <= segment_start + 0.001:
-            raise ValueError(f"Composition clip {original_index + 1} has no usable source range")
-
-        requested_start = _finite_number(raw.get("start_time"), segment_start)
-        requested_end = _finite_number(raw.get("end_time"), segment_end)
-        source_start = min(max(requested_start, segment_start), segment_end - 0.001)
-        source_end = min(max(requested_end, source_start + 0.001), segment_end)
-
-        timeline_duration = _finite_number(raw.get("timeline_duration"), 0.0)
-        if timeline_duration < 0.05 or timeline_duration > 3600:
-            raise ValueError(
-                f"Composition clip {original_index + 1} has an invalid output duration"
-            )
+        segment = resolve(raw)
+        source_video_path, source_start, source_end, timeline_duration = _resolve_and_clamp_clip(
+            raw, segment, original_index
+        )
 
         # Last guard before the filtergraph: re-validate the transition even
         # though ingress already did — intro clips get it stripped here too.
@@ -486,7 +596,7 @@ def _timeline_from_composition(
             clip_kind=raw.get("kind"),
         )
         timeline.append(TimelineEntry(
-            source_video_path=str(segment["source_video_path"]),
+            source_video_path=source_video_path,
             start_time=source_start,
             end_time=source_end,
             timeline_start=cursor,
@@ -2269,6 +2379,7 @@ class AssemblyService:
         match_results: Optional[List] = None,
         _preview_mode: bool = False,
         strict_segments: bool = True,
+        video_overlay_clips: Optional[List[dict]] = None,
     ) -> Path:
         """
         Assemble video from timeline using FFmpeg.
@@ -2319,15 +2430,21 @@ class AssemblyService:
             else get_prep_codec_params(include_audio=False)
         )
 
-        async def extract_segment(i: int, entry: TimelineEntry):
-            segment_file = temp_dir / f"segment_{i:03d}.mp4"
+        async def _extract_entry(
+            entry: TimelineEntry, segment_file: Path, fade_spec, log_tag: str
+        ) -> Optional[Path]:
+            """Extract one timeline slot to ``segment_file`` (or None on failure).
 
+            Shared by the sequential base timeline (per-slot fades) and the free
+            video-overlay path (fade_spec=None) so both reuse the transforms-v2 +
+            segment-cache extraction machinery.
+            """
             segment_duration = entry.end_time - entry.start_time
             needed_duration = entry.timeline_duration
 
             if segment_duration <= 0:
-                logger.error(f"Timeline entry {i} has zero/negative segment_duration ({segment_duration:.4f}s), skipping")
-                return
+                logger.error(f"Timeline entry {log_tag} has zero/negative segment_duration ({segment_duration:.4f}s), skipping")
+                return None
 
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
@@ -2335,7 +2452,6 @@ class AssemblyService:
             # Transitions V1: no-overlap fades on this slot's boundaries. Resolved
             # from the composition timeline (before slide insertion) and appended
             # after the transform chain so st/d run on the output clock.
-            fade_spec = resolve_fade_spec(timeline, i)
             vf_filters = transform_filters + _fade_filters(fade_spec, needed_duration)
             extraction_timing = _segment_extraction_timing(
                 segment_duration=segment_duration,
@@ -2348,8 +2464,8 @@ class AssemblyService:
             use_loop = extraction_timing.use_loop
 
             if not entry.source_video_path:
-                logger.error(f"Timeline entry {i} has no source_video_path, skipping")
-                return
+                logger.error(f"Timeline entry {log_tag} has no source_video_path, skipping")
+                return None
 
             if not Path(entry.source_video_path).exists():
                 # Skip (don't abort the whole render) but make it loud: the final video
@@ -2357,13 +2473,12 @@ class AssemblyService:
                 # source was added on another machine and its absolute path doesn't exist
                 # locally. The message names the file so the user can re-add/relocate it.
                 logger.error(
-                    f"Source video missing for segment {i} — SKIPPED, final video will be "
+                    f"Source video missing for segment {log_tag} — SKIPPED, final video will be "
                     f"incomplete. Re-add the file in Segments. Path: {entry.source_video_path}"
                 )
-                results[i] = None
-                return
+                return None
 
-            logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
+            logger.debug(f"Extracting segment {log_tag}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
             segment_raw = None  # VID-14: track for cleanup
             try:
@@ -2381,10 +2496,9 @@ class AssemblyService:
                     fade=fade_spec,
                 )
                 if cache_key and await asyncio.to_thread(segment_cache.lookup, cache_key, segment_file):
-                    results[i] = segment_file
                     _cache_stats["hit"] += 1
-                    logger.info(f"Segment {i}: cache HIT ({cache_key[:12]})")
-                    return
+                    logger.info(f"Segment {log_tag}: cache HIT ({cache_key[:12]})")
+                    return segment_file
                 _cache_stats["miss"] += 1
 
                 async with await _slot_fn():
@@ -2393,7 +2507,7 @@ class AssemblyService:
                     if use_loop:
                         # Extract just the segment to a temp file, then loop it
                         # This prevents bleeding past segment end_time
-                        segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
+                        segment_raw = segment_file.with_name(segment_file.stem + "_raw.mp4")
                         extract_cmd = [
                             "ffmpeg", "-y", "-threads", "4",
                             *_hwaccel_args,
@@ -2411,8 +2525,8 @@ class AssemblyService:
                             safe_ffmpeg_run, extract_cmd, _extract_timeout, "segment extract loop"
                         )
                         if result_extract.returncode != 0:
-                            logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
-                            return
+                            logger.error(f"Failed to extract raw segment {log_tag}: {result_extract.stderr}")
+                            return None
 
                         # Loop the extracted segment (contains only segment content)
                         cmd.extend([
@@ -2448,12 +2562,12 @@ class AssemblyService:
                     result = await asyncio.to_thread(safe_ffmpeg_run, cmd, _main_timeout, "segment extract")
 
                 if result.returncode == 0 and segment_file.exists():
-                    results[i] = segment_file
                     # F2: publish to the segment cache for future renders
                     if cache_key:
                         await asyncio.to_thread(segment_cache.store, cache_key, segment_file)
-                else:
-                    logger.error(f"Failed to extract segment {i}: {result.stderr}")
+                    return segment_file
+                logger.error(f"Failed to extract segment {log_tag}: {result.stderr}")
+                return None
             finally:
                 # VID-14: Clean up intermediate raw segment file used for looping
                 if segment_raw is not None:
@@ -2462,8 +2576,28 @@ class AssemblyService:
                     except Exception:
                         pass
 
+        async def extract_segment(i: int, entry: TimelineEntry):
+            # Transitions V1 fades are resolved from adjacency in the base timeline.
+            fade_spec = resolve_fade_spec(timeline, i)
+            results[i] = await _extract_entry(
+                entry, temp_dir / f"segment_{i:03d}.mp4", fade_spec, str(i)
+            )
+
         logger.info(f"Extracting {len(timeline)} segments in parallel (throttled by global prep semaphore)")
         await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
+
+        # Free video-overlay clips (composition track >= 2) reuse the same
+        # extraction machinery (transforms v2 + segment cache), never the xfade
+        # planner or the concat list — they are composited over the assembled
+        # base in the single overlay pass below. fade_spec=None (no boundary).
+        overlay_specs = video_overlay_clips or []
+        overlay_paths: List[Optional[Path]] = []
+        if overlay_specs:
+            overlay_paths = list(await asyncio.gather(*(
+                _extract_entry(spec["entry"], temp_dir / f"overlay_{k:03d}.mp4", None, f"ov{k}")
+                for k, spec in enumerate(overlay_specs)
+            )))
+
         logger.info(
             f"Segment cache: {_cache_stats['hit']} hits, {_cache_stats['miss']} misses "
             f"({len(timeline)} segments)"
@@ -2638,16 +2772,36 @@ class AssemblyService:
             cue for cue in (attention_timeline or {}).get("cues", [])
             if cue.get("zone", "behind") != "front"
         ]
-        if behind_cues:
-            from app.services.video_effects.overlay_renderer import apply_attention_timeline
-            assembled_path = await apply_attention_timeline(
-                assembled_path,
-                {"cues": behind_cues},
-                temp_dir / "assembled_attention.mp4",
-                target_w,
-                target_h,
-                sum(entry.timeline_duration for entry in timeline),
+        # One combined behind-zone pass: image attention cues + free video overlays.
+        # Video overlays get z = track*1000+intra so a V3 clip sits above a V2
+        # clip/image; attention items keep their existing collection-order z
+        # (all < 1000), so with no video overlays this is byte-for-byte the old
+        # attention pass. Fractional boxes scale to target dims (preview-safe).
+        overlay_items = _overlay_items_from_specs(
+            overlay_specs, overlay_paths, target_w, target_h
+        )
+
+        if behind_cues or overlay_items:
+            from app.services.video_effects.overlay_renderer import (
+                apply_overlay_timeline, _attention_cues_to_items,
             )
+            total_duration = sum(entry.timeline_duration for entry in timeline)
+            items = list(overlay_items)
+            if behind_cues:
+                overlay_dl = temp_dir / "overlay_dl"
+                overlay_dl.mkdir(exist_ok=True)
+                items += await _attention_cues_to_items(
+                    {"cues": behind_cues}, target_w, target_h, total_duration, str(overlay_dl)
+                )
+            if items:
+                assembled_path = await apply_overlay_timeline(
+                    assembled_path,
+                    items,
+                    temp_dir / "assembled_overlay.mp4",
+                    target_w,
+                    target_h,
+                    total_duration,
+                )
 
         logger.info(f"Video assembly complete: {assembled_path}")
 
@@ -2675,6 +2829,8 @@ class AssemblyService:
         voice_volume: float = 1.0,
         audio_fade_in: float = 0.0,
         audio_fade_out: float = 0.0,
+        # Background music (A2): dict with assetUrl/assetId + volume/ducking/fades.
+        music: Optional[dict] = None,
         shadow_depth: int = 0,
         enable_glow: bool = False,
         glow_blur: int = 0,
@@ -2684,6 +2840,7 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         on_progress=None,  # Optional[Callable[[str, int], None]]
         max_words_per_phrase: int = 2,
         min_segment_duration: float = 3.0,
@@ -2718,6 +2875,8 @@ class AssemblyService:
             reuse_audio_path: Path to existing TTS audio to reuse (skips TTS generation).
             reuse_audio_duration: Duration of the reused audio.
             reuse_srt_content: SRT content to reuse with the audio.
+            reuse_timestamps: Persisted character timings used to regroup cues
+                              without generating the same voice-over again.
 
         Returns:
             Path to final rendered video
@@ -2751,7 +2910,7 @@ class AssemblyService:
                 logger.info("Step 1/7: Reusing existing TTS audio (library or cached)")
                 audio_path = Path(reuse_audio_path)
                 audio_duration = reuse_audio_duration
-                timestamps = {}
+                timestamps = reuse_timestamps or {}
                 skip_library_save = True
                 _report("Reusing cached TTS audio", 20)
             else:
@@ -3131,20 +3290,32 @@ class AssemblyService:
             # so the merge pass in build_timeline won't change them further.
             # Ultra-rapid intro is passed through so it appears in the render
             # just as it did in the preview.
+            video_overlay_clips = None
             if composition_override:
+                # Phase C: split composition into the sequential magnetic base
+                # (track 1 / absent) and free video overlays (track >= 2).
+                base_clips = [
+                    c for c in composition_override
+                    if int(_finite_number((c or {}).get("track"), 1)) <= 1
+                ]
+                overlay_raw = [
+                    c for c in composition_override
+                    if int(_finite_number((c or {}).get("track"), 1)) >= 2
+                ]
                 timeline = _timeline_from_composition(
-                    composition=composition_override,
+                    composition=base_clips,
                     segments_data=segments_data,
                     audio_duration=audio_duration,
                 )
+                video_overlay_clips = _build_video_overlay_clips(overlay_raw, segments_data)
                 _intro_duration_sec = sum(
                     entry.timeline_duration
-                    for entry, raw in zip(timeline, composition_override)
+                    for entry, raw in zip(timeline, base_clips)
                     if raw.get("kind") == "intro"
                 )
                 logger.info(
-                    "Step 6/7: Using %s validated composition clips from the timeline editor",
-                    len(timeline),
+                    "Step 6/7: Using %s base + %s overlay composition clips from the timeline editor",
+                    len(timeline), len(video_overlay_clips or []),
                 )
             else:
                 timeline, _intro_duration_sec = self.build_timeline(
@@ -3183,6 +3354,7 @@ class AssemblyService:
                 match_results=match_results,
                 _preview_mode=_preview_mode,
                 strict_segments=strict_segments,
+                video_overlay_clips=video_overlay_clips,
             )
 
             # Render with preset and subtitle settings
@@ -3219,6 +3391,17 @@ class AssemblyService:
             if subtitle_style_override:
                 subtitle_settings.update(subtitle_style_override)
 
+            # Resolve the music asset (URL or local path) to a local file. Reuses
+            # overlay_renderer's content-agnostic downloader; failure = no music.
+            music_local_path = None
+            if music and (music.get("assetUrl") or music.get("assetId")):
+                from app.services.video_effects.overlay_renderer import _download_image
+                _music_source = str(music.get("assetUrl") or music.get("assetId"))
+                if not _music_source.startswith("pending:"):
+                    music_local_path = await _download_image(_music_source, str(temp_dir))
+                    if not music_local_path:
+                        logger.warning("Background music asset could not be resolved: %s", _music_source)
+
             await _render_with_preset(
                 video_path=assembled_video_path,
                 audio_path=audio_path,
@@ -3237,6 +3420,12 @@ class AssemblyService:
                 voice_volume=voice_volume,
                 audio_fade_in=audio_fade_in,
                 audio_fade_out=audio_fade_out,
+                music_path=music_local_path,
+                music_volume=float((music or {}).get("volume", 0.3)),
+                music_ducking=bool((music or {}).get("ducking", True)),
+                music_fade_in=float((music or {}).get("fadeInMs", 0) or 0) / 1000.0,
+                music_fade_out=float((music or {}).get("fadeOutMs", 0) or 0) / 1000.0,
+                music_loop=bool((music or {}).get("loop", True)),
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
                 # Real encode progress fills the 85%->99% band (replaces the
@@ -3334,6 +3523,7 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         subtitle_settings: Optional[dict] = None,
         min_segment_duration: float = 3.0,
         on_progress=None,
@@ -3357,6 +3547,7 @@ class AssemblyService:
         voice_volume: float = 1.0,
         audio_fade_in: float = 0.0,
         audio_fade_out: float = 0.0,
+        music: Optional[dict] = None,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
     ) -> Path:
@@ -3401,6 +3592,7 @@ class AssemblyService:
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
             reuse_srt_content=reuse_srt_content,
+            reuse_timestamps=reuse_timestamps,
             on_progress=on_progress,
             max_words_per_phrase=max_words_per_phrase,
             min_segment_duration=min_segment_duration,
@@ -3419,6 +3611,7 @@ class AssemblyService:
             voice_volume=voice_volume,
             audio_fade_in=audio_fade_in,
             audio_fade_out=audio_fade_out,
+            music=music,
             # Pass through subtitle style params to match final render output
             shadow_depth=_ss.get("shadowDepth", 0),
             enable_glow=_ss.get("enableGlow", False),
@@ -3457,6 +3650,7 @@ class AssemblyService:
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = True,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         subtitle_settings: Optional[dict] = None,
         preset: str = "balanced",
         segment_proximity: str = "separate",
@@ -3486,7 +3680,7 @@ class AssemblyService:
             logger.info("Preview Step 1/4: Reusing existing TTS audio from Step 2")
             audio_path = Path(reuse_audio_path)
             audio_duration = reuse_audio_duration
-            timestamps = {}  # Will rely on SRT cache or regenerate below
+            timestamps = reuse_timestamps or {}
         else:
             logger.info("Preview Step 1/4: Generating TTS audio")
             audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
@@ -3800,6 +3994,9 @@ class AssemblyService:
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
             "srt_content": srt_content,
+            # Kept server-side in pipeline state so a different template can
+            # regroup cues without a second TTS provider call.
+            "tts_timestamps": timestamps or None,
             "matches": matches_data,
             "timeline": timeline_data,
             # API key kept for saved-preview compatibility; the value now means

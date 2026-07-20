@@ -39,7 +39,7 @@ _JSON_COLUMNS = frozenset({
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
     "selected_captions", "subtitle_settings_by_key", "attention_timeline",
-    "template_settings", "config",
+    "template_settings", "config", "user_subtitle_presets",
     # F5 — segment columns written as JSON by segment CRUD routes
     "keywords", "transforms",
 })
@@ -96,6 +96,7 @@ class SQLiteRepository(DataRepository):
         # from the original sqlite_schema.sql snapshot. Sqlite's ALTER TABLE
         # ADD COLUMN is idempotent only when guarded — we check pragma first.
         self._ensure_phase80_columns()
+        self._ensure_profile_columns()
         self._ensure_pipeline_columns()
         self._ensure_source_video_columns()
         self._ensure_segment_columns()
@@ -122,6 +123,23 @@ class SQLiteRepository(DataRepository):
                     self._col_cache.pop("editai_segments", None)
         except Exception as e:
             logger.warning(f"Could not ensure usage_count column on editai_segments: {e}")
+
+    def _ensure_profile_columns(self) -> None:
+        """Mirror the additive user_subtitle_presets profile migration in SQLite."""
+        try:
+            cur = self._conn.execute('PRAGMA table_info("profiles")')
+            cols = {row[1] for row in cur.fetchall()}
+            if "user_subtitle_presets" in cols:
+                return
+            with self._write_lock:
+                self._conn.execute(
+                    'ALTER TABLE "profiles" ADD COLUMN "user_subtitle_presets" TEXT DEFAULT \'[]\''
+                )
+                self._conn.commit()
+            if hasattr(self, "_col_cache"):
+                self._col_cache.pop("profiles", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure subtitle preset column on profiles: {e}")
 
     def _ensure_pipeline_columns(self) -> None:
         """Add editai_pipelines columns missing from older DBs (F3 fix).

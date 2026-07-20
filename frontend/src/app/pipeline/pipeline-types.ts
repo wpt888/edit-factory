@@ -1,6 +1,6 @@
 import { SegmentOption } from "@/components/timeline-editor";
 import { SubtitleSettings } from "@/types/video-processing";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -41,6 +41,8 @@ export interface PreviewData {
   // Populated by the P1 Assembly Settings UI; resolved to concrete per-boundary
   // values via resolveCompositionTransitions() before any request is built.
   defaultTransition?: TransitionSpec | null;
+  // A2 background music (null/absent = none). Persisted via the composition save.
+  music?: MusicSettings | null;
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;
@@ -72,8 +74,8 @@ export interface AsyncJobState {
  * Meta version (instead of being per-(script × version)). With Meta
  * Multiplication ON there are exactly two styles to pick: "A" (Instagram)
  * and "B" (Facebook). With Meta OFF there is just "default" — one style
- * shared by every variant. The backend PUT endpoint accepts only these
- * three values as override keys; anything else is rejected.
+ * shared by every variant. The persistence endpoint also accepts PreviewKey
+ * entries as the final card-local layer used by subtitle-template rotation.
  */
 export type StyleKey = "A" | "B" | "default";
 

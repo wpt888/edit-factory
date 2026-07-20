@@ -1,5 +1,20 @@
 export type CompositionClipKind = "intro" | "body";
 
+/**
+ * Background music for the A2 lane. Mirrors the backend MusicSettings pydantic
+ * model field-for-field (fades in ms). `loop` stays backend-default true and has
+ * no UI toggle. Persisted additively in the composition save; absent = no music.
+ */
+export interface MusicSettings {
+  assetId: string;
+  assetUrl?: string;
+  label?: string;
+  volume: number;
+  ducking: boolean;
+  fadeInMs: number;
+  fadeOutMs: number;
+}
+
 /** Transition kinds: V1 no-overlap fades + "fade" (true cross dissolve, xfade). */
 export type TransitionKind = "dip_black" | "flash_white" | "fade";
 
@@ -36,7 +51,33 @@ export interface CompositionClip {
   pinned?: boolean;
   /** P0: transition into this clip; absent/null = hard cut. First clip ignores it. */
   transitionIn?: TransitionSpec | null;
+  /**
+   * Phase C: output video track. Absent/1 = the magnetic V1 base (reflowed).
+   * 2..4 = a free video overlay (PiP/B-roll) whose `timeline_start` is honored
+   * as absolute and which composites over V1 (higher track = in front).
+   */
+  track?: number;
+  /**
+   * Phase C: overlay placement in the 0..1 frame (track >= 2 only). Absent =
+   * full-frame contain. width/height must be > 0.
+   */
+  overlay_box?: OverlayBox;
 }
+
+/** Overlay placement box in normalized [0,1] frame coordinates (track >= 2). */
+export interface OverlayBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fit: "contain" | "cover";
+}
+
+/** Default overlay placement: full-frame, letterboxed (contain). */
+export const DEFAULT_OVERLAY_BOX: OverlayBox = { x: 0, y: 0, width: 1, height: 1, fit: "contain" };
+
+/** A clip is a free video overlay when its track is 2 or higher. */
+export const isOverlayClip = (clip: CompositionClip): boolean => (clip.track ?? 1) >= 2;
 
 /**
  * Resolve a variant's default transition into concrete per-boundary values so the

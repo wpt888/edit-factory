@@ -13,7 +13,7 @@ import { useApiUrl } from "@/hooks/use-api-url";
 import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
 
 type PreviewPipOverlayConfig = {
@@ -54,6 +54,8 @@ interface VariantPreviewPlayerProps {
   voiceVolume?: number;
   audioFadeIn?: number;
   audioFadeOut?: number;
+  /** A2 background music — carried into the server-rendered preview. */
+  music?: MusicSettings | null;
   // The caller can resolve the Meta style before posting. Keep visualVersion
   // for the preview key/segment offset without applying a second style overlay.
   applyMetaSubtitleStyle?: boolean;
@@ -89,6 +91,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   voiceVolume = 1.0,
   audioFadeIn = 0.0,
   audioFadeOut = 0.0,
+  music = null,
   applyMetaSubtitleStyle = true,
 }: VariantPreviewPlayerProps) {
   const mediaApiUrl = useApiUrl();
@@ -111,6 +114,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   useEffect(() => { videoTimelineRef.current = videoTimeline; }, [videoTimeline]);
   const defaultTransitionRef = useRef(defaultTransition);
   useEffect(() => { defaultTransitionRef.current = defaultTransition; }, [defaultTransition]);
+  const musicRef = useRef(music);
+  useEffect(() => { musicRef.current = music; }, [music]);
 
   // Stop progress tracking (SSE + polling fallback) on unmount or close
   const stopPolling = useCallback(() => {
@@ -197,6 +202,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             voice_volume: voiceVolume,
             audio_fade_in: audioFadeIn,
             audio_fade_out: audioFadeOut,
+            music: musicRef.current ?? undefined,
             visual_version: visualVersion,
             apply_meta_subtitle_style: applyMetaSubtitleStyle,
           }

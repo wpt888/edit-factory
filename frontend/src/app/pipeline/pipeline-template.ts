@@ -13,6 +13,7 @@ import type { AttentionSelection } from "@/components/attention-template-picker"
 import type { AttentionTimeline } from "@/types/attention-timeline";
 import type { CompositionClip } from "@/types/composition-timeline";
 import type { SubtitleSettings } from "@/types/video-processing";
+import type { SubtitleTemplateRotation } from "./subtitle-template-rotation";
 import type { ContextProduct, MatchPreview, PreviewKey, StyleKey } from "./pipeline-types";
 
 export const PIPELINE_TEMPLATE_FORMAT = "edit-factory.pipeline-template" as const;
@@ -72,6 +73,8 @@ export interface PipelineTemplateSettings {
   subtitles: {
     default: SubtitleSettings;
     overrides: Partial<Record<StyleKey, SubtitleSettings>>;
+    variantOverrides?: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
+    rotation: SubtitleTemplateRotation;
   };
   render: {
     presetName: string;

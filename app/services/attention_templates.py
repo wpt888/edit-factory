@@ -35,6 +35,54 @@ def layout_positions(layer_count: int, size: float) -> List[tuple[float, float]]
             for i in range(layer_count)]
 
 
+def template_track_cues(
+    *,
+    template: Dict[str, Any],
+    asset_ids: Optional[List[str]] = None,
+    duration_ms: int = 0,
+) -> List[Dict[str, Any]]:
+    """Track-based templates: each authored image becomes one cue on lane V(2+track).
+
+    ``template['tracks']`` is a list of tracks, each a list of images with
+    x/y/width/height (0..1 frame fractions), startMs and durationMs. Assets from
+    Step 1 rotate into slots in authored order. Cues starting past the video end
+    are dropped.
+    """
+    tracks = template.get("tracks") or []
+    zone = template.get("zone", "behind")
+    animation = template.get("animation", "pop")
+    assets = asset_ids or ["pending:choose-asset"]
+    cues: List[Dict[str, Any]] = []
+    asset_cursor = 0
+    for track_index, images in enumerate(tracks):
+        for image_index, image in enumerate(images or []):
+            start = max(0, int(image.get("startMs", 0)))
+            if duration_ms and start >= duration_ms:
+                continue
+            asset = assets[asset_cursor % len(assets)]
+            asset_cursor += 1
+            cues.append({
+                "id": f"attention-t{track_index}-{image_index}-{start}",
+                "startMs": start,
+                "durationMs": max(100, int(image.get("durationMs", 1200))),
+                "track": 2 + track_index,
+                "zone": zone,
+                "sfxAssetId": template.get("sfx"),
+                "sfxVolumeDb": 0,
+                "templateId": template.get("id"),
+                "layers": [{
+                    "id": f"cue-t{track_index}-{image_index}-layer-0",
+                    "assetId": asset,
+                    "x": float(image.get("x", 0.1)), "y": float(image.get("y", 0.1)),
+                    "width": float(image.get("width", 0.8)), "height": float(image.get("height", 0.8)),
+                    "zIndex": track_index + 1, "fit": "contain",
+                    "animation": {"preset": animation, "enterMs": 250,
+                                  "exitMs": 200, "delayMs": 0, "intensity": 1},
+                }],
+            })
+    return sorted(cues, key=lambda cue: cue["startMs"])
+
+
 def distribute_attention_cues(
     *,
     duration_ms: int,

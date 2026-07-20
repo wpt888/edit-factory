@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,7 @@ import {
   Maximize2,
   Minimize2,
   LayoutTemplate,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -68,6 +70,8 @@ import {
 import { formatDuration, WORKSPACE_CARD_BG } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
+import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
+import type { SubtitleTemplateRotation } from "../subtitle-template-rotation";
 import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 /**
@@ -95,7 +99,8 @@ type Step3Ctx = {
   getInterstitialSlidesChangeHandler: (previewKey: string) => (slides: InterstitialSlide[]) => void;
   attentionTimelines: Record<PreviewKey, AttentionTimeline>;
   getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
-  getPreviewSubtitleSettingsFor: (card: Pick<PreviewCard, "visualVersion">) => SubtitleSettings;
+  getPreviewSubtitleSettingsFor: (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">) => SubtitleSettings;
+  getPreviewSubtitleTemplateSettingsFor: (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">) => SubtitleSettings;
   getSubtitleSettingsFor: (styleKey: StyleKey) => SubtitleSettings;
   subtitleSettings: SubtitleSettings;
   subtitleOverrides: Partial<Record<StyleKey, SubtitleSettings>>;
@@ -104,6 +109,8 @@ type Step3Ctx = {
   selectedVariants: Set<number>;
   userSubtitlePresets: UserSubtitlePreset[];
   setUserSubtitlePresets: Dispatch<SetStateAction<UserSubtitlePreset[]>>;
+  subtitleRotation: SubtitleTemplateRotation;
+  variantSubtitleOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
@@ -128,6 +135,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     setSavePresetDialogOpen,
     userSubtitlePresets,
     setUserSubtitlePresets,
+    subtitleRotation,
+    handleSubtitleRotationChange,
+    getAssignedSubtitlePreset,
+    getWordsPerSubtitleForVariant,
+    variantSubtitleOverrides,
+    handleVariantTemplateOverrideChange,
+    handleResetVariantTemplateOverride,
+    handleUpdateSubtitlePreset,
     subtitleOverrides,
     currentProfileIdRef,
     pipelineId,
@@ -152,6 +167,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     availableSegments,
     currentProfile,
     getPreviewSubtitleSettingsFor,
+    getPreviewSubtitleTemplateSettingsFor,
     interstitialSlides,
     attentionTimelines,
     EMPTY_SLIDES,
@@ -159,11 +175,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getAttentionTimelineChangeHandler,
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
+    getMusicChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
     setMinSegmentDuration,
     wordsPerSubtitle,
+    setWordsPerSubtitle,
     ultraRapidIntro,
     setUltraRapidIntro,
     segmentProximity,
@@ -197,6 +215,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
   // Which variant's full-screen editor modal is open (card.key), or null.
   const [maximizedKey, setMaximizedKey] = useState<string | null>(null);
+  // Which settings tab is active in the maximized editor's settings column.
+  const [maximizeSettingsTab, setMaximizeSettingsTab] = useState<"subtitles" | "timing" | "adjust">("subtitles");
+  const [editingVariantKey, setEditingVariantKey] = useState<PreviewKey | null>(null);
+  const [variantSubtitleDraft, setVariantSubtitleDraft] = useState<SubtitleSettings | null>(null);
+  const editingVariantCard = useMemo(
+    () => previewCards.find((card) => card.key === editingVariantKey),
+    [editingVariantKey, previewCards],
+  );
 
   // Confine the maximized editor to the app work area (below the workspace
   // titlebar, right of the settings sidebar) instead of the whole screen.
@@ -268,6 +294,278 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     subtitleOverrides[activeSubtitleStyleKey]
       && Object.keys(subtitleOverrides[activeSubtitleStyleKey] ?? {}).length > 0
   );
+
+  // Lifted out of the JSX below so the exact same element (same state, same
+  // handlers) can render both in the left inspector and inside the maximized
+  // editor's settings column — no divergent copies of the settings UI.
+  const previewTimingCard = (
+    <Card
+      className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
+      data-testid="step3-preview-timing"
+    >
+      <CardHeader className="min-[1280px]:px-4">
+        <CardTitle className="text-lg">Preview Timing</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 min-[1280px]:px-4">
+        <div className="space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-1">
+            <Label htmlFor="pacing">Pacing</Label>
+            <InlineInfo label="About pacing">
+              Choose how quickly the visual cuts change.
+            </InlineInfo>
+          </div>
+          <Select
+            value={String(minSegmentDuration)}
+            onValueChange={(value) => {
+              setMinSegmentDuration(Number(value));
+              scheduleReassemblePreviews();
+            }}
+          >
+            <SelectTrigger id="pacing" className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="2">Fast (2s)</SelectItem>
+              <SelectItem value="3">Normal (3s)</SelectItem>
+              <SelectItem value="5">Slow (5s)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-1">
+            <Label htmlFor="segment-proximity">Segment proximity</Label>
+            <InlineInfo label="About segment proximity">
+              Separate: keep clips cut from nearby moments of the same source apart. Merge: fuse them into one continuous shot to avoid a jump-cut.
+            </InlineInfo>
+          </div>
+          <Select
+            value={segmentProximity}
+            onValueChange={(value) => {
+              setSegmentProximity(value as typeof segmentProximity);
+              scheduleReassemblePreviews();
+            }}
+          >
+            <SelectTrigger id="segment-proximity" className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="separate">Separate</SelectItem>
+              <SelectItem value="merge">Merge</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-1">
+            <Label htmlFor="rapid-intro">Rapid intro (2s)</Label>
+            <InlineInfo label="About rapid intro">
+              Force the first shot to a snappy 2-second cut regardless of min shot length.
+            </InlineInfo>
+          </div>
+          <Switch
+            id="rapid-intro"
+            checked={ultraRapidIntro}
+            onCheckedChange={(checked) => {
+              setUltraRapidIntro(checked);
+              scheduleReassemblePreviews();
+            }}
+          />
+        </div>
+        </div>
+
+      </CardContent>
+    </Card>
+  );
+
+  const subtitleStyleCard = (
+    <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents ${WORKSPACE_CARD_BG}`}>
+      <CardHeader className="pb-1 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Type className="size-4" />
+              Subtitle Style
+              {!subtitleSettingsLoaded && <Loader2 className="size-3 animate-spin" />}
+            </CardTitle>
+            <InlineInfo label="About subtitle styles">
+              {metaMultiplication
+                ? "Switch between A and B to preview and edit each platform style. Changes are saved automatically and shared across all scripts."
+                : "This style applies to every variant in the pipeline and is saved automatically."}
+            </InlineInfo>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
+          {subtitleSaveState === "saving" && (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              <span>Saving…</span>
+            </>
+          )}
+          {subtitleSaveState === "saved" && (
+            <>
+              <CheckCircle className="size-3 text-success" />
+              <span>Saved</span>
+            </>
+          )}
+          {subtitleSaveState === "error" && (
+            <>
+              <AlertCircle className="size-3 text-red-600" />
+              <span className="text-red-600">Save failed</span>
+            </>
+          )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 min-[1280px]:contents">
+        {/* Variant switch + live preview stay pinned to the very top of
+            the inspector; everything below scrolls under them. */}
+        <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background min-[1280px]:px-4">
+          {metaMultiplication && (
+            <div
+              role="tablist"
+              aria-label="Subtitle version"
+              className="flex gap-1"
+              data-testid="subtitle-version-switch"
+            >
+              {(["A", "B"] as const).map((styleKey) => {
+                const isSelected = activeSubtitleStyleKey === styleKey;
+                const platform = styleKey === "A" ? "Instagram" : "Facebook";
+                return (
+                  <Button
+                    key={styleKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={isSelected}
+                    aria-controls="subtitle-style-preview"
+                    variant={isSelected ? "default" : "ghost"}
+                    size="sm"
+                    className="h-9 gap-1.5 px-3"
+                    onClick={() => setActiveStyleKey(styleKey)}
+                  >
+                    <span className="font-semibold">{styleKey}</span>
+                    <span className={`text-xs ${isSelected ? "opacity-80" : "text-muted-foreground"}`}>
+                      {platform}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
+          )}
+
+          <div
+            id="subtitle-style-preview"
+            role="tabpanel"
+            data-testid="subtitle-sticky-preview"
+          >
+            <SubtitleStylePreviewPanel
+              key={activeSubtitleStyleKey}
+              styleKey={activeSubtitleStyleKey}
+              settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
+              hasOverride={activeSubtitleStyleHasOverride}
+              pipelineId={pipelineId ?? undefined}
+              previewCards={previewCards}
+              previewText={getStylePreviewText(activeSubtitleStyleKey)}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-3 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:pb-3">
+          {/* Auxiliary controls — below the preview so they don't push it down */}
+          <SubtitleTemplateRotationPanel
+            rotation={subtitleRotation}
+            presets={userSubtitlePresets}
+            onChange={handleSubtitleRotationChange}
+            onUpdatePreset={handleUpdateSubtitlePreset}
+          />
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Copy from the other Meta version (only when Meta ON) */}
+          {metaMultiplication && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => {
+                const source: StyleKey = activeSubtitleStyleKey === "A" ? "B" : "A";
+                handleCopyVariantSubtitle(source, activeSubtitleStyleKey);
+              }}
+            >
+              Copy from {activeSubtitleStyleKey === "A" ? "B" : "A"}
+            </Button>
+          )}
+
+          {/* Reset to default — only meaningful when override exists */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={!activeSubtitleStyleHasOverride}
+            onClick={() => handleResetVariantSubtitle(activeSubtitleStyleKey)}
+          >
+            Reset to default
+          </Button>
+
+          {/* Save current as named preset */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => setSavePresetDialogOpen(true)}
+          >
+            Save as preset
+          </Button>
+        </div>
+
+          <div className="space-y-4">
+            <div
+              data-testid="subtitle-style-variant-editor"
+            >
+            <SubtitleEditor
+              renderMode="settings-only"
+              settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
+              onSettingsChange={(newSettings) =>
+                handleVariantSubtitleChange(activeSubtitleStyleKey, newSettings)
+              }
+              showPreview={false}
+              compact={true}
+              userPresets={userSubtitlePresets}
+              onApplyUserPreset={(preset) => {
+                if (preset.wordsPerSubtitle != null) setWordsPerSubtitle(preset.wordsPerSubtitle);
+                const presetSettings =
+                  activeSubtitleStyleKey === "A"
+                    ? preset.settingsA ?? preset.settings
+                    : activeSubtitleStyleKey === "B"
+                      ? preset.settingsB ?? preset.settings
+                      : preset.settings;
+                const merged = mergeSubtitleStylePreservingPlacement(
+                  getSubtitleSettingsFor(activeSubtitleStyleKey),
+                  presetSettings,
+                );
+                handleVariantSubtitleChange(activeSubtitleStyleKey, merged);
+              }}
+              onDeleteUserPreset={async (preset) => {
+                const profileId = currentProfileIdRef.current;
+                if (!profileId) return;
+                try {
+                  await apiDelete(`/profiles/${profileId}/subtitle-presets/${preset.id}`);
+                  setUserSubtitlePresets((prev) => prev.filter((item) => item.id !== preset.id));
+                  if (subtitleRotation.presetIds.includes(preset.id)) {
+                    handleSubtitleRotationChange({
+                      ...subtitleRotation,
+                      presetIds: subtitleRotation.presetIds.filter((id: string) => id !== preset.id),
+                    });
+                  }
+                } catch (err) { console.error("Failed to delete preset:", err); }
+              }}
+              />
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   return (
           <div className="space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0">
             <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
@@ -312,251 +610,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             </Card>
 
             {/* Timing controls can reassemble the previews from inside the editor. */}
-            <Card
-              className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
-              data-testid="step3-preview-timing"
-            >
-              <CardHeader className="min-[1280px]:px-4">
-                <CardTitle className="text-lg">Preview Timing</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 min-[1280px]:px-4">
-                <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-1">
-                    <Label htmlFor="pacing">Pacing</Label>
-                    <InlineInfo label="About pacing">
-                      Choose how quickly the visual cuts change.
-                    </InlineInfo>
-                  </div>
-                  <Select
-                    value={String(minSegmentDuration)}
-                    onValueChange={(value) => {
-                      setMinSegmentDuration(Number(value));
-                      scheduleReassemblePreviews();
-                    }}
-                  >
-                    <SelectTrigger id="pacing" className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="2">Fast (2s)</SelectItem>
-                      <SelectItem value="3">Normal (3s)</SelectItem>
-                      <SelectItem value="5">Slow (5s)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-1">
-                    <Label htmlFor="segment-proximity">Segment proximity</Label>
-                    <InlineInfo label="About segment proximity">
-                      Separate: keep clips cut from nearby moments of the same source apart. Merge: fuse them into one continuous shot to avoid a jump-cut.
-                    </InlineInfo>
-                  </div>
-                  <Select
-                    value={segmentProximity}
-                    onValueChange={(value) => {
-                      setSegmentProximity(value as typeof segmentProximity);
-                      scheduleReassemblePreviews();
-                    }}
-                  >
-                    <SelectTrigger id="segment-proximity" className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="separate">Separate</SelectItem>
-                      <SelectItem value="merge">Merge</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-1">
-                    <Label htmlFor="rapid-intro">Rapid intro (2s)</Label>
-                    <InlineInfo label="About rapid intro">
-                      Force the first shot to a snappy 2-second cut regardless of min shot length.
-                    </InlineInfo>
-                  </div>
-                  <Switch
-                    id="rapid-intro"
-                    checked={ultraRapidIntro}
-                    onCheckedChange={(checked) => {
-                      setUltraRapidIntro(checked);
-                      scheduleReassemblePreviews();
-                    }}
-                  />
-                </div>
-                </div>
-
-              </CardContent>
-            </Card>
+            {previewTimingCard}
 
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
-            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
-              <CardHeader className="pb-1 min-[1280px]:px-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-1">
-                    <CardTitle className="flex items-center gap-2 text-sm">
-                      <Type className="size-4" />
-                      Subtitle Style
-                      {!subtitleSettingsLoaded && <Loader2 className="size-3 animate-spin" />}
-                    </CardTitle>
-                    <InlineInfo label="About subtitle styles">
-                      {metaMultiplication
-                        ? "Switch between A and B to preview and edit each platform style. Changes are saved automatically and shared across all scripts."
-                        : "This style applies to every variant in the pipeline and is saved automatically."}
-                    </InlineInfo>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
-                  {subtitleSaveState === "saving" && (
-                    <>
-                      <Loader2 className="size-3 animate-spin" />
-                      <span>Saving…</span>
-                    </>
-                  )}
-                  {subtitleSaveState === "saved" && (
-                    <>
-                      <CheckCircle className="size-3 text-success" />
-                      <span>Saved</span>
-                    </>
-                  )}
-                  {subtitleSaveState === "error" && (
-                    <>
-                      <AlertCircle className="size-3 text-red-600" />
-                      <span className="text-red-600">Save failed</span>
-                    </>
-                  )}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3 min-[1280px]:px-4">
-                {/* Variant switch + live preview stay pinned to the very top of
-                    the inspector; everything below scrolls under them. */}
-                <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background">
-                  {metaMultiplication && (
-                    <div
-                      role="tablist"
-                      aria-label="Subtitle version"
-                      className="flex gap-1"
-                      data-testid="subtitle-version-switch"
-                    >
-                      {(["A", "B"] as const).map((styleKey) => {
-                        const isSelected = activeSubtitleStyleKey === styleKey;
-                        const platform = styleKey === "A" ? "Instagram" : "Facebook";
-                        return (
-                          <Button
-                            key={styleKey}
-                            type="button"
-                            role="tab"
-                            aria-selected={isSelected}
-                            aria-controls="subtitle-style-preview"
-                            variant={isSelected ? "default" : "ghost"}
-                            size="sm"
-                            className="h-9 gap-1.5 px-3"
-                            onClick={() => setActiveStyleKey(styleKey)}
-                          >
-                            <span className="font-semibold">{styleKey}</span>
-                            <span className={`text-xs ${isSelected ? "opacity-80" : "text-muted-foreground"}`}>
-                              {platform}
-                            </span>
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div
-                    id="subtitle-style-preview"
-                    role="tabpanel"
-                    data-testid="subtitle-sticky-preview"
-                  >
-                    <SubtitleStylePreviewPanel
-                      key={activeSubtitleStyleKey}
-                      styleKey={activeSubtitleStyleKey}
-                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-                      hasOverride={activeSubtitleStyleHasOverride}
-                      pipelineId={pipelineId ?? undefined}
-                      previewCards={previewCards}
-                      previewText={getStylePreviewText(activeSubtitleStyleKey)}
-                    />
-                  </div>
-                </div>
-
-                {/* Auxiliary controls — below the preview so they don't push it down */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Copy from the other Meta version (only when Meta ON) */}
-                  {metaMultiplication && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={() => {
-                        const source: StyleKey = activeSubtitleStyleKey === "A" ? "B" : "A";
-                        handleCopyVariantSubtitle(source, activeSubtitleStyleKey);
-                      }}
-                    >
-                      Copy from {activeSubtitleStyleKey === "A" ? "B" : "A"}
-                    </Button>
-                  )}
-
-                  {/* Reset to default — only meaningful when override exists */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={!activeSubtitleStyleHasOverride}
-                    onClick={() => handleResetVariantSubtitle(activeSubtitleStyleKey)}
-                  >
-                    Reset to default
-                  </Button>
-
-                  {/* Save current as named preset */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    onClick={() => setSavePresetDialogOpen(true)}
-                  >
-                    Save as preset
-                  </Button>
-                </div>
-
-                <div className="space-y-4">
-                  <div
-                    data-testid="subtitle-style-variant-editor"
-                  >
-                    <SubtitleEditor
-                      renderMode="settings-only"
-                      settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-                      onSettingsChange={(newSettings) =>
-                        handleVariantSubtitleChange(activeSubtitleStyleKey, newSettings)
-                      }
-                      showPreview={false}
-                      compact={true}
-                      userPresets={userSubtitlePresets}
-                      onApplyUserPreset={(preset) => {
-                        const presetSettings =
-                          activeSubtitleStyleKey === "A"
-                            ? preset.settingsA ?? preset.settings
-                            : activeSubtitleStyleKey === "B"
-                              ? preset.settingsB ?? preset.settings
-                              : preset.settings;
-                        const merged = mergeSubtitleStylePreservingPlacement(
-                          getSubtitleSettingsFor(activeSubtitleStyleKey),
-                          presetSettings,
-                        );
-                        handleVariantSubtitleChange(activeSubtitleStyleKey, merged);
-                      }}
-                      onDeleteUserPreset={async (preset) => {
-                        const profileId = currentProfileIdRef.current;
-                        if (!profileId) return;
-                        try { await apiDelete(`/profiles/${profileId}/subtitle-presets/${preset.id}`); setUserSubtitlePresets((prev) => prev.filter((item) => item.id !== preset.id)); } catch (err) { console.error("Failed to delete preset:", err); }
-                      }}
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            {subtitleStyleCard}
 
               </aside>
 
@@ -566,7 +623,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 data-testid="step3-variant-canvas"
               >
                 <header
-                  className="sticky top-0 z-10 hidden h-14 items-center border-b bg-background px-4 min-[1280px]:flex"
+                  className="sticky top-0 z-[60] hidden h-14 items-center border-b bg-background px-4 min-[1280px]:flex"
                   data-testid="step3-variant-header"
                 >
                   <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
@@ -576,13 +633,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 </header>
 
             {/* Variant preview grid */}
-            <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border">
+            <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border min-[1480px]:grid-cols-2">
               {previewCards.map((card) => {
                 const preview = previews[card.key];
                 if (!preview) return null;
+                const assignedTemplate = getAssignedSubtitlePreset(card.baseIndex);
+                const hasVariantSubtitleOverride = Boolean(variantSubtitleOverrides[card.key]);
 
                 return (
-                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
+                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 ${WORKSPACE_CARD_BG}`}>
                     <CardHeader className="min-[1280px]:px-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -597,9 +656,45 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                                 {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
                               </Badge>
                             )}
+                            {subtitleRotation.enabled && assignedTemplate && (
+                              <Badge
+                                variant="outline"
+                                className="ml-2 border-primary/40 text-xs text-primary"
+                                data-testid="subtitle-template-badge"
+                              >
+                                {assignedTemplate.name} · {assignedTemplate.wordsPerSubtitle ?? wordsPerSubtitle} words
+                              </Badge>
+                            )}
                           </CardTitle>
                         </div>
                         <div className="flex items-center gap-2">
+                          {subtitleRotation.enabled && assignedTemplate && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 gap-1 px-2 text-xs"
+                                onClick={() => {
+                                  setEditingVariantKey(card.key);
+                                  setVariantSubtitleDraft(getPreviewSubtitleSettingsFor(card));
+                                }}
+                                title={`Override subtitles for ${card.label}`}
+                              >
+                                <Pencil className="size-3.5" />
+                                Override
+                              </Button>
+                              {hasVariantSubtitleOverride && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 px-2 text-xs text-muted-foreground"
+                                  onClick={() => handleResetVariantTemplateOverride(card.key)}
+                                >
+                                  Reset to template
+                                </Button>
+                              )}
+                            </>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -713,6 +808,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                         defaultTransition={preview.defaultTransition ?? null}
+                        music={preview.music ?? null}
+                        onMusicChange={getMusicChangeHandler(card.key)}
                         onRenderPreview={() => openRenderedPreview(card.key)}
                       />
                     </CardContent>
@@ -720,6 +817,65 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 );
               })}
             </div>
+
+            <Dialog
+              open={editingVariantKey !== null}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setEditingVariantKey(null);
+                  setVariantSubtitleDraft(null);
+                }
+              }}
+            >
+              <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto" data-testid="variant-subtitle-override-dialog">
+                <DialogHeader>
+                  <DialogTitle>Override {editingVariantCard?.label ?? "variant"}</DialogTitle>
+                  <DialogDescription>
+                    This changes only this output. The assigned template and other variants stay unchanged.
+                  </DialogDescription>
+                </DialogHeader>
+                {variantSubtitleDraft && (
+                  <SubtitleEditor
+                    renderMode="settings-only"
+                    settings={variantSubtitleDraft}
+                    onSettingsChange={setVariantSubtitleDraft}
+                    showPreview={false}
+                    compact
+                  />
+                )}
+                <DialogFooter>
+                  {editingVariantKey && variantSubtitleOverrides[editingVariantKey] && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        handleResetVariantTemplateOverride(editingVariantKey);
+                        setVariantSubtitleDraft(
+                          editingVariantCard ? getPreviewSubtitleTemplateSettingsFor(editingVariantCard) : null,
+                        );
+                      }}
+                    >
+                      Reset to template
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => setEditingVariantKey(null)}>Cancel</Button>
+                  <Button
+                    disabled={!editingVariantKey || !variantSubtitleDraft}
+                    onClick={() => {
+                      if (!editingVariantKey || !variantSubtitleDraft) return;
+                      if (!editingVariantCard) return;
+                      handleVariantTemplateOverrideChange(
+                        editingVariantKey,
+                        variantSubtitleDraft,
+                        getPreviewSubtitleTemplateSettingsFor(editingVariantCard),
+                      );
+                      setEditingVariantKey(null);
+                    }}
+                  >
+                    Save override
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Thumbnail picker dialog */}
             <ThumbnailPicker
@@ -767,6 +923,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   matches={previews[previewVariant]?.matches ?? []}
                   videoTimeline={previews[previewVariant]?.video_timeline ?? []}
                   defaultTransition={previews[previewVariant]?.defaultTransition ?? null}
+                  music={previews[previewVariant]?.music ?? null}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
                   visualVersion={activeCard.visualVersion}
@@ -776,7 +933,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   applyMetaSubtitleStyle={false}
                   sourceVideoIds={selectedSourceIdsArray}
                   minSegmentDuration={minSegmentDuration}
-                  wordsPerSubtitle={wordsPerSubtitle}
+                  wordsPerSubtitle={getWordsPerSubtitleForVariant(activeCard.baseIndex)}
                   ultraRapidIntro={ultraRapidIntro}
                   interstitialSlides={interstitialSlides[previewVariant]}
                   attentionTimeline={attentionTimelines[previewVariant]}
@@ -846,29 +1003,74 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         </Button>
                       </div>
                     </DialogHeader>
-                    <div className="min-h-0 flex-1 overflow-hidden">
-                      <TimelineEditor
-                        displayMode="full"
-                        matches={preview.matches}
-                        audioDuration={preview.audio_duration}
-                        introOffsetSec={preview.intro_offset_sec ?? 0}
-                        introSegments={preview.intro_segments ?? []}
-                        videoTimeline={preview.video_timeline ?? []}
-                        sourceVideoIds={selectedSourceIdsArray}
-                        availableSegments={availableSegments}
-                        profileId={currentProfile?.id}
-                        pipelineId={pipelineId ?? undefined}
-                        variantIndex={card.baseIndex}
-                        subtitleSettings={getPreviewSubtitleSettingsFor(card)}
-                        interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
-                        onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
-                        attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
-                        onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
-                        onMatchesChange={getMatchesChangeHandler(card.key)}
-                        onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
-                        defaultTransition={preview.defaultTransition ?? null}
-                        onRenderPreview={() => openRenderedPreview(card.key)}
-                      />
+                    <div className="flex min-h-0 flex-1 overflow-hidden">
+                      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                        <TimelineEditor
+                          displayMode="full"
+                          matches={preview.matches}
+                          audioDuration={preview.audio_duration}
+                          introOffsetSec={preview.intro_offset_sec ?? 0}
+                          introSegments={preview.intro_segments ?? []}
+                          videoTimeline={preview.video_timeline ?? []}
+                          sourceVideoIds={selectedSourceIdsArray}
+                          availableSegments={availableSegments}
+                          profileId={currentProfile?.id}
+                          pipelineId={pipelineId ?? undefined}
+                          variantIndex={card.baseIndex}
+                          subtitleSettings={getPreviewSubtitleSettingsFor(card)}
+                          interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
+                          onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
+                          attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
+                          onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
+                          onMatchesChange={getMatchesChangeHandler(card.key)}
+                          onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
+                          defaultTransition={preview.defaultTransition ?? null}
+                          music={preview.music ?? null}
+                          onMusicChange={getMusicChangeHandler(card.key)}
+                          onRenderPreview={() => openRenderedPreview(card.key)}
+                        />
+                      </div>
+
+                      {/* Every preview-affecting setting, reachable without leaving the
+                          maximized view. Reuses the exact same state/handlers as the left
+                          inspector (subtitleStyleCard/previewTimingCard/RenderSettingsPanel
+                          are shared elements or components, not copies) so edits made here
+                          are the same edits, live-reflected in the TimelineEditor preview
+                          to the left via the shared subtitleSettings/matches props. */}
+                      <aside
+                        className="flex w-[380px] shrink-0 flex-col overflow-hidden border-l bg-background"
+                        data-testid="step3-full-editor-settings"
+                      >
+                        <Tabs
+                          value={maximizeSettingsTab}
+                          onValueChange={(value) => setMaximizeSettingsTab(value as typeof maximizeSettingsTab)}
+                          className="flex min-h-0 flex-1 flex-col"
+                        >
+                          <TabsList className="mx-3 mt-3 grid w-auto grid-cols-3">
+                            <TabsTrigger value="subtitles" className="text-xs">Subtitles</TabsTrigger>
+                            <TabsTrigger value="timing" className="text-xs">Timing</TabsTrigger>
+                            <TabsTrigger value="adjust" className="text-xs">Adjust</TabsTrigger>
+                          </TabsList>
+                          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                            <TabsContent value="subtitles" className="mt-0 space-y-3">
+                              {subtitleStyleCard}
+                            </TabsContent>
+                            <TabsContent value="timing" className="mt-0 space-y-3">
+                              {previewTimingCard}
+                            </TabsContent>
+                            <TabsContent value="adjust" className="mt-0 space-y-3">
+                              <RenderSettingsPanel
+                                settings={renderSettings}
+                                onChange={setRenderSettings}
+                                presetName={presetName}
+                                onPresetNameChange={setPresetName}
+                                adjustments={renderAdjust}
+                                onAdjustmentsChange={setRenderAdjust}
+                              />
+                            </TabsContent>
+                          </div>
+                        </Tabs>
+                      </aside>
                     </div>
                   </DialogContent>
                 </Dialog>

@@ -276,7 +276,7 @@ export function WorkspaceSplit({
       {...rest}
     >
       {panels[0]}
-      <Separator className="relative z-30 w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2" />
+      <Separator className="relative z-30 w-px shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2" />
       {panels[1]}
     </ResizablePanelGroup>
   );

@@ -30,6 +30,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Loader2, CheckCircle2, Maximize2, ScanLine, X } from "lucide-react";
 import {
   SubtitleSettings,
@@ -52,6 +58,15 @@ import { stripAssTags } from "@/lib/karaoke-word-timing";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
 const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: SUBTITLE_REFERENCE_HEIGHT, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
+
+function InspectorSectionHeader({ title, summary }: { title: string; summary: string }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+      <span className="font-medium text-foreground">{title}</span>
+      <span className="truncate text-xs font-normal text-muted-foreground">{summary}</span>
+    </span>
+  );
+}
 
 interface SubtitleEditorProps {
   /** Current subtitle settings */
@@ -677,12 +692,20 @@ export function SubtitleEditor({
 
   // The settings controls panel
   const settingsPanel = (
-    <div className={`space-y-${compact ? "3" : "4"}`}>
-      {/* Style Presets Section */}
-      <div className="space-y-3">
-        <div>
-          <h3 className="font-semibold text-sm">Style Presets</h3>
-        </div>
+    <Accordion
+      type="multiple"
+      defaultValue={["text"]}
+      className="w-full rounded-md border border-border/70 bg-card/40"
+      data-testid="subtitle-settings-accordion"
+    >
+      <AccordionItem value="presets" data-testid="subtitle-section-presets">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader
+            title="Style Presets"
+            summary={`${CAPTION_PRESETS.length} built-in${userPresets.length ? ` · ${userPresets.length} saved` : ""}`}
+          />
+        </AccordionTrigger>
+        <AccordionContent className="px-3 pb-3 pt-1">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {[
             ...CAPTION_PRESETS.map((preset) => ({ preset, userPreset: undefined as UserSubtitlePreset | undefined })),
@@ -739,266 +762,216 @@ export function SubtitleEditor({
             );
           })}
         </div>
-      </div>
+        </AccordionContent>
+      </AccordionItem>
 
-      <Separator />
-
-      <div className="space-y-4">
-        <h4 className="text-sm font-medium">Text</h4>
-        <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label>Font</Label>
+      <AccordionItem value="text" data-testid="subtitle-section-text">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader title="Text" summary={`${displayFontName} · ${settings.fontSize}px`} />
+        </AccordionTrigger>
+        <AccordionContent className="space-y-3 px-3 pb-3 pt-1">
+          <div className="flex items-center justify-between gap-3">
+            <Label>Font</Label>
+            <Select value={settings.fontFamily} onValueChange={(value) => updateSetting("fontFamily", value)}>
+              <SelectTrigger className="h-8 w-48 bg-muted/50" style={{ fontFamily: settings.fontFamily }}>
+                {/* children override: always show the stored font, even when its SelectItem isn't mounted (system fonts load on demand). Legacy settings may store a full CSS stack — display the first real family name. */}
+                <SelectValue placeholder="Montserrat">{displayFontName}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <div className="p-2">
+                  <Input
+                    value={fontSearch}
+                    onChange={(event) => setFontSearch(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    placeholder="Search fonts..."
+                    aria-label="Search fonts"
+                  />
+                </div>
+                {/* phantom item so an unlisted stored font stays selectable until system fonts load */}
+                {settings.fontFamily &&
+                  !FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
+                  !systemFonts.includes(settings.fontFamily) && (
+                    <SelectItem value={settings.fontFamily} style={{ fontFamily: settings.fontFamily }}>
+                      {displayFontName}
+                    </SelectItem>
+                  )}
+                {filteredCuratedFonts.map((font) => (
+                  <SelectItem key={font.value} value={font.value} style={{ fontFamily: font.value }}>
+                    {font.label}
+                  </SelectItem>
+                ))}
+                {filteredSystemFonts.map((family) => (
+                  <SelectItem key={`system-${family}`} value={family} style={{ fontFamily: family }}>
+                    {family} (System)
+                  </SelectItem>
+                ))}
+                {filteredCuratedFonts.length === 0 && filteredSystemFonts.length === 0 && (
+                  <p className="px-2 pb-2 text-xs text-muted-foreground">No fonts found.</p>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
           {typeof window !== "undefined" && window.editFactory?.listSystemFonts && (
-            <Button type="button" variant="ghost" size="sm" onClick={loadSystemFonts}>
-              {systemFonts.length ? "Refresh system fonts" : "Load system fonts"}
-            </Button>
-          )}
-        </div>
-        <Select
-          value={settings.fontFamily}
-          onValueChange={(value) => updateSetting("fontFamily", value)}
-        >
-          <SelectTrigger className="w-full bg-muted/50" style={{ fontFamily: settings.fontFamily }}>
-            {/* children override: always show the stored font, even when its SelectItem isn't mounted (system fonts load on demand). Legacy settings may store a full CSS stack — display the first real family name. */}
-            <SelectValue placeholder="Montserrat">{displayFontName}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <div className="p-2">
-              <Input
-                value={fontSearch}
-                onChange={(event) => setFontSearch(event.target.value)}
-                onKeyDown={(event) => event.stopPropagation()}
-                placeholder="Search fonts..."
-                aria-label="Search fonts"
-              />
+            <div className="flex justify-end">
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={loadSystemFonts}>
+                {systemFonts.length ? "Refresh system fonts" : "Load system fonts"}
+              </Button>
             </div>
-            {/* phantom item so an unlisted stored font stays selectable until system fonts load */}
-            {settings.fontFamily &&
-              !FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
-              !systemFonts.includes(settings.fontFamily) && (
-                <SelectItem value={settings.fontFamily} style={{ fontFamily: settings.fontFamily }}>
-                  {displayFontName}
-                </SelectItem>
-              )}
-            {filteredCuratedFonts.map((font) => (
-              <SelectItem
-                key={font.value}
-                value={font.value}
-                style={{ fontFamily: font.value }}
-              >
-                {font.label}
-              </SelectItem>
-            ))}
-            {filteredSystemFonts.map((family) => (
-              <SelectItem key={`system-${family}`} value={family} style={{ fontFamily: family }}>
-                {family} (System)
-              </SelectItem>
-            ))}
-            {filteredCuratedFonts.length === 0 && filteredSystemFonts.length === 0 && (
-              <p className="px-2 pb-2 text-xs text-muted-foreground">No fonts found.</p>
+          )}
+          {fontAccessError && <p className="text-xs text-amber-500">{fontAccessError}</p>}
+          {!FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
+            systemFonts.length > 0 && !systemFonts.includes(settings.fontFamily) && (
+              <p className="text-xs text-amber-500">
+                Font {settings.fontFamily} is unavailable on this computer; Montserrat will be used.
+              </p>
             )}
-          </SelectContent>
-        </Select>
-        {fontAccessError && <p className="text-xs text-amber-500">{fontAccessError}</p>}
-        {!FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
-          systemFonts.length > 0 && !systemFonts.includes(settings.fontFamily) && (
-            <p className="text-xs text-amber-500">
-              Font {settings.fontFamily} is unavailable on this computer; Montserrat will be used.
-            </p>
-          )}
-      </div>
 
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
             <Label>Font Size</Label>
-            <span className="text-sm text-muted-foreground">{settings.fontSize}px</span>
+            <Slider value={[settings.fontSize]} onValueChange={([value]) => updateSetting("fontSize", value)} min={12} max={200} step={1} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.fontSize}px</span>
           </div>
-          <Slider value={[settings.fontSize]} onValueChange={([value]) => updateSetting("fontSize", value)} min={12} max={200} step={1} className="w-full" />
-        </div>
-        <ColorPicker label="Text Color" value={settings.textColor} onChange={(value) => updateSetting("textColor", value)} />
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
-            <Label>Opacity</Label>
-            <span className="text-sm text-muted-foreground">{settings.opacity ?? 100}%</span>
-          </div>
-          <Slider value={[settings.opacity ?? 100]} onValueChange={([value]) => updateSetting("opacity", value)} min={0} max={100} step={5} className="w-full" />
-        </div>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-4">
-        <h4 className="text-sm font-medium">Position</h4>
-        <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <Label>Vertical Position (Y)</Label>
-          <span className="text-sm text-muted-foreground">{settings.positionY}%</span>
-        </div>
-        <Slider
-          value={[settings.positionY]}
-          onValueChange={([value]) => updateSetting("positionY", value)}
-          min={5}
-          max={95}
-          step={1}
-          className="w-full"
-        />
-        <p className="text-xs text-muted-foreground">
-          0% = top, 50% = center, 100% = bottom
-        </p>
-      </div>
-
-        <div className="space-y-2">
-          <Label>Horizontal Alignment</Label>
-          <Select
-            value={settings.horizontalAlignment ?? "center"}
-            onValueChange={(value) => updateSetting("horizontalAlignment", value as "left" | "center" | "right")}
-          >
-            <SelectTrigger className="bg-muted/50"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="left">Left</SelectItem>
-              <SelectItem value="center">Center</SelectItem>
-              <SelectItem value="right">Right</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
             <Label>Letter Spacing</Label>
-            <span className="text-sm text-muted-foreground">{settings.letterSpacing ?? 0}px</span>
+            <Slider value={[settings.letterSpacing ?? 0]} onValueChange={([value]) => updateSetting("letterSpacing", value)} min={-2} max={10} step={0.5} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.letterSpacing ?? 0}px</span>
           </div>
-          <Slider
-            value={[settings.letterSpacing ?? 0]}
-            onValueChange={([value]) => updateSetting("letterSpacing", value)}
-            min={-2}
-            max={10}
-            step={0.5}
-            className="w-full"
-          />
-        </div>
+          <div className="flex items-center justify-between gap-3">
+            <div><Label>Adaptive Sizing</Label><p className="text-xs text-muted-foreground">Auto-reduce font for long text</p></div>
+            <Switch checked={settings.adaptiveSizing ?? false} onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)} />
+          </div>
+        </AccordionContent>
+      </AccordionItem>
 
-        <div className="flex items-center justify-between"><div><Label>Adaptive Sizing</Label><p className="text-xs text-muted-foreground">Auto-reduce font for long text</p></div><Switch checked={settings.adaptiveSizing ?? false} onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)} /></div>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-4">
-        <h4 className="text-sm font-medium">Effects</h4>
-        <ColorPicker label="Outline Color" value={settings.outlineColor} onChange={(value) => updateSetting("outlineColor", value)} />
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
+      <AccordionItem value="color-stroke" data-testid="subtitle-section-color-stroke">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader title="Color & Stroke" summary={`${settings.textColor} · ${settings.outlineWidth}px`} />
+        </AccordionTrigger>
+        <AccordionContent className="space-y-3 px-3 pb-3 pt-1">
+          <ColorPicker label="Text Color" value={settings.textColor} onChange={(value) => updateSetting("textColor", value)} />
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
+            <Label>Opacity</Label>
+            <Slider value={[settings.opacity ?? 100]} onValueChange={([value]) => updateSetting("opacity", value)} min={0} max={100} step={5} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.opacity ?? 100}%</span>
+          </div>
+          <ColorPicker label="Outline Color" value={settings.outlineColor} onChange={(value) => updateSetting("outlineColor", value)} />
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
             <Label>Outline Width</Label>
-            <span className="text-sm text-muted-foreground">{settings.outlineWidth}px</span>
+            <Slider value={[settings.outlineWidth]} onValueChange={([value]) => updateSetting("outlineWidth", value)} min={0} max={10} step={1} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.outlineWidth}px</span>
           </div>
-          <Slider value={[settings.outlineWidth]} onValueChange={([value]) => updateSetting("outlineWidth", value)} min={0} max={10} step={1} className="w-full" />
-        </div>
-        <div className="space-y-3">
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
+        </AccordionContent>
+      </AccordionItem>
+
+      <AccordionItem value="position" data-testid="subtitle-section-position">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader title="Position" summary={`${settings.horizontalAlignment ?? "center"} · Y ${settings.positionY}%`} />
+        </AccordionTrigger>
+        <AccordionContent className="space-y-3 px-3 pb-3 pt-1">
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
+            <Label>Vertical Position (Y)</Label>
+            <Slider value={[settings.positionY]} onValueChange={([value]) => updateSetting("positionY", value)} min={5} max={95} step={1} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.positionY}%</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <Label>Horizontal Alignment</Label>
+            <Select
+              value={settings.horizontalAlignment ?? "center"}
+              onValueChange={(value) => updateSetting("horizontalAlignment", value as "left" | "center" | "right")}
+            >
+              <SelectTrigger className="h-8 w-40 bg-muted/50"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="left">Left</SelectItem>
+                <SelectItem value="center">Center</SelectItem>
+                <SelectItem value="right">Right</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </AccordionContent>
+      </AccordionItem>
+
+      <AccordionItem value="background-shadow" data-testid="subtitle-section-background-shadow">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader
+            title="Background & Shadow"
+            summary={`${(settings.borderStyle ?? 1) === 3 ? "Box" : "Outline"} · Shadow ${settings.shadowDepth ?? 0}px`}
+          />
+        </AccordionTrigger>
+        <AccordionContent className="space-y-3 px-3 pb-3 pt-1">
+          <div className="flex items-center justify-between gap-3">
+            <Label>Border Style</Label>
+            <Select
+              value={String(settings.borderStyle ?? 1)}
+              onValueChange={(value) => updateSetting("borderStyle", Number(value))}
+            >
+              <SelectTrigger className="h-8 w-48 bg-muted/50"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">Outline + Shadow</SelectItem>
+                <SelectItem value="3">Box Background</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
             <Label>Shadow Depth</Label>
-            <span className="text-sm text-muted-foreground">{settings.shadowDepth ?? 0}px</span>
+            <Slider value={[settings.shadowDepth ?? 0]} onValueChange={([value]) => updateSetting("shadowDepth", value)} min={0} max={4} step={1} />
+            <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.shadowDepth ?? 0}px</span>
           </div>
-          <Slider
-            value={[settings.shadowDepth ?? 0]}
-            onValueChange={([value]) => updateSetting("shadowDepth", value)}
-            min={0}
-            max={4}
-            step={1}
-            className="w-full"
-          />
-        </div>
-
-        {(settings.shadowDepth ?? 0) > 0 && (
-          <ColorPicker
-            label="Shadow Color"
-            value={settings.shadowColor ?? "#000000"}
-            onChange={(value) => updateSetting("shadowColor", value)}
-          />
-        )}
-      </div>
-
-        <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label>Glow Effect</Label>
-          <Switch
-            checked={settings.enableGlow ?? false}
-            onCheckedChange={(checked) => updateSetting("enableGlow", checked)}
-          />
-        </div>
-
-        {settings.enableGlow && (
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <Label>Glow Blur</Label>
-              <span className="text-sm text-muted-foreground">{settings.glowBlur ?? 0}px</span>
-            </div>
-            <Slider
-              value={[settings.glowBlur ?? 0]}
-              onValueChange={([value]) => updateSetting("glowBlur", value)}
-              min={0}
-              max={10}
-              step={1}
-              className="w-full"
+          {(settings.shadowDepth ?? 0) > 0 && (
+            <ColorPicker
+              label="Shadow Color"
+              value={settings.shadowColor ?? "#000000"}
+              onChange={(value) => updateSetting("shadowColor", value)}
             />
-            <p className="text-xs text-muted-foreground">
-              Outline becomes semi-transparent for glow effect
-            </p>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <Label>Glow Effect</Label>
+            <Switch checked={settings.enableGlow ?? false} onCheckedChange={(checked) => updateSetting("enableGlow", checked)} />
           </div>
-        )}
-      </div>
+          {settings.enableGlow && (
+            <div className="grid grid-cols-[8rem_1fr_auto] items-center gap-3">
+              <Label>Glow Blur</Label>
+              <Slider value={[settings.glowBlur ?? 0]} onValueChange={([value]) => updateSetting("glowBlur", value)} min={0} max={10} step={1} />
+              <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{settings.glowBlur ?? 0}px</span>
+            </div>
+          )}
+        </AccordionContent>
+      </AccordionItem>
 
-        <div className="space-y-2">
-        <Label>Border Style</Label>
-        <Select
-          value={String(settings.borderStyle ?? 1)}
-          onValueChange={(value) => updateSetting("borderStyle", Number(value))}
-        >
-          <SelectTrigger className="bg-muted/50">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="1">Outline + Shadow</SelectItem>
-            <SelectItem value="3">Box Background</SelectItem>
-          </SelectContent>
-        </Select>
-        </div>
-
-        <div className="space-y-3">
+      <AccordionItem value="karaoke" data-testid="subtitle-section-karaoke">
+        <AccordionTrigger className="h-10 px-3 py-0 hover:no-underline">
+          <InspectorSectionHeader
+            title="Karaoke"
+            summary={settings.karaoke ? `On · ${settings.karaokeStyle === "box" ? "Background box" : "Color sweep"}` : "Off"}
+          />
+        </AccordionTrigger>
+        <AccordionContent className="space-y-3 px-3 pb-3 pt-1">
           <div className="flex items-center justify-between">
             <div>
               <Label>Karaoke Highlight</Label>
               <p className="text-xs text-muted-foreground">Words light up in sync with the voice</p>
             </div>
-            <Switch
-              checked={settings.karaoke ?? false}
-              onCheckedChange={(checked) => updateSetting("karaoke", checked)}
-            />
+            <Switch checked={settings.karaoke ?? false} onCheckedChange={(checked) => updateSetting("karaoke", checked)} />
           </div>
-
           {settings.karaoke && (
             <>
-              <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
                 <Label>Highlight Style</Label>
                 <Select
                   value={settings.karaokeStyle ?? "color"}
                   onValueChange={(value) => updateSetting("karaokeStyle", value as "color" | "box")}
                 >
-                  <SelectTrigger className="bg-muted/50">
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger className="h-8 w-48 bg-muted/50"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="color">Color sweep</SelectItem>
                     <SelectItem value="box">Background box</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-
               <ColorPicker
                 label="Active Word Color"
                 value={settings.highlightColor ?? "#FFFF00"}
                 onChange={(value) => updateSetting("highlightColor", value)}
               />
-
               {settings.karaokeStyle === "box" && (
                 <ColorPicker
                   label="Highlight Background"
@@ -1008,9 +981,9 @@ export function SubtitleEditor({
               )}
             </>
           )}
-        </div>
-      </div>
-    </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 
   // ── Render mode branching ─────────────────────────────────────────────
@@ -1188,13 +1161,13 @@ interface ColorPickerProps {
 
 function ColorPicker({ label, value, onChange }: ColorPickerProps) {
   return (
-    <div className="space-y-2">
+    <div className="flex items-center justify-between gap-3">
       <Label>{label}</Label>
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="outline" className="w-full justify-start gap-2">
+          <Button variant="outline" className="h-8 w-40 justify-start gap-2 px-2 font-mono text-xs">
             <div
-              className="size-5 rounded border"
+              className="size-4 rounded-sm border"
               style={{ backgroundColor: value }}
             />
             {value}

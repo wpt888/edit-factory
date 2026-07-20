@@ -1,13 +1,18 @@
 import { expect, test } from "@playwright/test";
 
-// Verifies the karaoke "Background box" style end-to-end: the settings panel
-// toggle + live animated mock (Work package B), and the real inline Step-3
-// preview player's per-word rAF-driven highlight (Work package A).
+// Verifies the maximized Step-3 editor ("Maximize editor" button on a variant
+// card -> full-viewport NLE dialog): (a) the karaoke word-highlight renders in
+// its preview panel exactly like the compact inline player (same
+// renderPreviewSubtitleOverlay/PreviewSubtitleOverlayText, reused per
+// displayMode="full"), and (b) the settings column on the right exposes the
+// full preview-settings surface (Subtitles / Timing / Adjust tabs) reusing the
+// same Subtitle Style + Preview Timing + Render Settings panels/state as the
+// left inspector — no divergent copies.
 
-const PIPELINE_ID = "karaoke-preview-pipeline";
+const PIPELINE_ID = "karaoke-max-pipeline";
 const PROFILE = {
-  id: "karaoke-preview-profile",
-  name: "Karaoke QA",
+  id: "karaoke-max-profile",
+  name: "Karaoke Max QA",
   is_default: true,
   created_at: "2026-07-19T00:00:00Z",
 };
@@ -46,7 +51,7 @@ const makeSilentWav = (durationSec: number) => {
   return buffer;
 };
 
-test("karaoke background-box style: settings mock + live inline preview", async ({ page }) => {
+test("maximized editor: karaoke overlay + full settings column with tabs", async ({ page }) => {
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
     localStorage.setItem("editai_current_profile_id", profile.id);
@@ -67,14 +72,14 @@ test("karaoke background-box style: settings mock + live inline preview", async 
       await route.fulfill({ json: {
         pipeline_id: PIPELINE_ID,
         scripts: ["One two three four five"],
-        script_names: ["Karaoke QA"],
+        script_names: ["Karaoke Max QA"],
         context_products: [],
         preview_info: { "0": { has_audio: true, audio_duration: 3, has_srt: true } },
         tts_info: { "0": { has_audio: true, audio_duration: 3, approved: true, srt_content: "" } },
         captions: {},
         selected_captions: {},
-        name: "Karaoke QA",
-        idea: "Karaoke QA",
+        name: "Karaoke Max QA",
+        idea: "Karaoke Max QA",
         provider: "gemini",
         variant_count: 1,
         meta_multiplication: false,
@@ -154,47 +159,54 @@ test("karaoke background-box style: settings mock + live inline preview", async 
     await route.fulfill({ json: {} });
   });
 
-  await page.setViewportSize({ width: 1900, height: 1400 });
+  await page.setViewportSize({ width: 1900, height: 1080 });
   await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
 
-  // --- Work package B: settings panel + animated mock -------------------
-  const settingsEditor = page.getByTestId("subtitle-style-variant-editor");
-  const inspector = settingsEditor.getByTestId("subtitle-settings-accordion");
-  await expect(inspector.getByText("Font Size")).toBeVisible();
-  await expect(inspector.getByText("Karaoke Highlight")).toBeHidden();
-  await page.waitForTimeout(500);
-  await inspector.screenshot({ path: "screenshots/subtitle-inspector-collapsed.png" });
-
-  await inspector.getByRole("button", { name: /^Karaoke/ }).evaluate((element) => {
-    (element as HTMLElement).click();
-  });
+  // Turn karaoke ON with the "Background box" style from the left inspector.
+  const settingsEditor = page.getByTestId("subtitle-style-variant-editor").first();
   await expect(settingsEditor.getByText("Karaoke Highlight")).toBeVisible();
-  await page.waitForTimeout(300);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.getByTestId("step3-inspector").evaluate((element) => { element.scrollTop = 0; });
-  await page.waitForTimeout(100);
-  const expandedInspectorBox = await inspector.boundingBox();
-  expect(expandedInspectorBox).not.toBeNull();
-  await page.screenshot({
-    path: "screenshots/subtitle-inspector-two-expanded.png",
-    clip: expandedInspectorBox!,
-  });
-
   const karaokeRow = settingsEditor.locator("div.flex.items-center.justify-between").filter({ hasText: "Karaoke Highlight" });
   await karaokeRow.getByRole("switch").click();
-
-  const karaokeSection = settingsEditor.getByTestId("subtitle-section-karaoke");
-  await karaokeSection.getByRole("combobox").click();
+  const styleSection = settingsEditor.locator("div.space-y-2").filter({ hasText: "Highlight Style" });
+  await styleSection.getByRole("combobox").click();
   await page.getByRole("option", { name: "Background box" }).click();
 
-  const livePreview = page.getByTestId("subtitle-sticky-preview");
-  await expect(livePreview.getByTestId("karaoke-preview-overlay")).toBeVisible();
-  await page.waitForTimeout(500);
-  await livePreview.screenshot({ path: "screenshots/karaoke-settings-box-mode.png" });
-
-  // --- Work package A: the real inline preview player --------------------
+  // Open the maximized editor for the variant card.
   const canvas = page.getByTestId("step3-variant-canvas");
-  const activeBoxWord = () => canvas.evaluate((el) => {
+  await canvas.getByRole("button", { name: /Maximize editor/ }).click();
+
+  const fullEditor = page.getByTestId("step3-full-editor");
+  await expect(fullEditor).toBeVisible();
+
+  // --- (b) the settings column exposes the full surface, tabbed ----------
+  const settingsColumn = page.getByTestId("step3-full-editor-settings");
+  await expect(settingsColumn).toBeVisible();
+  await expect(settingsColumn.getByRole("tab", { name: "Subtitles" })).toBeVisible();
+  await expect(settingsColumn.getByRole("tab", { name: "Timing" })).toBeVisible();
+  await expect(settingsColumn.getByRole("tab", { name: "Adjust" })).toBeVisible();
+
+  // Subtitles tab (default) shows the same Subtitle Style panel (incl. the
+  // karaoke toggle we just flipped, reflecting the SAME shared state).
+  await expect(settingsColumn.getByText("Subtitle Style")).toBeVisible();
+  const maximizedKaraokeRow = settingsColumn
+    .locator("div.flex.items-center.justify-between")
+    .filter({ hasText: "Karaoke Highlight" });
+  await expect(maximizedKaraokeRow.getByRole("switch")).toHaveAttribute("data-state", "checked");
+
+  // Timing tab shows Preview Timing controls.
+  await settingsColumn.getByRole("tab", { name: "Timing" }).click();
+  await expect(settingsColumn.getByText("Preview Timing")).toBeVisible();
+  await expect(settingsColumn.getByText("Pacing")).toBeVisible();
+
+  // Adjust tab shows Render Settings (encoding + picture/audio adjustments).
+  await settingsColumn.getByRole("tab", { name: "Adjust" }).click();
+  await expect(settingsColumn.getByText("Render Settings")).toBeVisible();
+
+  // Back to Subtitles for the screenshot.
+  await settingsColumn.getByRole("tab", { name: "Subtitles" }).click();
+
+  // --- (a) karaoke renders in the maximized preview -----------------------
+  const activeBoxWord = () => fullEditor.evaluate((el) => {
     const spans = Array.from(el.querySelectorAll("span"));
     const active = spans.find((s) => getComputedStyle(s).backgroundColor === "rgb(163, 230, 53)");
     return active?.textContent ?? null;
@@ -202,18 +214,20 @@ test("karaoke background-box style: settings mock + live inline preview", async 
 
   // Paused, before any playback: the fallback clock (time 0) highlights word 0.
   await expect.poll(activeBoxWord).toBe("One");
+  await fullEditor.screenshot({ path: "screenshots/karaoke-maximized-paused.png" });
 
-  // Two controls share the "Play preview" label before playback starts (the
-  // centered overlay button and the transport-bar toggle) — either works.
-  await canvas.getByRole("button", { name: "Play preview" }).first().click();
-  await page.waitForTimeout(1200);
+  await fullEditor.getByRole("button", { name: "Play preview" }).first().click();
 
-  // Playing: the child component's own rAF loop (reading audio.currentTime
-  // directly) has advanced the highlight well past the first word — proof
-  // the fine-grained clock is live, not just the coarse ~0.1s parent clock.
-  const wordDuringPlayback = await activeBoxWord();
-  expect(wordDuringPlayback).not.toBe("One");
-  expect(wordDuringPlayback).not.toBeNull();
+  // Playing: the rAF loop has advanced the highlight past the first word —
+  // proof the maximized view's overlay is live, not a static/first-word stub.
+  // Poll (rather than a single fixed-delay read) because the highlight color
+  // transitions over 120ms on each word change — a single sampled instant can
+  // land mid-transition even though the highlight is genuinely advancing.
+  const isAdvancedPastFirstWord = async () => {
+    const word = await activeBoxWord();
+    return word !== null && word !== "One";
+  };
+  await expect.poll(isAdvancedPastFirstWord, { timeout: 3000 }).toBe(true);
 
-  await canvas.screenshot({ path: "screenshots/karaoke-inline-preview-box-mode.png" });
+  await fullEditor.screenshot({ path: "screenshots/karaoke-maximized-playing.png" });
 });

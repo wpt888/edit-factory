@@ -5025,6 +5025,15 @@ async def _render_with_preset(
     voice_volume: float = 1.0,
     audio_fade_in: float = 0.0,
     audio_fade_out: float = 0.0,
+    # Background music (A2 lane). music_path is a resolved LOCAL file; when set
+    # AND a real voiceover exists, the voice `-af` chain is swapped for a
+    # `-filter_complex` mix (loudnorm-first voice + optionally-ducked music).
+    music_path: Optional[str] = None,
+    music_volume: float = 0.3,
+    music_ducking: bool = True,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+    music_loop: bool = True,
     # Preview mode: skip loudnorm, use ultrafast codec
     _preview_mode: bool = False,
     force_cpu: bool = False,
@@ -5057,6 +5066,15 @@ async def _render_with_preset(
         # Add silent audio source BEFORE video settings
         cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
         has_audio = False
+
+    # Background music enters as input index 2, but ONLY when a real voiceover
+    # exists — mixing over an infinite anullsrc would make amix=duration=first
+    # never terminate. ponytail: music without a voiceover isn't a Step-3 flow.
+    use_music = bool(music_path) and has_audio and Path(str(music_path)).exists()
+    if use_music:
+        if music_loop:
+            cmd.extend(["-stream_loop", "-1"])
+        cmd.extend(["-i", str(music_path)])
 
     # Build filter complex
     filters = []
@@ -5195,8 +5213,26 @@ async def _render_with_preset(
             _fade_out_st = _audio_dur - audio_fade_out
             audio_filters.append(f"afade=t=out:st={_fade_out_st:.2f}:d={audio_fade_out:.2f}")
 
-    # Apply audio filters if any
-    if audio_filters:
+    # Apply audio filters. With music present, the voice chain (audio_filters)
+    # is folded into a filter_complex that mixes ducked music underneath it;
+    # otherwise the legacy voice-only `-af` path is left untouched.
+    music_filter_complex = None
+    if use_music:
+        from app.services.audio.mix import build_audio_mix_filter
+        music_filter_complex, _music_input_args = build_audio_mix_filter(
+            voice_filters=audio_filters,
+            music_path=str(music_path),
+            music_volume=music_volume,
+            music_ducking=music_ducking,
+            music_fade_in=music_fade_in,
+            music_fade_out=music_fade_out,
+            music_loop=music_loop,
+            audio_dur=_audio_dur,
+        )
+        # Music input args are already on cmd (added at input time). The graph
+        # is applied at map time so it lands after -vf just like -af did.
+        cmd.extend(["-filter_complex", music_filter_complex])
+    elif audio_filters:
         cmd.extend(["-af", ",".join(audio_filters)])
 
     # Preview mode: use ultrafast codec params, skip encoding preset
@@ -5335,13 +5371,23 @@ async def _render_with_preset(
                 pass2_cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
                 has_audio_pass2 = False
 
+            # Background music input index 2 (same contract as single-pass).
+            if use_music:
+                if music_loop:
+                    pass2_cmd.extend(["-stream_loop", "-1"])
+                pass2_cmd.extend(["-i", str(music_path)])
+
             # Full video filters (including subtitles) for pass 2
             if filters:
                 vf_str = ",".join(filters)
                 pass2_cmd.extend(["-vf", vf_str])
 
-            # Audio filters (loudnorm) for pass 2
-            if audio_filters:
+            # Audio filters (loudnorm) for pass 2 — same mix graph as single-pass.
+            if use_music:
+                # music_filter_complex was built once above from audio_filters
+                # (which already carry loudnorm for non-preview); reuse it.
+                pass2_cmd.extend(["-filter_complex", music_filter_complex])
+            elif audio_filters:
                 pass2_cmd.extend(["-af", ",".join(audio_filters)])
 
             pass2_cmd.extend(["-r", _fps])
@@ -5349,7 +5395,13 @@ async def _render_with_preset(
             pass2_cmd.extend(pass2_params)
 
             # Audio mapping
-            if audio_path and audio_path.exists():
+            if use_music:
+                pass2_cmd.extend(["-map", "0:v:0", "-map", "[aout]"])
+                if _audio_dur > 0:
+                    pass2_cmd.extend(["-t", str(_audio_dur)])
+                else:
+                    pass2_cmd.extend(["-shortest"])
+            elif audio_path and audio_path.exists():
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
                 if _audio_dur > 0:
                     pass2_cmd.extend(["-t", str(_audio_dur)])
@@ -5399,7 +5451,14 @@ async def _render_with_preset(
         cmd.extend(encoding_params)
 
         # Audio mapping — use audio duration as master clock (video was pre-synced to match)
-        if audio_path and audio_path.exists():
+        if use_music:
+            # Mixed audio comes from the filter_complex output, not a raw stream.
+            cmd.extend(["-map", "0:v:0", "-map", "[aout]"])
+            if _audio_dur > 0:
+                cmd.extend(["-t", str(_audio_dur)])
+            else:
+                cmd.extend(["-shortest"])
+        elif audio_path and audio_path.exists():
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
             if _audio_dur > 0:
                 cmd.extend(["-t", str(_audio_dur)])

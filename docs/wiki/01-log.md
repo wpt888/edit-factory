@@ -1,5 +1,107 @@
 # Engineering Change Log
 
+## 2026-07-20 - Subtitle inspector: collapsible settings sections
+
+- Step 3 subtitle settings now use a multi-open shadcn Accordion with compact
+  Premiere-style rows and live value summaries in each section header.
+- Text opens by default; Style Presets, Color & Stroke, Position, Background &
+  Shadow, and Karaoke remain collapsed until needed. Existing settings fields,
+  preset apply/delete behavior, and save callbacks are unchanged.
+- The live subtitle preview stays pinned while the inspector scrolls. Verified
+  with TypeScript, production build, 14 subtitle Playwright checks, and the
+  collapsed/two-expanded inspector screenshot flow on frontend 3005/backend 8001.
+
+## 2026-07-20 - Subtitle-template rotation
+
+- Step 3 now rotates an ordered set of profile subtitle presets across script
+  variants using `index % templateCount`; each preset also carries its own
+  `wordsPerSubtitle` value.
+- Rotation is a base layer, Meta A/B remains independent above it, and a final
+  card-local delta preserves per-variant editing plus Reset to template.
+- Character timings are persisted with Step 2 TTS and reused to regroup SRT
+  cues during preview/final assembly without another provider call.
+- Rotation and variant deltas are included in pipeline-template exports.
+- Verified with 778 backend tests, TypeScript/build, four Playwright tests and a
+  real three-variant FFmpeg smoke. See wiki 36.
+
+## 2026-07-19 - Multi-track timeline Phase C (frontend): overlay clips + conversions
+
+- The timeline editor now edits video overlays. `CompositionClip` gains `track` +
+  `overlay_box`; `reflowComposition`/`fitCompositionToDuration` reflow only
+  magnetic clips (track absent/1) and pass overlays through at their absolute
+  `timeline_start`. The editor splits `video_timeline` into a magnetic sequence
+  (existing V1 handlers) + `overlayClips` (never reflowed); the persist path
+  re-joins them.
+- Overlay video clips render on V2..Vn (`overlay-lane.tsx`, cyan blocks) with
+  free pointer-drag move/track-change/trim: snap to subtitle + V1 boundaries,
+  clamp to no same-track overlap, min 0.05s. Selecting one opens an inspector
+  (track V2..V4, placement presets + x/y/w/h, contain/cover, transforms, remove).
+- Premiere-style conversions via the same save/undo path: drag a V1 block onto a
+  V2+ lane → overlay (keeps timeline_start, full-frame contain box, transition
+  stripped, V1 reflows); drag an overlay onto V1 → strips track/overlay_box and
+  splices into the sequence (reuses the insertion indicator).
+- Preview: fallback positioned boxes (poster thumbnail / dashed outline by
+  `overlay_box`), NOT live video — the V1 double-buffer engine is left untouched;
+  server render gives full fidelity. Spec `timeline-video-overlay.spec.ts`.
+  See wiki 35 (Frontend section).
+
+## 2026-07-19 - Multi-track timeline Phase C: video-on-video overlay compositor
+
+- Composition clips may now carry `track` (1..4) and, for track >= 2, a
+  fractional `overlay_box {x,y,width,height,fit}`. Track 1/absent = the magnetic
+  V1 base (unchanged). Track >= 2 = a free video overlay: absolute
+  `timeline_start`, excluded from cursor reflow + `intro_offset_sec`, no
+  transition, capped at 50, no same-track overlap.
+- `apply_attention_timeline` was generalized into `apply_overlay_timeline`
+  (image AND video items, applied ascending by z). Assembly extracts overlays
+  with the existing per-segment machinery (transforms v2 + segment cache reused,
+  `fade_spec=None`, excluded from xfade + concat) and composites them together
+  with behind-zone attention cues in one z-sorted pass; z = track*1000+index so
+  a V3 video sits above V2. Wired into both full and preview render (540x960).
+- Real ffmpeg: duration drift 0.0s, in-window pixel-mean diff ~51, out-of-window
+  ~0.006; xfade-on-V1 coexists with a video overlay. See wiki 35.
+
+## 2026-07-19 - Maximize editor: tabbed settings column (Subtitles / Timing / Adjust)
+
+- The "Maximize editor" dialog in Step 3 now embeds the full preview-settings
+  surface as a right-hand tabbed column, reusing the existing cards (Subtitle
+  Style incl. karaoke controls, Preview Timing, RenderSettingsPanel) with the
+  SAME state as the compact inspector — no copies. Karaoke already rendered in
+  both maximize surfaces (verified); the gap was settings access only.
+- Spec: `karaoke-maximized-preview.spec.ts` (live highlight + shared state).
+
+## 2026-07-19 - Multi-track timeline Phase B: background music (A2) with auto-ducking
+
+- The A2 lane is now live: pick a per-variant background track, it plays under
+  the voiceover and auto-ducks (sidechaincompress keyed on the voice) while the
+  voice speaks. Server-rendered, so the Step 3 preview and Step 4 render carry
+  the identical mix.
+- New pure helper `build_audio_mix_filter` (`app/services/audio/mix.py`): folds
+  the loudnorm-first voice chain into a `-filter_complex` and mixes ducked,
+  looped/trimmed music; `amix=duration=first` + the caller's `-t` keep output
+  duration identical. No music leaves the legacy `-af` path untouched. Wired
+  into both `_render_with_preset` encode branches.
+- `MusicSettings` model; music persisted additively in `preview_data['music']`
+  (no DB migration) and folded into both cache fingerprints with a file mtime.
+  Music source reuses the Blipost media library (`kind=audio`) + direct URL.
+- A2 lane block + Music inspector (volume, ducking toggle, fades). Backend
+  restart required for the new routes/models.
+- Tests: `tests/test_bgm_mix.py` (unit + ffmpeg ducking smoke),
+  `frontend/tests/timeline-music-track.spec.ts`.
+
+See [Background music (A2) with auto-ducking — Phase B](34-bgm-ducking.md).
+
+## 2026-07-19 - Multi-track timeline Phase A: generic tracks + images as clips
+
+- Step 3 timeline lanes are now generic Premiere-style tracks built dynamically:
+  Subtitles > Vn..V2 (image tracks, addable, cues draggable between them with a
+  new left-edge trim) > V1 (magnetic video) > A1 Voiceover > A2 Music (stub) >
+  SFX. Track order = z-order, mirrored in the preview overlay.
+- Attention cues gained one additive `track` field (frontend type + Pydantic
+  model — required server-side or PUTs strip it). Reflow helpers, the V1 lane
+  and the image lane were extracted into pure modules/components; existing
+  timeline specs pass unmodified. Details: page 33.
+
 ## 2026-07-19 - Karaoke highlight: three root-cause fixes + per-word box mode
 
 - Karaoke was invisible everywhere: preview reused tag-less Step-2 SRT,

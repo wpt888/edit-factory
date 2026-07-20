@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.auth import get_current_user, ensure_default_profile, AuthUser
 from app.config import get_settings
@@ -608,6 +608,7 @@ class UserSubtitlePresetCreate(BaseModel):
     settings: Dict[str, Any]
     settingsA: Optional[Dict[str, Any]] = None
     settingsB: Optional[Dict[str, Any]] = None
+    wordsPerSubtitle: Optional[int] = Field(default=None, ge=1, le=20)
 
 
 @router.get("/{profile_id}/subtitle-presets")
@@ -675,6 +676,8 @@ async def create_user_subtitle_preset(
             new_preset["settingsA"] = body.settingsA
         if body.settingsB:
             new_preset["settingsB"] = body.settingsB
+        if body.wordsPerSubtitle is not None:
+            new_preset["wordsPerSubtitle"] = body.wordsPerSubtitle
         existing.append(new_preset)
 
         try:
@@ -698,6 +701,69 @@ async def create_user_subtitle_preset(
     except Exception as e:
         logger.error(f"Failed to create subtitle preset for profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create subtitle preset")
+
+
+@router.put("/{profile_id}/subtitle-presets/{preset_id}")
+async def update_user_subtitle_preset(
+    profile_id: str,
+    preset_id: str,
+    body: UserSubtitlePresetCreate,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Update one reusable subtitle template without changing its identity/order."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name cannot be empty")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="Preset name too long (max 80 chars)")
+    if not isinstance(body.settings, dict) or not body.settings:
+        raise HTTPException(status_code=400, detail="Preset settings must be a non-empty dict")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        existing = list(profile.get("user_subtitle_presets") or [])
+        updated = None
+        for index, preset in enumerate(existing):
+            if preset.get("id") != preset_id:
+                continue
+            updated = {
+                **preset,
+                "name": name,
+                "settings": body.settings,
+            }
+            for key, value in (
+                ("settingsA", body.settingsA),
+                ("settingsB", body.settingsB),
+                ("wordsPerSubtitle", body.wordsPerSubtitle),
+            ):
+                if value is None:
+                    updated.pop(key, None)
+                else:
+                    updated[key] = value
+            existing[index] = updated
+            break
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Preset not found")
+
+        repo.update_profile(profile_id, {
+            "user_subtitle_presets": existing,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update subtitle preset {preset_id} for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update subtitle preset")
 
 
 @router.delete("/{profile_id}/subtitle-presets/{preset_id}")

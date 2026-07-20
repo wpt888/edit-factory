@@ -74,6 +74,10 @@ def _complete_settings() -> dict:
                 "highlightColor": "#FACC15",
             },
             "overrides": {"A": {"fontSize": 60, "textColor": "#FF0000"}},
+            "rotation": {
+                "enabled": True,
+                "presetIds": ["subtitle-template-one", "subtitle-template-two"],
+            },
         },
         "render": {
             "presetName": "Instagram Reels",
@@ -159,6 +163,10 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     assert imported_row["min_segment_duration"] == 4.5
     assert imported_row["meta_multiplication"] == 1
     assert imported_row["subtitle_settings_by_key"]["A"]["fontSize"] == 60
+    assert imported_row["template_settings"]["subtitles"]["rotation"]["presetIds"] == [
+        "subtitle-template-one",
+        "subtitle-template-two",
+    ]
 
 
 def test_pipeline_template_export_backfills_legacy_pipeline_contract(sqlite_backend):

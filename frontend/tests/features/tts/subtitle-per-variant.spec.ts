@@ -21,6 +21,186 @@ const PIPELINE_META_ON = process.env.SUBTITLE_TEST_PIPELINE_META_ON
 const PIPELINE_META_OFF = process.env.SUBTITLE_TEST_PIPELINE_META_OFF
   ?? '242029a5-2e35-48c2-9155-5db4c6e098a7';
 
+const PROFILE = {
+  id: 'subtitle-meta-profile',
+  name: 'Subtitle Meta QA',
+  is_default: true,
+  created_at: '2026-07-20T00:00:00Z',
+};
+
+const SUBTITLE_SETTINGS = {
+  fontSize: 48,
+  fontFamily: 'Montserrat',
+  textColor: '#ffffff',
+  outlineColor: '#000000',
+  outlineWidth: 3,
+  positionY: 85,
+  horizontalAlignment: 'center',
+  letterSpacing: 0,
+  opacity: 100,
+};
+
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XwK8AAAAAElFTkSuQmCC',
+  'base64',
+);
+
+const makeSilentWav = () => {
+  const sampleRate = 8_000;
+  const samples = sampleRate * 3;
+  const buffer = Buffer.alloc(44 + samples * 2);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(buffer.length - 8, 4);
+  buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(samples * 2, 40);
+  return buffer;
+};
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((profile) => {
+    localStorage.setItem('editai_profiles', JSON.stringify([profile]));
+    localStorage.setItem('editai_current_profile_id', profile.id);
+  }, PROFILE);
+
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const pipelineId = path.includes(PIPELINE_META_ON) ? PIPELINE_META_ON : PIPELINE_META_OFF;
+    const metaMultiplication = pipelineId === PIPELINE_META_ON;
+    const preview = {
+      audio_duration: 3,
+      srt_content: '1\n00:00:00,000 --> 00:00:03,000\nSubtitle preview text',
+      matches: [{
+        srt_index: 0,
+        srt_text: 'Subtitle preview text',
+        srt_start: 0,
+        srt_end: 3,
+        segment_id: 'segment-a',
+        segment_keywords: ['demo'],
+        matched_keyword: 'demo',
+        confidence: 1,
+        source_video_id: 'source-a',
+        segment_start_time: 0,
+        segment_end_time: 3,
+        merge_group: 0,
+        merge_group_duration: 3,
+      }],
+      total_phrases: 1,
+      matched_count: 1,
+      unmatched_count: 0,
+      available_segments: [],
+      intro_offset_sec: 0,
+      intro_segments: [],
+      video_timeline: [{
+        id: 'body-a',
+        kind: 'body',
+        segment_id: 'segment-a',
+        segment_keywords: ['demo'],
+        source_video_id: 'source-a',
+        start_time: 0,
+        end_time: 3,
+        timeline_start: 0,
+        timeline_duration: 3,
+      }],
+    };
+
+    if (path.endsWith(`/pipeline/audio/${pipelineId}/0`)) {
+      await route.fulfill({ status: 200, contentType: 'audio/wav', body: makeSilentWav() });
+      return;
+    }
+    if (path.endsWith(`/pipeline/scripts/${pipelineId}`)) {
+      await route.fulfill({ json: {
+        pipeline_id: pipelineId,
+        scripts: ['Subtitle preview text'],
+        script_names: ['Subtitle QA'],
+        context_products: [],
+        preview_info: { '0': { has_audio: true, audio_duration: 3, has_srt: true } },
+        tts_info: { '0': { has_audio: true, audio_duration: 3, approved: true, srt_content: preview.srt_content } },
+        captions: {},
+        selected_captions: {},
+        name: 'Subtitle Meta QA',
+        idea: 'Subtitle Meta QA',
+        provider: 'gemini',
+        variant_count: 1,
+        meta_multiplication: metaMultiplication,
+        generation_job: {},
+        tts_jobs: {},
+      } });
+      return;
+    }
+    if (path.endsWith(`/pipeline/${pipelineId}/restore-previews`)) {
+      await route.fulfill({ json: { previews: { '0': preview }, available_segments: [] } });
+      return;
+    }
+    if (path.endsWith(`/pipeline/status/${pipelineId}`)) {
+      await route.fulfill({ json: {
+        pipeline_id: pipelineId,
+        provider: 'gemini',
+        variant_count: 1,
+        variants: [{ variant_index: 0, status: 'not_started', progress: 0, current_step: '' }],
+        meta_variants: metaMultiplication ? { A: {}, B: {} } : null,
+        meta_multiplication: metaMultiplication,
+        preview_info: {},
+        tts_info: {},
+        library_project_id: null,
+      } });
+      return;
+    }
+    if (path.endsWith(`/pipeline/${pipelineId}/source-selection`)) {
+      await route.fulfill({ json: { source_video_ids: ['source-a'] } });
+      return;
+    }
+    if (path.endsWith(`/pipeline/${pipelineId}/subtitle-overrides`)) {
+      await route.fulfill({ json: { overrides: {} } });
+      return;
+    }
+    if (path.includes('/pipeline/subtitle-frame-preview/')) {
+      await route.fulfill({ status: 200, contentType: 'image/png', body: TRANSPARENT_PNG });
+      return;
+    }
+    if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-settings`)) {
+      await route.fulfill({ json: SUBTITLE_SETTINGS });
+      return;
+    }
+    if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-presets`)) {
+      await route.fulfill({ json: { presets: [] } });
+      return;
+    }
+    if (path.endsWith(`/profiles/${PROFILE.id}`)) {
+      await route.fulfill({ json: { ...PROFILE, tts_settings: {} } });
+      return;
+    }
+    if (path.endsWith('/profiles/') || path.endsWith('/profiles')) {
+      await route.fulfill({ json: [PROFILE] });
+      return;
+    }
+    if (path.endsWith('/segments/source-videos')) {
+      await route.fulfill({ json: [{ id: 'source-a', name: 'Source A', duration: 3, segments_count: 1, status: 'ready' }] });
+      return;
+    }
+    if (path.endsWith('/tts-library/') || path.endsWith('/tts/voices') || path.endsWith('/subtitle-presets')) {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    if (path.endsWith('/pipeline/segment-duration')) {
+      await route.fulfill({ json: { total_segment_duration: 3 } });
+      return;
+    }
+    if (path.endsWith('/ai-instructions')) {
+      await route.fulfill({ json: { ai_instructions: '' } });
+      return;
+    }
+    await route.fulfill({ json: {} });
+  });
+});
+
 /**
  * The Subtitle Style card only renders inside "Advanced" mode. Fresh loads
  * of /pipeline default to "Simple" mode (persisted in localStorage), so

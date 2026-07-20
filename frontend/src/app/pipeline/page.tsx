@@ -35,7 +35,7 @@ import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderAdjustments, RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
 import { EMPTY_ATTENTION_SELECTION, type AttentionSelection } from "@/components/attention-template-picker";
-import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
+import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
 import {
   MatchPreview,
@@ -62,6 +62,14 @@ import {
   type PipelineTemplateImportResponse,
   type PipelineTemplateSettings,
 } from "./pipeline-template";
+import {
+  EMPTY_SUBTITLE_TEMPLATE_ROTATION,
+  assignedSubtitlePreset,
+  resolveRotatedSubtitleSettings,
+  subtitleSettingsDiff,
+  wordsPerSubtitleForVariant,
+  type SubtitleTemplateRotation,
+} from "./subtitle-template-rotation";
 import { PipelineErrorBoundary } from "./components/pipeline-error-boundary";
 import { Step1Script } from "./components/step1-script";
 import { Step2TTS } from "./components/step2-tts";
@@ -491,6 +499,12 @@ function PipelinePage() {
   // User-saved named presets loaded from the profile (distinct from the
   // hardcoded CAPTION_PRESETS built into SubtitleEditor).
   const [userSubtitlePresets, setUserSubtitlePresets] = useState<UserSubtitlePreset[]>([]);
+  const [subtitleRotation, setSubtitleRotation] = useState<SubtitleTemplateRotation>(
+    EMPTY_SUBTITLE_TEMPLATE_ROTATION,
+  );
+  const [variantSubtitleOverrides, setVariantSubtitleOverrides] = useState<
+    Partial<Record<PreviewKey, Partial<SubtitleSettings>>>
+  >({});
 
   // Debounced-save timer for per-variant overrides → PUT /pipeline/{id}/subtitle-overrides
   const overridesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -551,6 +565,8 @@ function PipelinePage() {
 
     setSubtitleSettings(subtitles.default || { ...DEFAULT_SUBTITLE_SETTINGS });
     setSubtitleOverrides(subtitles.overrides || {});
+    setVariantSubtitleOverrides(subtitles.variantOverrides || {});
+    setSubtitleRotation(subtitles.rotation || EMPTY_SUBTITLE_TEMPLATE_ROTATION);
     setPresetName(render.presetName || "TikTok");
     setRenderSettings(render.encoding || { ...DEFAULT_RENDER_SETTINGS });
     setRenderAdjust(render.adjustments || {
@@ -620,7 +636,18 @@ function PipelinePage() {
   // for that card's Meta version. Used by TimelineEditor cards and
   // VariantPreviewPlayer, which always reason in terms of PreviewCards.
   const getPreviewSubtitleSettingsFor = useCallback(
-    (card: Pick<PreviewCard, "visualVersion">): SubtitleSettings => {
+    (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => {
+      if (subtitleRotation.enabled) {
+        return resolveRotatedSubtitleSettings({
+          card,
+          rotation: subtitleRotation,
+          presets: userSubtitlePresets,
+          defaultSettings: subtitleSettings,
+          metaOverrides: subtitleOverrides,
+          variantOverrides: variantSubtitleOverrides,
+          metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
+        });
+      }
       const styleKey = toStyleKey(card);
       const effective = getSubtitleSettingsFor(styleKey);
 
@@ -640,7 +667,48 @@ function PipelinePage() {
       const metaStyle = META_SUBTITLE_STYLE_BY_VERSION[card.visualVersion];
       return metaStyle ? { ...effective, ...metaStyle } : effective;
     },
-    [getSubtitleSettingsFor, subtitleOverrides]
+    [
+      getSubtitleSettingsFor,
+      subtitleOverrides,
+      subtitleRotation,
+      subtitleSettings,
+      userSubtitlePresets,
+      variantSubtitleOverrides,
+    ]
+  );
+
+  const getPreviewSubtitleTemplateSettingsFor = useCallback(
+    (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => (
+      resolveRotatedSubtitleSettings({
+        card,
+        rotation: subtitleRotation,
+        presets: userSubtitlePresets,
+        defaultSettings: subtitleSettings,
+        metaOverrides: subtitleOverrides,
+        variantOverrides: {},
+        metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
+      })
+    ),
+    [subtitleOverrides, subtitleRotation, subtitleSettings, userSubtitlePresets],
+  );
+
+  const getAssignedSubtitlePreset = useCallback(
+    (variantIndex: number) => assignedSubtitlePreset(
+      subtitleRotation,
+      userSubtitlePresets,
+      variantIndex,
+    ),
+    [subtitleRotation, userSubtitlePresets],
+  );
+
+  const getWordsPerSubtitleForVariant = useCallback(
+    (variantIndex: number) => wordsPerSubtitleForVariant(
+      subtitleRotation,
+      userSubtitlePresets,
+      variantIndex,
+      wordsPerSubtitle,
+    ),
+    [subtitleRotation, userSubtitlePresets, wordsPerSubtitle],
   );
 
   // Stable empty slides constant to avoid new array reference on every render
@@ -728,6 +796,7 @@ function PipelinePage() {
             video_timeline: videoTimeline,
             visual_version: visualVersion,
             default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
+            music: previewsRef.current[previewKey]?.music ?? null,
           }).catch((error) => {
             console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
           });
@@ -735,6 +804,30 @@ function PipelinePage() {
       };
     }
     return videoTimelineChangeHandlers.current[previewKey];
+  }, []);
+
+  // A2 background music — updates PreviewData and persists via the same
+  // debounced composition save (which now carries `music`), mirroring the
+  // default-transition handler exactly.
+  const musicChangeHandlers = useRef<Record<string, (music: MusicSettings | null) => void>>({});
+  const getMusicChangeHandler = useCallback((previewKey: string) => {
+    if (!musicChangeHandlers.current[previewKey]) {
+      musicChangeHandlers.current[previewKey] = (music: MusicSettings | null) => {
+        setPreviews((previous) => {
+          const current = previous[previewKey];
+          if (!current) return previous;
+          return { ...previous, [previewKey]: { ...current, music } };
+        });
+        const timeline = previewsRef.current[previewKey]?.video_timeline;
+        if (timeline?.length) {
+          // Reuse the debounced composition save so timeline + music persist
+          // together. previewsRef is updated by the state commit above.
+          getVideoTimelineChangeHandler(previewKey)(timeline);
+        }
+      };
+    }
+    return musicChangeHandlers.current[previewKey];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Transitions V1: per-variant default transition. Updates the PreviewData blob
@@ -1056,7 +1149,13 @@ function PipelinePage() {
           const ovRes = await apiGet(`/pipeline/${data.pipeline_id}/subtitle-overrides`);
           const ovData = await ovRes.json();
           if (isMountedRef.current && ovData && typeof ovData.overrides === "object" && ovData.overrides !== null) {
-            setSubtitleOverrides(ovData.overrides as Partial<Record<StyleKey, SubtitleSettings>>);
+            const entries = Object.entries(ovData.overrides) as [string, SubtitleSettings][];
+            setSubtitleOverrides(Object.fromEntries(
+              entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
+            ) as Partial<Record<StyleKey, SubtitleSettings>>);
+            setVariantSubtitleOverrides(Object.fromEntries(
+              entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
+            ));
           }
         } catch {
           // Old pipeline or no overrides — silent fallback
@@ -2015,7 +2114,7 @@ function PipelinePage() {
               speed: voiceSpeed,
               use_speaker_boost: voiceSpeakerBoost,
             },
-            words_per_subtitle: wordsPerSubtitle,
+            words_per_subtitle: getWordsPerSubtitleForVariant(previewCard.baseIndex),
             min_segment_duration: minSegmentDuration,
             ultra_rapid_intro: ultraRapidIntro,
             visual_version: previewCard.visualVersion,
@@ -2287,6 +2386,8 @@ function PipelinePage() {
       subtitles: {
         default: subtitleSettings,
         overrides: subtitleOverrides,
+        variantOverrides: variantSubtitleOverrides,
+        rotation: subtitleRotation,
       },
       render: {
         presetName,
@@ -2383,8 +2484,12 @@ function PipelinePage() {
   const buildRenderPayload = () => {
     const matchOverrides: Record<string, MatchPreview[]> = {};
     const compositionOverrides: Record<string, CompositionClip[]> = {};
+    const musicOverrides: Record<string, MusicSettings> = {};
     const selectedPreviewCards = previewCards.filter(card => selectedVariants.has(card.baseIndex));
     for (const card of selectedPreviewCards) {
+      if (previews[card.key]?.music) {
+        musicOverrides[card.key] = previews[card.key].music!;
+      }
       if (previews[card.key]?.matches && previews[card.key].matches.length > 0) {
         matchOverrides[card.key] = previews[card.key].matches;
       } else {
@@ -2444,6 +2549,9 @@ function PipelinePage() {
       composition_overrides: Object.keys(compositionOverrides).length > 0
         ? compositionOverrides
         : undefined,
+      music_overrides: Object.keys(musicOverrides).length > 0
+        ? musicOverrides
+        : undefined,
       interstitial_slides: filteredInterstitialSlides,
       attention_timelines: Object.fromEntries(
         selectedPreviewCards
@@ -2465,6 +2573,12 @@ function PipelinePage() {
         use_speaker_boost: voiceSpeakerBoost,
       },
       words_per_subtitle: wordsPerSubtitle,
+      words_per_subtitle_by_key: Object.fromEntries(
+        selectedPreviewCards.map((card) => [
+          card.key,
+          getWordsPerSubtitleForVariant(card.baseIndex),
+        ]),
+      ),
       min_segment_duration: minSegmentDuration,
       ultra_rapid_intro: ultraRapidIntro,
       preset: assemblyPreset,
@@ -2505,7 +2619,13 @@ function PipelinePage() {
       // remain after filtering, omit the field entirely so the backend
       // takes the simpler code path (flat defaults only).
       subtitle_settings_by_key: (() => {
-        const filtered: Partial<Record<StyleKey, SubtitleSettings>> = {};
+        const filtered: Record<string, SubtitleSettings> = {};
+        if (subtitleRotation.enabled) {
+          for (const card of selectedPreviewCards) {
+            filtered[card.key] = getPreviewSubtitleSettingsFor(card);
+          }
+          return filtered;
+        }
         for (const [k, v] of Object.entries(subtitleOverrides) as [StyleKey, SubtitleSettings | undefined][]) {
           if (v && Object.keys(v).length > 0) filtered[k] = v;
         }
@@ -3130,20 +3250,26 @@ function PipelinePage() {
   // time. If the user switches pipelines before the 800 ms timer elapses, we
   // would otherwise PUT pipeline A's overrides into pipeline B. Mirrors the
   // savedPid pattern used by the voice-settings auto-save further down.
-  const scheduleOverridesSave = useCallback((nextOverrides: Partial<Record<StyleKey, SubtitleSettings>>) => {
+  const scheduleOverridesSave = useCallback((
+    nextOverrides: Partial<Record<StyleKey, SubtitleSettings>>,
+    nextVariantOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>> = variantSubtitleOverrides,
+  ) => {
     const savedPid = pipelineIdRef.current;
     if (!savedPid) return;
     setSubtitleSaveState("saving");
     if (overridesSaveTimer.current) clearTimeout(overridesSaveTimer.current);
     // Snapshot the dict so concurrent state mutations after this call don't
     // alter what we end up sending. Also strip empty-object entries: the
-    // backend's regex accepts only {A,B,default}, and we never want to send
+    // backend accepts Meta keys plus PreviewKeys, and we never want to send
     // `{"A": {}}` which would look like a no-op override.
-    const snapshot: Partial<Record<StyleKey, SubtitleSettings>> = {};
+    const snapshot: Record<string, Partial<SubtitleSettings>> = {};
     for (const [k, v] of Object.entries(nextOverrides) as [StyleKey, SubtitleSettings | undefined][]) {
       if (v && Object.keys(v).length > 0) {
         snapshot[k] = v;
       }
+    }
+    for (const [key, value] of Object.entries(nextVariantOverrides)) {
+      if (value && Object.keys(value).length > 0) snapshot[key] = value;
     }
     overridesSaveTimer.current = setTimeout(async () => {
       // Bail out if the user navigated to a different pipeline meanwhile.
@@ -3156,7 +3282,7 @@ function PipelinePage() {
         // Silent — overrides still work locally for this session
       }
     }, 800);
-  }, [markSubtitleSaveSuccess]);
+  }, [markSubtitleSaveSuccess, variantSubtitleOverrides]);
 
   // Cancel any pending override save when the active pipeline changes, so a
   // late-firing timer for the previous pipeline can never write into the new
@@ -3200,6 +3326,33 @@ function PipelinePage() {
       });
     },
     [scheduleOverridesSave]
+  );
+
+  const handleVariantTemplateOverrideChange = useCallback(
+    (previewKey: PreviewKey, newSettings: SubtitleSettings, templateSettings: SubtitleSettings) => {
+      setVariantSubtitleOverrides((previous) => {
+        const delta = subtitleSettingsDiff(templateSettings, newSettings);
+        const next = { ...previous };
+        if (Object.keys(delta).length > 0) next[previewKey] = delta;
+        else delete next[previewKey];
+        scheduleOverridesSave(subtitleOverrides, next);
+        return next;
+      });
+    },
+    [scheduleOverridesSave, subtitleOverrides],
+  );
+
+  const handleResetVariantTemplateOverride = useCallback(
+    (previewKey: PreviewKey) => {
+      setVariantSubtitleOverrides((previous) => {
+        if (!(previewKey in previous)) return previous;
+        const next = { ...previous };
+        delete next[previewKey];
+        scheduleOverridesSave(subtitleOverrides, next);
+        return next;
+      });
+    },
+    [scheduleOverridesSave, subtitleOverrides],
   );
 
   // Copy the effective style from one Meta version to another (e.g. copy A → B).
@@ -3248,9 +3401,11 @@ function PipelinePage() {
       settings: SubtitleSettings;
       settingsA?: SubtitleSettings;
       settingsB?: SubtitleSettings;
+      wordsPerSubtitle?: number;
     } = {
       name: trimmedName,
       settings: subtitleSettings,
+      wordsPerSubtitle,
     };
     if (hasOverrideA) {
       payload.settingsA = { ...subtitleSettings, ...overrideA };
@@ -3277,7 +3432,7 @@ function PipelinePage() {
     } finally {
       setSavePresetSubmitting(false);
     }
-  }, [savePresetName, subtitleSettings, subtitleOverrides]);
+  }, [savePresetName, subtitleSettings, subtitleOverrides, wordsPerSubtitle]);
 
   // Load/refresh user-saved subtitle presets from the profile.
   const refreshUserSubtitlePresets = useCallback(async () => {
@@ -3298,6 +3453,65 @@ function PipelinePage() {
     if (!currentProfile?.id) return;
     refreshUserSubtitlePresets();
   }, [currentProfile?.id, refreshUserSubtitlePresets]);
+
+  useEffect(() => {
+    if (!pipelineId) {
+      setSubtitleRotation(EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+      return;
+    }
+    let cancelled = false;
+    apiGet(`/pipeline/${pipelineId}/subtitle-rotation`)
+      .then((response) => response.json())
+      .then((rotation: SubtitleTemplateRotation) => {
+        if (!cancelled) setSubtitleRotation({
+          enabled: Boolean(rotation.enabled),
+          presetIds: Array.isArray(rotation.presetIds) ? rotation.presetIds : [],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setSubtitleRotation(EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+      });
+    return () => { cancelled = true; };
+  }, [pipelineId]);
+
+  const handleSubtitleRotationChange = useCallback((next: SubtitleTemplateRotation) => {
+    setSubtitleRotation(next);
+    scheduleReassemblePreviews();
+    const savedPipelineId = pipelineIdRef.current;
+    if (!savedPipelineId) return;
+    apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, next).catch(() => {
+      toast.error("Could not save subtitle template rotation");
+    });
+  }, [scheduleReassemblePreviews]);
+
+  const handleUpdateSubtitlePreset = useCallback((
+    presetId: string,
+    settings: SubtitleSettings,
+    presetWordsPerSubtitle: number,
+  ) => {
+    const preset = userSubtitlePresets.find((candidate) => candidate.id === presetId);
+    const profileId = currentProfileIdRef.current;
+    if (!preset || !profileId) return;
+    const updated = {
+      ...preset,
+      settings,
+      wordsPerSubtitle: presetWordsPerSubtitle,
+    };
+    setUserSubtitlePresets((previous) => previous.map((candidate) => (
+      candidate.id === presetId ? updated : candidate
+    )));
+    scheduleReassemblePreviews();
+    apiPut(`/profiles/${profileId}/subtitle-presets/${presetId}`, {
+      name: updated.name,
+      settings: updated.settings,
+      settingsA: updated.settingsA,
+      settingsB: updated.settingsB,
+      wordsPerSubtitle: updated.wordsPerSubtitle,
+    }).catch(() => {
+      toast.error("Could not update subtitle template");
+      refreshUserSubtitlePresets();
+    });
+  }, [refreshUserSubtitlePresets, scheduleReassemblePreviews, userSubtitlePresets]);
 
   // Debounced auto-save scripts to backend
   const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[], updatedNames?: string[]) => {
@@ -3585,13 +3799,21 @@ function PipelinePage() {
           if (!isMountedRef.current) return;
           const data = await res.json();
           if (data && typeof data.overrides === "object" && data.overrides !== null) {
-            setSubtitleOverrides(data.overrides as Partial<Record<StyleKey, SubtitleSettings>>);
+            const entries = Object.entries(data.overrides) as [string, SubtitleSettings][];
+            setSubtitleOverrides(Object.fromEntries(
+              entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
+            ) as Partial<Record<StyleKey, SubtitleSettings>>);
+            setVariantSubtitleOverrides(Object.fromEntries(
+              entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
+            ));
           } else {
             setSubtitleOverrides({});
+            setVariantSubtitleOverrides({});
           }
         })
         .catch(() => {
           setSubtitleOverrides({});
+          setVariantSubtitleOverrides({});
         });
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -4044,7 +4266,7 @@ function PipelinePage() {
           speed: voiceSpeed,
           use_speaker_boost: voiceSpeakerBoost,
         },
-        words_per_subtitle: wordsPerSubtitle,
+        words_per_subtitle: getWordsPerSubtitleForVariant(variantIndex),
         min_segment_duration: minSegmentDuration,
         ultra_rapid_intro: ultraRapidIntro,
       }, { timeout: 60_000 });
@@ -4124,7 +4346,7 @@ function PipelinePage() {
             speed: voiceSpeed,
             use_speaker_boost: voiceSpeakerBoost,
           },
-          words_per_subtitle: wordsPerSubtitle,
+          words_per_subtitle: getWordsPerSubtitleForVariant(i),
           min_segment_duration: minSegmentDuration,
           ultra_rapid_intro: ultraRapidIntro,
         }, { timeout: 60_000, signal: abortController.signal });
@@ -4326,7 +4548,7 @@ function PipelinePage() {
           speed: voiceSpeed,
           use_speaker_boost: voiceSpeakerBoost,
         },
-        words_per_subtitle: wordsPerSubtitle,
+        words_per_subtitle: getWordsPerSubtitleForVariant(variantIndex),
         min_segment_duration: minSegmentDuration,
         ultra_rapid_intro: ultraRapidIntro,
         visual_version: visualVersion,
@@ -4688,6 +4910,14 @@ function PipelinePage() {
     setSavePresetDialogOpen,
     userSubtitlePresets,
     setUserSubtitlePresets,
+    subtitleRotation,
+    handleSubtitleRotationChange,
+    getAssignedSubtitlePreset,
+    getWordsPerSubtitleForVariant,
+    variantSubtitleOverrides,
+    handleVariantTemplateOverrideChange,
+    handleResetVariantTemplateOverride,
+    handleUpdateSubtitlePreset,
     subtitleSettings,
     setSubtitleSettings,
     scheduleProfileSubtitleSave,
@@ -4715,6 +4945,7 @@ function PipelinePage() {
     availableSegments,
     currentProfile,
     getPreviewSubtitleSettingsFor,
+    getPreviewSubtitleTemplateSettingsFor,
     interstitialSlides,
     attentionTimelines,
     attentionSelection,
@@ -4725,6 +4956,7 @@ function PipelinePage() {
     getMatchesChangeHandler,
     getVideoTimelineChangeHandler,
     getDefaultTransitionChangeHandler,
+    getMusicChangeHandler,
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     savePresetName,
@@ -4926,4 +5158,3 @@ function extractPreviewSubtitleText(srtContent?: string): string | undefined {
 
   return undefined;
 }
-

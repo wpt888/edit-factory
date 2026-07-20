@@ -29,3 +29,7 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Attention Images: Pipeline Step 1 integration + per-variant stagger](30-attention-images-pipeline-integration.md)
 - [Timeline transitions V1 — dip to black + flash white](31-timeline-transitions-v1.md)
 - [Karaoke highlight system — sweep + per-word background box](32-karaoke-highlight-system.md)
+- [Multi-track timeline — Phase A: generic tracks + images as clips](33-multitrack-timeline.md)
+- [Background music (A2) with auto-ducking — Phase B](34-bgm-ducking.md)
+- [Video-on-video overlay compositor — Phase C](35-video-overlay-compositor.md)
+- [Subtitle-template rotation](36-subtitle-template-rotation.md)

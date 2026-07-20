@@ -49,6 +49,7 @@ export interface UserSubtitlePreset {
   settings: SubtitleSettings;
   settingsA?: SubtitleSettings;
   settingsB?: SubtitleSettings;
+  wordsPerSubtitle?: number;
 }
 
 export interface SubtitleLine {
