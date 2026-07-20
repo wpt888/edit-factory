@@ -2840,6 +2840,7 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         on_progress=None,  # Optional[Callable[[str, int], None]]
         max_words_per_phrase: int = 2,
         min_segment_duration: float = 3.0,
@@ -2874,6 +2875,8 @@ class AssemblyService:
             reuse_audio_path: Path to existing TTS audio to reuse (skips TTS generation).
             reuse_audio_duration: Duration of the reused audio.
             reuse_srt_content: SRT content to reuse with the audio.
+            reuse_timestamps: Persisted character timings used to regroup cues
+                              without generating the same voice-over again.
 
         Returns:
             Path to final rendered video
@@ -2907,7 +2910,7 @@ class AssemblyService:
                 logger.info("Step 1/7: Reusing existing TTS audio (library or cached)")
                 audio_path = Path(reuse_audio_path)
                 audio_duration = reuse_audio_duration
-                timestamps = {}
+                timestamps = reuse_timestamps or {}
                 skip_library_save = True
                 _report("Reusing cached TTS audio", 20)
             else:
@@ -3520,6 +3523,7 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         subtitle_settings: Optional[dict] = None,
         min_segment_duration: float = 3.0,
         on_progress=None,
@@ -3588,6 +3592,7 @@ class AssemblyService:
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
             reuse_srt_content=reuse_srt_content,
+            reuse_timestamps=reuse_timestamps,
             on_progress=on_progress,
             max_words_per_phrase=max_words_per_phrase,
             min_segment_duration=min_segment_duration,
@@ -3645,6 +3650,7 @@ class AssemblyService:
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = True,
         reuse_srt_content: Optional[str] = None,
+        reuse_timestamps: Optional[dict] = None,
         subtitle_settings: Optional[dict] = None,
         preset: str = "balanced",
         segment_proximity: str = "separate",
@@ -3674,7 +3680,7 @@ class AssemblyService:
             logger.info("Preview Step 1/4: Reusing existing TTS audio from Step 2")
             audio_path = Path(reuse_audio_path)
             audio_duration = reuse_audio_duration
-            timestamps = {}  # Will rely on SRT cache or regenerate below
+            timestamps = reuse_timestamps or {}
         else:
             logger.info("Preview Step 1/4: Generating TTS audio")
             audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
@@ -3988,6 +3994,9 @@ class AssemblyService:
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
             "srt_content": srt_content,
+            # Kept server-side in pipeline state so a different template can
+            # regroup cues without a second TTS provider call.
+            "tts_timestamps": timestamps or None,
             "matches": matches_data,
             "timeline": timeline_data,
             # API key kept for saved-preview compatibility; the value now means

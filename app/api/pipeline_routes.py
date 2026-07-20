@@ -50,6 +50,7 @@ from app.services.pipeline_template_bundle import (
     normalize_pipeline_template_settings,
     validate_pipeline_template_document,
 )
+from app.services.subtitle_rotation import words_per_subtitle_for_key
 from app.config import APP_VERSION, get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -717,7 +718,11 @@ def _compute_render_fingerprint(
         "voice_id": render_request.voice_id,
         "elevenlabs_model": render_request.elevenlabs_model,
         "voice_settings": render_request.voice_settings or {},
-        "words_per_subtitle": render_request.words_per_subtitle,
+        "words_per_subtitle": words_per_subtitle_for_key(
+            lookup_key,
+            getattr(render_request, "words_per_subtitle_by_key", None),
+            render_request.words_per_subtitle,
+        ),
         "min_segment_duration": render_request.min_segment_duration,
         "ultra_rapid_intro": render_request.ultra_rapid_intro,
         # Effective subtitle settings for THIS specific job_key — captures both
@@ -1858,46 +1863,29 @@ def _style_key_for_lookup(key: str) -> str:
 
 
 def _normalize_overrides(raw: Any) -> Dict[str, Any]:
-    """Collapse legacy per-script override keys ("0_A", "1_B") to per-Meta-version
-    keys ("A", "B", "default"). Idempotent on already-canonical data.
+    """Keep canonical Meta layers and explicit per-variant overrides.
 
-    Sort order: legacy keys are processed before canonical ones so that if the
-    dict already contains a canonical "A" alongside legacy "0_A", the canonical
-    value wins (last-wins via sorted iteration — "0_A" < "A" alphabetically).
-
-    Logs a WARNING when two legacy keys would map to the same target with
-    different values, so operators have forensic evidence of the collapse when
-    a user reports "my script-3 A style disappeared".
+    ``A``/``B`` remain orthogonal Meta layers. Keys such as ``0_A`` and ``2``
+    are intentionally preserved because they identify the final variant layer
+    applied after a rotated base template and the matching Meta layer.
     """
     if not isinstance(raw, dict) or not raw:
         return {}
 
     normalized: Dict[str, Any] = {}
-    sources: Dict[str, str] = {}  # tracks which legacy key produced each target
     for k in sorted(raw.keys()):
         v = raw[k]
         if not isinstance(v, dict):
             continue
         if k in ("A", "B", "default"):
             target = k
-        elif k.endswith("_A"):
-            target = "A"
-        elif k.endswith("_B"):
-            target = "B"
-        elif k.isdigit():
-            target = "default"
+        elif _re.fullmatch(r"\d+(?:_[A-J])?", str(k)):
+            target = str(k)
         else:
             # Unknown shape — ignore silently; the PUT regex rejects these,
             # and the resolver's fallback handles any in-flight weirdness.
             continue
-        if target in normalized and normalized[target] != v:
-            logger.warning(
-                "_normalize_overrides: collapsing %r over %r into key %r — "
-                "values differ, last-wins (forensic note for user reports).",
-                k, sources.get(target), target
-            )
         normalized[target] = v
-        sources[target] = k
     return normalized
 
 
@@ -1925,19 +1913,17 @@ def _get_subtitle_settings_for_key(
     """
     overrides = render_request.subtitle_settings_by_key or {}
     style_key = _style_key_for_lookup(key)
-    raw_override = overrides.get(style_key)
-    if not isinstance(raw_override, dict) or not raw_override:
-        # Legacy fallback: older stored shapes may still have the full key.
-        raw_override = overrides.get(key)
-    if not isinstance(raw_override, dict) or not raw_override:
-        return dict(default_subtitle_settings), False
-
-    # Shallow merge: start from default, then let override replace matching
-    # keys. This is robust against override dicts that only contain a subset
-    # of fields (e.g. only textColor changed).
     merged = dict(default_subtitle_settings)
-    merged.update(raw_override)
-    return merged, True
+    style_override = overrides.get(style_key)
+    direct_override = overrides.get(key)
+    has_override = False
+    # Keep the render boundary identical to the browser: rotation template
+    # base -> Meta A/B layer -> one explicit variant override.
+    for candidate in (style_override, direct_override):
+        if isinstance(candidate, dict) and candidate:
+            merged.update(candidate)
+            has_override = True
+    return merged, has_override
 
 
 def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
@@ -2864,6 +2850,7 @@ class PipelineRenderRequest(BaseModel):
     voice_settings: Optional[Dict[str, Any]] = None
     # Subtitle word grouping — BUG-PR-19: bounded
     words_per_subtitle: int = Field(default=2, ge=1, le=20)
+    words_per_subtitle_by_key: Optional[Dict[str, int]] = None
     # Minimum video segment duration (seconds) — groups short SRT phrases
     min_segment_duration: Optional[float] = None
 
@@ -3398,7 +3385,10 @@ async def import_pipeline_template(
         "target_script_duration": generation.get("targetScriptDuration"),
         "min_segment_duration": _clamp_min_segment_duration(assembly.get("minSegmentDuration")),
         "meta_multiplication": bool(render.get("metaMultiplication", True)),
-        "subtitle_settings_by_key": _normalize_overrides(subtitles.get("overrides") or {}),
+        "subtitle_settings_by_key": _normalize_overrides({
+            **(subtitles.get("overrides") or {}),
+            **(subtitles.get("variantOverrides") or {}),
+        }),
         "attention_timeline": attention_timelines,
         "template_settings": settings,
         "created_at": now,
@@ -3739,6 +3729,20 @@ class SubtitleOverridesRequest(BaseModel):
     overrides: Dict[str, Dict[str, Any]]
 
 
+class SubtitleRotationRequest(BaseModel):
+    """Ordered profile-preset rotation stored inside portable template state."""
+    enabled: bool = False
+    presetIds: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("presetIds")
+    @classmethod
+    def validate_preset_ids(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value).strip() for value in values if str(value).strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Subtitle rotation cannot contain duplicate templates")
+        return cleaned
+
+
 class AttentionAnimation(BaseModel):
     preset: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "static"
     enterMs: int = Field(default=250, ge=0, le=10000)
@@ -4007,9 +4011,8 @@ async def get_subtitle_overrides(
 ):
     """Return per-Meta-version subtitle style overrides for a pipeline.
 
-    Response shape: {"A": {...}, "B": {...}, "default": {...}} — only keys
-    with actual overrides are present. Legacy data is normalized on read so
-    the frontend always receives the canonical shape.
+    Response shape includes Meta keys plus card-local PreviewKey entries; only keys
+    with actual overrides are present, including direct PreviewKey deltas.
     """
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -4020,6 +4023,59 @@ async def get_subtitle_overrides(
     # or racing legacy writes that bypassed _get_pipeline_or_load's path.
     normalized = _normalize_overrides(pipeline.get("subtitle_settings_by_key") or {})
     return {"overrides": normalized}
+
+
+@router.get("/{pipeline_id}/subtitle-rotation")
+async def get_subtitle_rotation(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Return the pipeline's ordered subtitle-template rotation."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    settings = pipeline.get("template_settings") or {}
+    rotation = ((settings.get("subtitles") or {}).get("rotation") or {})
+    return {
+        "enabled": bool(rotation.get("enabled", False)),
+        "presetIds": list(rotation.get("presetIds") or []),
+    }
+
+
+@router.put("/{pipeline_id}/subtitle-rotation")
+async def update_subtitle_rotation(
+    pipeline_id: str,
+    request: SubtitleRotationRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Persist rotation in the same JSON envelope exported by pipeline templates."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    profile_row = get_repository().get_profile(profile.profile_id) or {}
+    owned_ids = {
+        str(preset.get("id"))
+        for preset in (profile_row.get("user_subtitle_presets") or [])
+        if isinstance(preset, dict) and preset.get("id")
+    }
+    missing = [preset_id for preset_id in request.presetIds if preset_id not in owned_ids]
+    if missing:
+        raise HTTPException(status_code=400, detail="Subtitle rotation contains an unavailable template")
+
+    rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
+    with _get_pipeline_state_lock(pipeline_id):
+        settings = copy.deepcopy(pipeline.get("template_settings") or {})
+        settings.setdefault("subtitles", {})["rotation"] = rotation
+        pipeline["template_settings"] = settings
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
+    _db_save_pipeline(pipeline_id, pipeline)
+    return rotation
 
 
 @router.put("/{pipeline_id}/subtitle-overrides")
@@ -4041,11 +4097,9 @@ async def update_subtitle_overrides(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    # Validate key shape — after the per-Meta-version refactor, the only
-    # legal keys are "A", "B", and "default". Reject anything else so stale
-    # browser tabs sending legacy "0_A"/"1_B" keys fail loudly instead of
-    # silently poisoning the stored shape.
-    _key_pattern = _re.compile(r"^(A|B|default)$")
+    # Validate key shape — rotation adds one optional card-local layer, so
+    # legal keys include Meta A/B/default and direct PreviewKey deltas.
+    _key_pattern = _re.compile(r"^(?:A|B|default|\d+(?:_[A-J])?)$")
     for key in request.overrides.keys():
         if not isinstance(key, str) or not _key_pattern.match(key):
             raise HTTPException(status_code=400, detail=f"Invalid override key: {key!r}")
@@ -5374,6 +5428,7 @@ async def _generate_variant_tts_work(
                 "voice_settings": request.voice_settings,
                 "words_per_subtitle": request.words_per_subtitle,
                 "srt_content": srt_content,
+                "tts_timestamps": _timestamps,
                 "script_word_count": script_word_count,
                 "srt_word_count": srt_word_count,
             }
@@ -5910,6 +5965,7 @@ async def preview_variant(
     reuse_audio_path = None
     reuse_audio_duration = None
     reuse_srt_content = None
+    reuse_timestamps = None
     if existing_tts:
         # Verify script hasn't changed since TTS was generated
         # TTS hashes use cleaned text (tags stripped) so tag edits don't invalidate
@@ -5942,6 +5998,7 @@ async def preview_variant(
                 # Also grab SRT content from Step 2 to avoid TTS regeneration
                 stored_srt = existing_tts.get("srt_content")
                 stored_wpf = existing_tts.get("words_per_subtitle")
+                reuse_timestamps = existing_tts.get("tts_timestamps")
                 if stored_srt and stored_wpf == words_per_subtitle:
                     reuse_srt_content = stored_srt
                 logger.info(
@@ -6146,6 +6203,7 @@ async def preview_variant(
             avoid_segment_ids=avoid_ids if avoid_ids else None,
             ultra_rapid_intro=ultra_rapid_intro,
             reuse_srt_content=reuse_srt_content,
+            reuse_timestamps=reuse_timestamps,
             preset=preset,
             segment_proximity=segment_proximity,
         )
@@ -6171,7 +6229,7 @@ async def preview_variant(
                 cleaned_text=cleaned_text,
                 audio_path=str(_fresh_audio_path),
                 srt_content=preview_data.get("srt_content"),
-                timestamps=None,
+                timestamps=preview_data.get("tts_timestamps"),
                 model=elevenlabs_model,
                 duration=preview_data.get("audio_duration", 0.0),
                 voice_id=voice_id,
@@ -6201,6 +6259,8 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index] = {}
             pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
             pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
+            if preview_data.get("tts_timestamps"):
+                pipeline["tts_previews"][variant_index]["tts_timestamps"] = preview_data["tts_timestamps"]
             # Freshly billed audio replaces stale/forced audio even when an old
             # path existed. Reused Step 2 audio remains untouched.
             if preview_tts_metered:
@@ -6986,6 +7046,12 @@ async def render_variants(
             reuse_audio_path = None
             reuse_audio_duration = None
             reuse_srt_content = None
+            reuse_timestamps = None
+            _job_words_per_subtitle = words_per_subtitle_for_key(
+                str(job_key),
+                render_request.words_per_subtitle_by_key,
+                render_request.words_per_subtitle,
+            )
 
             # Hash comparison uses cleaned text (tags stripped) to match stored hash
             cleaned_render_text = strip_product_group_tags(script_text)
@@ -7006,6 +7072,7 @@ async def render_variants(
                         if resolved_audio_path:
                             reuse_audio_path = str(resolved_audio_path)
                             reuse_audio_duration = existing_tts.get("audio_duration")
+                            reuse_timestamps = existing_tts.get("tts_timestamps")
 
                             # ── SRT reuse guard ──────────────────────────────
                             # Only reuse cached SRT if words_per_subtitle hasn't
@@ -7013,7 +7080,7 @@ async def render_variants(
                             # groups words into subtitle phrases using this param;
                             # reusing a stale SRT would show wrong subtitle grouping.
                             cached_wpf = existing_tts.get("words_per_subtitle")
-                            render_wpf = render_request.words_per_subtitle
+                            render_wpf = _job_words_per_subtitle
                             if cached_wpf is not None and cached_wpf != render_wpf:
                                 logger.info(
                                     f"[RENDER {_render_fingerprint}] SRT reuse BLOCKED: "
@@ -7216,8 +7283,9 @@ async def render_variants(
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         on_progress=on_progress,
-                        max_words_per_phrase=render_request.words_per_subtitle,
+                        max_words_per_phrase=_job_words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
                         segment_proximity=render_request.segment_proximity or "separate",
@@ -7663,6 +7731,12 @@ async def remake_variant(
     reuse_audio_path = None
     reuse_audio_duration = None
     reuse_srt_content = None
+    reuse_timestamps = None
+    _remake_words_per_subtitle = words_per_subtitle_for_key(
+        str(job_key),
+        render_request.words_per_subtitle_by_key,
+        render_request.words_per_subtitle,
+    )
 
     if existing_tts:
         audio_path_str = existing_tts.get("audio_path")
@@ -7670,7 +7744,9 @@ async def remake_variant(
         if resolved_audio_path:
             reuse_audio_path = str(resolved_audio_path)
             reuse_audio_duration = existing_tts.get("audio_duration")
-            reuse_srt_content = existing_tts.get("srt_content")
+            reuse_timestamps = existing_tts.get("tts_timestamps")
+            if existing_tts.get("words_per_subtitle") == _remake_words_per_subtitle:
+                reuse_srt_content = existing_tts.get("srt_content")
         else:
             raise HTTPException(
                 status_code=400,
@@ -7958,8 +8034,9 @@ async def remake_variant(
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         on_progress=on_progress,
-                        max_words_per_phrase=render_request.words_per_subtitle,
+                        max_words_per_phrase=_remake_words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
                         preset=render_request.preset or "balanced",
                         segment_proximity=render_request.segment_proximity or "separate",
@@ -9709,6 +9786,7 @@ async def render_preview(
     else:
         reuse_srt_content = tts_data.get("srt_content")
     reuse_audio_duration = tts_data.get("audio_duration")
+    reuse_timestamps = tts_data.get("tts_timestamps")
 
     _profile_id = profile.profile_id
 
@@ -9735,6 +9813,7 @@ async def render_preview(
                         reuse_audio_path=audio_path_str,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
+                        reuse_timestamps=reuse_timestamps,
                         subtitle_settings=render_request.subtitle_settings,
                         min_segment_duration=render_request.min_segment_duration,
                         on_progress=on_progress,

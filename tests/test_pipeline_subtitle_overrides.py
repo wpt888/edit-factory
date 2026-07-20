@@ -224,6 +224,23 @@ def test_legacy_fallback_in_resolver_hits_full_key():
     assert settings["textColor"] == "#ABC123"
 
 
+def test_resolver_layers_meta_then_direct_variant_delta():
+    request = _make_request(subtitle_settings_by_key={
+        "A": {"outlineWidth": 5, "textColor": "#FFFFFF"},
+        "0_A": {"textColor": "#A3E635"},
+    })
+
+    settings, has_user_override = _get_subtitle_settings_for_key(
+        request,
+        "0_A",
+        _default_settings(),
+    )
+
+    assert has_user_override is True
+    assert settings["outlineWidth"] == 5
+    assert settings["textColor"] == "#A3E635"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _normalize_overrides
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,10 +251,8 @@ def test_normalize_overrides_empty_input():
     assert _normalize_overrides("not a dict") == {}  # type: ignore[arg-type]
 
 
-def test_normalize_overrides_collapses_legacy_keys():
-    """Legacy per-script granular keys collapse to per-Meta-version keys.
-    Sort order is alphabetical, so '0_A' < '1_A' — last-wins means '1_A'
-    overwrites '0_A' in the final dict."""
+def test_normalize_overrides_preserves_per_variant_keys():
+    """Per-script keys remain distinct so one card can override its template."""
     raw = {
         "0_A": {"textColor": "#FF0000"},  # red
         "1_A": {"textColor": "#00FF00"},  # green (wins — later in sort)
@@ -245,9 +260,7 @@ def test_normalize_overrides_collapses_legacy_keys():
     }
     result = _normalize_overrides(raw)
 
-    assert set(result.keys()) == {"A", "B"}
-    assert result["A"]["textColor"] == "#00FF00"  # last-wins: '1_A' overwrites '0_A'
-    assert result["B"]["textColor"] == "#0000FF"
+    assert result == raw
 
 
 def test_normalize_overrides_idempotent_on_canonical_input():
@@ -260,20 +273,18 @@ def test_normalize_overrides_idempotent_on_canonical_input():
     assert result == canonical
 
 
-def test_normalize_overrides_canonical_wins_over_legacy_on_tie():
-    """When both a legacy '0_A' and a canonical 'A' exist, canonical wins —
-    because '0_A' < 'A' alphabetically, so 'A' is processed last."""
+def test_normalize_overrides_keeps_meta_and_variant_layers_separate():
+    """A canonical Meta layer and one final variant layer are both retained."""
     raw = {
         "0_A": {"textColor": "#FF0000"},  # legacy red
         "A": {"textColor": "#00FF00"},    # canonical green (wins)
     }
     result = _normalize_overrides(raw)
-    assert result["A"]["textColor"] == "#00FF00"
+    assert result == raw
 
 
-def test_normalize_overrides_logs_warning_on_value_conflict(caplog):
-    """Forensic evidence for user reports: log a WARNING when a collapse
-    discards a differing value."""
+def test_normalize_overrides_does_not_warn_for_distinct_variant_values(caplog):
+    """Different card overrides are expected and must not be treated as loss."""
     raw = {
         "0_A": {"textColor": "#FF0000"},
         "1_A": {"textColor": "#00FF00"},  # different value — triggers warning
@@ -284,9 +295,7 @@ def test_normalize_overrides_logs_warning_on_value_conflict(caplog):
     warning_messages = [
         rec.message for rec in caplog.records if rec.levelname == "WARNING"
     ]
-    assert any("collapsing" in msg for msg in warning_messages), (
-        f"Expected a WARNING about collapsing, got: {warning_messages}"
-    )
+    assert not warning_messages
 
 
 def test_normalize_overrides_no_warning_when_values_match():
@@ -320,13 +329,13 @@ def test_normalize_overrides_drops_non_dict_values():
         "1_A": {"textColor": "#00FF00"},
     }
     result = _normalize_overrides(raw)
-    assert result == {"A": {"textColor": "#00FF00"}}
+    assert result == {"1_A": {"textColor": "#00FF00"}}
 
 
-def test_normalize_overrides_handles_plain_numeric_keys_as_default():
+def test_normalize_overrides_preserves_plain_numeric_variant_keys():
     raw = {
         "0": {"fontSize": 50},
-        "1": {"fontSize": 60},  # last-wins for default
+        "1": {"fontSize": 60},
     }
     result = _normalize_overrides(raw)
-    assert result == {"default": {"fontSize": 60}}
+    assert result == raw

@@ -253,6 +253,7 @@ def fallback_pipeline_template_settings(pipeline: Mapping[str, Any]) -> dict[str
                 "positionY": 85,
             },
             "overrides": copy.deepcopy(pipeline.get("subtitle_settings_by_key") or {}),
+            "rotation": {"enabled": False, "presetIds": []},
         },
         "render": {
             "presetName": "TikTok",
