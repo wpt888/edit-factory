@@ -1,5 +1,18 @@
 # Engineering Change Log
 
+## 2026-07-20 - Subtitle-template rotation
+
+- Step 3 now rotates an ordered set of profile subtitle presets across script
+  variants using `index % templateCount`; each preset also carries its own
+  `wordsPerSubtitle` value.
+- Rotation is a base layer, Meta A/B remains independent above it, and a final
+  card-local delta preserves per-variant editing plus Reset to template.
+- Character timings are persisted with Step 2 TTS and reused to regroup SRT
+  cues during preview/final assembly without another provider call.
+- Rotation and variant deltas are included in pipeline-template exports.
+- Verified with 778 backend tests, TypeScript/build, four Playwright tests and a
+  real three-variant FFmpeg smoke. See wiki 36.
+
 ## 2026-07-19 - Multi-track timeline Phase C (frontend): overlay clips + conversions
 
 - The timeline editor now edits video overlays. `CompositionClip` gains `track` +
