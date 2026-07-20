@@ -1,5 +1,16 @@
 # Engineering Change Log
 
+## 2026-07-20 - Subtitle inspector: collapsible settings sections
+
+- Step 3 subtitle settings now use a multi-open shadcn Accordion with compact
+  Premiere-style rows and live value summaries in each section header.
+- Text opens by default; Style Presets, Color & Stroke, Position, Background &
+  Shadow, and Karaoke remain collapsed until needed. Existing settings fields,
+  preset apply/delete behavior, and save callbacks are unchanged.
+- The live subtitle preview stays pinned while the inspector scrolls. Verified
+  with TypeScript, production build, 14 subtitle Playwright checks, and the
+  collapsed/two-expanded inspector screenshot flow on frontend 3005/backend 8001.
+
 ## 2026-07-20 - Subtitle-template rotation
 
 - Step 3 now rotates an ordered set of profile subtitle presets across script
