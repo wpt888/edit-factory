@@ -415,8 +415,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             </Card>
 
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
-            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
-              <CardHeader className="pb-1 min-[1280px]:px-4">
+            <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents ${WORKSPACE_CARD_BG}`}>
+              <CardHeader className="pb-1 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1">
                     <CardTitle className="flex items-center gap-2 text-sm">
@@ -452,10 +452,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-3 min-[1280px]:px-4">
+              <CardContent className="space-y-3 min-[1280px]:contents">
                 {/* Variant switch + live preview stay pinned to the very top of
                     the inspector; everything below scrolls under them. */}
-                <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background">
+                <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background min-[1280px]:px-4">
                   {metaMultiplication && (
                     <div
                       role="tablist"
@@ -505,13 +505,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </div>
                 </div>
 
-                {/* Auxiliary controls — below the preview so they don't push it down */}
-                <SubtitleTemplateRotationPanel
-                  rotation={subtitleRotation}
-                  presets={userSubtitlePresets}
-                  onChange={handleSubtitleRotationChange}
-                  onUpdatePreset={handleUpdateSubtitlePreset}
-                />
+                <div className="space-y-3 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:pb-3">
+                  {/* Auxiliary controls — below the preview so they don't push it down */}
+                  <SubtitleTemplateRotationPanel
+                    rotation={subtitleRotation}
+                    presets={userSubtitlePresets}
+                    onChange={handleSubtitleRotationChange}
+                    onUpdatePreset={handleUpdateSubtitlePreset}
+                  />
 
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Copy from the other Meta version (only when Meta ON) */}
@@ -551,10 +552,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   </Button>
                 </div>
 
-                <div className="space-y-4">
-                  <div
-                    data-testid="subtitle-style-variant-editor"
-                  >
+                  <div className="space-y-4">
+                    <div
+                      data-testid="subtitle-style-variant-editor"
+                    >
                     <SubtitleEditor
                       renderMode="settings-only"
                       settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
@@ -592,7 +593,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           }
                         } catch (err) { console.error("Failed to delete preset:", err); }
                       }}
-                    />
+                      />
+                    </div>
                   </div>
                 </div>
               </CardContent>
