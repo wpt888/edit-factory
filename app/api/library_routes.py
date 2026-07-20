@@ -5044,6 +5044,9 @@ async def _render_with_preset(
     # Render quality/speed mode (Wave 2.1): "speed" | "balanced" | "max".
     # None = use the configured default (env RENDER_QUALITY_MODE, else balanced).
     quality_mode: Optional[str] = None,
+    # Timeline-editor renders use the edited V1 duration as the output clock.
+    # Older callers continue to fall back to the voiceover duration.
+    output_duration: Optional[float] = None,
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
@@ -5150,6 +5153,12 @@ async def _render_with_preset(
         if _audio_dur == 0 and audio_path.stat().st_size > 0:
             logger.warning(f"Audio file exists ({audio_path.stat().st_size} bytes) but ffprobe returned duration=0, using -shortest fallback")
             # _audio_dur stays 0, -shortest will be used — which is correct for real audio
+
+    _render_dur = (
+        float(output_duration)
+        if output_duration is not None and float(output_duration) > 0
+        else _audio_dur
+    )
 
     # Audio normalization (two-pass loudnorm) — skip in preview mode for speed
     audio_filters = []
@@ -5355,7 +5364,7 @@ async def _render_with_preset(
             logger.info(f"Pass 1 command: {' '.join(pass1_cmd)}")
             # Pass 1 (analysis) maps to the first 45% of the encode progress band.
             _p1_cb = (lambda f: on_encode_progress(f * 0.45)) if on_encode_progress else None
-            result1 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass1_cmd, _audio_dur, _p1_cb, 1200, "VBR 2-pass: pass 1")
+            result1 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass1_cmd, _render_dur, _p1_cb, 1200, "VBR 2-pass: pass 1")
             if result1.returncode != 0:
                 raise RuntimeError(f"FFmpeg 2-pass (pass 1) failed: {result1.stderr}")
 
@@ -5397,18 +5406,22 @@ async def _render_with_preset(
             # Audio mapping
             if use_music:
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "[aout]"])
-                if _audio_dur > 0:
-                    pass2_cmd.extend(["-t", str(_audio_dur)])
+                if _render_dur > 0:
+                    pass2_cmd.extend(["-t", str(_render_dur)])
                 else:
                     pass2_cmd.extend(["-shortest"])
             elif audio_path and audio_path.exists():
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
-                if _audio_dur > 0:
-                    pass2_cmd.extend(["-t", str(_audio_dur)])
+                if _render_dur > 0:
+                    pass2_cmd.extend(["-t", str(_render_dur)])
                 else:
                     pass2_cmd.extend(["-shortest"])
             else:
-                pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
+                pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+                if _render_dur > 0:
+                    pass2_cmd.extend(["-t", str(_render_dur)])
+                else:
+                    pass2_cmd.extend(["-shortest"])
 
             # Extra flags
             extra_flags = preset.get("extra_flags", "-movflags +faststart")
@@ -5420,7 +5433,7 @@ async def _render_with_preset(
             logger.info(f"Pass 2 command: {' '.join(pass2_cmd)}")
             # Pass 2 (final encode) maps to the remaining 45%-100% of the band.
             _p2_cb = (lambda f: on_encode_progress(0.45 + f * 0.55)) if on_encode_progress else None
-            result2 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass2_cmd, _audio_dur, _p2_cb, 1800, "VBR 2-pass: pass 2")
+            result2 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass2_cmd, _render_dur, _p2_cb, 1800, "VBR 2-pass: pass 2")
             if result2.returncode != 0:
                 raise RuntimeError(f"FFmpeg 2-pass (pass 2) failed: {result2.stderr}")
 
@@ -5454,18 +5467,22 @@ async def _render_with_preset(
         if use_music:
             # Mixed audio comes from the filter_complex output, not a raw stream.
             cmd.extend(["-map", "0:v:0", "-map", "[aout]"])
-            if _audio_dur > 0:
-                cmd.extend(["-t", str(_audio_dur)])
+            if _render_dur > 0:
+                cmd.extend(["-t", str(_render_dur)])
             else:
                 cmd.extend(["-shortest"])
         elif audio_path and audio_path.exists():
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
-            if _audio_dur > 0:
-                cmd.extend(["-t", str(_audio_dur)])
+            if _render_dur > 0:
+                cmd.extend(["-t", str(_render_dur)])
             else:
                 cmd.extend(["-shortest"])
         else:
-            cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
+            cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+            if _render_dur > 0:
+                cmd.extend(["-t", str(_render_dur)])
+            else:
+                cmd.extend(["-shortest"])
 
         # Extra flags for social media compatibility (validated against allowlist)
         extra_flags = preset.get("extra_flags", "-movflags +faststart")
@@ -5479,7 +5496,7 @@ async def _render_with_preset(
 
         # Stream real progress when a callback + known duration are available;
         # the helper falls back to plain safe_ffmpeg_run otherwise.
-        result = await asyncio.to_thread(safe_ffmpeg_run_with_progress, cmd, _audio_dur, on_encode_progress, 1200, "final render")
+        result = await asyncio.to_thread(safe_ffmpeg_run_with_progress, cmd, _render_dur, on_encode_progress, 1200, "final render")
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 

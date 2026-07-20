@@ -131,6 +131,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
     selectedSourceIds,
     attentionSelection,
     handleAttentionSelectionChange,
+    renderSettings,
+    setRenderSettings,
   }: Step1Ctx = ctx;
   const workspaceLayout = pipelineLayout !== "guided";
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -195,6 +197,13 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 <AttentionTemplatePicker
                   selection={attentionSelection}
                   onSelectionChange={handleAttentionSelectionChange}
+                  outputWidth={renderSettings.output_width || 1080}
+                  outputHeight={renderSettings.output_height || 1920}
+                  onOutputSizeChange={(width, height) => setRenderSettings({
+                    ...renderSettings,
+                    output_width: width,
+                    output_height: height,
+                  })}
                 />
 
                 <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>

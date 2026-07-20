@@ -6,10 +6,13 @@ from typing import Any, Dict, Iterable, List, Optional
 
 SYSTEM_TEMPLATES: List[Dict[str, Any]] = [
     {"id": "system-quick-pulse", "name": "Quick Pulse", "is_system": True,
+     "canvasWidth": 1080, "canvasHeight": 1920,
      "strategy": "count", "count": 3, "durationMs": 1200, "animation": "pop", "sfx": "whoosh"},
     {"id": "system-product-focus", "name": "Product Focus", "is_system": True,
+     "canvasWidth": 1080, "canvasHeight": 1920,
      "strategy": "everySeconds", "everySeconds": 6, "durationMs": 1800, "animation": "zoom"},
     {"id": "system-tornado-stack", "name": "Tornado Stack", "is_system": True,
+     "canvasWidth": 1080, "canvasHeight": 1920,
      "strategy": "count", "count": 2, "durationMs": 1800, "animation": "tornado", "layers": 3, "sfx": "impact"},
 ]
 
@@ -75,7 +78,9 @@ def template_track_cues(
                     "assetId": asset,
                     "x": float(image.get("x", 0.1)), "y": float(image.get("y", 0.1)),
                     "width": float(image.get("width", 0.8)), "height": float(image.get("height", 0.8)),
-                    "zIndex": track_index + 1, "fit": "contain",
+                    "opacity": float(image.get("opacity", 1.0)),
+                    "zIndex": track_index + 1,
+                    "fit": image.get("fit") if image.get("fit") in ("contain", "cover") else "contain",
                     "animation": {"preset": animation, "enterMs": 250,
                                   "exitMs": 200, "delayMs": 0, "intensity": 1},
                 }],

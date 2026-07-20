@@ -1,4 +1,4 @@
-from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues
+from app.services.attention_templates import SYSTEM_TEMPLATES, distribute_attention_cues, template_track_cues
 
 
 def test_distribution_is_deterministic_and_snaps_to_srt():
@@ -54,3 +54,28 @@ def test_template_size_and_zone_thread_into_cues():
     assert cues
     assert cues[0]["zone"] == "front"
     assert all(l["width"] == 0.5 and l["height"] == 0.5 for l in cues[0]["layers"])
+
+
+def test_track_template_threads_slot_rendering_into_layer():
+    cues = template_track_cues(
+        template={
+            "tracks": [[{
+                "id": "slot-1", "x": 0.1, "y": 0.2,
+                "width": 0.5, "height": 0.4, "opacity": 0.35, "fit": "cover",
+                "startMs": 500, "durationMs": 1200,
+            }]],
+        },
+        asset_ids=["asset-1"],
+        duration_ms=5000,
+    )
+    assert cues[0]["layers"][0]["opacity"] == 0.35
+    assert cues[0]["layers"][0]["fit"] == "cover"
+
+
+def test_track_template_defaults_invalid_slot_fit_to_contain():
+    cues = template_track_cues(
+        template={"tracks": [[{"startMs": 0, "durationMs": 1000, "fit": "stretch"}]]},
+        asset_ids=["asset-1"],
+        duration_ms=5000,
+    )
+    assert cues[0]["layers"][0]["fit"] == "contain"

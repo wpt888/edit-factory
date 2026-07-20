@@ -49,6 +49,8 @@ import {
   Minimize2,
   LayoutTemplate,
   Pencil,
+  ScanLine,
+  GripVertical,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -72,7 +74,11 @@ import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
 import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
 import type { SubtitleTemplateRotation } from "../subtitle-template-rotation";
+import type { SafeZoneType } from "@/components/safe-zone-overlay";
 import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+
+// Radix Select forbids empty-string values, so "Auto (rotation)" uses a sentinel.
+const AUTO_TEMPLATE_VALUE = "__auto__";
 
 /**
  * Timeline state contract consumed by the future CompositePreviewPlayer (F5).
@@ -111,6 +117,8 @@ type Step3Ctx = {
   setUserSubtitlePresets: Dispatch<SetStateAction<UserSubtitlePreset[]>>;
   subtitleRotation: SubtitleTemplateRotation;
   variantSubtitleOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
+  variantTemplateSelections: Partial<Record<PreviewKey, string>>;
+  handleVariantTemplateSelectionChange: (previewKey: PreviewKey, presetId: string) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
@@ -142,6 +150,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     variantSubtitleOverrides,
     handleVariantTemplateOverrideChange,
     handleResetVariantTemplateOverride,
+    variantTemplateSelections,
+    handleVariantTemplateSelectionChange,
     handleUpdateSubtitlePreset,
     subtitleOverrides,
     currentProfileIdRef,
@@ -219,6 +229,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   const [maximizeSettingsTab, setMaximizeSettingsTab] = useState<"subtitles" | "timing" | "adjust">("subtitles");
   const [editingVariantKey, setEditingVariantKey] = useState<PreviewKey | null>(null);
   const [variantSubtitleDraft, setVariantSubtitleDraft] = useState<SubtitleSettings | null>(null);
+  const [safeZoneEnabled, setSafeZoneEnabled] = useState(false);
+  const [safeZoneType, setSafeZoneType] = useState<SafeZoneType>("reel");
+  const activeSafeZone = safeZoneEnabled ? safeZoneType : null;
   const editingVariantCard = useMemo(
     () => previewCards.find((card) => card.key === editingVariantKey),
     [editingVariantKey, previewCards],
@@ -379,6 +392,46 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     </Card>
   );
 
+  const safeZoneCard = (
+    <Card
+      className={`order-3 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
+      data-testid="step3-safe-zone-settings"
+    >
+      <CardHeader className="min-[1280px]:px-4">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <ScanLine className="size-4" />
+          Safe Zone
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 min-[1280px]:px-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Label className="text-sm">Show over preview</Label>
+            <p className="text-xs text-muted-foreground">Guide only; it is never included in the render.</p>
+          </div>
+          <Switch
+            checked={safeZoneEnabled}
+            onCheckedChange={setSafeZoneEnabled}
+            aria-label="Show safe zone over preview"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <Label className="text-sm">Format</Label>
+          <Select value={safeZoneType} onValueChange={(value) => setSafeZoneType(value as SafeZoneType)} disabled={!safeZoneEnabled}>
+            <SelectTrigger className="w-36" aria-label="Safe zone format">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="post">Post (4:5)</SelectItem>
+              <SelectItem value="story">Story</SelectItem>
+              <SelectItem value="reel">Reel</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   const subtitleStyleCard = (
     <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents ${WORKSPACE_CARD_BG}`}>
       <CardHeader className="pb-1 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:py-3">
@@ -418,9 +471,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3 min-[1280px]:contents">
-        {/* Variant switch + live preview stay pinned to the very top of
-            the inspector; everything below scrolls under them. */}
-        <div className="sticky top-0 z-10 space-y-2 bg-card pb-2 min-[1280px]:bg-background min-[1280px]:px-4">
+        {/* Keep the preview and controls in one continuous scroll surface.
+            A nested sticky region made the preview and settings move in
+            separate stages inside the already-scrollable inspector. */}
+        <div className="space-y-2 pb-2 min-[1280px]:bg-background min-[1280px]:px-2">
           {metaMultiplication && (
             <div
               role="tablist"
@@ -430,7 +484,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             >
               {(["A", "B"] as const).map((styleKey) => {
                 const isSelected = activeSubtitleStyleKey === styleKey;
-                const platform = styleKey === "A" ? "Instagram" : "Facebook";
                 return (
                   <Button
                     key={styleKey}
@@ -444,33 +497,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     onClick={() => setActiveStyleKey(styleKey)}
                   >
                     <span className="font-semibold">{styleKey}</span>
-                    <span className={`text-xs ${isSelected ? "opacity-80" : "text-muted-foreground"}`}>
-                      {platform}
-                    </span>
                   </Button>
                 );
               })}
             </div>
           )}
 
-          <div
-            id="subtitle-style-preview"
-            role="tabpanel"
-            data-testid="subtitle-sticky-preview"
-          >
-            <SubtitleStylePreviewPanel
-              key={activeSubtitleStyleKey}
-              styleKey={activeSubtitleStyleKey}
-              settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-              hasOverride={activeSubtitleStyleHasOverride}
-              pipelineId={pipelineId ?? undefined}
-              previewCards={previewCards}
-              previewText={getStylePreviewText(activeSubtitleStyleKey)}
-            />
-          </div>
         </div>
 
-        <div className="space-y-3 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:pb-3">
+        <div className="space-y-2 min-[1280px]:bg-background min-[1280px]:px-2 min-[1280px]:pb-2">
           {/* Auxiliary controls — below the preview so they don't push it down */}
           <SubtitleTemplateRotationPanel
             rotation={subtitleRotation}
@@ -517,7 +552,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           </Button>
         </div>
 
-          <div className="space-y-4">
+          <div>
             <div
               data-testid="subtitle-style-variant-editor"
             >
@@ -561,6 +596,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               />
             </div>
           </div>
+
         </div>
       </CardContent>
     </Card>
@@ -591,7 +627,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               rightSizing={{ minSize: "30%" }}
             >
               <aside
-                className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:bg-border"
+                className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:divide-y min-[1280px]:divide-border min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
                 data-testid="step3-inspector"
               >
             <Card className={`order-3 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
@@ -606,30 +642,72 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 <Button asChild variant="outline" size="sm" className="w-full border-primary/35 text-primary">
                   <Link href="/attention-templates">Open template space</Link>
                 </Button>
+                <div className="flex items-center gap-2 pt-1">
+                  <Type className="size-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-medium">Subtitle templates</p>
+                    <p className="text-xs text-muted-foreground">Create and manage reusable caption styles for variants.</p>
+                  </div>
+                </div>
+                <Button asChild variant="outline" size="sm" className="w-full border-primary/35 text-primary">
+                  <Link href="/subtitle-templates">Open subtitle templates</Link>
+                </Button>
               </CardContent>
             </Card>
 
             {/* Timing controls can reassemble the previews from inside the editor. */}
             {previewTimingCard}
 
+            {safeZoneCard}
+
             {/* Subtitle Style — one useful preview, switched between Meta versions. */}
             {subtitleStyleCard}
 
               </aside>
 
-              <section
-                className="min-w-0 space-y-3 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:space-y-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:[&>[data-slot=card]]:gap-3 min-[1280px]:[&>[data-slot=card]]:rounded-none min-[1280px]:[&>[data-slot=card]]:border-0 min-[1280px]:[&>[data-slot=card]]:py-3 min-[1280px]:[&>[data-slot=card]>[data-slot=card-header]]:px-4 min-[1280px]:[&>[data-slot=card]>[data-slot=card-content]]:px-4"
-                aria-label="Variant previews"
-                data-testid="step3-variant-canvas"
-              >
+              <div className="min-w-0 bg-background min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0">
+                {/* Keep the live subtitle preview permanently between the
+                    settings inspector and the variant canvas. Each column
+                    scrolls independently, so the preview remains available
+                    throughout Step 3 without covering variant controls. */}
+                <aside
+                  id="subtitle-style-preview"
+                  role="tabpanel"
+                  data-testid="subtitle-sticky-preview"
+                  className="border-b bg-background p-3 min-[1280px]:h-full min-[1280px]:w-[min(24rem,32vw)] min-[1280px]:shrink-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-r min-[1280px]:border-b-0"
+                  aria-label="Live subtitle preview"
+                >
+                  <SubtitleStylePreviewPanel
+                    key={activeSubtitleStyleKey}
+                    styleKey={activeSubtitleStyleKey}
+                    settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
+                    hasOverride={activeSubtitleStyleHasOverride}
+                    pipelineId={pipelineId ?? undefined}
+                    previewCards={previewCards}
+                    previewText={getStylePreviewText(activeSubtitleStyleKey)}
+                  />
+                </aside>
+
+                <section
+                  className="min-w-0 flex-1 space-y-3 bg-background min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:space-y-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:[&>[data-slot=card]]:gap-3 min-[1280px]:[&>[data-slot=card]]:rounded-none min-[1280px]:[&>[data-slot=card]]:border-0 min-[1280px]:[&>[data-slot=card]]:py-3 min-[1280px]:[&>[data-slot=card]>[data-slot=card-header]]:px-4 min-[1280px]:[&>[data-slot=card]>[data-slot=card-content]]:px-4"
+                  aria-label="Variant previews"
+                  data-testid="step3-variant-canvas"
+                >
                 <header
                   className="sticky top-0 z-[60] hidden h-14 items-center border-b bg-background px-4 min-[1280px]:flex"
                   data-testid="step3-variant-header"
                 >
-                  <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
-                    <Film className="size-4" />
-                    Variant Previews
-                  </h2>
+                  <div className="flex items-center gap-1">
+                    <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
+                      <Film className="size-4" />
+                      Variant Previews
+                    </h2>
+                    <InlineInfo label="About variant previews">
+                      {metaMultiplication
+                        ? "Each script is generated in two visual versions, A and B, with different footage selections. Compare them and choose the stronger result before rendering."
+                        : "Each preview is a visual version of its script that you can review and refine before rendering."}
+                    </InlineInfo>
+                  </div>
                 </header>
 
             {/* Variant preview grid */}
@@ -637,8 +715,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               {previewCards.map((card) => {
                 const preview = previews[card.key];
                 if (!preview) return null;
-                const assignedTemplate = getAssignedSubtitlePreset(card.baseIndex);
+                const assignedTemplate = getAssignedSubtitlePreset(card);
                 const hasVariantSubtitleOverride = Boolean(variantSubtitleOverrides[card.key]);
+                const selectedTemplateValue = variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE;
 
                 return (
                   <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 ${WORKSPACE_CARD_BG}`}>
@@ -651,24 +730,40 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           />
                           <CardTitle className="text-lg">
                             {card.label}
-                            {card.metaPlatform && (
-                              <Badge variant="outline" className="ml-2 text-xs">
-                                {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
-                              </Badge>
-                            )}
-                            {subtitleRotation.enabled && assignedTemplate && (
-                              <Badge
-                                variant="outline"
-                                className="ml-2 border-primary/40 text-xs text-primary"
-                                data-testid="subtitle-template-badge"
-                              >
-                                {assignedTemplate.name} · {assignedTemplate.wordsPerSubtitle ?? wordsPerSubtitle} words
-                              </Badge>
-                            )}
                           </CardTitle>
+                          {userSubtitlePresets.length > 0 && (
+                            <Select
+                              value={selectedTemplateValue}
+                              onValueChange={(value) =>
+                                handleVariantTemplateSelectionChange(
+                                  card.key,
+                                  value === AUTO_TEMPLATE_VALUE ? "" : value,
+                                )
+                              }
+                            >
+                              <SelectTrigger
+                                className="h-7 w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary"
+                                data-testid="subtitle-template-select"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={AUTO_TEMPLATE_VALUE}>
+                                  Auto{assignedTemplate && !variantTemplateSelections[card.key]
+                                    ? ` (${assignedTemplate.name})`
+                                    : " (rotation)"}
+                                </SelectItem>
+                                {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
+                                  <SelectItem key={preset.id} value={preset.id}>
+                                    {preset.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
-                          {subtitleRotation.enabled && assignedTemplate && (
+                          {assignedTemplate && (
                             <>
                               <Button
                                 variant="ghost"
@@ -744,50 +839,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           <AlertDescription>{preview.variety_warning.message}</AlertDescription>
                         </Alert>
                       )}
-                      {/* Thumbnail selector (becomes first frame of rendered video) */}
-                      {(() => {
-                        const thumb = variantThumbnails[card.key];
-                        const thumbUrl = thumb
-                          ? segmentFileUrl(mediaApiUrl, thumb.imageUrl)
-                          : null;
-                        return (
-                          <div className="flex items-center gap-3 pb-2 border-b">
-                            {thumbUrl ? (
-                              <button
-                                onClick={() => setThumbnailPickerKey(card.key)}
-                                className={`w-[54px] h-[96px] rounded overflow-hidden border-2 flex-shrink-0 hover:opacity-80 transition-opacity ${
-                                  thumb?.isAutoSelected ? "border-border" : "border-primary"
-                                }`}
-                                title="Click to change thumbnail"
-                              >
-                                <img src={thumbUrl} alt="Thumbnail" className="w-full h-full object-cover" />
-                              </button>
-                            ) : (
-                              <div
-                                onClick={() => setThumbnailPickerKey(card.key)}
-                                className="w-[54px] h-[96px] rounded bg-muted border-2 border-dashed border-muted-foreground/30 flex items-center justify-center cursor-pointer hover:border-muted-foreground/50 flex-shrink-0"
-                              >
-                                <Film className="size-4 text-muted-foreground" />
-                              </div>
-                            )}
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs font-medium">Thumbnail</span>
-                              <span className="text-xs text-muted-foreground">
-                                {thumb ? (thumb.isAutoSelected ? "auto-selected" : "manual") : "none"}
-                              </span>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 text-xs px-2 w-fit"
-                                onClick={() => setThumbnailPickerKey(card.key)}
-                              >
-                                Change
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
                       {/* Full timeline editor — uses this variant's effective subtitle style */}
                       <TimelineEditor
                         matches={preview.matches}
@@ -811,6 +862,67 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         music={preview.music ?? null}
                         onMusicChange={getMusicChangeHandler(card.key)}
                         onRenderPreview={() => openRenderedPreview(card.key)}
+                        safeZone={activeSafeZone}
+                        previewTopLeftAccessory={(() => {
+                          const thumb = variantThumbnails[card.key];
+                          const thumbUrl = thumb
+                            ? segmentFileUrl(mediaApiUrl, thumb.imageUrl)
+                            : null;
+                          const openThumbnailPicker = () => setThumbnailPickerKey(card.key);
+
+                          return (
+                            <div
+                              data-testid={`variant-thumbnail-control-${card.key}`}
+                              className="flex w-24 flex-col items-stretch gap-1.5 rounded-sm border bg-background/95 p-2 shadow-lg backdrop-blur-sm"
+                            >
+                              <div
+                                data-preview-accessory-drag-handle
+                                className="flex touch-none select-none items-center justify-between gap-1 cursor-grab active:cursor-grabbing"
+                                title="Drag thumbnail panel"
+                              >
+                                <span className="flex items-center gap-0.5 text-[11px] font-semibold leading-none">
+                                  <GripVertical className="size-3 text-muted-foreground" aria-hidden="true" />
+                                  Thumbnail
+                                </span>
+                                <span
+                                  className="text-[9px] leading-none text-muted-foreground"
+                                  title={thumb ? (thumb.isAutoSelected ? "auto-selected" : "manual") : "none"}
+                                >
+                                  {thumb ? (thumb.isAutoSelected ? "Auto" : "Manual") : "None"}
+                                </span>
+                              </div>
+                              {thumbUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={openThumbnailPicker}
+                                  className={`aspect-[9/16] w-full overflow-hidden rounded-sm border-2 transition-opacity hover:opacity-80 ${
+                                    thumb.isAutoSelected ? "border-border" : "border-primary"
+                                  }`}
+                                  title="Click to change thumbnail"
+                                >
+                                  <img src={thumbUrl} alt="Thumbnail" className="h-full w-full object-cover" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={openThumbnailPicker}
+                                  className="flex aspect-[9/16] w-full items-center justify-center rounded-sm border-2 border-dashed border-muted-foreground/30 bg-muted transition-colors hover:border-muted-foreground/50"
+                                  title="Choose thumbnail"
+                                >
+                                  <Film className="size-5 text-muted-foreground" />
+                                </button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 w-full rounded-sm px-1 text-[11px]"
+                                onClick={openThumbnailPicker}
+                              >
+                                Change
+                              </Button>
+                            </div>
+                          );
+                        })()}
                       />
                     </CardContent>
                   </Card>
@@ -945,6 +1057,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   voiceVolume={renderAdjust.voiceVolume}
                   audioFadeIn={renderAdjust.audioFadeIn}
                   audioFadeOut={renderAdjust.audioFadeOut}
+                  safeZone={activeSafeZone}
+                  outputWidth={renderSettings.output_width || 1080}
+                  outputHeight={renderSettings.output_height || 1920}
                 />
               );
             })()}
@@ -985,11 +1100,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         <DialogTitle className="flex items-center gap-2 text-sm">
                           <Film className="size-4" />
                           <span>{card.label} — Full Editor</span>
-                          {card.metaPlatform && (
-                            <Badge variant="outline" className="text-xs">
-                              {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
-                            </Badge>
-                          )}
                         </DialogTitle>
                         <Button
                           variant="ghost"
@@ -1028,6 +1138,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           music={preview.music ?? null}
                           onMusicChange={getMusicChangeHandler(card.key)}
                           onRenderPreview={() => openRenderedPreview(card.key)}
+                          safeZone={activeSafeZone}
                         />
                       </div>
 
@@ -1053,12 +1164,39 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           </TabsList>
                           <div className="min-h-0 flex-1 overflow-y-auto p-3">
                             <TabsContent value="subtitles" className="mt-0 space-y-3">
+                              {userSubtitlePresets.length > 0 && (
+                                <div className="flex items-center justify-between gap-2 rounded-md border border-primary/25 px-3 py-2">
+                                  <span className="text-xs font-medium text-muted-foreground">Template</span>
+                                  <Select
+                                    value={variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE}
+                                    onValueChange={(value) =>
+                                      handleVariantTemplateSelectionChange(
+                                        card.key,
+                                        value === AUTO_TEMPLATE_VALUE ? "" : value,
+                                      )
+                                    }
+                                  >
+                                    <SelectTrigger className="h-7 w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value={AUTO_TEMPLATE_VALUE}>Auto (rotation)</SelectItem>
+                                      {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
+                                        <SelectItem key={preset.id} value={preset.id}>
+                                          {preset.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              )}
                               {subtitleStyleCard}
                             </TabsContent>
                             <TabsContent value="timing" className="mt-0 space-y-3">
                               {previewTimingCard}
                             </TabsContent>
                             <TabsContent value="adjust" className="mt-0 space-y-3">
+                              {safeZoneCard}
                               <RenderSettingsPanel
                                 settings={renderSettings}
                                 onChange={setRenderSettings}
@@ -1238,7 +1376,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 onConfirm={(skipVars) => handleRender(skipVars)}
               />
             )}
-              </section>
+                </section>
+              </div>
             </WorkspaceSplit>
           </div>
   );

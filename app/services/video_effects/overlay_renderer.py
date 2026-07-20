@@ -298,6 +298,7 @@ async def _attention_cues_to_items(
                 "source_path": local, "is_video": False,
                 "start": start, "end": end,
                 "box_px": (x, y, w, h), "fit": layer.get("fit", "contain"),
+                "opacity": max(0.0, min(1.0, float(layer.get("opacity", 1.0)))),
                 "animation": layer.get("animation", {}), "z": z,
             })
             z += 1
@@ -355,7 +356,9 @@ async def apply_overlay_timeline(
         else:
             sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
         fade = "" if it.get("is_video") else _fade_filter(start, end, it.get("animation", {}))
-        filters.append(f"[{index}:v]{sizing},format=rgba,setpts=PTS-STARTPTS+{start}/TB{fade}[ov{index}]")
+        opacity = max(0.0, min(1.0, float(it.get("opacity", 1.0))))
+        alpha = "" if opacity >= 0.999 else f",colorchannelmixer=aa={opacity}"
+        filters.append(f"[{index}:v]{sizing},format=rgba{alpha},setpts=PTS-STARTPTS+{start}/TB{fade}[ov{index}]")
         output = f"vov{index}"
         filters.append(
             f"[{previous}][ov{index}]overlay={x}:{y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"

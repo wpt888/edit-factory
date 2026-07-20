@@ -1346,7 +1346,7 @@ export function VideoSegmentPlayer({
           timelineRef points at the Video lane so all % positioning math is reused. */}
       <MultiTrackTimeline
         scrollRef={timelineScrollRef}
-        className="flex-1 min-h-0 overflow-auto border-y border-white/10 bg-[#0d0f0d] text-[10px] text-white"
+        className="min-h-0 flex-1 border-y border-white/10"
         laneWidth={timelineLaneWidth}
         ruler={{
           startTime: visibleStart,

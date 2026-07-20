@@ -18,6 +18,8 @@ class AttentionTemplateImage(BaseModel):
     y: float = Field(default=0.1, ge=0.0, le=1.0)
     width: float = Field(default=0.8, gt=0.0, le=1.0)
     height: float = Field(default=0.8, gt=0.0, le=1.0)
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    fit: Literal["contain", "cover"] = "contain"
     startMs: int = Field(default=0, ge=0, le=600000)
     durationMs: int = Field(default=1200, ge=100, le=600000)
 
@@ -25,8 +27,11 @@ class AttentionTemplateImage(BaseModel):
 class AttentionTemplateBody(BaseModel):
     """Track-based template: tracks[i] = images on lane V(2+i)."""
     name: str = Field(min_length=1, max_length=80)
+    canvasWidth: int = Field(default=1080, ge=64, le=8192, multiple_of=2)
+    canvasHeight: int = Field(default=1920, ge=64, le=8192, multiple_of=2)
     zone: Literal["behind", "front"] = "behind"
     animation: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "pop"
+    variantGapMs: int = Field(default=1000, ge=0, le=30000)
     sfx: Optional[str] = Field(default=None, max_length=500)
     tracks: list[list[AttentionTemplateImage]] = Field(default_factory=lambda: [[]], max_length=10)
 

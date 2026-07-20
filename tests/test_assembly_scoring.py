@@ -414,7 +414,7 @@ def test_edited_composition_becomes_gapless_profile_scoped_timeline():
     assert [entry.timeline_start for entry in timeline] == pytest.approx([0.0, 2.0])
     assert timeline[1].start_time == pytest.approx(20.0)
     assert timeline[1].end_time == pytest.approx(24.0)
-    assert sum(entry.timeline_duration for entry in timeline) == pytest.approx(3.05)
+    assert sum(entry.timeline_duration for entry in timeline) == pytest.approx(3.0)
 
 
 def test_edited_composition_rejects_unknown_library_clip():

@@ -26,7 +26,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
 from fastapi.responses import FileResponse
 import re as _re
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
 from app.repositories.factory import get_repository
@@ -715,6 +715,8 @@ def _compute_render_fingerprint(
     key_data = {
         "script_text": script_text or "",
         "preset_name": render_request.preset_name,
+        "output_width": render_request.output_width,
+        "output_height": render_request.output_height,
         "voice_id": render_request.voice_id,
         "elevenlabs_model": render_request.elevenlabs_model,
         "voice_settings": render_request.voice_settings or {},
@@ -1801,6 +1803,15 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         except Exception as e:
             logger.error(f"Failed to fetch preset: {e}")
 
+    output_width = getattr(render_request, "output_width", None)
+    output_height = getattr(render_request, "output_height", None)
+    if output_width is not None and output_height is not None:
+        preset_data = {
+            **preset_data,
+            "width": output_width,
+            "height": output_height,
+        }
+
     # Merge encoding overrides from request into preset_data
     if render_request.encoding_mode:
         preset_data["encoding_mode"] = render_request.encoding_mode
@@ -2781,6 +2792,8 @@ class PipelineRenderRequest(BaseModel):
     """Request model for batch render."""
     variant_indices: List[int] = Field(..., min_length=1, max_length=10)  # Which variants to render (BUG-PR-13)
     preset_name: str = "TikTok"
+    output_width: Optional[int] = Field(default=None, ge=64, le=8192, multiple_of=2)
+    output_height: Optional[int] = Field(default=None, ge=64, le=8192, multiple_of=2)
     source_video_ids: Optional[List[str]] = None  # Filter segments to these source videos
     # Timeline editor overrides: preview key -> list of match dicts (with optional duration_override)
     # Keys are either "0" for standard previews or "0_A"/"0_B" for Meta preview versions.
@@ -2789,6 +2802,12 @@ class PipelineRenderRequest(BaseModel):
     composition_overrides: Optional[Dict[str, List[dict]]] = None
     # Per-variant background music, keyed exactly like composition_overrides.
     music_overrides: Optional[Dict[str, MusicSettings]] = None
+
+    @model_validator(mode="after")
+    def _validate_output_dimensions(self):
+        if (self.output_width is None) != (self.output_height is None):
+            raise ValueError("output_width and output_height must be provided together")
+        return self
 
     @field_validator("composition_overrides")
     @classmethod
@@ -3730,9 +3749,15 @@ class SubtitleOverridesRequest(BaseModel):
 
 
 class SubtitleRotationRequest(BaseModel):
-    """Ordered profile-preset rotation stored inside portable template state."""
+    """Ordered profile-preset rotation stored inside portable template state.
+
+    ``variantTemplates`` holds explicit manual per-variant template picks
+    (presetId keyed by PreviewKey, e.g. "0", "0_A"). It layers on top of the
+    round-robin rotation: a manual pick wins even when rotation is disabled.
+    """
     enabled: bool = False
     presetIds: List[str] = Field(default_factory=list, max_length=50)
+    variantTemplates: Dict[str, str] = Field(default_factory=dict)
 
     @field_validator("presetIds")
     @classmethod
@@ -4045,10 +4070,14 @@ async def get_subtitle_rotation(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
     settings = pipeline.get("template_settings") or {}
-    rotation = ((settings.get("subtitles") or {}).get("rotation") or {})
+    subtitles = settings.get("subtitles") or {}
+    rotation = subtitles.get("rotation") or {}
+    variant_templates = subtitles.get("variantTemplates") or {}
     return {
         "enabled": bool(rotation.get("enabled", False)),
         "presetIds": list(rotation.get("presetIds") or []),
+        # Unknown/deleted presetIds are ignored gracefully client-side.
+        "variantTemplates": dict(variant_templates) if isinstance(variant_templates, dict) else {},
     }
 
 
@@ -4075,15 +4104,25 @@ async def update_subtitle_rotation(
     if missing:
         raise HTTPException(status_code=400, detail="Subtitle rotation contains an unavailable template")
 
+    # Manual per-variant picks are optional convenience — silently drop any
+    # that reference a deleted/unowned preset rather than failing the save.
+    variant_templates = {
+        str(key): str(preset_id)
+        for key, preset_id in (request.variantTemplates or {}).items()
+        if str(preset_id) in owned_ids
+    }
+
     rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
     with _get_pipeline_state_lock(pipeline_id):
         settings = copy.deepcopy(pipeline.get("template_settings") or {})
-        settings.setdefault("subtitles", {})["rotation"] = rotation
+        subtitles = settings.setdefault("subtitles", {})
+        subtitles["rotation"] = rotation
+        subtitles["variantTemplates"] = variant_templates
         pipeline["template_settings"] = settings
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
     _db_save_pipeline(pipeline_id, pipeline)
-    return rotation
+    return {**rotation, "variantTemplates": variant_templates}
 
 
 @router.put("/{pipeline_id}/subtitle-overrides")
@@ -9503,6 +9542,8 @@ async def get_pipeline_audio(
 class PreviewRenderRequest(BaseModel):
     """Request model for server-side FFmpeg preview render."""
     match_overrides: List[dict]
+    output_width: int = Field(default=1080, ge=64, le=8192, multiple_of=2)
+    output_height: int = Field(default=1920, ge=64, le=8192, multiple_of=2)
     composition_override: Optional[List[dict]] = None
     source_video_ids: Optional[List[str]] = None
     min_segment_duration: Optional[float] = None
@@ -9673,6 +9714,8 @@ async def render_preview(
         "variant_index": variant_index,
         "effective_variant_index": effective_variant_index,
         "visual_version": normalized_visual_version or "",
+        "output_width": render_request.output_width,
+        "output_height": render_request.output_height,
         "matches": [
             {
                 "index": i,
@@ -9844,6 +9887,8 @@ async def render_preview(
                         music=render_request.music.model_dump() if render_request.music else None,
                         subtitle_style_override=subtitle_style_override,
                         visual_version_label=normalized_visual_version,
+                        output_width=render_request.output_width,
+                        output_height=render_request.output_height,
                     ),
                     timeout=300  # 5-minute timeout for preview
                 )
@@ -9856,7 +9901,11 @@ async def render_preview(
                     render_state["preview_video_path"] = str(preview_path)
                     render_state["preview_limitations"] = [
                         "Audio volume may differ from export (loudness normalization disabled)",
-                        "Resolution is 540x960 (export will be 1080x1920)",
+                        (
+                            f"Resolution is {(render_request.output_width // 2) // 2 * 2}x"
+                            f"{(render_request.output_height // 2) // 2 * 2} (export will be "
+                            f"{render_request.output_width}x{render_request.output_height})"
+                        ),
                     ]
                 logger.info(f"Preview render completed: {preview_path}")
 

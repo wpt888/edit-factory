@@ -44,6 +44,7 @@ import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import { GlobalTransformPanel } from "@/components/global-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
+import { EditorHeader } from "@/components/editor-header";
 import { ProductPickerDialog } from "@/components/dialogs/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/dialogs/image-picker-dialog";
 import { PipOverlayPanel } from "@/components/pip-overlay-panel";
@@ -2518,23 +2519,30 @@ export default function SegmentsPage() {
   );
 
   return (
-    <div className="h-full min-h-0 overflow-hidden bg-background text-foreground">
-      <EditorLayout
-        leftPanel={leftPanelContent}
-        rightPanel={rightPanelContent}
-        leftPanelTitle="Source Videos"
-        centerPanelTitle={(
-          <span className="flex items-center gap-1.5 whitespace-nowrap">
-            <Scissors className="size-4 shrink-0" />
-            Source Video
-          </span>
-        )}
-        centerPanelHeader={centerPanelHeader}
-        rightPanelTitle="Segments Library"
-        workspaceId={currentProfile?.id}
-      >
-        {centerContent}
-      </EditorLayout>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <EditorHeader
+        icon={<Scissors className="size-4 text-primary" />}
+        title="Footage & Segments"
+        subtitle="Source videos and segment library"
+      />
+      <div className="min-h-0 flex-1">
+        <EditorLayout
+          leftPanel={leftPanelContent}
+          rightPanel={rightPanelContent}
+          leftPanelTitle="Source Videos"
+          centerPanelTitle={(
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
+              <Scissors className="size-4 shrink-0" />
+              Source Video
+            </span>
+          )}
+          centerPanelHeader={centerPanelHeader}
+          rightPanelTitle="Segments Library"
+          workspaceId={currentProfile?.id}
+        >
+          {centerContent}
+        </EditorLayout>
+      </div>
 
       {/* Segment keyword popup - for new segments (conditional render) */}
         {showKeywordPopup && pendingSegment && (

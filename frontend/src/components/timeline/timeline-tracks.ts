@@ -26,10 +26,12 @@ export function cuesOnTrack(cues: AttentionCue[], trackIndex: number): Attention
 
 export function deriveTracks(
   cues: AttentionCue[],
-  addedVideoTracks: number,
+  minimumVideoTrackCount: number,
+  overlayTrackIndices: number[] = [],
 ): { video: TimelineTrack[]; audio: TimelineTrack[] } {
   const maxCueTrack = cues.reduce((max, cue) => Math.max(max, trackOf(cue)), 2);
-  const videoCount = Math.max(2, maxCueTrack, 2 + addedVideoTracks);
+  const maxOverlayTrack = overlayTrackIndices.reduce((max, index) => Math.max(max, index), 2);
+  const videoCount = Math.max(2, maxCueTrack, maxOverlayTrack, minimumVideoTrackCount);
 
   // Top-to-bottom: Vn .. V2 (image tracks), then V1 (magnetic) at the bottom.
   const video: TimelineTrack[] = [];

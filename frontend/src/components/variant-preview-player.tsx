@@ -15,6 +15,7 @@ import type { SubtitleSettings } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
 import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
+import { SafeZoneOverlay, type SafeZoneType } from "@/components/safe-zone-overlay";
 
 type PreviewPipOverlayConfig = {
   image_url: string;
@@ -59,6 +60,9 @@ interface VariantPreviewPlayerProps {
   // The caller can resolve the Meta style before posting. Keep visualVersion
   // for the preview key/segment offset without applying a second style overlay.
   applyMetaSubtitleStyle?: boolean;
+  safeZone?: SafeZoneType | null;
+  outputWidth?: number;
+  outputHeight?: number;
 }
 
 export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
@@ -93,6 +97,9 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   audioFadeOut = 0.0,
   music = null,
   applyMetaSubtitleStyle = true,
+  safeZone = null,
+  outputWidth = 1080,
+  outputHeight = 1920,
 }: VariantPreviewPlayerProps) {
   const mediaApiUrl = useApiUrl();
   const [status, setStatus] = useState<string>("idle");
@@ -205,6 +212,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             music: musicRef.current ?? undefined,
             visual_version: visualVersion,
             apply_meta_subtitle_style: applyMetaSubtitleStyle,
+            output_width: outputWidth,
+            output_height: outputHeight,
           }
         );
 
@@ -356,7 +365,11 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
         <div
           className="relative mx-auto bg-black rounded-lg overflow-hidden flex items-center justify-center"
-          style={{ aspectRatio: "9/16", maxHeight: "75vh" }}
+          style={{
+            aspectRatio: `${outputWidth} / ${outputHeight}`,
+            maxHeight: "75vh",
+            width: `min(100%, calc(75vh * ${outputWidth} / ${outputHeight}))`,
+          }}
         >
           {/* Loading state */}
           {status === "processing" && (
@@ -419,6 +432,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
                   videoRef.current?.play().catch(() => {});
                 }}
               />
+              {safeZone && <SafeZoneOverlay type={safeZone} />}
             </>
           )}
 

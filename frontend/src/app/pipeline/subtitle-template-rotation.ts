@@ -11,6 +11,9 @@ export const EMPTY_SUBTITLE_TEMPLATE_ROTATION: SubtitleTemplateRotation = {
   presetIds: [],
 };
 
+// Explicit manual per-variant template picks, keyed by PreviewKey ("0", "0_A").
+export type VariantTemplateSelections = Partial<Record<PreviewKey, string>>;
+
 export function assignedSubtitlePreset(
   rotation: SubtitleTemplateRotation,
   presets: UserSubtitlePreset[],
@@ -21,13 +24,33 @@ export function assignedSubtitlePreset(
   return presets.find((preset) => preset.id === presetId);
 }
 
+// Precedence: explicit per-variant selection > rotation round-robin > none.
+// Unknown/deleted preset ids fall through gracefully.
+export function resolveSubtitlePresetForCard(
+  rotation: SubtitleTemplateRotation,
+  selections: VariantTemplateSelections,
+  presets: UserSubtitlePreset[],
+  card: Pick<PreviewCard, "key" | "baseIndex">,
+): UserSubtitlePreset | undefined {
+  const explicitId = selections?.[card.key];
+  if (explicitId) {
+    const found = presets.find((preset) => preset.id === explicitId);
+    if (found) return found;
+  }
+  return assignedSubtitlePreset(rotation, presets, card.baseIndex);
+}
+
 export function wordsPerSubtitleForVariant(
   rotation: SubtitleTemplateRotation,
   presets: UserSubtitlePreset[],
   variantIndex: number,
   fallback: number,
+  selections?: VariantTemplateSelections,
+  previewKey?: PreviewKey,
 ): number {
-  const preset = assignedSubtitlePreset(rotation, presets, variantIndex);
+  const key = previewKey ?? (String(variantIndex) as PreviewKey);
+  const card = { key, baseIndex: variantIndex };
+  const preset = resolveSubtitlePresetForCard(rotation, selections ?? {}, presets, card);
   return Math.max(1, Math.min(20, preset?.wordsPerSubtitle ?? fallback));
 }
 
@@ -45,6 +68,7 @@ export function subtitleSettingsDiff(
 export function resolveRotatedSubtitleSettings({
   card,
   rotation,
+  selections,
   presets,
   defaultSettings,
   metaOverrides,
@@ -53,13 +77,14 @@ export function resolveRotatedSubtitleSettings({
 }: {
   card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">;
   rotation: SubtitleTemplateRotation;
+  selections?: VariantTemplateSelections;
   presets: UserSubtitlePreset[];
   defaultSettings: SubtitleSettings;
   metaOverrides: Partial<Record<StyleKey, SubtitleSettings>>;
   variantOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
   metaFallback?: Partial<Record<string, Partial<SubtitleSettings>>>;
 }): SubtitleSettings {
-  const preset = assignedSubtitlePreset(rotation, presets, card.baseIndex);
+  const preset = resolveSubtitlePresetForCard(rotation, selections ?? {}, presets, card);
   const styleKey: StyleKey = card.visualVersion === "A" || card.visualVersion === "B"
     ? card.visualVersion
     : "default";

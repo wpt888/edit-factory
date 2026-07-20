@@ -48,6 +48,7 @@ export interface VideoLaneProps {
   onClipDragStart: (clipId: string) => void;
   onClipDragEnd: () => void;
   onRollPointerDown: (event: React.PointerEvent<HTMLSpanElement>, idx: number) => void;
+  onEndResizePointerDown: (event: React.PointerEvent<HTMLSpanElement>) => void;
   onBoundaryChange: (clipId: string, next: TransitionSpec | null | undefined) => void;
   onBoundaryDragStart: (event: React.PointerEvent, originIdx: number, spec: TransitionSpec) => void;
 }
@@ -70,6 +71,7 @@ export function VideoLane({
   onClipDragStart,
   onClipDragEnd,
   onRollPointerDown,
+  onEndResizePointerDown,
   onBoundaryChange,
   onBoundaryDragStart,
 }: VideoLaneProps) {
@@ -140,6 +142,14 @@ export function VideoLane({
                 aria-label={`Trim boundary after ${blockLabel}`}
                 className="absolute inset-y-0 right-0 z-30 w-2 translate-x-1/2 cursor-col-resize border-x border-white/25 bg-white/20 opacity-70 transition hover:bg-white/70 group-hover:opacity-100"
                 onPointerDown={(event) => onRollPointerDown(event, idx)}
+              />
+            )}
+            {idx === clips.length - 1 && (
+              <span
+                role="separator"
+                aria-label={`Trim right edge of ${blockLabel}`}
+                className="absolute inset-y-0 right-0 z-30 w-2 translate-x-1/2 cursor-col-resize border-x border-lime-100/45 bg-lime-100/25 opacity-80 transition hover:bg-lime-100/80 group-hover:opacity-100"
+                onPointerDown={onEndResizePointerDown}
               />
             )}
           </TimelineClipShell>

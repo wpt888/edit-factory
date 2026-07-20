@@ -1,79 +1,92 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft,
-  CopyPlus,
-  ImagePlus,
-  Layers3,
-  LayoutTemplate,
-  Loader2,
-  Plus,
-  Save,
-  ShieldCheck,
-  Trash2,
-  X,
+  ArrowLeft, ChevronDown, ChevronRight, CopyPlus, Film, ImagePlus,
+  Layers3, Library, Loader2, Maximize2, Minus, Pause, Play, Plus,
+  Save, Settings2, ShieldCheck, Trash2, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
-import { PageHeader } from "@/components/page-header";
-import { PageShell } from "@/components/page-shell";
+import { EditorHeader } from "@/components/editor-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  MultiTrackTimeline,
+  TIMELINE_MAX_ZOOM,
+  TIMELINE_MIN_ZOOM,
+} from "@/components/timeline/multi-track-timeline";
+import { TimelineClipShell } from "@/components/timeline/timeline-primitives";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import type { AttentionAnimationPreset } from "@/types/attention-timeline";
 import {
-  DEFAULT_ATTENTION_TEMPLATE,
-  newTemplateImage,
-  normalizeAttentionTemplate,
-  templateEndMs,
-  type AttentionTemplate,
-  type AttentionTemplateImage,
+  DEFAULT_ATTENTION_TEMPLATE, newTemplateImage, normalizeAttentionTemplate,
+  templateEndMs, type AttentionTemplate, type AttentionTemplateImage,
   type AttentionTemplatePayload,
 } from "@/types/attention-template";
 
-const PREVIEW_GRADIENTS = [
-  "from-lime-300 via-emerald-400 to-teal-700",
-  "from-fuchsia-400 via-violet-500 to-indigo-800",
-  "from-amber-300 via-orange-500 to-rose-700",
-  "from-cyan-300 via-sky-500 to-blue-800",
-];
-
-const ANIMATIONS: AttentionAnimationPreset[] = [
-  "static",
-  "pop",
-  "zoom",
-  "slide",
-  "spin",
-  "tornado",
-];
+const ANIMATIONS: AttentionAnimationPreset[] = ["static", "pop", "zoom", "slide", "spin", "tornado"];
+const TIMELINE_CHUNK_MS = 10_000;
+const INITIAL_TIMELINE_MS = 60_000;
+const CANVAS_PRESETS = [
+  { label: "Vertical 9:16", width: 1080, height: 1920 },
+  { label: "Landscape 16:9", width: 1920, height: 1080 },
+  { label: "Square 1:1", width: 1080, height: 1080 },
+  { label: "Portrait 4:5", width: 1080, height: 1350 },
+  { label: "Portrait 3:4", width: 1080, height: 1440 },
+  { label: "Landscape 4:3", width: 1440, height: 1080 },
+] as const;
 
 export default function AttentionTemplatesPage() {
   const [templates, setTemplates] = useState<AttentionTemplate[]>([]);
-  const [selectedId, setSelectedId] = useState<string>("");
-  const [draft, setDraft] = useState<AttentionTemplatePayload>(DEFAULT_ATTENTION_TEMPLATE);
-  const [selectedImageId, setSelectedImageId] = useState<string>("");
+  const [selectedId, setSelectedId] = useState("new");
+  const [draft, setDraft] = useState<AttentionTemplatePayload>({ ...DEFAULT_ATTENTION_TEMPLATE, tracks: [[]] });
+  const [selectedImageId, setSelectedImageId] = useState("");
   const [previewMs, setPreviewMs] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [timelineRangeMs, setTimelineRangeMs] = useState(INITIAL_TIMELINE_MS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [videoUrl, setVideoUrl] = useState("");
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const previewCanvasRef = useRef<HTMLDivElement>(null);
+  const previewMsRef = useRef(0);
 
   const selectedTemplate = templates.find(template => template.id === selectedId);
+  const selectedImage = draft.tracks.flat().find(image => image.id === selectedImageId);
   const isNew = selectedId === "new";
   const isSystem = Boolean(selectedTemplate?.is_system);
   const editable = isNew || Boolean(selectedTemplate && !selectedTemplate.is_system);
+  const endMs = Math.max(timelineRangeMs, timelineRangeForContent(templateEndMs(draft.tracks)));
+  const slotCount = draft.tracks.reduce((sum, track) => sum + track.length, 0);
+  const canvasLabel = formatCanvasLabel(draft.canvasWidth, draft.canvasHeight);
+  const canvasPreset = CANVAS_PRESETS.find(option => option.width === draft.canvasWidth && option.height === draft.canvasHeight);
+  const activeImages = useMemo(() => draft.tracks.flatMap((track, trackIndex) =>
+    track.filter(image => previewMs >= image.startMs && previewMs < image.startMs + image.durationMs)
+      .map(image => ({ image, trackIndex }))), [draft.tracks, previewMs]);
+  const previewImages = useMemo(() => draft.tracks.flatMap((track, trackIndex) =>
+    track.map(image => ({
+      image,
+      trackIndex,
+      active: previewMs >= image.startMs && previewMs < image.startMs + image.durationMs,
+    }))), [draft.tracks, previewMs]);
 
   const selectTemplate = useCallback((template: AttentionTemplate) => {
     setSelectedId(template.id);
-    setDraft(normalizeAttentionTemplate(template));
+    const normalized = normalizeAttentionTemplate(template);
+    setDraft(normalized);
     setSelectedImageId("");
     setPreviewMs(0);
+    setTimelineRangeMs(timelineRangeForContent(templateEndMs(normalized.tracks)));
+    setLibraryOpen(false);
   }, []);
 
   const loadTemplates = useCallback(async (preferredId?: string) => {
@@ -83,380 +96,385 @@ export default function AttentionTemplatesPage() {
       const data = (await response.json()) as { templates?: AttentionTemplate[] };
       const next = data.templates ?? [];
       setTemplates(next);
-      const preferred = next.find(template => template.id === preferredId) ?? next[0];
+      const preferred = next.find(template => template.id === preferredId);
       if (preferred) selectTemplate(preferred);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load attention templates");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [selectTemplate]);
 
   useEffect(() => {
-    void loadTemplates();
+    const timer = window.setTimeout(() => void loadTemplates(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadTemplates]);
+  useEffect(() => {
+    previewMsRef.current = previewMs;
+  }, [previewMs]);
+  useEffect(() => {
+    if (!playing) return;
+    const started = performance.now() - previewMsRef.current;
+    let frame = 0;
+    const tick = (now: number) => {
+      const next = now - started;
+      if (next >= endMs) { setPreviewMs(0); setPlaying(false); return; }
+      setPreviewMs(next);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, endMs]);
+  useEffect(() => {
+    const clearSelection = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedImageId("");
+    };
+    window.addEventListener("keydown", clearSelection);
+    return () => window.removeEventListener("keydown", clearSelection);
+  }, []);
 
   const beginCreate = () => {
     setSelectedId("new");
     setDraft({ ...DEFAULT_ATTENTION_TEMPLATE, name: "My attention template", tracks: [[]] });
-    setSelectedImageId("");
-    setPreviewMs(0);
+    setSelectedImageId(""); setPreviewMs(0); setTimelineRangeMs(INITIAL_TIMELINE_MS); setLibraryOpen(false);
   };
-
-  const setTracks = (tracks: AttentionTemplateImage[][]) =>
-    setDraft(current => ({ ...current, tracks }));
-
+  const setTracks = (tracks: AttentionTemplateImage[][]) => setDraft(current => ({ ...current, tracks }));
+  const updateImage = (id: string, patch: Partial<AttentionTemplateImage>) =>
+    setTracks(draft.tracks.map(track => track.map(image => image.id === id ? { ...image, ...patch } : image)));
+  const removeImage = (id: string) => {
+    setTracks(draft.tracks.map(track => track.filter(image => image.id !== id)));
+    if (selectedImageId === id) setSelectedImageId("");
+  };
+  const addSlot = (trackIndex: number) => {
+    const image = newTemplateImage({ startMs: Math.round(previewMs / 100) * 100 });
+    setTracks(draft.tracks.map((track, index) => index === trackIndex ? [...track, image] : track));
+    setSelectedImageId(image.id);
+  };
   const addTrack = () => setTracks([...draft.tracks, []]);
-
   const removeTrack = (trackIndex: number) => {
     if (draft.tracks.length <= 1) return;
     setTracks(draft.tracks.filter((_, index) => index !== trackIndex));
   };
-
-  const addImage = (trackIndex: number) => {
-    const track = draft.tracks[trackIndex];
-    const lastEnd = track.length
-      ? Math.max(...track.map(image => image.startMs + image.durationMs))
-      : 0;
-    const image = newTemplateImage({ startMs: lastEnd });
-    setTracks(draft.tracks.map((images, index) =>
-      index === trackIndex ? [...images, image] : images));
-    setSelectedImageId(image.id);
-    setPreviewMs(image.startMs);
-  };
-
-  const updateImage = (imageId: string, patch: Partial<AttentionTemplateImage>) =>
-    setTracks(draft.tracks.map(images =>
-      images.map(image => (image.id === imageId ? { ...image, ...patch } : image))));
-
-  const removeImage = (imageId: string) =>
-    setTracks(draft.tracks.map(images => images.filter(image => image.id !== imageId)));
 
   const saveTemplate = async () => {
     if (!editable || !draft.name.trim()) return;
     setSaving(true);
     try {
       const payload = { ...draft, name: draft.name.trim() };
-      const response = isNew
-        ? await apiPost("/attention-templates", payload)
-        : await apiPut(`/attention-templates/${selectedId}`, payload);
+      const response = isNew ? await apiPost("/attention-templates", payload) : await apiPut(`/attention-templates/${selectedId}`, payload);
       const saved = (await response.json()) as AttentionTemplate;
       await loadTemplates(saved.id);
       toast.success(isNew ? "Personal template created" : "Template saved");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save template");
-    } finally {
-      setSaving(false);
-    }
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not save template"); }
+    finally { setSaving(false); }
   };
-
   const deleteTemplate = async () => {
     if (!selectedTemplate || selectedTemplate.is_system) return;
     setDeleting(true);
     try {
       await apiDelete(`/attention-templates/${selectedTemplate.id}`);
-      setDeleteOpen(false);
-      await loadTemplates();
-      toast.success("Personal template deleted");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not delete template");
-    } finally {
-      setDeleting(false);
-    }
+      setDeleteOpen(false); beginCreate(); await loadTemplates(); toast.success("Personal template deleted");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not delete template"); }
+    finally { setDeleting(false); }
   };
 
-  const endMs = useMemo(() => Math.max(1000, templateEndMs(draft.tracks)), [draft.tracks]);
-  const activeImages = useMemo(() =>
-    draft.tracks.flatMap((images, trackIndex) =>
-      images
-        .filter(image => previewMs >= image.startMs && previewMs < image.startMs + image.durationMs)
-        .map(image => ({ image, trackIndex }))),
-    [draft.tracks, previewMs]);
-  const imageCount = draft.tracks.reduce((sum, images) => sum + images.length, 0);
+  const beginCanvasInteraction = (
+    event: React.PointerEvent,
+    image: AttentionTemplateImage,
+    mode: "move" | "nw" | "ne" | "sw" | "se",
+  ) => {
+    if (!editable || !previewCanvasRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedImageId(image.id);
+    const canvas = previewCanvasRef.current.getBoundingClientRect();
+    const originX = image.x * canvas.width;
+    const originY = image.y * canvas.height;
+    const originW = image.width * canvas.width;
+    const originH = image.height * canvas.height;
+    const pointerX = event.clientX;
+    const pointerY = event.clientY;
+    const isLeft = mode === "nw" || mode === "sw";
+    const isTop = mode === "nw" || mode === "ne";
+    const anchorX = isLeft ? originX + originW : originX;
+    const anchorY = isTop ? originY + originH : originY;
+    const cornerX = isLeft ? originX : originX + originW;
+    const cornerY = isTop ? originY : originY + originH;
+    const vectorX = cornerX - anchorX;
+    const vectorY = cornerY - anchorY;
+    const vectorLengthSquared = vectorX ** 2 + vectorY ** 2;
+
+    const move = (moveEvent: PointerEvent) => {
+      if (mode === "move") {
+        const x = clamp(originX + moveEvent.clientX - pointerX, 0, canvas.width - originW);
+        const y = clamp(originY + moveEvent.clientY - pointerY, 0, canvas.height - originH);
+        updateImage(image.id, { x: x / canvas.width, y: y / canvas.height });
+        return;
+      }
+      const relativeX = moveEvent.clientX - canvas.left - anchorX;
+      const relativeY = moveEvent.clientY - canvas.top - anchorY;
+      const projectedScale = (relativeX * vectorX + relativeY * vectorY) / vectorLengthSquared;
+      const minScale = Math.max(24 / originW, 24 / originH);
+      const horizontalRoom = isLeft ? anchorX / originW : (canvas.width - anchorX) / originW;
+      const verticalRoom = isTop ? anchorY / originH : (canvas.height - anchorY) / originH;
+      const scale = clamp(projectedScale, minScale, Math.min(horizontalRoom, verticalRoom));
+      const width = originW * scale;
+      const height = originH * scale;
+      updateImage(image.id, {
+        x: (isLeft ? anchorX - width : anchorX) / canvas.width,
+        y: (isTop ? anchorY - height : anchorY) / canvas.height,
+        width: width / canvas.width,
+        height: height / canvas.height,
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  };
 
   return (
-    <PageShell width="wide" className="space-y-6">
-      <PageHeader
-        icon={<div className="rounded-xl border border-lime-300/25 bg-lime-300/10 p-3"><LayoutTemplate className="size-6 text-lime-300" /></div>}
+    <div className="flex h-[calc(100vh-4rem)] min-h-[680px] flex-col overflow-hidden bg-background" data-testid="attention-template-editor">
+      <EditorHeader
+        className="relative z-50"
+        icon={<Layers3 className="size-4 text-primary" />}
         title="Attention Templates"
-        description="Stack image tracks like in Premiere: position, size, duration. Apply from Step 3."
-        actions={(
-          <div className="flex gap-2">
-            <Button asChild variant="outline">
-              <Link href="/pipeline"><ArrowLeft className="mr-2 size-4" />Back to Pipeline</Link>
-            </Button>
-            <Button onClick={beginCreate} className="bg-lime-300 text-black hover:bg-lime-200">
-              <CopyPlus className="mr-2 size-4" />New personal template
-            </Button>
+        breadcrumb={draft.name}
+        subtitle="Template editor"
+        actions={<>
+          <Button variant="ghost" size="sm" onClick={() => setLibraryOpen(value => !value)}><Library className="mr-2 size-4" />Template Library</Button>
+          <Button variant="ghost" size="sm" onClick={beginCreate}><CopyPlus className="mr-2 size-4" />New template</Button>
+          <Button variant="outline" size="sm" asChild><Link href="/pipeline"><ArrowLeft className="mr-2 size-4" />Back to Step 3</Link></Button>
+          <Button size="sm" disabled={!editable || saving || !draft.name.trim() || slotCount === 0} onClick={() => void saveTemplate()}><Save className="mr-2 size-4" />{saving ? "Saving..." : "Save template"}</Button>
+        </>}
+      >
+        {libraryOpen && <TemplateLibrary templates={templates} selectedId={selectedId} loading={loading} onSelect={selectTemplate} onCreate={beginCreate} />}
+      </EditorHeader>
+
+      <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-px bg-border">
+        <aside className="min-h-0 overflow-y-auto bg-card" data-testid="attention-template-inspector">
+          <div className="border-b border-border p-4">
+            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Template settings</p><p className="mt-0.5 text-[11px] text-muted-foreground">Reusable layout and timing</p></div>{isSystem && <Badge variant="outline" className="border-primary/30 text-primary"><ShieldCheck className="mr-1 size-3" />System</Badge>}</div>
           </div>
-        )}
-      />
-
-      <div className="grid gap-5 xl:grid-cols-[18rem_minmax(28rem,1fr)_minmax(22rem,0.8fr)]">
-        <Card className="gap-3 py-4">
-          <CardHeader className="px-4">
-            <CardTitle className="text-sm">Template library</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 px-3">
-            {loading ? (
-              <div className="flex justify-center py-10"><Loader2 className="size-6 animate-spin text-primary" /></div>
-            ) : templates.length === 0 ? (
-              <p className="px-2 py-8 text-center text-sm text-muted-foreground">No templates available.</p>
-            ) : templates.map(template => {
-              const config = normalizeAttentionTemplate(template);
-              const images = config.tracks.reduce((sum, track) => sum + track.length, 0);
-              return (
-                <button
-                  key={template.id}
-                  type="button"
-                  onClick={() => selectTemplate(template)}
-                  className={`w-full rounded-lg border p-3 text-left transition ${
-                    selectedId === template.id
-                      ? "border-lime-300/60 bg-lime-300/10"
-                      : "border-border bg-muted/20 hover:border-lime-300/30 hover:bg-muted/40"
-                  }`}
+          <fieldset disabled={!editable || saving} className="disabled:opacity-55">
+            <InspectorSection title="Template" open>
+              <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-9" /></Field>
+              <Field label="Subtitle layer"><select value={draft.zone} onChange={event => setDraft(current => ({ ...current, zone: event.target.value as AttentionTemplatePayload["zone"] }))} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="behind">Captions over images</option><option value="front">Images over captions</option></select></Field>
+              <Field label="Animation"><select value={draft.animation} onChange={event => setDraft(current => ({ ...current, animation: event.target.value as AttentionAnimationPreset }))} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm capitalize">{ANIMATIONS.map(animation => <option key={animation}>{animation}</option>)}</select></Field>
+              <NumberField label="Variant start gap" value={draft.variantGapMs / 1000} unit="s" step={.1} onChange={value => setDraft(current => ({ ...current, variantGapMs: clamp(Math.round(value * 1000), 0, 30000) }))} />
+              <p className="text-[10px] leading-relaxed text-muted-foreground">Variant 1 uses the authored timing. Each following variant starts another {formatGap(draft.variantGapMs)} later.</p>
+            </InspectorSection>
+            <InspectorSection title="Image slot" value={selectedImage ? "Selected" : "No selection"} open>
+              {selectedImage ? <>
+                <div className="grid grid-cols-2 gap-2"><NumberField label="Position X" value={selectedImage.x * 100} unit="%" onChange={value => updateImage(selectedImage.id, { x: clamp(value / 100, 0, 1) })} /><NumberField label="Position Y" value={selectedImage.y * 100} unit="%" onChange={value => updateImage(selectedImage.id, { y: clamp(value / 100, 0, 1) })} /><NumberField label="Width" value={selectedImage.width * 100} unit="%" onChange={value => updateImage(selectedImage.id, { width: clamp(value / 100, .01, 1) })} /><NumberField label="Height" value={selectedImage.height * 100} unit="%" onChange={value => updateImage(selectedImage.id, { height: clamp(value / 100, .01, 1) })} /></div>
+                <Field label="Media fit"><select value={selectedImage.fit} onChange={event => updateImage(selectedImage.id, { fit: event.target.value as AttentionTemplateImage["fit"] })} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="contain">Contain · show the whole image</option><option value="cover">Cover · fill and crop</option></select></Field>
+                <p className="text-[10px] leading-relaxed text-muted-foreground">The pipeline supplies the real image. Contain safely handles portrait and landscape media; Cover fills the slot and may crop it.</p>
+                <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><input type="range" min="0" max="100" value={selectedImage.opacity * 100} onChange={event => updateImage(selectedImage.id, { opacity: Number(event.target.value) / 100 })} className="w-full accent-primary" /></Field>
+                <div className="grid grid-cols-2 gap-2"><NumberField label="Start" value={selectedImage.startMs / 1000} unit="s" step={.1} onChange={value => { const ms = Math.max(0, Math.round(value * 1000)); updateImage(selectedImage.id, { startMs: ms }); setPreviewMs(ms); }} /><NumberField label="Duration" value={selectedImage.durationMs / 1000} unit="s" step={.1} onChange={value => updateImage(selectedImage.id, { durationMs: Math.max(100, Math.round(value * 1000)) })} /></div>
+                <Button type="button" variant="outline" size="sm" className="w-full border-destructive/30 text-destructive" onClick={() => removeImage(selectedImage.id)}><Trash2 className="mr-2 size-3.5" />Remove slot</Button>
+              </> : <div className="rounded border border-dashed border-border p-5 text-center text-xs text-muted-foreground/70">Add or select a slot on the timeline to edit its layout and timing.</div>}
+            </InspectorSection>
+            <InspectorSection title="Canvas" value={canvasLabel} open>
+              <Field label="Video format">
+                <select
+                  value={canvasPreset ? `${canvasPreset.width}x${canvasPreset.height}` : "custom"}
+                  onChange={event => {
+                    const preset = CANVAS_PRESETS.find(option => `${option.width}x${option.height}` === event.target.value);
+                    if (preset) setDraft(current => ({ ...current, canvasWidth: preset.width, canvasHeight: preset.height }));
+                  }}
+                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                  data-testid="attention-canvas-preset"
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium">{template.name}</span>
-                    {template.is_system && <ShieldCheck className="size-3.5 shrink-0 text-lime-300" />}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-muted-foreground">
-                    {config.tracks.length} track{config.tracks.length === 1 ? "" : "s"} · {images} image{images === 1 ? "" : "s"} · {config.zone}
-                  </span>
-                </button>
-              );
-            })}
-          </CardContent>
-        </Card>
-
-        <Card className="gap-4 py-5" data-testid="attention-template-editor">
-          <CardHeader className="border-b px-5 pb-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle>{isNew ? "Create personal template" : draft.name}</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {isSystem ? "System templates are read-only." : "Changes are saved to your current profile."}
-                </p>
+                  {CANVAS_PRESETS.map(option => <option key={`${option.width}x${option.height}`} value={`${option.width}x${option.height}`}>{option.label} · {option.width}×{option.height}</option>)}
+                  <option value="custom">Custom dimensions</option>
+                </select>
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="Width" value={draft.canvasWidth} unit="px" onChange={value => setDraft(current => ({ ...current, canvasWidth: clampCanvasDimension(value) }))} />
+                <NumberField label="Height" value={draft.canvasHeight} unit="px" onChange={value => setDraft(current => ({ ...current, canvasHeight: clampCanvasDimension(value) }))} />
               </div>
-              {isSystem && <Badge variant="outline" className="border-lime-300/30 text-lime-300">System</Badge>}
-              {isNew && <Badge className="bg-lime-300 text-black">New</Badge>}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-5 px-5">
-            <fieldset disabled={!editable || saving} className="space-y-5 disabled:opacity-65">
-              <div className="grid gap-4 sm:grid-cols-3">
-                <label className="space-y-1.5 sm:col-span-1">
-                  <Label htmlFor="attention-name">Name</Label>
-                  <Input id="attention-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} maxLength={80} />
-                </label>
-                <label className="space-y-1.5">
-                  <Label htmlFor="attention-zone">Subtitle zone</Label>
-                  <select id="attention-zone" className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                    value={draft.zone} onChange={event => setDraft(current => ({ ...current, zone: event.target.value as AttentionTemplatePayload["zone"] }))}>
-                    <option value="behind">Behind subtitles</option>
-                    <option value="front">In front of subtitles</option>
-                  </select>
-                </label>
-                <label className="space-y-1.5">
-                  <Label htmlFor="attention-animation">Animation</Label>
-                  <select id="attention-animation" className="h-9 w-full rounded-md border bg-background px-3 text-sm capitalize"
-                    value={draft.animation} onChange={event => setDraft(current => ({ ...current, animation: event.target.value as AttentionAnimationPreset }))}>
-                    {ANIMATIONS.map(animation => <option key={animation} value={animation}>{animation}</option>)}
-                  </select>
-                </label>
-              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">The monitor uses a neutral canvas until you load a reference video. Reference media is only for preview and is not saved in the template.</p>
+              <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => videoInputRef.current?.click()}><Upload className="mr-2 size-3.5" />Load reference video</Button>
+            </InspectorSection>
+          </fieldset>
+          {!isNew && !isSystem && <div className="p-4"><Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}><Trash2 className="mr-2 size-4" />Delete personal template</Button></div>}
+        </aside>
 
-              <div className="space-y-3" data-testid="attention-track-list">
-                {draft.tracks.map((images, trackIndex) => (
-                  <div key={trackIndex} className="space-y-2 rounded-lg border bg-muted/20 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Video track V{trackIndex + 2}
-                      </p>
-                      <div className="flex gap-1.5">
-                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs"
-                          onClick={() => addImage(trackIndex)} data-testid={`add-image-track-${trackIndex}`}>
-                          <ImagePlus className="size-3.5" />Add image
-                        </Button>
-                        {draft.tracks.length > 1 && (
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground"
-                            onClick={() => removeTrack(trackIndex)} aria-label={`Remove track ${trackIndex + 1}`}>
-                            <X className="size-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    {images.length === 0 ? (
-                      <p className="rounded border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
-                        Empty track — add an image.
-                      </p>
-                    ) : images.map((image, imageIndex) => (
-                      <div
-                        key={image.id}
-                        className={`space-y-2 rounded-md border p-2 transition ${
-                          selectedImageId === image.id ? "border-lime-300/60 bg-lime-300/5" : "border-border"
-                        }`}
-                        onClick={() => { setSelectedImageId(image.id); setPreviewMs(image.startMs); }}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-medium">Image {imageIndex + 1}</span>
-                          <button type="button" className="text-muted-foreground hover:text-destructive"
-                            onClick={event => { event.stopPropagation(); removeImage(image.id); }}
-                            aria-label={`Remove image ${imageIndex + 1} on track ${trackIndex + 1}`}>
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                          <PercentField label="X" value={image.x} onChange={value => updateImage(image.id, { x: value })} />
-                          <PercentField label="Y" value={image.y} onChange={value => updateImage(image.id, { y: value })} />
-                          <PercentField label="W" min={1} value={image.width} onChange={value => updateImage(image.id, { width: value })} />
-                          <PercentField label="H" min={1} value={image.height} onChange={value => updateImage(image.id, { height: value })} />
-                          <MsField label="Start ms" value={image.startMs} onChange={value => updateImage(image.id, { startMs: value })} />
-                          <MsField label="Duration ms" min={100} value={image.durationMs} onChange={value => updateImage(image.id, { durationMs: value })} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-                <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={addTrack} data-testid="add-track">
-                  <Plus className="size-4" />Add video track
-                </Button>
-              </div>
-            </fieldset>
-
-            <div className="flex flex-wrap justify-between gap-2 border-t pt-4">
-              <Button variant="destructive" disabled={!selectedTemplate || selectedTemplate.is_system || saving}
-                onClick={() => setDeleteOpen(true)}>
-                <Trash2 className="mr-2 size-4" />Delete personal template
-              </Button>
-              <Button disabled={!editable || saving || !draft.name.trim() || imageCount === 0} onClick={() => void saveTemplate()}
-                className="bg-lime-300 text-black hover:bg-lime-200">
-                {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
-                {saving ? "Saving..." : isNew ? "Create template" : "Save changes"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="gap-4 overflow-hidden border-lime-300/15 bg-[#111411] py-5 text-white">
-          <CardHeader className="px-5">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Layers3 className="size-4 text-lime-300" />Live 9:16 preview
-            </CardTitle>
-            <p className="text-xs text-white/50">Scrub the timeline to see which images are on screen.</p>
-          </CardHeader>
-          <CardContent className="space-y-3 px-5">
-            <div className="flex justify-center">
-              <div className="relative aspect-[9/16] w-full max-w-[300px] overflow-hidden rounded-[1.6rem] border border-white/15 bg-gradient-to-b from-zinc-700 via-zinc-900 to-black shadow-2xl" data-testid="attention-template-preview">
-                <div className="absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-white/10 to-transparent" />
-                <div className="absolute left-4 top-5 rounded-full bg-black/35 px-2 py-1 text-[9px] uppercase tracking-[0.2em] text-white/55">Mock video</div>
-                {activeImages.map(({ image, trackIndex }) => (
-                  <div
-                    key={image.id}
-                    className={`absolute overflow-hidden rounded-lg border shadow-xl bg-gradient-to-br ${PREVIEW_GRADIENTS[trackIndex % PREVIEW_GRADIENTS.length]} ${
-                      selectedImageId === image.id ? "border-lime-300" : "border-white/45"
-                    }`}
-                    style={{
-                      left: `${image.x * 100}%`,
-                      top: `${image.y * 100}%`,
-                      width: `${image.width * 100}%`,
-                      height: `${image.height * 100}%`,
-                      zIndex: (draft.zone === "front" ? 30 : 10) + trackIndex,
-                    }}
-                  >
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_35%_25%,rgba(255,255,255,0.55),transparent_24%)]" />
-                    <span className="absolute bottom-2 right-2 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-semibold">V{trackIndex + 2}</span>
-                  </div>
-                ))}
-                <div className="absolute inset-x-3 top-[76%] z-20 text-center">
-                  <span className="inline rounded bg-black/70 px-2 py-1 text-sm font-black leading-relaxed text-white [text-shadow:0_1px_2px_black]">
-                    LIVE SUBTITLE LAYER
-                  </span>
-                </div>
-                <div className="absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-full border border-white/15 bg-black/55 px-3 py-1 text-[10px] text-white/65">
-                  {draft.zone === "front" ? "Images over captions" : "Captions over images"}
-                </div>
+        <main className="grid min-h-0 grid-rows-[minmax(300px,1fr)_300px] bg-card">
+          <section className="flex min-h-0 flex-col border-b border-border" aria-label="Program monitor">
+            <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-4"><p className="flex items-center gap-2 text-xs font-semibold"><Film className="size-3.5" />Program monitor</p><div className="flex items-center gap-1"><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{canvasLabel} · {(previewMs / 1000).toFixed(2)}s</span><Button variant="ghost" size="icon" className="size-7 text-muted-foreground"><Maximize2 className="size-3.5" /></Button></div></div>
+            {/* Program-monitor video stage stays dark in both themes — a preview canvas is theme-independent, like any video player. */}
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#060706] p-4" style={{ containerType: "size" }}>
+              <div ref={previewCanvasRef} className="relative overflow-hidden border border-white/15 bg-[#171a17] shadow-2xl" style={{ aspectRatio: `${draft.canvasWidth} / ${draft.canvasHeight}`, width: `min(100cqw, calc(100cqh * ${draft.canvasWidth / draft.canvasHeight}))`, height: `min(100cqh, calc(100cqw * ${draft.canvasHeight / draft.canvasWidth}))` }} data-testid="attention-template-preview" onPointerDown={event => { if (event.target === event.currentTarget || !(event.target as HTMLElement).closest("[data-preview-image]")) setSelectedImageId(""); }}>
+                {videoUrl ? <video src={videoUrl} muted loop autoPlay className="pointer-events-none absolute inset-0 size-full object-cover" /> : <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(45deg,#171a17_25%,#121412_25%,#121412_50%,#171a17_50%,#171a17_75%,#121412_75%)] bg-[length:18px_18px]"><div className="absolute inset-0 flex flex-col items-center justify-center text-white/25"><Film className="mb-2 size-7" /><span className="text-[10px] uppercase tracking-[.18em]">Reference video</span></div></div>}
+                {previewImages.map(({ image, trackIndex, active }) => <div key={image.id} data-preview-image data-active={active ? "true" : "false"} className={`group absolute cursor-move touch-none ${selectedImageId === image.id ? "z-50" : ""}`} style={{ left: `${image.x * 100}%`, top: `${image.y * 100}%`, width: `${image.width * 100}%`, height: `${image.height * 100}%`, zIndex: selectedImageId === image.id ? 70 : (active ? (draft.zone === "front" ? 40 : 10) : 2) + trackIndex }} onPointerDown={event => beginCanvasInteraction(event, image, "move")}><div className={`absolute inset-0 overflow-hidden ${active ? "bg-[#252b25] shadow-xl" : "border border-dashed border-white/25 bg-transparent"} ${selectedImageId === image.id ? "ring-2 ring-primary" : active ? "ring-1 ring-white/35 group-hover:ring-primary/80" : "group-hover:border-primary/70"}`} style={{ opacity: active ? image.opacity : selectedImageId === image.id ? .45 : .18 }}>{active ? <div className="flex size-full flex-col items-center justify-center gap-1 bg-[linear-gradient(135deg,#333a33,#1b201b)] text-white/35"><ImagePlus className="size-7" /><span className="text-[9px] font-medium uppercase tracking-wider">Pipeline image slot</span><span className="absolute bottom-2 right-2 bg-black/60 px-1.5 py-0.5 text-[9px]">V{trackIndex + 2} · {image.fit}</span></div> : <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[8px] text-white/70">V{trackIndex + 2} · inactive</span>}</div>{(["nw", "ne", "sw", "se"] as const).map(corner => <button key={corner} type="button" aria-label={`Resize image slot from ${corner} corner`} className={`absolute size-3 rounded-full border-2 border-[#0b0d0b] bg-primary shadow transition-opacity ${selectedImageId === image.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"} ${corner === "nw" ? "-left-1.5 -top-1.5 cursor-nwse-resize" : corner === "ne" ? "-right-1.5 -top-1.5 cursor-nesw-resize" : corner === "sw" ? "-bottom-1.5 -left-1.5 cursor-nesw-resize" : "-bottom-1.5 -right-1.5 cursor-nwse-resize"}`} onPointerDown={event => beginCanvasInteraction(event, image, corner)} />)}</div>)}
+                {slotCount > 0 && activeImages.length === 0 && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-[90] rounded bg-black/70 px-2 py-1.5 text-center text-[9px] text-white/65">No slots active at {(previewMs / 1000).toFixed(2)}s · inactive positions are outlined</div>}
               </div>
             </div>
-            <div className="space-y-1">
-              <input
-                type="range"
-                min={0}
-                max={endMs}
-                step={50}
-                value={Math.min(previewMs, endMs)}
-                onChange={event => setPreviewMs(Number(event.target.value))}
-                className="w-full accent-lime-300"
-                data-testid="attention-preview-scrub"
-              />
-              <p className="text-center text-[11px] text-white/50">
-                {(previewMs / 1000).toFixed(2)}s / {(endMs / 1000).toFixed(2)}s · {activeImages.length} image{activeImages.length === 1 ? "" : "s"} on screen
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+            <div className="flex h-10 shrink-0 items-center justify-center gap-2 border-t border-border bg-card"><Button variant="ghost" size="icon" className="size-7" onClick={() => setPreviewMs(0)}><ArrowLeft className="size-3.5" /></Button><Button variant="outline" size="icon" className="size-8 rounded-full" onClick={() => setPlaying(value => !value)}>{playing ? <Pause className="size-3.5" /> : <Play className="ml-0.5 size-3.5" />}</Button><span className="w-24 font-mono text-[10px] text-muted-foreground">{formatMs(previewMs)} / {formatMs(endMs)}</span></div>
+          </section>
+
+          <Timeline tracks={draft.tracks} endMs={endMs} previewMs={previewMs} zoom={zoom} selectedImageId={selectedImageId} editable={editable} onSeek={setPreviewMs} onSelect={id => setSelectedImageId(id)} onDeselect={() => setSelectedImageId("")} onAddSlot={addSlot} onAddTrack={addTrack} onRemoveTrack={removeTrack} onZoom={setZoom} onUpdateImage={updateImage} onNeedMoreTime={() => setTimelineRangeMs(current => Math.max(current, endMs) + TIMELINE_CHUNK_MS)} />
+        </main>
       </div>
 
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title="Delete personal attention template?"
-        description={`This removes “${selectedTemplate?.name ?? "this template"}” from your profile. Existing timelines keep their already-applied cues.`}
-        confirmLabel="Delete template"
-        variant="destructive"
-        loading={deleting}
-        onConfirm={() => void deleteTemplate()}
-      />
-    </PageShell>
+      <input ref={videoInputRef} className="hidden" type="file" accept="video/*" onChange={event => { const file = event.target.files?.[0]; if (file) setVideoUrl(URL.createObjectURL(file)); }} />
+      <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Delete personal attention template?" description={`This removes “${selectedTemplate?.name ?? "this template"}” from your profile. Existing timelines keep their applied images.`} confirmLabel="Delete template" variant="destructive" loading={deleting} onConfirm={() => void deleteTemplate()} />
+    </div>
   );
 }
 
-function PercentField({ label, value, min = 0, onChange }: {
-  label: string;
-  value: number;
-  min?: number;
-  onChange: (value: number) => void;
-}) {
+function TemplateLibrary({ templates, selectedId, loading, onSelect, onCreate }: { templates: AttentionTemplate[]; selectedId: string; loading: boolean; onSelect: (template: AttentionTemplate) => void; onCreate: () => void }) {
+  return <div className="absolute right-4 top-12 z-[80] w-80 rounded-lg border border-border bg-card p-2 shadow-2xl"><div className="flex items-center justify-between px-2 py-2"><div><p className="text-sm font-semibold">Template Library</p><p className="text-[10px] text-muted-foreground">Choose a reusable layout</p></div><Button size="icon" className="size-7" onClick={onCreate}><Plus className="size-4" /></Button></div><div className="max-h-80 space-y-1 overflow-y-auto">{loading ? <div className="flex justify-center p-8"><Loader2 className="size-5 animate-spin text-primary" /></div> : templates.length === 0 ? <p className="p-8 text-center text-xs text-muted-foreground">No saved templates yet.</p> : templates.map(template => { const config = normalizeAttentionTemplate(template); const count = config.tracks.flat().length; return <button key={template.id} onClick={() => onSelect(template)} className={`flex w-full items-center justify-between rounded-md border px-3 py-2.5 text-left ${selectedId === template.id ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}><div className="min-w-0"><p className="truncate text-xs font-medium">{template.name}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{config.tracks.length} video tracks · {count} slots</p></div>{template.is_system && <ShieldCheck className="size-3.5 text-primary" />}</button>; })}</div></div>;
+}
+
+function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, onSeek, onSelect, onDeselect, onAddSlot, onAddTrack, onRemoveTrack, onZoom, onUpdateImage, onNeedMoreTime }: { tracks: AttentionTemplateImage[][]; endMs: number; previewMs: number; zoom: number; selectedImageId: string; editable: boolean; onSeek: (ms: number) => void; onSelect: (id: string) => void; onDeselect: () => void; onAddSlot: (track: number) => void; onAddTrack: () => void; onRemoveTrack: (track: number) => void; onZoom: (zoom: number) => void; onUpdateImage: (id: string, patch: Partial<AttentionTemplateImage>) => void; onNeedMoreTime: () => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const laneWidth = Math.round(endMs / 1000 * 100 * zoom);
+  const secondWidth = laneWidth / (endMs / 1000);
+
+  const seek = (event: React.PointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest("[data-timeline-block]")) return;
+    onDeselect();
+    const rect = event.currentTarget.getBoundingClientRect();
+    onSeek(clamp((event.clientX - rect.left) / rect.width, 0, 1) * endMs);
+  };
+  const extendNearEdge = () => {
+    const scroller = scrollRef.current;
+    if (scroller && scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 500) onNeedMoreTime();
+  };
+  const beginDrag = (event: React.PointerEvent, image: AttentionTemplateImage, mode: "move" | "start" | "end") => {
+    if (!editable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect(image.id);
+    const originX = event.clientX;
+    const originStart = image.startMs;
+    const originDuration = image.durationMs;
+    const move = (moveEvent: PointerEvent) => {
+      const delta = (moveEvent.clientX - originX) / laneWidth * endMs;
+      if (mode === "move") onUpdateImage(image.id, { startMs: Math.max(0, Math.round((originStart + delta) / 50) * 50) });
+      if (mode === "start") {
+        const start = clamp(Math.round((originStart + delta) / 50) * 50, 0, originStart + originDuration - 100);
+        onUpdateImage(image.id, { startMs: start, durationMs: originDuration + originStart - start });
+      }
+      if (mode === "end") onUpdateImage(image.id, { durationMs: Math.max(100, Math.round((originDuration + delta) / 50) * 50) });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  const playhead = (
+    <span
+      className="pointer-events-none absolute inset-y-0 z-30 w-px bg-rose-400"
+      style={{ left: `${clamp(previewMs / endMs, 0, 1) * 100}%` }}
+    />
+  );
+
   return (
-    <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {label} %
-      <Input
-        type="number"
-        className="h-8 text-xs"
-        value={Math.round(value * 100)}
-        min={min}
-        max={100}
-        step={1}
-        onChange={event => {
-          const next = Number(event.target.value);
-          if (Number.isFinite(next)) onChange(Math.min(100, Math.max(min, next)) / 100);
+    <section className="flex min-h-0 flex-col bg-card" data-testid="attention-track-list">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
+        <div className="flex items-center gap-2">
+          <Settings2 className="size-3.5 text-primary" />
+          <span className="text-xs font-semibold">Timeline</span>
+          <span className="text-[10px] text-muted-foreground">Add slots, then drag or trim them · scroll right for more time</span>
+        </div>
+        <Button disabled={!editable} variant="ghost" size="sm" className="h-7 text-primary" onClick={onAddTrack}>
+          <Plus className="mr-1 size-3.5" />Add track
+        </Button>
+      </div>
+      <MultiTrackTimeline
+        scrollRef={scrollRef}
+        className="min-h-0 flex-1"
+        containerProps={{
+          "data-testid": "attention-timeline-scroll",
+          onScroll: extendNearEdge,
         }}
+        laneWidth={laneWidth}
+        ruler={{
+          duration: endMs / 1000,
+          currentTime: previewMs / 1000,
+          className: "cursor-ew-resize",
+          onPointerDown: seek,
+        }}
+        zoom={zoom}
+        minZoom={TIMELINE_MIN_ZOOM}
+        maxZoom={TIMELINE_MAX_ZOOM}
+        onZoomChange={onZoom}
+        onFit={() => {
+          onZoom(1);
+          if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+        }}
+        lanes={tracks.map((images, trackIndex) => ({
+          label: `V${trackIndex + 2}`,
+          description: `Attention image track ${trackIndex + 1}`,
+          height: "h-12",
+          action: (
+            <div className="flex">
+              <Button disabled={!editable} variant="ghost" size="icon" className="size-6 text-primary" onClick={() => onAddSlot(trackIndex)} title="Add image slot" aria-label={`Add image slot to V${trackIndex + 2}`}>
+                <Plus className="size-3.5" />
+              </Button>
+              {tracks.length > 1 && (
+                <Button disabled={!editable} variant="ghost" size="icon" className="size-6 text-muted-foreground/50 hover:text-destructive" onClick={() => onRemoveTrack(trackIndex)} title="Remove track" aria-label={`Remove V${trackIndex + 2}`}>
+                  <Minus className="size-3" />
+                </Button>
+              )}
+            </div>
+          ),
+          axisClassName: "cursor-ew-resize bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px)]",
+          axisProps: {
+            style: { backgroundSize: `${secondWidth}px 100%` },
+            onPointerDown: seek,
+          },
+          showEndLine: true,
+          content: (
+            <>
+              {images.map((image, index) => (
+                <TimelineClipShell
+                  key={image.id}
+                  testId={`attention-slot-${image.id}`}
+                  className={`flex cursor-grab select-none items-center text-[10px] ${selectedImageId === image.id ? "border-primary bg-primary/25 ring-1 ring-primary/30" : ""}`}
+                  style={{ left: `${image.startMs / endMs * 100}%`, width: `${Math.max(.3, image.durationMs / endMs * 100)}%` }}
+                  onPointerDown={event => beginDrag(event, image, "move")}
+                  onClick={() => { onSelect(image.id); onSeek(image.startMs); }}
+                  title={`Slot ${index + 1}`}
+                >
+                  <span className="absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize border-r border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "start")} />
+                  <ImagePlus className="ml-3 mr-1 size-3 shrink-0" />
+                  <span className="truncate">Slot {index + 1}</span>
+                  <span className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize border-l border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "end")} />
+                </TimelineClipShell>
+              ))}
+              {playhead}
+            </>
+          ),
+        }))}
       />
-    </label>
+    </section>
   );
 }
 
-function MsField({ label, value, min = 0, onChange }: {
-  label: string;
-  value: number;
-  min?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {label}
-      <Input
-        type="number"
-        className="h-8 text-xs"
-        value={value}
-        min={min}
-        max={600000}
-        step={100}
-        onChange={event => {
-          const next = Number(event.target.value);
-          if (Number.isFinite(next)) onChange(Math.max(min, Math.round(next)));
-        }}
-      />
-    </label>
-  );
+function InspectorSection({ title, value, open = false, children }: { title: string; value?: string; open?: boolean; children: React.ReactNode }) { const [expanded, setExpanded] = useState(open); return <section className="border-b border-border"><button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left" onClick={() => setExpanded(value => !value)}><span className="text-sm font-medium">{title}</span><span className="flex items-center gap-2 text-xs text-muted-foreground">{value}{expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</span></button>{expanded && <div className="space-y-3 px-4 pb-4">{children}</div>}</section>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block space-y-1.5"><Label className="text-[11px] text-muted-foreground">{label}</Label>{children}</label>; }
+function NumberField({ label, value, unit, step = 1, onChange }: { label: string; value: number; unit: string; step?: number; onChange: (value: number) => void }) { return <Field label={label}><div className="relative"><Input type="number" value={Number(value.toFixed(2))} step={step} onChange={event => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} className="h-8 pr-7 text-xs" /><span className="absolute right-2 top-2 text-[10px] text-muted-foreground/70">{unit}</span></div></Field>; }
+function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
+function formatMs(ms: number) { const seconds = Math.max(0, ms) / 1000; return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`; }
+function formatGap(ms: number) { return `${Number((ms / 1000).toFixed(1))}s`; }
+function clampCanvasDimension(value: number) { return Math.round(Math.min(8192, Math.max(64, value)) / 2) * 2; }
+function formatCanvasLabel(width: number, height: number) {
+  const divisor = greatestCommonDivisor(width, height);
+  return `${width / divisor}:${height / divisor} · ${width}×${height}`;
 }
+function greatestCommonDivisor(a: number, b: number): number {
+  let left = Math.max(1, Math.round(Math.abs(a)));
+  let right = Math.max(1, Math.round(Math.abs(b)));
+  while (right) [left, right] = [right, left % right];
+  return left;
+}
+function timelineRangeForContent(contentEndMs: number) { return Math.max(INITIAL_TIMELINE_MS, Math.ceil((contentEndMs + TIMELINE_CHUNK_MS) / TIMELINE_CHUNK_MS) * TIMELINE_CHUNK_MS); }

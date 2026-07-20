@@ -214,26 +214,92 @@ const openFullEditor = async (
 const laneLabels = async (editor: ReturnType<Page["getByTestId"]>) =>
   (await editor.locator("span.truncate").allInnerTexts()).map((t) => t.trim());
 
-test("lanes stack V2 above V1 above A1 Voiceover", async ({ page }) => {
+test("lanes use unified V/A ids and stack V3 above V2 above V1 above A1", async ({ page }) => {
   const { editor } = await openFullEditor(page);
   const labels = await laneLabels(editor);
+  expect(labels.indexOf("V3")).toBeGreaterThanOrEqual(0);
+  expect(labels.indexOf("V3")).toBeLessThan(labels.indexOf("V2"));
   expect(labels.indexOf("V2")).toBeGreaterThanOrEqual(0);
   expect(labels.indexOf("V2")).toBeLessThan(labels.indexOf("V1"));
-  expect(labels.indexOf("V1")).toBeLessThan(labels.indexOf("A1 Voiceover"));
+  expect(labels.indexOf("V1")).toBeLessThan(labels.indexOf("A1"));
+  expect(labels).not.toContain("Subtitles");
+  expect(labels).not.toContain("A1 Voiceover");
   await page.screenshot({ path: "screenshots/timeline-tracks-order.png" });
 });
 
-test("Add video track adds a V3 lane", async ({ page }) => {
+test("Add video track inserts V3 and renumbers subtitles to V4", async ({ page }) => {
   const { editor } = await openFullEditor(page);
-  await expect(editor.locator("span.truncate", { hasText: /^V3$/ })).toHaveCount(0);
-  await editor.getByRole("button", { name: "Add video track" }).click();
-  await expect(editor.locator("span.truncate", { hasText: /^V3$/ })).toBeVisible();
+  await expect(editor.locator('[data-track-index="3"]')).toHaveCount(0);
+  await editor.getByRole("button", { name: "Open V2 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Add video track" }).click();
+  await expect(editor.locator('[data-track-index="3"]')).toBeVisible();
+  await expect(editor.locator("span.truncate", { hasText: /^V4$/ })).toBeVisible();
   await page.screenshot({ path: "screenshots/timeline-tracks-maximized-v3.png" });
+});
+
+test("an empty added video track can be deleted without deleting media", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  await editor.getByRole("button", { name: "Open V2 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Add video track" }).click();
+  await expect(editor.locator('[data-track-index="3"]')).toBeVisible();
+  await editor.getByRole("button", { name: "Open V3 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Delete video track V3" }).click();
+  await expect(editor.locator('[data-track-index="3"]')).toHaveCount(0);
+  await expect(editor.locator("span.truncate", { hasText: /^V3$/ })).toBeVisible();
+});
+
+test("audio track settings add and delete tracks without duplicating the mute control", async ({ page }) => {
+  const { editor } = await openFullEditor(page, { maximize: false });
+
+  await editor.getByRole("button", { name: "Open A1 track settings" }).click();
+  await expect(page.getByRole("menuitem", { name: "Mute audio track" })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "Add audio track" }).click();
+
+  await expect(editor.locator("span.truncate", { hasText: /^A3$/ })).toBeVisible();
+  await editor.getByRole("button", { name: "Open A3 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Delete audio track A3" }).click();
+  await expect(editor.locator("span.truncate", { hasText: /^A3$/ })).toHaveCount(0);
+});
+
+test("track headers expose Premiere-style monitor, add, settings, and resize controls", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+
+  const hideV1 = editor.getByRole("button", { name: "Hide video track V1" });
+  const muteA1 = editor.getByRole("button", { name: "Mute audio track A1" });
+  await expect(hideV1).toBeVisible();
+  await expect(muteA1).toBeVisible();
+  await expect(editor.getByRole("button", { name: "Add media to V2" })).toBeEnabled();
+  await expect(editor.getByRole("button", { name: "Add media to V1" })).toBeEnabled();
+  await expect(editor.getByRole("button", { name: "Open V2 track settings" })).toBeVisible();
+
+  await hideV1.click();
+  await expect(editor.getByRole("button", { name: "Show video track V1" })).toHaveAttribute("aria-pressed", "true");
+  await muteA1.click();
+  await expect(editor.getByRole("button", { name: "Unmute audio track A1" })).toHaveAttribute("aria-pressed", "true");
+  await expect(editor.locator("audio")).toHaveJSProperty("muted", true);
+
+  const v1Resize = editor.getByRole("separator", { name: "Resize V1 track height" });
+  const v2Resize = editor.getByRole("separator", { name: "Resize V2 track height" });
+  const a1Resize = editor.getByRole("separator", { name: "Resize A1 track height" });
+  const a2Resize = editor.getByRole("separator", { name: "Resize A2 track height" });
+  await expect(v1Resize).toHaveAttribute("aria-valuenow", "48");
+  await expect(v2Resize).toHaveAttribute("aria-valuenow", "48");
+  await expect(a1Resize).toHaveAttribute("aria-valuenow", "44");
+  await expect(a2Resize).toHaveAttribute("aria-valuenow", "44");
+
+  const handle = await v1Resize.boundingBox();
+  if (!handle) throw new Error("V1 resize handle is missing");
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2 + 24, { steps: 4 });
+  await page.mouse.up();
+  await expect(v1Resize).toHaveAttribute("aria-valuenow", "72");
 });
 
 test("dragging a cue from V2 to V3 persists track: 3", async ({ page }) => {
   const { editor, harness } = await openFullEditor(page);
-  await editor.getByRole("button", { name: "Add video track" }).click();
+  await editor.getByRole("button", { name: "Open V2 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Add video track" }).click();
 
   const v3 = editor.locator('[data-track-index="3"]');
   await expect(v3).toBeVisible();

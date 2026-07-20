@@ -607,24 +607,6 @@ def _timeline_from_composition(
         ))
         cursor += timeline_duration
 
-    # The final mux uses the voice-over as the output boundary.  Keep a tiny
-    # hidden safety tail so rounding at concat boundaries can never expose a
-    # black frame or cut the last subtitle; the editor itself still ends exactly
-    # at audio_duration.
-    required_duration = max(0.0, float(audio_duration)) + 0.05
-    if timeline and cursor < required_duration:
-        last = timeline[-1]
-        timeline[-1] = TimelineEntry(
-            source_video_path=last.source_video_path,
-            start_time=last.start_time,
-            end_time=last.end_time,
-            timeline_start=last.timeline_start,
-            timeline_duration=last.timeline_duration + (required_duration - cursor),
-            transforms=last.transforms,
-            pinned=last.pinned,
-            transition_in=last.transition_in,
-        )
-
     return timeline
 
 
@@ -2380,6 +2362,8 @@ class AssemblyService:
         _preview_mode: bool = False,
         strict_segments: bool = True,
         video_overlay_clips: Optional[List[dict]] = None,
+        target_width: Optional[int] = None,
+        target_height: Optional[int] = None,
     ) -> Path:
         """
         Assemble video from timeline using FFmpeg.
@@ -2396,11 +2380,12 @@ class AssemblyService:
         if not timeline:
             raise ValueError("Timeline is empty, cannot assemble video")
 
-        # Target output dimensions (portrait) — preview uses half-res
-        if _preview_mode:
-            target_w, target_h = 540, 960
+        # Compose directly on the selected output canvas. The fallback keeps
+        # compatibility for lower-level callers that do not yet pass a preset.
+        if target_width is None or target_height is None:
+            target_w, target_h = (540, 960) if _preview_mode else (1080, 1920)
         else:
-            target_w, target_h = 1080, 1920
+            target_w, target_h = int(target_width), int(target_height)
 
         # Extract each segment clip in parallel, throttled by semaphore.
         # Preview mode uses a dedicated semaphore so it never queues behind production.
@@ -3355,6 +3340,8 @@ class AssemblyService:
                 _preview_mode=_preview_mode,
                 strict_segments=strict_segments,
                 video_overlay_clips=video_overlay_clips,
+                target_width=int(preset_data["width"]),
+                target_height=int(preset_data["height"]),
             )
 
             # Render with preset and subtitle settings
@@ -3434,6 +3421,7 @@ class AssemblyService:
                     (lambda f: _report("Rendering final video", min(99, 85 + int(round(14 * f)))))
                     if on_progress else None
                 ),
+                output_duration=sum(entry.timeline_duration for entry in timeline),
             )
 
             front_cues = [
@@ -3550,25 +3538,28 @@ class AssemblyService:
         music: Optional[dict] = None,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
+        output_width: int = 1080,
+        output_height: int = 1920,
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
 
-        Uses 540x960, ultrafast encoding, CRF 32, and no loudnorm. Produces a real MP4 that matches the final render's
+        Uses a half-resolution canvas, ultrafast encoding, CRF 32, and no loudnorm. Produces a real MP4 that matches the final render's
         segment order exactly (including ultra_rapid_intro if enabled).
 
         Returns:
             Path to the preview MP4 file.
         """
-        # Build a lightweight 540x960 preset
-        # subtitle_ref_width/height ensure subtitle positioning matches the final
-        # 1080x1920 render even though the preview is encoded at half resolution
+        # Preserve the selected output aspect ratio and keep dimensions even for
+        # yuv420p. Subtitle reference dimensions remain the full export canvas.
+        preview_width = max(2, (int(output_width) // 2) // 2 * 2)
+        preview_height = max(2, (int(output_height) // 2) // 2 * 2)
         preview_preset = {
             "name": "Preview",
-            "width": 540,
-            "height": 960,
-            "subtitle_ref_width": 1080,
-            "subtitle_ref_height": 1920,
+            "width": preview_width,
+            "height": preview_height,
+            "subtitle_ref_width": int(output_width),
+            "subtitle_ref_height": int(output_height),
             "fps": 30,
             "video_codec": "libx264",
             "audio_codec": "aac",

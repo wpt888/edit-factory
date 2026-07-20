@@ -75,6 +75,7 @@ export interface PipelineTemplateSettings {
     overrides: Partial<Record<StyleKey, SubtitleSettings>>;
     variantOverrides?: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
     rotation: SubtitleTemplateRotation;
+    variantTemplates?: Partial<Record<PreviewKey, string>>;
   };
   render: {
     presetName: string;

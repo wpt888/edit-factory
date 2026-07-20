@@ -15,6 +15,7 @@ export type AttentionLayer = {
   y: number;
   width: number;
   height: number;
+  opacity?: number;
   zIndex: number;
   fit: "contain" | "cover";
   animation: {

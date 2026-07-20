@@ -33,3 +33,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Background music (A2) with auto-ducking — Phase B](34-bgm-ducking.md)
 - [Video-on-video overlay compositor — Phase C](35-video-overlay-compositor.md)
 - [Subtitle-template rotation](36-subtitle-template-rotation.md)
+- [Subtitle Templates page + Step 3 preview drawer](37-subtitle-templates-page-and-preview-drawer.md)

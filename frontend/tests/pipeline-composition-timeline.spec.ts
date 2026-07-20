@@ -190,6 +190,13 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
 
   const timeline = editor.locator('[aria-label="Multi-track timeline"]');
   const zoomLevel = editor.getByRole("button", { name: "Fit the full timeline" });
+  const previewPosition = editor.getByRole("slider", { name: "Preview position" });
+
+  // Editing the playhead is independent from preview playback. A fresh Step 3
+  // timeline must accept click-to-seek before the user has pressed Play.
+  await expect(previewPosition).toBeDisabled();
+  await timeline.locator("[data-timeline-axis]").first().click({ position: { x: 300, y: 8 } });
+  await expect.poll(async () => Number(await previewPosition.inputValue())).toBeGreaterThan(1);
 
   // Hovering over the timeline while scrolling the preview page must not zoom.
   await timeline.hover();
@@ -213,10 +220,21 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
   await expect.poll(() => compositionWrites.length).toBeGreaterThanOrEqual(1);
   expect(compositionWrites.at(-1)?.video_timeline.slice(0, 2).map((clip) => clip.id)).toEqual(["intro-b", "intro-a"]);
 
+  // The maximized editor is portalled out of the card DOM, but its edits must
+  // still participate in the application-level history.
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => compositionWrites.length).toBeGreaterThanOrEqual(2);
+  expect(compositionWrites.at(-1)?.video_timeline.slice(0, 2).map((clip) => clip.id)).toEqual(["intro-a", "intro-b"]);
+
+  await page.keyboard.press("Control+Shift+z");
+  await expect.poll(() => compositionWrites.length).toBeGreaterThanOrEqual(3);
+  expect(compositionWrites.at(-1)?.video_timeline.slice(0, 2).map((clip) => clip.id)).toEqual(["intro-b", "intro-a"]);
+
   await editor.getByTestId("composition-clip-body-a").click();
   const rightEdgeRow = inspector.getByText("Right edge", { exact: true }).locator("..");
+  const writesBeforeTrim = compositionWrites.length;
   await rightEdgeRow.getByRole("button", { name: "+0.1" }).click();
-  await expect.poll(() => compositionWrites.length).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => compositionWrites.length).toBeGreaterThan(writesBeforeTrim);
   const finalTimeline = compositionWrites.at(-1)!.video_timeline;
   const bodyA = finalTimeline.find((clip) => clip.id === "body-a")!;
   const bodyB = finalTimeline.find((clip) => clip.id === "body-b")!;
@@ -229,7 +247,24 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
     );
   }
 
-  const previewPosition = editor.getByRole("slider", { name: "Preview position" });
+  // The final V1 edge is a real output boundary, not a hidden lock to the
+  // voiceover duration. Dragging it extends the video clock past A1.
+  const endHandle = editor.getByRole("separator", { name: /Trim right edge of/ });
+  const endHandleBox = await endHandle.boundingBox();
+  if (!endHandleBox) throw new Error("Final composition resize handle is missing");
+  const writesBeforeEndResize = compositionWrites.length;
+  await page.mouse.move(endHandleBox.x + endHandleBox.width / 2, endHandleBox.y + endHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(endHandleBox.x + endHandleBox.width / 2 + 120, endHandleBox.y + endHandleBox.height / 2);
+  await page.mouse.up();
+  await expect.poll(() => compositionWrites.length).toBeGreaterThan(writesBeforeEndResize);
+  const extendedTimeline = compositionWrites.at(-1)!.video_timeline;
+  const extendedEnd = extendedTimeline.reduce(
+    (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
+    0,
+  );
+  expect(extendedEnd).toBeGreaterThan(4);
+
   await editor.getByTitle("Play", { exact: true }).click();
   await expect(previewPosition).toBeEnabled();
   await expect(editor.getByTitle("Pause", { exact: true })).toBeVisible({ timeout: 5_000 });

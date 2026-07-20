@@ -234,3 +234,24 @@ test("dragging a video clip onto another reorders the composition", async ({ pag
   console.log("A after:", aBoxAfter.x, "C after:", cBoxAfter.x);
   expect(aBoxAfter.x).toBeGreaterThan(cBoxAfter.x);
 });
+
+test("dragging a clip into the right end gutter moves it to the end", async ({ page }) => {
+  const editor = await openFullEditor(page);
+  const clipA = editor.getByTestId("composition-clip-body-a");
+  const endDropZone = editor.getByLabel("Drop clip at end of V1");
+  await expect(clipA).toBeVisible();
+  await expect(endDropZone).toBeVisible();
+
+  const clipBox = (await clipA.boundingBox())!;
+  const gutterBox = (await endDropZone.boundingBox())!;
+  await page.mouse.move(clipBox.x + clipBox.width / 2, clipBox.y + clipBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(clipBox.x + clipBox.width / 2 + 15, clipBox.y + clipBox.height / 2, { steps: 3 });
+  await page.mouse.move(gutterBox.x + gutterBox.width / 2, gutterBox.y + gutterBox.height / 2, { steps: 15 });
+  await expect(editor.getByTestId("composition-drop-indicator")).toBeVisible();
+  await page.mouse.up();
+
+  const aBoxAfter = (await editor.getByTestId("composition-clip-body-a").boundingBox())!;
+  const cBoxAfter = (await editor.getByTestId("composition-clip-body-c").boundingBox())!;
+  expect(aBoxAfter.x).toBeGreaterThan(cBoxAfter.x);
+});

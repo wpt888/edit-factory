@@ -40,6 +40,7 @@ import {
   ChevronRight,
   Workflow,
   LayoutTemplate,
+  Captions,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -56,6 +57,7 @@ const allNavGroups = [
     items: [
       { label: "Video Pipeline", href: "/pipeline", icon: Clapperboard },
       { label: "Attention Templates", href: "/attention-templates", icon: LayoutTemplate },
+      { label: "Subtitle Templates", href: "/subtitle-templates", icon: Captions },
       { label: "Footage & Segments", href: "/segments", icon: ListVideo },
       { label: "Clipping", href: "/clipping", icon: Scissors },
       { label: "AI Image", href: "/create-image", icon: ImageIcon },

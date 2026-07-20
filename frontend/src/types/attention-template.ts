@@ -7,6 +7,10 @@ export type AttentionTemplateImage = {
   y: number;
   width: number;
   height: number;
+  /** 0..1 image opacity. */
+  opacity: number;
+  /** How pipeline media of any aspect ratio is placed inside this slot. */
+  fit: "contain" | "cover";
   startMs: number;
   durationMs: number;
 };
@@ -16,6 +20,11 @@ export type AttentionTemplatePayload = {
   name: string;
   zone: "behind" | "front";
   animation: AttentionAnimationPreset;
+  /** Authored canvas size. Slot coordinates remain normalized frame fractions. */
+  canvasWidth: number;
+  canvasHeight: number;
+  /** Delay added to the template start for every consecutive video variant. */
+  variantGapMs: number;
   tracks: AttentionTemplateImage[][];
 };
 
@@ -39,6 +48,9 @@ export const DEFAULT_ATTENTION_TEMPLATE: AttentionTemplatePayload = {
   name: "New attention template",
   zone: "behind",
   animation: "pop",
+  canvasWidth: 1080,
+  canvasHeight: 1920,
+  variantGapMs: 1000,
   tracks: [[]],
 };
 
@@ -50,6 +62,8 @@ export function newTemplateImage(partial?: Partial<AttentionTemplateImage>): Att
     y: 0.1,
     width: 0.8,
     height: 0.8,
+    opacity: 1,
+    fit: "contain",
     startMs: 0,
     durationMs: 1200,
     ...partial,
@@ -73,8 +87,20 @@ export function normalizeAttentionTemplate(
 ): AttentionTemplatePayload {
   const zone = template?.zone === "front" ? "front" : "behind";
   const animation = template?.animation ?? "pop";
+  const canvasWidth = normalizeCanvasDimension(template?.canvasWidth, 1080);
+  const canvasHeight = normalizeCanvasDimension(template?.canvasHeight, 1920);
+  const variantGapMs = Math.max(0, template?.variantGapMs ?? 1000);
   if (template?.tracks?.length) {
-    return { name: template.name ?? "", zone, animation, tracks: template.tracks };
+    return {
+      name: template.name ?? "",
+      zone,
+      animation, canvasWidth, canvasHeight, variantGapMs,
+      tracks: template.tracks.map(track => track.map(image => ({
+        ...image,
+        opacity: image.opacity ?? 1,
+        fit: image.fit === "cover" ? "cover" : "contain",
+      }))),
+    };
   }
   const layers = Math.max(1, Math.min(10, template?.layers ?? 1));
   const size = template?.size ?? 0.8;
@@ -83,12 +109,18 @@ export function normalizeAttentionTemplate(
   return {
     name: template?.name ?? DEFAULT_ATTENTION_TEMPLATE.name,
     zone,
-    animation,
+    animation, canvasWidth, canvasHeight, variantGapMs,
     tracks: template
       ? positions.map((position, index) =>
           [newTemplateImage({ id: `legacy-${index}`, x: position.x, y: position.y, width: size, height: size, startMs: 0, durationMs })])
       : [[]],
   };
+}
+
+function normalizeCanvasDimension(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value)
+    ? Math.round(Math.min(8192, Math.max(64, value!)) / 2) * 2
+    : fallback;
 }
 
 export function templateEndMs(tracks: AttentionTemplateImage[][]): number {

@@ -161,7 +161,7 @@ export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
                 className={cn(
                   "group relative flex min-w-32 max-w-56 shrink-0 cursor-grab items-center gap-2 border-r border-sidebar-border px-3 text-sm transition-colors active:cursor-grabbing",
                   active
-                    ? "bg-background text-foreground"
+                    ? "z-10 bg-background text-foreground ring-1 ring-inset ring-lime"
                     : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground",
                   isDragged && "opacity-40",
                 )}
@@ -177,7 +177,6 @@ export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
                 )}
                 <BriefcaseBusiness className={cn("size-3.5", active && "text-lime")} />
                 <span className="min-w-0 flex-1 truncate text-left">{profile.name}</span>
-                {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-lime" />}
               </button>
             );
           })}

@@ -20,12 +20,33 @@ test("Step 3 keeps live timing controls left and render controls right", async (
   const inspector = page.getByTestId("step3-inspector");
   const canvas = page.getByTestId("step3-variant-canvas");
   const previewTiming = inspector.getByTestId("step3-preview-timing");
+  const safeZoneSettings = inspector.getByTestId("step3-safe-zone-settings");
   const renderSettings = canvas.getByTestId("step3-render-settings");
 
+  await expect(canvas.getByRole("button", { name: "About variant previews" })).toBeVisible({ timeout: 10_000 });
   await expect(previewTiming).toBeVisible({ timeout: 10_000 });
   await expect(renderSettings).toBeVisible({ timeout: 10_000 });
+  const [inspectorBackground, canvasBackground] = await Promise.all([
+    inspector.evaluate((element) => getComputedStyle(element).backgroundColor),
+    canvas.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  expect(inspectorBackground).toBe(canvasBackground);
   await expect(previewTiming.getByText("Preview Timing", { exact: true })).toBeVisible();
   await expect(previewTiming.getByText("Pacing", { exact: true })).toBeVisible();
+  await expect(safeZoneSettings).toBeVisible();
+  const safeZoneToggle = safeZoneSettings.getByRole("switch", { name: "Show safe zone over preview" });
+  const safeZoneFormat = safeZoneSettings.getByRole("combobox", { name: "Safe zone format" });
+  await expect(safeZoneToggle).not.toBeChecked();
+  await expect(safeZoneFormat).toBeDisabled();
+  await expect(canvas.getByTestId("safe-zone-overlay")).toHaveCount(0);
+
+  await safeZoneToggle.click();
+  await expect(safeZoneFormat).toBeEnabled();
+  await safeZoneFormat.click();
+  await page.getByRole("option", { name: "Story", exact: true }).click();
+  await expect(safeZoneToggle).toBeChecked();
+  await expect(safeZoneFormat).toContainText("Story");
+
   await expect(inspector.getByText("Assembly Preset", { exact: true })).toHaveCount(0);
 
   await expect(inspector.getByText("Export Preset", { exact: true })).toHaveCount(0);

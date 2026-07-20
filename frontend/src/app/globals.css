@@ -298,6 +298,11 @@ body {
   background: transparent;
 }
 
+/* Keep Step 3 timeline panning intact without reserving a bar below the lanes. */
+.timeline-horizontal-scrollbar-hidden::-webkit-scrollbar:horizontal {
+  height: 0;
+}
+
 /* Firefox only (web builds). Chromium 121+ also reads scrollbar-width and
    then IGNORES ::-webkit-scrollbar styling, so this must not reach it. */
 @supports (-moz-appearance: none) {

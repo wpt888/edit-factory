@@ -26,7 +26,7 @@ const previewFor = (offset: number) => ({
   available_segments: [],
 });
 
-test("step 1 exposes the attention template picker with stagger controls", async ({ page }) => {
+test("step 1 exposes template layout and numbered content slots", async ({ page }) => {
   await page.addInitScript(({ profile }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
     localStorage.setItem("editai_current_profile_id", profile.id);
@@ -57,7 +57,16 @@ test("step 1 exposes the attention template picker with stagger controls", async
   await picker.locator("select").selectOption("system-tornado-stack");
   await expect(page.getByTestId("attention-stagger-seconds")).toBeVisible();
   await expect(page.getByTestId("attention-max-variants")).toBeVisible();
-  await expect(picker.getByText("3 layers")).toBeVisible();
+  await expect(picker.getByText("3 slots")).toBeVisible();
+  await expect(page.getByTestId("attention-layout-preview")).toBeVisible();
+  await expect(page.getByTestId("attention-content-slots").getByText("Slot 1")).toBeVisible();
+  await expect(page.getByTestId("attention-content-slots").getByText("Slot 3")).toBeVisible();
+
+  await page.getByTestId("attention-content-slots").getByText("Choose image").first().click();
+  await page.getByRole("tab", { name: "URL" }).click();
+  await page.getByLabel("Image URL").fill("https://assets.test/attention-one.png");
+  await page.getByRole("button", { name: "Use image URL" }).click();
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
 
   await picker.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "screenshots/attention-step1-picker.png", fullPage: true });

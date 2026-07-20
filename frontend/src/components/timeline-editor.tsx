@@ -44,9 +44,17 @@ import {
   Loader2,
   Maximize2,
   Pin,
-  ScanLine,
   Music,
+  Eye,
+  EyeOff,
+  MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
 import { segmentFileUrl } from "@/lib/media-url";
@@ -77,6 +85,7 @@ import { toast } from "sonner";
 import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
 import {
   fitCompositionToDuration,
+  reflowComposition,
   buildLegacyComposition,
   rollCompositionBoundary as rollCompositionBoundaryPure,
 } from "@/lib/composition-reflow";
@@ -84,6 +93,7 @@ import { VideoLane } from "@/components/timeline/lanes/video-lane";
 import { ImageLane } from "@/components/timeline/lanes/image-lane";
 import { OverlayLane } from "@/components/timeline/lanes/overlay-lane";
 import { deriveTracks, cuesOnTrack } from "@/components/timeline/timeline-tracks";
+import { SafeZoneOverlay, type SafeZoneType } from "@/components/safe-zone-overlay";
 
 // Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
 const compactPreviewFrameStyle: React.CSSProperties = {
@@ -315,6 +325,10 @@ interface TimelineEditorProps {
   onMusicChange?: (music: MusicSettings | null) => void;
   /** Open the server-rendered preview for this exact variant. */
   onRenderPreview?: () => void;
+  /** Optional platform guide displayed over every Step 3 program monitor. */
+  safeZone?: SafeZoneType | null;
+  /** Optional compact control anchored in the card player's empty top-left gutter. */
+  previewTopLeftAccessory?: React.ReactNode;
   // "card" = compact in-card editor; "full" = the maximized modal editor
   // (bigger inline preview, everything else identical — same component reused).
   displayMode?: "card" | "full";
@@ -343,6 +357,8 @@ export function TimelineEditor({
   music = null,
   onMusicChange,
   onRenderPreview,
+  safeZone = null,
+  previewTopLeftAccessory,
   displayMode = "card",
 }: TimelineEditorProps) {
   const mediaApiUrl = useApiUrl();
@@ -601,14 +617,16 @@ export function TimelineEditor({
     });
   }, [audioDuration, availableSegments, introSegments, matches, videoTimeline]);
 
-  // The magnetic V1 sequence: track absent/1, sorted by output time then reflowed
-  // to fill the voiceover clock. This is what every existing V1 handler indexes.
+  // The magnetic V1 sequence stays gapless. A generated legacy composition
+  // initially follows the voiceover, but user edits own their output duration.
   const composition = useMemo(() => {
     const magnetic = enrichedTimeline
       .filter((clip) => !isOverlayClip(clip))
       .sort((a, b) => a.timeline_start - b.timeline_start);
-    return fitCompositionToDuration(magnetic, audioDuration);
-  }, [audioDuration, enrichedTimeline]);
+    return videoTimeline.length > 0
+      ? reflowComposition(magnetic)
+      : fitCompositionToDuration(magnetic, audioDuration);
+  }, [audioDuration, enrichedTimeline, videoTimeline.length]);
 
   // Free video overlays (track >= 2): absolute timeline_start, never reflowed.
   const overlayClips = useMemo(() =>
@@ -622,22 +640,19 @@ export function TimelineEditor({
   const displayedComposition = compositionDraft ?? composition;
   const displayedOverlays = overlayDraft ?? overlayClips;
   displayedCompositionRef.current = displayedComposition;
-  const compositionIntroDuration = displayedComposition
-    .filter((clip) => clip.kind === "intro")
-    .reduce((sum, clip) => sum + clip.timeline_duration, 0);
 
   useEffect(() => {
     setCompositionDraft(null);
     setOverlayDraft(null);
   }, [videoTimeline]);
 
-  // Persist the full timeline (magnetic + overlays). fit self-separates: it
-  // reflows only magnetic clips and passes overlays through untouched.
+  // Persist V1 gaplessly without forcing its right edge to the voiceover end.
+  // Overlay clips retain their absolute positions.
   const emitTimeline = useCallback((clips: CompositionClip[]) => {
     setCompositionDraft(null);
     setOverlayDraft(null);
-    onVideoTimelineChange?.(fitCompositionToDuration(clips, audioDuration));
-  }, [audioDuration, onVideoTimelineChange]);
+    onVideoTimelineChange?.(reflowComposition(clips));
+  }, [onVideoTimelineChange]);
 
   // V1 edits hand a magnetic-only array; append the current overlays so they
   // survive the save/undo round-trip.
@@ -668,6 +683,62 @@ export function TimelineEditor({
   const fullLayoutRef = useRef<HTMLDivElement>(null);
   const [fullInspectorWidth, setFullInspectorWidth] = useState(320);
   const [fullTimelineHeight, setFullTimelineHeight] = useState(260);
+  const compactPreviewStageRef = useRef<HTMLDivElement>(null);
+  const compactPreviewAccessoryRef = useRef<HTMLDivElement>(null);
+  const [compactPreviewAccessoryPosition, setCompactPreviewAccessoryPosition] = useState({ x: 12, y: 12 });
+
+  const clampCompactPreviewAccessory = useCallback((x: number, y: number) => {
+    const stage = compactPreviewStageRef.current;
+    const accessory = compactPreviewAccessoryRef.current;
+    if (!stage || !accessory) return { x, y };
+
+    const inset = 8;
+    return {
+      x: Math.min(Math.max(inset, x), Math.max(inset, stage.clientWidth - accessory.offsetWidth - inset)),
+      y: Math.min(Math.max(inset, y), Math.max(inset, stage.clientHeight - accessory.offsetHeight - inset)),
+    };
+  }, []);
+
+  const beginCompactPreviewAccessoryDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPosition = compactPreviewAccessoryPosition;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    const onMove = (moveEvent: PointerEvent) => {
+      setCompactPreviewAccessoryPosition(clampCompactPreviewAccessory(
+        startPosition.x + moveEvent.clientX - startX,
+        startPosition.y + moveEvent.clientY - startY,
+      ));
+    };
+    const onUp = () => {
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [clampCompactPreviewAccessory, compactPreviewAccessoryPosition]);
+
+  useEffect(() => {
+    const stage = compactPreviewStageRef.current;
+    if (!stage || !previewTopLeftAccessory) return;
+
+    const keepInsideStage = () => {
+      setCompactPreviewAccessoryPosition((position) => clampCompactPreviewAccessory(position.x, position.y));
+    };
+    keepInsideStage();
+    const observer = new ResizeObserver(keepInsideStage);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [clampCompactPreviewAccessory, previewTopLeftAccessory]);
 
   const beginFullLayoutResize = useCallback((
     event: React.PointerEvent<HTMLDivElement>,
@@ -716,6 +787,7 @@ export function TimelineEditor({
   // Dialog state (used for both unmatched assignment and swap)
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
   const [assigningClipId, setAssigningClipId] = useState<string | null>(null);
+  const [isAddingCompositionClip, setIsAddingCompositionClip] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"same" | "all">("all");
   // D2: "Generate with AI" — capture the phrase text before the assign dialog
@@ -745,8 +817,30 @@ export function TimelineEditor({
   // ponytail: session-only; persist count if users ask. Extra image tracks the
   // user added this session via "Add video track". deriveTracks also grows the
   // count to fit any cue whose track exceeds the current max.
-  const [addedVideoTracks, setAddedVideoTracks] = useState(0);
+  const [minimumVideoTrackCount, setMinimumVideoTrackCount] = useState(2);
+  const [minimumAudioTrackCount, setMinimumAudioTrackCount] = useState(2);
+  const [hiddenVideoTracks, setHiddenVideoTracks] = useState<Set<number>>(() => new Set());
+  const [mutedAudioTracks, setMutedAudioTracks] = useState<Set<number>>(() => new Set());
+  const [trackHeights, setTrackHeights] = useState<Record<string, number>>({});
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(TIMELINE_MIN_WIDTH + TIMELINE_LABEL_WIDTH);
+
+  const toggleVideoTrackVisibility = useCallback((trackIndex: number) => {
+    setHiddenVideoTracks((current) => {
+      const next = new Set(current);
+      if (next.has(trackIndex)) next.delete(trackIndex);
+      else next.add(trackIndex);
+      return next;
+    });
+  }, []);
+
+  const toggleAudioTrackMute = useCallback((trackIndex: number) => {
+    setMutedAudioTracks((current) => {
+      const next = new Set(current);
+      if (next.has(trackIndex)) next.delete(trackIndex);
+      else next.add(trackIndex);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const viewport = multiTrackScrollRef.current;
@@ -769,11 +863,17 @@ export function TimelineEditor({
   // Premiere-style insertion point while dragging a clip: index in
   // displayedComposition + the boundary time where the indicator line sits.
   const [compositionDropTarget, setCompositionDropTarget] = useState<{ index: number; time: number } | null>(null);
+  // `dragover` and `drop` can arrive in one browser frame. Mirror the live
+  // target synchronously so drop never reads the previous React render.
+  const compositionDropTargetRef = useRef<{ index: number; time: number } | null>(null);
+  const setLiveCompositionDropTarget = (target: { index: number; time: number } | null) => {
+    compositionDropTargetRef.current = target;
+    setCompositionDropTarget(target);
+  };
 
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
-  const [showSafeArea, setShowSafeArea] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [isPreviewBuffering, setIsPreviewBuffering] = useState(false);
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
@@ -1848,8 +1948,15 @@ export function TimelineEditor({
 
   const seekPreviewToTime = useCallback((time: number) => {
     const audio = previewAudioRef.current;
-    if (!audio) return;
     setPreviewCurrentTime(time);
+    const newIdx = findActiveMatch(time);
+    setPreviewActiveIndex(newIdx);
+    previewActiveIndexRef.current = newIdx;
+
+    // The timeline cursor is an editor control, so it must remain movable even
+    // before the preview player has been activated. Keep the pending position in
+    // React state without trying to seat media slots that are not mounted yet.
+    if (!audio || !isPreviewActive) return;
     if (time < introOffsetSec) {
       audio.currentTime = time;
       audio.loop = false;
@@ -1887,14 +1994,11 @@ export function TimelineEditor({
         setIsPreviewPlaying(false);
       });
     }
-    const newIdx = findActiveMatch(audioTime);
-    setPreviewActiveIndex(newIdx);
-    previewActiveIndexRef.current = newIdx;
     preparedNextForIndexRef.current = null;
     // Scrub lands at an arbitrary audio time; seat the active slot at the
     // segment's start (video doesn't track sub-phrase position — same as before).
     seatActiveSlot(newIdx, isPreviewPlayingRef.current);
-  }, [findActiveMatch, seatActiveSlot, introOffsetSec, playIntroAt]);
+  }, [findActiveMatch, isPreviewActive, seatActiveSlot, introOffsetSec, playIntroAt]);
 
   const compositionEnd = displayedComposition.reduce(
     (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
@@ -1924,7 +2028,7 @@ export function TimelineEditor({
   }, [seekPreviewToTime, timelineDuration]);
 
   const beginMultiTrackScrub = useCallback((event: React.PointerEvent<HTMLElement>) => {
-    if (!isPreviewActive || timelineDuration <= 0) return;
+    if (timelineDuration <= 0) return;
     const target = event.target as HTMLElement;
     if (target.closest("[data-timeline-block]")) return;
     const axis = (event.currentTarget as HTMLElement).closest("[data-timeline-axis]") as HTMLElement | null;
@@ -1948,7 +2052,7 @@ export function TimelineEditor({
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
     window.addEventListener("pointercancel", handleUp);
-  }, [isPreviewActive, scheduleTimelineSeek, timelineDuration]);
+  }, [scheduleTimelineSeek, timelineDuration]);
 
   const setTimelineZoomAt = useCallback((nextZoom: number, clientX?: number) => {
     const viewport = multiTrackScrollRef.current;
@@ -2393,18 +2497,28 @@ export function TimelineEditor({
   // --- Dialog handlers ---
 
   const handleOpenDialog = (matchIndex: number) => {
+    setIsAddingCompositionClip(false);
     setAssigningIndex(matchIndex);
     setAssigningClipId(null);
     setSearchQuery("");
   };
 
   const handleOpenClipDialog = (clipId: string) => {
+    setIsAddingCompositionClip(false);
     setAssigningClipId(clipId);
     setAssigningIndex(null);
     setSearchQuery("");
   };
 
+  const handleOpenAddClipDialog = () => {
+    setIsAddingCompositionClip(true);
+    setAssigningClipId(null);
+    setAssigningIndex(null);
+    setSearchQuery("");
+  };
+
   const handleCloseDialog = () => {
+    setIsAddingCompositionClip(false);
     setAssigningIndex(null);
     setAssigningClipId(null);
     setSearchQuery("");
@@ -2412,6 +2526,31 @@ export function TimelineEditor({
   };
 
   const handleSelectSegment = (segment: SegmentOption) => {
+    if (isAddingCompositionClip) {
+      const sourceStart = segment.start_time ?? 0;
+      const sourceEnd = segment.end_time ?? sourceStart + Math.max(0.05, segment.duration);
+      const timelineStart = displayedComposition.reduce(
+        (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
+        0,
+      );
+      commitComposition([...displayedComposition, {
+        id: crypto.randomUUID(),
+        kind: "body",
+        segment_id: segment.id,
+        segment_keywords: segment.keywords,
+        source_video_id: segment.source_video_id,
+        thumbnail_path: segment.thumbnail_path,
+        product_group: segment.product_group,
+        start_time: sourceStart,
+        end_time: Math.max(sourceStart + 0.05, sourceEnd),
+        timeline_start: timelineStart,
+        timeline_duration: Math.max(0.05, sourceEnd - sourceStart),
+        transforms: segment.transforms,
+        pinned: true,
+      }]);
+      handleCloseDialog();
+      return;
+    }
     if (assigningClipId !== null) {
       const sourceStart = segment.start_time ?? 0;
       const sourceEnd = segment.end_time ?? sourceStart + Math.max(0.05, segment.duration);
@@ -2520,6 +2659,62 @@ export function TimelineEditor({
     window.addEventListener("pointercancel", cancel);
   };
 
+  const resizeCompositionEnd = useCallback((requestedDuration: number) => {
+    if (displayedComposition.length === 0) return displayedComposition;
+    const lastIndex = displayedComposition.length - 1;
+    return reflowComposition(displayedComposition.map((clip, index) => index === lastIndex
+      ? {
+          ...clip,
+          timeline_duration: Math.max(0.1, Math.min(3600, requestedDuration)),
+          pinned: true,
+        }
+      : clip));
+  }, [displayedComposition]);
+
+  const beginCompositionEndResize = (
+    event: React.PointerEvent<HTMLSpanElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const axis = event.currentTarget.closest("[data-timeline-axis]") as HTMLElement | null;
+    const lastClip = displayedComposition.at(-1);
+    if (!axis || !lastClip) return;
+    const startX = event.clientX;
+    const originalDuration = lastClip.timeline_duration;
+    const dragScaleDuration = Math.max(0.05, timelineDurationRef.current);
+    let latest = displayedComposition;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const update = (clientX: number) => {
+      const delta = (clientX - startX) / Math.max(1, axis.clientWidth) * dragScaleDuration;
+      latest = resizeCompositionEnd(originalDuration + delta);
+      setCompositionDraft(latest);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+    const move = (moveEvent: PointerEvent) => update(moveEvent.clientX);
+    const finish = (upEvent: PointerEvent) => {
+      update(upEvent.clientX);
+      cleanup();
+      commitComposition(latest);
+    };
+    const cancel = () => {
+      cleanup();
+      setCompositionDraft(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+  };
+
   const moveCompositionClip = useCallback((clipId: string, direction: -1 | 1) => {
     const currentIndex = displayedComposition.findIndex((clip) => clip.id === clipId);
     if (currentIndex < 0) return;
@@ -2564,15 +2759,37 @@ export function TimelineEditor({
     const boundaryTime = index >= displayedComposition.length
       ? total
       : displayedComposition[index].timeline_start;
-    setCompositionDropTarget({ index, time: boundaryTime });
+    setLiveCompositionDropTarget({ index, time: boundaryTime });
+  };
+
+  // The visible space after the green end marker is a separate layout gutter,
+  // not part of the V1 axis. Make it the final insertion boundary as users
+  // naturally drag a clip past that marker when moving it to the right.
+  const updateCompositionEndDropTarget = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!compositionDragId) return;
+    const draggedClip = displayedComposition.find((clip) => clip.id === compositionDragId);
+    if (!draggedClip) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+
+    const total = displayedComposition.reduce(
+      (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
+      0,
+    );
+    const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
+    const index = draggedClip.kind === "intro" ? introCount : displayedComposition.length;
+    const time = index >= displayedComposition.length
+      ? total
+      : displayedComposition[index].timeline_start;
+    setLiveCompositionDropTarget({ index, time });
   };
 
   const dropCompositionClipAtTarget = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const target = compositionDropTarget;
+    const target = compositionDropTargetRef.current;
     const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
     setCompositionDragId(null);
-    setCompositionDropTarget(null);
+    setLiveCompositionDropTarget(null);
     if (!target || sourceIndex < 0) return;
     if (target.index === sourceIndex || target.index === sourceIndex + 1) return;
     const updated = [...displayedComposition];
@@ -2710,11 +2927,11 @@ export function TimelineEditor({
         const index = magneticInsertionAt(t);
         const time = index >= displayedComposition.length ? total : displayedComposition[index].timeline_start;
         pendingV1 = { index, time };
-        setCompositionDropTarget({ index, time });
+        setLiveCompositionDropTarget({ index, time });
         return;
       }
       pendingV1 = null;
-      setCompositionDropTarget(null);
+      setLiveCompositionDropTarget(null);
 
       if (edge === "resize") {
         const dur = Math.max(0.05, snap(originStart + originDur + deltaSec, moveEvent.altKey) - originStart);
@@ -2738,7 +2955,7 @@ export function TimelineEditor({
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      setCompositionDropTarget(null);
+      setLiveCompositionDropTarget(null);
       if (pendingV1) {
         convertOverlayToMagnetic(clip.id, pendingV1.index);
         return;
@@ -3121,10 +3338,12 @@ export function TimelineEditor({
     (assigningClipId !== null && displayedComposition.some(
       (clip) => clip.id === assigningClipId && Boolean(clip.segment_id),
     ));
-  const dialogTitle = isSwapMode ? "Swap Segment" : "Select Segment";
-  const dialogSubLabel = assigningClipId !== null
-    ? "Replacing timeline clip"
-    : isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
+  const dialogTitle = isAddingCompositionClip ? "Add Video Clip" : isSwapMode ? "Swap Segment" : "Select Segment";
+  const dialogSubLabel = isAddingCompositionClip
+    ? "Adding to V1"
+    : assigningClipId !== null
+      ? "Replacing timeline clip"
+      : isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
 
   // Calculate total duration for proportional widths in timeline view
   const bodyDuration = timelineDuration;
@@ -3139,8 +3358,16 @@ export function TimelineEditor({
   const selectedOverlay = selectedClipId === null
     ? null
     : displayedOverlays.find((clip) => clip.id === selectedClipId) ?? null;
+  const monitorHighestVideoTrack = Math.max(
+    2,
+    minimumVideoTrackCount,
+    ...attentionCues.map((cue) => cue.track ?? 2),
+    ...displayedOverlays.map((clip) => clip.track ?? 2),
+  );
+  const monitorSubtitleTrack = monitorHighestVideoTrack + 1;
 
   const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
+    if (hiddenVideoTracks.has(monitorSubtitleTrack)) return null;
     const activeMatch = matches.find(
       (match) => match.srt_start <= previewCurrentTime && previewCurrentTime < match.srt_end,
     ) ?? null;
@@ -3214,6 +3441,7 @@ export function TimelineEditor({
     if (!attentionTimeline) return null;
     const nowMs = previewCurrentTime * 1000;
     return attentionCues.flatMap((cue) => {
+      if (hiddenVideoTracks.has(cue.track ?? 2)) return [];
       if (nowMs < cue.startMs || nowMs >= cue.startMs + cue.durationMs) return [];
       return cue.layers.map((layer) => {
         const url = layer.assetUrl || layer.assetId;
@@ -3230,6 +3458,7 @@ export function TimelineEditor({
               left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
               width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
               objectFit: layer.fit,
+              opacity: layer.opacity ?? 1,
               // Front zone always sits above subtitles (60+); behind-zone cues
               // stack by track so a higher image track composites in front.
               zIndex: (cue.zone === "front" ? 60 : 10 + ((cue.track ?? 2) - 2) * 20) + layer.zIndex,
@@ -3252,6 +3481,7 @@ export function TimelineEditor({
     if (displayedOverlays.length === 0) return null;
     const now = previewCurrentTime;
     return displayedOverlays.map((clip) => {
+      if (hiddenVideoTracks.has(clip.track ?? 2)) return null;
       const active = now >= clip.timeline_start && now < clip.timeline_start + clip.timeline_duration;
       const isSelected = selectedClipId === clip.id;
       if (!active && !isSelected) return null;
@@ -3303,6 +3533,7 @@ export function TimelineEditor({
         <audio
           ref={previewAudioRef}
           src={previewAudioSrc ?? undefined}
+          muted={mutedAudioTracks.has(1)}
           preload="auto"
           style={{ display: "none" }}
         />
@@ -3346,7 +3577,7 @@ export function TimelineEditor({
         <>
           {!isPreviewExpanded && (
             <div
-              className={`bg-card overflow-hidden ${
+              className={`relative bg-card overflow-hidden ${
                 displayMode === "full"
                   ? "col-start-3 row-start-2 flex min-h-0 flex-col"
                   : /* -mt-3 collapses against CardContent's space-y-3 so the player
@@ -3355,17 +3586,22 @@ export function TimelineEditor({
                     "-mt-3 -mx-6 min-[1280px]:-mx-4"
               }`}
             >
-              {/* Video display with subtitle overlay */}
               <div
-                ref={compactPreviewMeasurement.ref}
-                className={`group relative isolate mx-auto flex items-center justify-center overflow-hidden bg-black ${
-                  displayMode === "full" ? "min-h-0 flex-1" : ""
-                }`}
-                style={displayMode === "full" ? fullPreviewFrameStyle : compactPreviewFrameStyle}
+                ref={displayMode === "card" ? compactPreviewStageRef : undefined}
+                data-testid={displayMode === "card" ? "compact-preview-stage" : undefined}
+                className={`relative flex justify-center overflow-hidden ${displayMode === "full" ? "min-h-0 flex-1" : ""}`}
               >
-                {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
-                    prepareSlot/seatActiveSlot. Visibility follows the active slot. */}
-                {[0, 1].map((slot) => (
+                {/* Video display with subtitle overlay */}
+                <div
+                  ref={compactPreviewMeasurement.ref}
+                  className={`group relative isolate flex items-center justify-center overflow-hidden bg-black ${
+                    displayMode === "full" ? "min-h-0 flex-1" : ""
+                  }`}
+                  style={displayMode === "full" ? fullPreviewFrameStyle : compactPreviewFrameStyle}
+                >
+                  {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
+                      prepareSlot/seatActiveSlot. Visibility follows the active slot. */}
+                  {[0, 1].map((slot) => (
                   <video
                     key={`slot-${slot}`}
                     ref={(el) => setPreviewSlotRef(slot, el)}
@@ -3379,7 +3615,7 @@ export function TimelineEditor({
                     style={{
                       display: "block",
                       opacity:
-                        activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
+                        !hiddenVideoTracks.has(1) && activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
                           ? 1
                           : 0,
                       zIndex: activeSlot === slot ? 1 : 0,
@@ -3388,7 +3624,7 @@ export function TimelineEditor({
                       ),
                     }}
                   />
-                ))}
+                  ))}
 
                 {/* Transitions V1: instant-preview fade overlay, above video/thumbnail,
                     below attention cues (z>=10) and subtitles (z-50). */}
@@ -3396,7 +3632,7 @@ export function TimelineEditor({
 
                 {!isPreviewActive && (
                   <>
-                    {playbackMatches[previewActiveIndex]?.thumbnail_path && (
+                    {!hiddenVideoTracks.has(1) && playbackMatches[previewActiveIndex]?.thumbnail_path && (
                       <img
                         src={segmentFileUrl(mediaApiUrl, playbackMatches[previewActiveIndex].thumbnail_path!)}
                         alt=""
@@ -3445,10 +3681,28 @@ export function TimelineEditor({
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
                 {renderOverlayClipBoxes()}
                 {renderAttentionOverlays()}
-                {showSafeArea && (
-                  <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
+                {safeZone && <SafeZoneOverlay type={safeZone} />}
+                  {renderPreviewSubtitleOverlay(8, compactPreviewMeasurement.height)}
+                </div>
+
+                {displayMode === "card" && previewTopLeftAccessory && (
+                  <div
+                    ref={compactPreviewAccessoryRef}
+                    className="absolute z-20"
+                    style={{
+                      left: compactPreviewAccessoryPosition.x,
+                      top: compactPreviewAccessoryPosition.y,
+                    }}
+                    onPointerDown={(event) => {
+                      const target = event.target as HTMLElement;
+                      if (target.closest("[data-preview-accessory-drag-handle]")) {
+                        beginCompactPreviewAccessoryDrag(event);
+                      }
+                    }}
+                  >
+                    {previewTopLeftAccessory}
+                  </div>
                 )}
-                {renderPreviewSubtitleOverlay(8, compactPreviewMeasurement.height)}
               </div>
 
               {/* Controls */}
@@ -3524,17 +3778,6 @@ export function TimelineEditor({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className={`size-7 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
-                      onClick={() => setShowSafeArea((visible) => !visible)}
-                      aria-pressed={showSafeArea}
-                      aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
-                      title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
-                    >
-                      <ScanLine className="size-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
                       className="size-7"
                       onClick={() => setIsPreviewExpanded(true)}
                       title="Expand preview"
@@ -3579,7 +3822,7 @@ export function TimelineEditor({
                         style={{
                           display: "block",
                           opacity:
-                            activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
+                            !hiddenVideoTracks.has(1) && activeSlot === slot && (isPreviewIntro || playbackMatches[previewActiveIndex]?.source_video_id)
                               ? 1
                               : 0,
                           zIndex: activeSlot === slot ? 1 : 0,
@@ -3595,7 +3838,7 @@ export function TimelineEditor({
 
                     {!isPreviewActive && (
                       <>
-                        {playbackMatches[previewActiveIndex]?.thumbnail_path && (
+                        {!hiddenVideoTracks.has(1) && playbackMatches[previewActiveIndex]?.thumbnail_path && (
                           <img
                             src={segmentFileUrl(mediaApiUrl, playbackMatches[previewActiveIndex].thumbnail_path!)}
                             alt=""
@@ -3651,9 +3894,7 @@ export function TimelineEditor({
 
                     {renderOverlayClipBoxes()}
                     {renderAttentionOverlays()}
-                    {showSafeArea && (
-                      <div aria-hidden="true" className="pointer-events-none absolute inset-x-[6%] top-[8%] bottom-[8%] z-[1] rounded border border-dashed border-white/25" />
-                    )}
+                    {safeZone && <SafeZoneOverlay type={safeZone} />}
                     {renderPreviewSubtitleOverlay(10, expandedPreviewMeasurement.height)}
                   </div>
 
@@ -3723,17 +3964,6 @@ export function TimelineEditor({
                         >
                           <SkipForward className="size-4" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={`size-8 ${showSafeArea ? "bg-primary/10 text-primary" : ""}`}
-                          onClick={() => setShowSafeArea((visible) => !visible)}
-                          aria-pressed={showSafeArea}
-                          aria-label={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
-                          title={`${showSafeArea ? "Hide" : "Show"} Safe Area`}
-                        >
-                          <ScanLine className="size-4" />
-                        </Button>
                       </div>
 
                       <span className="text-xs text-muted-foreground">
@@ -3796,12 +4026,129 @@ export function TimelineEditor({
             ) : null;
 
             const canInsertSlide = !!(onInterstitialSlidesChange || onAttentionTimelineChange);
-            const tracks = deriveTracks(attentionCues, addedVideoTracks);
+            const overlayTrackIndices = displayedOverlays.map((clip) => clip.track ?? 2);
+            const tracks = deriveTracks(attentionCues, minimumVideoTrackCount, overlayTrackIndices);
+            const highestOverlayTrack = tracks.video[0]?.index ?? 2;
+            const subtitleTrackIndex = highestOverlayTrack + 1;
+            const baseAudioTrackCount = sfxCues.length > 0 ? 3 : 2;
+            const highestAudioTrack = Math.max(baseAudioTrackCount, minimumAudioTrackCount);
+            const addVideoTrack = () => {
+              setMinimumVideoTrackCount((count) => Math.max(count, highestOverlayTrack) + 1);
+            };
+            const removeVideoTrack = (trackIndex: number) => {
+              const hasCues = cuesOnTrack(attentionCues, trackIndex).length > 0;
+              const hasOverlays = displayedOverlays.some((clip) => (clip.track ?? 2) === trackIndex);
+              const isHighestSessionTrack = trackIndex === highestOverlayTrack
+                && trackIndex === minimumVideoTrackCount
+                && trackIndex > 2;
+              if (hasCues || hasOverlays || !isHighestSessionTrack) return;
+              setMinimumVideoTrackCount((count) => Math.max(2, count - 1));
+            };
+            const addAudioTrack = () => {
+              setMinimumAudioTrackCount((count) => Math.max(count, highestAudioTrack) + 1);
+            };
+            const removeAudioTrack = (trackIndex: number) => {
+              const isHighestEmptySessionTrack = trackIndex === highestAudioTrack
+                && trackIndex === minimumAudioTrackCount
+                && trackIndex > baseAudioTrackCount;
+              if (!isHighestEmptySessionTrack) return;
+              setMinimumAudioTrackCount((count) => Math.max(2, count - 1));
+            };
+            const laneAddButton = (
+              label: string,
+              onClick?: () => void,
+              disabledReason?: string,
+            ) => (
+              <button
+                type="button"
+                onClick={onClick}
+                disabled={!onClick}
+                className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:text-white/20 disabled:hover:bg-transparent"
+                title={onClick ? label : disabledReason}
+                aria-label={onClick ? label : `${label} unavailable`}
+              >
+                <Plus className="size-3" />
+              </button>
+            );
+            const trackControls = ({
+              id,
+              kind,
+              index,
+              addMedia,
+              addMediaUnavailable,
+              canDelete = false,
+              deleteUnavailable,
+              onDelete,
+            }: {
+              id: string;
+              kind: "video" | "audio";
+              index: number;
+              addMedia?: () => void;
+              addMediaUnavailable?: string;
+              canDelete?: boolean;
+              deleteUnavailable?: string;
+              onDelete?: () => void;
+            }) => {
+              const hidden = kind === "video" && hiddenVideoTracks.has(index);
+              const muted = kind === "audio" && mutedAudioTracks.has(index);
+              return (
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => kind === "video"
+                      ? toggleVideoTrackVisibility(index)
+                      : toggleAudioTrackMute(index)}
+                    aria-label={kind === "video"
+                      ? `${hidden ? "Show" : "Hide"} video track ${id}`
+                      : `${muted ? "Unmute" : "Mute"} audio track ${id}`}
+                    aria-pressed={hidden || muted}
+                    className={`flex size-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-white/10 ${
+                      hidden || muted ? "bg-primary/15 text-primary" : "text-white/50"
+                    }`}
+                    title={kind === "video" ? `${hidden ? "Show" : "Hide"} ${id}` : `${muted ? "Unmute" : "Mute"} ${id}`}
+                  >
+                    {kind === "video"
+                      ? hidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />
+                      : <span className="text-[9px] font-bold">M</span>}
+                  </button>
+                  {laneAddButton(`Add media to ${id}`, addMedia, addMediaUnavailable)}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex size-5 shrink-0 items-center justify-center rounded text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+                        aria-label={`Open ${id} track settings`}
+                        title={`${id} track settings`}
+                      >
+                        <MoreHorizontal className="size-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="min-w-44 text-xs">
+                      <DropdownMenuItem onSelect={kind === "video" ? addVideoTrack : addAudioTrack}>
+                        <Plus className="size-3.5" /> Add {kind} track
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        disabled={!canDelete}
+                        onSelect={onDelete}
+                        title={!canDelete ? deleteUnavailable : undefined}
+                        aria-label={`Delete ${kind} track ${id}`}
+                      >
+                        <Trash2 className="size-3.5" /> Delete {kind} track
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              );
+            };
             // Image tracks Vn..V2, top-to-bottom (V1 is the magnetic video lane).
             const imageTracks = tracks.video.filter((track) => !track.magnetic);
             type LaneDef = {
               label: string;
+              description?: string;
               height: string;
+              heightPx?: number;
+              onHeightChange?: (height: number) => void;
               attention?: boolean;
               trackIndex?: number;
               magneticLane?: boolean;
@@ -3810,12 +4157,21 @@ export function TimelineEditor({
               meta?: React.ReactNode;
               content: React.ReactNode;
               dragProps?: React.HTMLAttributes<HTMLDivElement>;
+              endGutterProps?: React.HTMLAttributes<HTMLDivElement>;
             };
             const lanes: LaneDef[] = [
               // Subtitles — burned in above everything, always the top lane.
               {
-                label: "Subtitles",
+                label: `V${subtitleTrackIndex}`,
+                description: "Subtitles",
                 height: "h-8",
+                action: trackControls({
+                  id: `V${subtitleTrackIndex}`,
+                  kind: "video",
+                  index: subtitleTrackIndex,
+                  addMediaUnavailable: "Subtitle blocks are generated from the transcript",
+                  deleteUnavailable: "The subtitle track is required",
+                }),
                 content: matches.map((match) => (
                   <button
                     type="button"
@@ -3831,35 +4187,25 @@ export function TimelineEditor({
                 )),
               },
               // Image tracks Vn..V2 (z-order: higher track composites in front).
-              ...imageTracks.map((track, laneIdx): LaneDef => ({
+              ...imageTracks.map((track): LaneDef => ({
                 label: `V${track.index}`,
                 height: "h-9",
                 attention: true,
                 trackIndex: track.index,
-                action: canInsertSlide ? (
-                  <div className="flex items-center gap-0.5">
-                    {laneIdx === 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setAddedVideoTracks((n) => n + 1)}
-                        className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
-                        title="Add video track"
-                        aria-label="Add video track"
-                      >
-                        <Layers3 className="size-3" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleInsertSlide(selectedBlockIndex ?? -1, track.index)}
-                      className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
-                      title="Add attention image to this track (drag it on the lane to position)"
-                      aria-label={`Add attention image to ${track.id}`}
-                    >
-                      <Plus className="size-3" />
-                    </button>
-                  </div>
-                ) : null,
+                action: trackControls({
+                  id: track.id,
+                  kind: "video",
+                  index: track.index,
+                  addMedia: canInsertSlide ? () => handleInsertSlide(selectedBlockIndex ?? -1, track.index) : undefined,
+                  addMediaUnavailable: "Media insertion is unavailable for this timeline",
+                  canDelete: track.index === minimumVideoTrackCount
+                    && track.index === highestOverlayTrack
+                    && track.index > 2
+                    && cuesOnTrack(attentionCues, track.index).length === 0
+                    && displayedOverlays.every((clip) => (clip.track ?? 2) !== track.index),
+                  deleteUnavailable: "Move or remove this track's clips before deleting it",
+                  onDelete: () => removeVideoTrack(track.index),
+                }),
                 // Accept a V1 clip block (HTML5 drag) dropped here → convert it
                 // into a free video overlay on this track.
                 dragProps: {
@@ -3873,7 +4219,7 @@ export function TimelineEditor({
                     event.preventDefault();
                     const id = compositionDragId;
                     setCompositionDragId(null);
-                    setCompositionDropTarget(null);
+                    setLiveCompositionDropTarget(null);
                     convertClipToOverlay(id, track.index);
                   },
                 },
@@ -3913,21 +4259,30 @@ export function TimelineEditor({
               // V1 — the magnetic main-video lane.
               {
                 label: "V1",
+                description: "Main video",
                 height: "h-16",
                 magneticLane: true,
-                meta: compositionIntroDuration > 0 ? (
-                  <span className="font-mono text-[8px] text-violet-300">
-                    intro {compositionIntroDuration.toFixed(1)}s
-                  </span>
-                ) : undefined,
+                action: trackControls({
+                  id: "V1",
+                  kind: "video",
+                  index: 1,
+                  addMedia: availableSegments.length > 0 ? handleOpenAddClipDialog : undefined,
+                  addMediaUnavailable: "No video segments are available",
+                  deleteUnavailable: "The main video track is required",
+                }),
                 dragProps: {
                   onDragOver: updateCompositionDropTarget,
                   onDrop: dropCompositionClipAtTarget,
                   onDragLeave: (event) => {
                     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                      setCompositionDropTarget(null);
+                      setLiveCompositionDropTarget(null);
                     }
                   },
+                },
+                endGutterProps: {
+                  "aria-label": "Drop clip at end of V1",
+                  onDragOver: updateCompositionEndDropTarget,
+                  onDrop: dropCompositionClipAtTarget,
                 },
                 content: (
                   <VideoLane
@@ -3953,9 +4308,10 @@ export function TimelineEditor({
                     onClipDragStart={setCompositionDragId}
                     onClipDragEnd={() => {
                       setCompositionDragId(null);
-                      setCompositionDropTarget(null);
+                      setLiveCompositionDropTarget(null);
                     }}
                     onRollPointerDown={beginCompositionRoll}
+                    onEndResizePointerDown={beginCompositionEndResize}
                     onBoundaryChange={setBoundaryTransition}
                     onBoundaryDragStart={beginTransitionDrag}
                   />
@@ -3963,8 +4319,15 @@ export function TimelineEditor({
               },
               // A1 — the TTS voiceover waveform.
               {
-                label: "A1 Voiceover",
+                label: "A1",
+                description: "Voiceover",
                 height: "h-10",
+                action: trackControls({
+                  id: "A1",
+                  kind: "audio",
+                  index: 1,
+                  addMediaUnavailable: "A1 is generated from the project voiceover",
+                }),
                 content: (
                   <>
                     <div
@@ -3984,25 +4347,22 @@ export function TimelineEditor({
               // A2 — background music. A single full-width block spanning the
               // whole timeline when a track is set; empty lane + "+" otherwise.
               {
-                label: "A2 Music",
+                label: "A2",
+                description: "Music",
                 height: "h-8",
                 stub: !onMusicChange,
-                action: onMusicChange && !music ? (
-                  <button
-                    type="button"
-                    onClick={() => {
+                action: trackControls({
+                  id: "A2",
+                  kind: "audio",
+                  index: 2,
+                  addMedia: onMusicChange ? () => {
                       setSelectedMusic(true);
                       setSelectedClipId(null);
                       setSelectedSlideId(null);
                       setSelectedBlockIndex(null);
-                    }}
-                    className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10"
-                    title="Add background music"
-                    aria-label="Add background music"
-                  >
-                    <Plus className="size-3" />
-                  </button>
-                ) : undefined,
+                    } : undefined,
+                  addMediaUnavailable: "Music editing is unavailable",
+                }),
                 content: !onMusicChange ? (
                   <div className="absolute inset-0 flex items-center px-2 text-muted-foreground/40">
                     Music — coming soon
@@ -4047,31 +4407,52 @@ export function TimelineEditor({
                   </button>
                 ),
               },
-              ...(sfxCues.length > 0 ? [{
-                label: "SFX",
-                height: "h-7",
-                content: sfxCues.map(cue => (
-                  <div
-                    key={cue.id}
-                    className="absolute inset-y-1 w-2 rounded bg-amber-500"
-                    style={{ left: pct(cue.startMs / 1000) }}
-                    title="Attention SFX"
-                  />
-                )),
-              }] : []),
+              ...Array.from({ length: Math.max(0, highestAudioTrack - 2) }, (_, offset): LaneDef => {
+                const index = offset + 3;
+                const isSfxTrack = index === 3 && sfxCues.length > 0;
+                const canDelete = index === highestAudioTrack
+                  && index === minimumAudioTrackCount
+                  && index > baseAudioTrackCount;
+                return {
+                  label: `A${index}`,
+                  description: isSfxTrack ? "Sound effects" : "Audio",
+                  height: "h-7",
+                  action: trackControls({
+                    id: `A${index}`,
+                    kind: "audio",
+                    index,
+                    addMediaUnavailable: isSfxTrack
+                      ? "Sound effects are attached to attention cues"
+                      : "No audio media is assigned to this track",
+                    canDelete,
+                    deleteUnavailable: isSfxTrack
+                      ? "The sound-effects track contains clips"
+                      : "Only the highest empty audio track can be deleted",
+                    onDelete: () => removeAudioTrack(index),
+                  }),
+                  content: isSfxTrack ? sfxCues.map(cue => (
+                    <div
+                      key={cue.id}
+                      className="absolute inset-y-1 w-2 rounded bg-amber-500"
+                      style={{ left: pct(cue.startMs / 1000) }}
+                      title="Attention SFX"
+                    />
+                  )) : null,
+                };
+              }),
             ];
 
             // Lane order top-to-bottom = z-order (top lane composites in front),
-            // built directly: Subtitles > Vn..V2 (image tracks) > V1 (magnetic
-            // video) > A1 voiceover > A2 music > SFX. Mirrors the preview z-index
+            // built directly: subtitle Vn > overlay Vn..V2 > V1 (magnetic
+            // video) > A1 voiceover > A2 music > A3 SFX. Mirrors the preview z-index
             // and the backend burn-in order.
 
             return (
               <MultiTrackTimeline
                 scrollRef={multiTrackScrollRef}
-                className={displayMode === "full"
-                  ? "col-span-3 row-start-4 h-full min-h-0 overflow-auto bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-                  : "-mx-6 min-[1280px]:-mx-4 max-h-[45vh] overflow-x-auto overflow-y-auto border-y border-white/10 bg-[#0d0f0d] text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"}
+                className={`timeline-horizontal-scrollbar-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${displayMode === "full"
+                  ? "col-span-3 row-start-4 h-full min-h-0"
+                  : "-mx-6 min-[1280px]:-mx-4 max-h-[45vh] border-y border-white/10"}`}
                 containerProps={{
                   tabIndex: 0,
                   "aria-label": "Multi-track timeline",
@@ -4083,9 +4464,9 @@ export function TimelineEditor({
                 laneWidth={laneWidth}
                 ruler={{
                   duration: totalDuration,
-                  currentTime: isPreviewActive ? previewCurrentTime : undefined,
+                  currentTime: previewCurrentTime,
                   playheadStyle: smoothPlayheadStyle,
-                  className: isPreviewActive ? "cursor-ew-resize" : "",
+                  className: "cursor-ew-resize",
                   onPointerDown: beginMultiTrackScrub,
                 }}
                 zoom={timelineZoom}
@@ -4096,30 +4477,40 @@ export function TimelineEditor({
                   setTimelineZoom(1);
                   if (multiTrackScrollRef.current) multiTrackScrollRef.current.scrollLeft = 0;
                 }}
-                lanes={lanes.map(lane => ({
-                  label: lane.label,
-                  height: lane.height,
-                  action: lane.action,
-                  meta: lane.meta,
-                  axisClassName: lane.stub
-                    ? "opacity-60"
-                    : `bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%] ${isPreviewActive ? "cursor-ew-resize" : ""}`,
+                lanes={lanes.map((lane) => {
+                  const standardHeight = lane.label.startsWith("A") ? 44 : 48;
+                  return {
+                    label: lane.label,
+                    description: lane.description,
+                    height: lane.height,
+                    heightPx: trackHeights[lane.label] ?? standardHeight,
+                    onHeightChange: (height: number) => setTrackHeights((current) => ({
+                      ...current,
+                      [lane.label]: height,
+                    })),
+                    action: lane.action,
+                    meta: lane.meta,
+                    axisClassName: lane.stub
+                      ? "opacity-60"
+                      : "cursor-ew-resize bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%]",
                   axisProps: lane.stub ? {} : {
-                    title: isPreviewActive ? "Drag to scrub" : undefined,
-                    onPointerDown: beginMultiTrackScrub,
-                    ...(lane.attention ? { "data-attention-track": "" } : {}),
-                    ...(lane.trackIndex != null ? { "data-track-index": lane.trackIndex } : {}),
-                    ...(lane.magneticLane ? { "data-magnetic-lane": "" } : {}),
+                      title: "Drag to move the playhead",
+                      onPointerDown: beginMultiTrackScrub,
+                      ...(lane.attention ? { "data-attention-track": "" } : {}),
+                      ...(lane.trackIndex != null ? { "data-track-index": lane.trackIndex } : {}),
+                      ...(lane.magneticLane ? { "data-magnetic-lane": "" } : {}),
                     ...(lane.dragProps ?? {}),
                   },
-                  showEndLine: !lane.stub,
-                  content: (
-                    <>
-                      {lane.content}
-                      {playhead}
-                    </>
-                  ),
-                }))}
+                  endGutterProps: lane.endGutterProps,
+                    showEndLine: !lane.stub,
+                    content: (
+                      <>
+                        {lane.content}
+                        {playhead}
+                      </>
+                    ),
+                  };
+                })}
               />
             );
           })()}
@@ -4142,6 +4533,9 @@ export function TimelineEditor({
               .some((clip) => clip.kind === selectedClip.kind);
             const commitRoll = (leftIndex: number, delta: number) => {
               commitComposition(rollCompositionBoundary(displayedComposition, leftIndex, delta));
+            };
+            const commitRightEdge = (delta: number) => {
+              commitComposition(resizeCompositionEnd(selectedClip.timeline_duration + delta));
             };
             return (
               <div
@@ -4236,10 +4630,11 @@ export function TimelineEditor({
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-white/65">Right edge</span>
                       <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex >= displayedComposition.length - 1}
-                          onClick={() => commitRoll(clipIndex, -0.1)}>−0.1</Button>
-                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white" disabled={clipIndex >= displayedComposition.length - 1}
-                          onClick={() => commitRoll(clipIndex, 0.1)}>+0.1</Button>
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white"
+                          disabled={clipIndex >= displayedComposition.length - 1 && selectedClip.timeline_duration <= 0.1}
+                          onClick={() => clipIndex < displayedComposition.length - 1 ? commitRoll(clipIndex, -0.1) : commitRightEdge(-0.1)}>−0.1</Button>
+                        <Button variant="outline" size="sm" className="h-7 border-white/15 bg-white/5 px-2 text-white"
+                          onClick={() => clipIndex < displayedComposition.length - 1 ? commitRoll(clipIndex, 0.1) : commitRightEdge(0.1)}>+0.1</Button>
                       </div>
                     </div>
                   </div>
@@ -5078,7 +5473,7 @@ export function TimelineEditor({
 
       {/* Segment assignment / swap dialog */}
       <Dialog
-        open={assigningIndex !== null || assigningClipId !== null}
+        open={isAddingCompositionClip || assigningIndex !== null || assigningClipId !== null}
         onOpenChange={(open) => {
           if (!open) handleCloseDialog();
         }}
@@ -5088,7 +5483,7 @@ export function TimelineEditor({
             <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
 
-          {(assigningIndex !== null || assigningClipId !== null) && (
+          {(isAddingCompositionClip || assigningIndex !== null || assigningClipId !== null) && (
             <div className="space-y-3">
               {/* Phrase being assigned */}
               <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
@@ -5096,7 +5491,9 @@ export function TimelineEditor({
                   {dialogSubLabel}
                 </span>
                 <p className="mt-0.5 font-medium">
-                  &ldquo;{assigningClipId !== null
+                  &ldquo;{isAddingCompositionClip
+                    ? "New clip at the end of V1"
+                    : assigningClipId !== null
                     ? displayedComposition.find((clip) => clip.id === assigningClipId)?.segment_keywords?.join(", ") || "Timeline clip"
                     : matches[assigningIndex!]?.srt_text}&rdquo;
                 </p>
@@ -5108,7 +5505,9 @@ export function TimelineEditor({
                 size="sm"
                 className="w-full gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
                 onClick={() => {
-                  setAiGenPrompt(assigningClipId !== null
+                  setAiGenPrompt(isAddingCompositionClip
+                    ? ""
+                    : assigningClipId !== null
                     ? displayedComposition.find((clip) => clip.id === assigningClipId)?.segment_keywords?.join(" ") ?? ""
                     : matches[assigningIndex!]?.srt_text ?? "");
                   setAiGenOpen(true);

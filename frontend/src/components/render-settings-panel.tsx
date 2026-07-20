@@ -35,6 +35,10 @@ export interface RenderSettings {
   force_cpu: boolean;
   preset_speed: string;
   gop_size: number;
+  /** Final composition dimensions. Kept separate from the platform preset so
+   *  every common ratio (and custom formats) can use the same encoder preset. */
+  output_width: number;
+  output_height: number;
 }
 
 export interface RenderAdjustments {
@@ -56,7 +60,19 @@ const DEFAULT_RENDER_SETTINGS: RenderSettings = {
   force_cpu: false,
   preset_speed: "medium",
   gop_size: 60,
+  output_width: 1080,
+  output_height: 1920,
 };
+
+const OUTPUT_FORMATS = [
+  { label: "Vertical 9:16", width: 1080, height: 1920 },
+  { label: "Square 1:1", width: 1080, height: 1080 },
+  { label: "Landscape 16:9", width: 1920, height: 1080 },
+  { label: "Portrait 4:5", width: 1080, height: 1350 },
+  { label: "Portrait 3:4", width: 1080, height: 1440 },
+  { label: "Landscape 4:3", width: 1440, height: 1080 },
+  { label: "Cinematic 21:9", width: 2520, height: 1080 },
+] as const;
 
 const ENCODING_MODE_DESCRIPTIONS: Record<RenderSettings["encoding_mode"], string> = {
   crf: "Constant visual quality with a file size that varies by content.",
@@ -100,6 +116,14 @@ export function RenderSettingsPanel({
   const isVbr = settings.encoding_mode !== "crf";
   const is2Pass = settings.encoding_mode === "vbr_2pass";
   const fadeSummary = `${adjustments.audioFadeIn.toFixed(1)}s in / ${adjustments.audioFadeOut.toFixed(1)}s out`;
+  const outputWidth = settings.output_width || 1080;
+  const outputHeight = settings.output_height || 1920;
+  const knownOutputFormat = OUTPUT_FORMATS.find(
+    (format) => format.width === outputWidth && format.height === outputHeight,
+  );
+  const outputFormatValue = knownOutputFormat
+    ? `${knownOutputFormat.width}x${knownOutputFormat.height}`
+    : "custom";
 
   return (
     <Card className="border-muted" data-testid="step3-render-settings">
@@ -126,6 +150,32 @@ export function RenderSettingsPanel({
                 <SelectItem value="TikTok">TikTok (1080x1920)</SelectItem>
                 <SelectItem value="Instagram Reels">Instagram Reels (1080x1920)</SelectItem>
                 <SelectItem value="YouTube Shorts">YouTube Shorts (1080x1920)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="render-output-format" className="text-xs font-medium text-muted-foreground">
+              Video Format
+            </Label>
+            <Select
+              value={outputFormatValue}
+              onValueChange={(value) => {
+                if (value === "custom") return;
+                const [width, height] = value.split("x").map(Number);
+                update({ output_width: width, output_height: height });
+              }}
+            >
+              <SelectTrigger id="render-output-format" className="h-8 text-xs" data-testid="render-output-format">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {OUTPUT_FORMATS.map((format) => (
+                  <SelectItem key={`${format.width}x${format.height}`} value={`${format.width}x${format.height}`}>
+                    {format.label} ({format.width}x{format.height})
+                  </SelectItem>
+                ))}
+                <SelectItem value="custom">Custom dimensions</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -170,6 +220,35 @@ export function RenderSettingsPanel({
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div className="grid max-w-md grid-cols-2 gap-3 rounded-lg border p-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="render-output-width" className="text-xs text-muted-foreground">Width</Label>
+              <input
+                id="render-output-width"
+                type="number"
+                min={240}
+                max={7680}
+                step={2}
+                value={outputWidth}
+                onChange={(event) => update({ output_width: normalizeOutputDimension(Number(event.target.value)) })}
+                className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="render-output-height" className="text-xs text-muted-foreground">Height</Label>
+              <input
+                id="render-output-height"
+                type="number"
+                min={240}
+                max={7680}
+                step={2}
+                value={outputHeight}
+                onChange={(event) => update({ output_height: normalizeOutputDimension(Number(event.target.value)) })}
+                className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+              />
+            </div>
         </div>
 
         <p className="text-[11px] text-muted-foreground">
@@ -451,4 +530,8 @@ export function RenderSettingsPanel({
       </CardContent>
     </Card>
   );
+}
+
+function normalizeOutputDimension(value: number): number {
+  return Math.round(Math.max(240, Math.min(7680, value || 240)) / 2) * 2;
 }

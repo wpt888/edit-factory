@@ -9,6 +9,7 @@ import {
 import { usePolling } from "@/hooks";
 import { useLocalStorageConfig } from "@/hooks/use-local-storage-config";
 import { useProfile } from "@/contexts/profile-context";
+import { useUndo } from "@/contexts/undo-context";
 import { toast } from "sonner";
 import { getCachedSourceVideos } from "@/lib/source-video-cache";
 import {
@@ -64,11 +65,12 @@ import {
 } from "./pipeline-template";
 import {
   EMPTY_SUBTITLE_TEMPLATE_ROTATION,
-  assignedSubtitlePreset,
   resolveRotatedSubtitleSettings,
   subtitleSettingsDiff,
   wordsPerSubtitleForVariant,
+  resolveSubtitlePresetForCard,
   type SubtitleTemplateRotation,
+  type VariantTemplateSelections,
 } from "./subtitle-template-rotation";
 import { PipelineErrorBoundary } from "./components/pipeline-error-boundary";
 import { Step1Script } from "./components/step1-script";
@@ -139,6 +141,7 @@ function PipelinePage() {
     DEFAULT_PIPELINE_LAYOUT,
   );
   const { currentProfile } = useProfile();
+  const { pushAction, clearHistory } = useUndo();
   // Ref to avoid stale closure in debounced setTimeout callbacks
   const currentProfileIdRef = useRef(currentProfile?.id);
   currentProfileIdRef.current = currentProfile?.id;
@@ -210,6 +213,11 @@ function PipelinePage() {
 
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
+  useEffect(() => {
+    // Query-string navigation can swap pipelines without changing pathname.
+    // Never let an undo action from the previous pipeline mutate the new one.
+    clearHistory();
+  }, [pipelineId, clearHistory]);
   const [scripts, setScripts] = useState<string[]>([]);
   const [scriptNames, setScriptNames] = useState<string[]>([]);
   const [approvedScripts, setApprovedScripts] = useState<Set<number>>(new Set());
@@ -326,6 +334,9 @@ function PipelinePage() {
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Step 3 hides Script History by default (toggled from the toolbar) so the
+  // variant previews claim the full width; other steps keep it visible.
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [historyScripts, setHistoryScripts] = useState<string[]>([]);
   const [historyScriptNames, setHistoryScriptNames] = useState<string[]>([]);
@@ -505,6 +516,11 @@ function PipelinePage() {
   const [variantSubtitleOverrides, setVariantSubtitleOverrides] = useState<
     Partial<Record<PreviewKey, Partial<SubtitleSettings>>>
   >({});
+  // Explicit manual per-variant template picks (presetId keyed by PreviewKey).
+  // Layered on top of rotation: a selection wins even when rotation is off.
+  const [variantTemplateSelections, setVariantTemplateSelections] = useState<
+    VariantTemplateSelections
+  >({});
 
   // Debounced-save timer for per-variant overrides → PUT /pipeline/{id}/subtitle-overrides
   const overridesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -567,8 +583,9 @@ function PipelinePage() {
     setSubtitleOverrides(subtitles.overrides || {});
     setVariantSubtitleOverrides(subtitles.variantOverrides || {});
     setSubtitleRotation(subtitles.rotation || EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+    setVariantTemplateSelections(subtitles.variantTemplates || {});
     setPresetName(render.presetName || "TikTok");
-    setRenderSettings(render.encoding || { ...DEFAULT_RENDER_SETTINGS });
+    setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, ...(render.encoding || {}) });
     setRenderAdjust(render.adjustments || {
       enableColor: false,
       brightness: 0,
@@ -637,10 +654,13 @@ function PipelinePage() {
   // VariantPreviewPlayer, which always reason in terms of PreviewCards.
   const getPreviewSubtitleSettingsFor = useCallback(
     (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => {
-      if (subtitleRotation.enabled) {
+      // A template baseline applies when rotation is on OR this card has an
+      // explicit manual selection.
+      if (subtitleRotation.enabled || variantTemplateSelections[card.key]) {
         return resolveRotatedSubtitleSettings({
           card,
           rotation: subtitleRotation,
+          selections: variantTemplateSelections,
           presets: userSubtitlePresets,
           defaultSettings: subtitleSettings,
           metaOverrides: subtitleOverrides,
@@ -674,6 +694,7 @@ function PipelinePage() {
       subtitleSettings,
       userSubtitlePresets,
       variantSubtitleOverrides,
+      variantTemplateSelections,
     ]
   );
 
@@ -682,6 +703,7 @@ function PipelinePage() {
       resolveRotatedSubtitleSettings({
         card,
         rotation: subtitleRotation,
+        selections: variantTemplateSelections,
         presets: userSubtitlePresets,
         defaultSettings: subtitleSettings,
         metaOverrides: subtitleOverrides,
@@ -689,26 +711,30 @@ function PipelinePage() {
         metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
       })
     ),
-    [subtitleOverrides, subtitleRotation, subtitleSettings, userSubtitlePresets],
+    [subtitleOverrides, subtitleRotation, subtitleSettings, userSubtitlePresets, variantTemplateSelections],
   );
 
+  // Effective template for a card: explicit selection > rotation > none.
   const getAssignedSubtitlePreset = useCallback(
-    (variantIndex: number) => assignedSubtitlePreset(
+    (card: Pick<PreviewCard, "key" | "baseIndex">) => resolveSubtitlePresetForCard(
       subtitleRotation,
+      variantTemplateSelections,
       userSubtitlePresets,
-      variantIndex,
+      card,
     ),
-    [subtitleRotation, userSubtitlePresets],
+    [subtitleRotation, userSubtitlePresets, variantTemplateSelections],
   );
 
   const getWordsPerSubtitleForVariant = useCallback(
-    (variantIndex: number) => wordsPerSubtitleForVariant(
+    (variantIndex: number, previewKey?: PreviewKey) => wordsPerSubtitleForVariant(
       subtitleRotation,
       userSubtitlePresets,
       variantIndex,
       wordsPerSubtitle,
+      variantTemplateSelections,
+      previewKey,
     ),
-    [subtitleRotation, userSubtitlePresets, wordsPerSubtitle],
+    [subtitleRotation, userSubtitlePresets, wordsPerSubtitle, variantTemplateSelections],
   );
 
   // Stable empty slides constant to avoid new array reference on every render
@@ -718,93 +744,113 @@ function PipelinePage() {
   const matchesChangeHandlers = useRef<Record<string, (matches: MatchPreview[]) => void>>({});
   // F3: debounce timers for persisting timeline edits per preview key
   const matchesSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const applyMatchesChange = useCallback((previewKey: string, updatedMatches: MatchPreview[]) => {
+    setPreviews(prev => {
+      const current = prev[previewKey] || {} as PreviewData;
+      return {
+        ...prev,
+        [previewKey]: {
+          ...current,
+          matches: updatedMatches,
+          matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
+          unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
+        }
+      };
+    });
+
+    const pid = pipelineIdRef.current;
+    if (!pid) return;
+    if (matchesSaveTimers.current[previewKey]) {
+      clearTimeout(matchesSaveTimers.current[previewKey]);
+    }
+    matchesSaveTimers.current[previewKey] = setTimeout(() => {
+      delete matchesSaveTimers.current[previewKey];
+      const baseVariant = parseInt(previewKey, 10);
+      if (!Number.isFinite(baseVariant)) return;
+      const underscoreIdx = previewKey.indexOf("_");
+      const visualVersion = underscoreIdx > 0 ? previewKey.slice(underscoreIdx + 1) : undefined;
+      apiPut(`/pipeline/${pid}/matches/${baseVariant}`, {
+        matches: updatedMatches,
+        visual_version: visualVersion,
+      }).catch(() => {
+        // Best-effort persistence; edits remain in local state and are still
+        // sent as match_overrides at render time.
+      });
+    }, 800);
+  }, []);
   const getMatchesChangeHandler = useCallback((previewKey: string) => {
     if (!matchesChangeHandlers.current[previewKey]) {
       matchesChangeHandlers.current[previewKey] = (updatedMatches: MatchPreview[]) => {
-        setPreviews(prev => {
-          const current = prev[previewKey] || {} as PreviewData;
-          return {
-            ...prev,
-            [previewKey]: {
-              ...current,
-              matches: updatedMatches,
-              matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
-              unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
-            }
-          };
-        });
-
-        // F3: persist timeline edits (debounced) so a backend/app restart
-        // restores the edited timeline, not the original auto-match.
-        const pid = pipelineIdRef.current;
-        if (!pid) return;
-        if (matchesSaveTimers.current[previewKey]) {
-          clearTimeout(matchesSaveTimers.current[previewKey]);
-        }
-        matchesSaveTimers.current[previewKey] = setTimeout(() => {
-          delete matchesSaveTimers.current[previewKey];
-          const baseVariant = parseInt(previewKey, 10);
-          if (!Number.isFinite(baseVariant)) return;
-          const underscoreIdx = previewKey.indexOf("_");
-          const visualVersion = underscoreIdx > 0 ? previewKey.slice(underscoreIdx + 1) : undefined;
-          apiPut(`/pipeline/${pid}/matches/${baseVariant}`, {
-            matches: updatedMatches,
-            visual_version: visualVersion,
-          }).catch(() => {
-            // Best-effort persistence — edits remain in local state and are
-            // still sent as match_overrides at render time.
+        const previousMatches = previewsRef.current[previewKey]?.matches;
+        if (previousMatches && previousMatches !== updatedMatches) {
+          pushAction({
+            label: "variant match edit",
+            undo: () => applyMatchesChange(previewKey, previousMatches),
+            redo: () => applyMatchesChange(previewKey, updatedMatches),
           });
-        }, 800);
+        }
+        applyMatchesChange(previewKey, updatedMatches);
       };
     }
     return matchesChangeHandlers.current[previewKey];
-  }, []);
+  }, [applyMatchesChange, pushAction]);
 
   const videoTimelineChangeHandlers = useRef<Record<string, (timeline: CompositionClip[]) => void>>({});
   const videoTimelineSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const applyVideoTimelineChange = useCallback((previewKey: string, videoTimeline: CompositionClip[]) => {
+    setPreviews((previous) => {
+      const current = previous[previewKey] || {} as PreviewData;
+      return {
+        ...previous,
+        [previewKey]: {
+          ...current,
+          video_timeline: videoTimeline,
+          intro_offset_sec: videoTimeline
+            .filter((clip) => clip.kind === "intro")
+            .reduce((sum, clip) => sum + clip.timeline_duration, 0),
+        },
+      };
+    });
+
+    const pid = pipelineIdRef.current;
+    if (!pid) return;
+    if (videoTimelineSaveTimers.current[previewKey]) {
+      clearTimeout(videoTimelineSaveTimers.current[previewKey]);
+    }
+    videoTimelineSaveTimers.current[previewKey] = setTimeout(() => {
+      delete videoTimelineSaveTimers.current[previewKey];
+      const baseVariant = parseInt(previewKey, 10);
+      if (!Number.isFinite(baseVariant)) return;
+      const underscoreIndex = previewKey.indexOf("_");
+      const visualVersion = underscoreIndex > 0
+        ? previewKey.slice(underscoreIndex + 1)
+        : undefined;
+      apiPut(`/pipeline/${pid}/composition/${baseVariant}`, {
+        video_timeline: videoTimeline,
+        visual_version: visualVersion,
+        default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
+        music: previewsRef.current[previewKey]?.music ?? null,
+      }).catch((error) => {
+        console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
+      });
+    }, 500);
+  }, []);
   const getVideoTimelineChangeHandler = useCallback((previewKey: string) => {
     if (!videoTimelineChangeHandlers.current[previewKey]) {
       videoTimelineChangeHandlers.current[previewKey] = (videoTimeline: CompositionClip[]) => {
-        setPreviews((previous) => {
-          const current = previous[previewKey] || {} as PreviewData;
-          return {
-            ...previous,
-            [previewKey]: {
-              ...current,
-              video_timeline: videoTimeline,
-              intro_offset_sec: videoTimeline
-                .filter((clip) => clip.kind === "intro")
-                .reduce((sum, clip) => sum + clip.timeline_duration, 0),
-            },
-          };
-        });
-
-        const pid = pipelineIdRef.current;
-        if (!pid) return;
-        if (videoTimelineSaveTimers.current[previewKey]) {
-          clearTimeout(videoTimelineSaveTimers.current[previewKey]);
-        }
-        videoTimelineSaveTimers.current[previewKey] = setTimeout(() => {
-          delete videoTimelineSaveTimers.current[previewKey];
-          const baseVariant = parseInt(previewKey, 10);
-          if (!Number.isFinite(baseVariant)) return;
-          const underscoreIndex = previewKey.indexOf("_");
-          const visualVersion = underscoreIndex > 0
-            ? previewKey.slice(underscoreIndex + 1)
-            : undefined;
-          apiPut(`/pipeline/${pid}/composition/${baseVariant}`, {
-            video_timeline: videoTimeline,
-            visual_version: visualVersion,
-            default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
-            music: previewsRef.current[previewKey]?.music ?? null,
-          }).catch((error) => {
-            console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
+        const previousTimeline = previewsRef.current[previewKey]?.video_timeline;
+        if (previousTimeline && previousTimeline !== videoTimeline) {
+          pushAction({
+            label: "variant timeline edit",
+            undo: () => applyVideoTimelineChange(previewKey, previousTimeline),
+            redo: () => applyVideoTimelineChange(previewKey, videoTimeline),
           });
-        }, 500);
+        }
+        applyVideoTimelineChange(previewKey, videoTimeline);
       };
     }
     return videoTimelineChangeHandlers.current[previewKey];
-  }, []);
+  }, [applyVideoTimelineChange, pushAction]);
 
   // A2 background music — updates PreviewData and persists via the same
   // debounced composition save (which now carries `music`), mirroring the
@@ -2114,7 +2160,7 @@ function PipelinePage() {
               speed: voiceSpeed,
               use_speaker_boost: voiceSpeakerBoost,
             },
-            words_per_subtitle: getWordsPerSubtitleForVariant(previewCard.baseIndex),
+            words_per_subtitle: getWordsPerSubtitleForVariant(previewCard.baseIndex, previewCard.key),
             min_segment_duration: minSegmentDuration,
             ultra_rapid_intro: ultraRapidIntro,
             visual_version: previewCard.visualVersion,
@@ -2388,6 +2434,7 @@ function PipelinePage() {
         overrides: subtitleOverrides,
         variantOverrides: variantSubtitleOverrides,
         rotation: subtitleRotation,
+        variantTemplates: variantTemplateSelections,
       },
       render: {
         presetName,
@@ -2542,6 +2589,8 @@ function PipelinePage() {
     return {
       variant_indices: Array.from(selectedVariants),
       preset_name: presetName,
+      output_width: renderSettings.output_width || 1080,
+      output_height: renderSettings.output_height || 1920,
       elevenlabs_model: elevenlabsModel,
       voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
       source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
@@ -2576,7 +2625,7 @@ function PipelinePage() {
       words_per_subtitle_by_key: Object.fromEntries(
         selectedPreviewCards.map((card) => [
           card.key,
-          getWordsPerSubtitleForVariant(card.baseIndex),
+          getWordsPerSubtitleForVariant(card.baseIndex, card.key),
         ]),
       ),
       min_segment_duration: minSegmentDuration,
@@ -2620,7 +2669,7 @@ function PipelinePage() {
       // takes the simpler code path (flat defaults only).
       subtitle_settings_by_key: (() => {
         const filtered: Record<string, SubtitleSettings> = {};
-        if (subtitleRotation.enabled) {
+        if (subtitleRotation.enabled || Object.keys(variantTemplateSelections).length > 0) {
           for (const card of selectedPreviewCards) {
             filtered[card.key] = getPreviewSubtitleSettingsFor(card);
           }
@@ -3457,32 +3506,75 @@ function PipelinePage() {
   useEffect(() => {
     if (!pipelineId) {
       setSubtitleRotation(EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+      setVariantTemplateSelections({});
       return;
     }
     let cancelled = false;
     apiGet(`/pipeline/${pipelineId}/subtitle-rotation`)
       .then((response) => response.json())
-      .then((rotation: SubtitleTemplateRotation) => {
-        if (!cancelled) setSubtitleRotation({
+      .then((rotation: SubtitleTemplateRotation & { variantTemplates?: Record<string, string> }) => {
+        if (cancelled) return;
+        setSubtitleRotation({
           enabled: Boolean(rotation.enabled),
           presetIds: Array.isArray(rotation.presetIds) ? rotation.presetIds : [],
         });
+        setVariantTemplateSelections(
+          rotation.variantTemplates && typeof rotation.variantTemplates === "object"
+            ? { ...rotation.variantTemplates }
+            : {},
+        );
       })
       .catch(() => {
-        if (!cancelled) setSubtitleRotation(EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+        if (!cancelled) {
+          setSubtitleRotation(EMPTY_SUBTITLE_TEMPLATE_ROTATION);
+          setVariantTemplateSelections({});
+        }
       });
     return () => { cancelled = true; };
   }, [pipelineId]);
 
+  // Persist rotation + manual selections together (same endpoint/envelope).
+  const persistSubtitleRotation = useCallback((
+    rotation: SubtitleTemplateRotation,
+    selections: VariantTemplateSelections,
+  ) => {
+    const savedPipelineId = pipelineIdRef.current;
+    if (!savedPipelineId) return;
+    apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, {
+      ...rotation,
+      variantTemplates: selections,
+    }).catch(() => {
+      toast.error("Could not save subtitle template settings");
+    });
+  }, []);
+
   const handleSubtitleRotationChange = useCallback((next: SubtitleTemplateRotation) => {
     setSubtitleRotation(next);
     scheduleReassemblePreviews();
-    const savedPipelineId = pipelineIdRef.current;
-    if (!savedPipelineId) return;
-    apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, next).catch(() => {
-      toast.error("Could not save subtitle template rotation");
+    persistSubtitleRotation(next, variantTemplateSelections);
+  }, [scheduleReassemblePreviews, persistSubtitleRotation, variantTemplateSelections]);
+
+  // Manual per-variant template pick. Empty string clears the selection back
+  // to Auto (rotation). Triggers preview re-resolution like other subtitle edits.
+  const handleVariantTemplateSelectionChange = useCallback((previewKey: PreviewKey, presetId: string) => {
+    setVariantTemplateSelections((previous) => {
+      const next = { ...previous };
+      if (presetId) next[previewKey] = presetId;
+      else delete next[previewKey];
+      // Selecting a new template drops any card-local override so Reset baseline
+      // follows the freshly picked template.
+      setVariantSubtitleOverrides((prevOverrides) => {
+        if (!(previewKey in prevOverrides)) return prevOverrides;
+        const nextOverrides = { ...prevOverrides };
+        delete nextOverrides[previewKey];
+        scheduleOverridesSave(subtitleOverrides, nextOverrides);
+        return nextOverrides;
+      });
+      persistSubtitleRotation(subtitleRotation, next);
+      return next;
     });
-  }, [scheduleReassemblePreviews]);
+    scheduleReassemblePreviews();
+  }, [persistSubtitleRotation, subtitleRotation, scheduleReassemblePreviews, scheduleOverridesSave, subtitleOverrides]);
 
   const handleUpdateSubtitlePreset = useCallback((
     presetId: string,
@@ -4917,6 +5009,8 @@ function PipelinePage() {
     variantSubtitleOverrides,
     handleVariantTemplateOverrideChange,
     handleResetVariantTemplateOverride,
+    variantTemplateSelections,
+    handleVariantTemplateSelectionChange,
     handleUpdateSubtitlePreset,
     subtitleSettings,
     setSubtitleSettings,
@@ -5023,6 +5117,8 @@ function PipelinePage() {
     historySelectedScripts,
     handleHistoryImport,
     pipelineLayout,
+    showHistoryPanel,
+    setShowHistoryPanel,
   };
 
   const isEditingWorkspace = step >= 1 && step <= 3;
@@ -5030,6 +5126,10 @@ function PipelinePage() {
   // applied elsewhere, where a linear reading order is more approachable.
   const usesWideWorkspace = step === 3 || pipelineLayout === "workspace";
   const usesFixedWorkspace = isEditingWorkspace && usesWideWorkspace;
+  // History gets a permanent column everywhere except Step 3, where it is a
+  // toggled overlay-free column so the previews take the freed width by default.
+  const historyVisible = step === 3 ? showHistoryPanel : true;
+  const splitEnabled = usesFixedWorkspace && historyVisible;
 
   return (
     <div className={`min-h-full bg-background ${
@@ -5048,8 +5148,8 @@ function PipelinePage() {
         {/* Main content + History sidebar */}
         <WorkspaceSplit
           splitId="history"
-          enabled={usesFixedWorkspace}
-          fallbackClassName={`grid grid-cols-1 ${usesWideWorkspace ? "min-[1280px]:grid-cols-[minmax(0,1fr)_20rem]" : ""} ${
+          enabled={splitEnabled}
+          fallbackClassName={`grid grid-cols-1 ${usesWideWorkspace && historyVisible ? "min-[1280px]:grid-cols-[minmax(0,1fr)_20rem]" : ""} ${
             usesFixedWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:bg-border" : "gap-5"
           }`}
           leftSizing={{ minSize: "40%" }}
@@ -5071,7 +5171,8 @@ function PipelinePage() {
 
         </div>{/* end main content */}
 
-        {/* History Sidebar */}
+        {/* History Sidebar — hidden on Step 3 unless toggled from the toolbar */}
+          {historyVisible && (
           <div className={
             usesFixedWorkspace
               ? "min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:overflow-hidden"
@@ -5079,6 +5180,7 @@ function PipelinePage() {
           }>
             <PipelineHistorySidebar ctx={pipelineCtx} />
           </div>
+          )}
 
         </WorkspaceSplit>{/* end main + history split */}
       </div>

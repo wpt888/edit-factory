@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, CheckCircle, Download, Film, Loader2, Sparkles, Upload } from "lucide-react";
+import { ArrowLeft, CheckCircle, Clock, Download, Film, Loader2, Sparkles, Upload } from "lucide-react";
 import { useRef, type Dispatch, type SetStateAction } from "react";
 
 // Mirrors the inline confirmDialog state shape in PipelinePage (page.tsx).
@@ -64,6 +64,8 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     templateTransferBusy,
     handleExportPipelineTemplate,
     handleImportPipelineTemplate,
+    showHistoryPanel,
+    setShowHistoryPanel,
   }: PipelineStepperCtx = ctx;
   const templateInputRef = useRef<HTMLInputElement>(null);
 
@@ -248,6 +250,20 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
           <span className="hidden min-[1450px]:inline">Export Template</span>
           <span className="min-[1450px]:hidden">Export</span>
         </Button>
+        {step === 3 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 px-2.5 text-sm"
+            aria-pressed={!!showHistoryPanel}
+            onClick={() => setShowHistoryPanel?.((prev: boolean) => !prev)}
+            title={showHistoryPanel ? "Hide script history" : "Show script history"}
+            data-testid="pipeline-history-toggle"
+          >
+            <Clock className="mr-1.5 size-4" />
+            <span className="hidden min-[1450px]:inline">{showHistoryPanel ? "Hide History" : "History"}</span>
+          </Button>
+        )}
         {step === 3 && (
           <Button
             variant="ghost"

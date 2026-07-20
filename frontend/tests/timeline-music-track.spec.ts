@@ -186,7 +186,7 @@ const openFullEditor = async (page: Page): Promise<{ editor: ReturnType<Page["ge
   await page.locator('button[title^="Maximize editor"]').first().click();
   const editor = page.getByTestId("step3-full-editor");
   await expect(editor).toBeVisible();
-  await expect(editor.locator("span.truncate", { hasText: /^A2 Music$/ })).toBeVisible();
+  await expect(editor.locator("span.truncate", { hasText: /^A2$/ })).toBeVisible();
   return { editor, harness };
 };
 
