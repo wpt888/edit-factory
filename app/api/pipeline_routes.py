@@ -2560,6 +2560,16 @@ def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
         return _db_load_pipeline(pipeline_id)
 
 
+def _require_owned_pipeline(pipeline_id: str, profile_id: str) -> dict:
+    """Load a pipeline and enforce profile ownership before any route action."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    return pipeline
+
+
 def _compute_segment_duration(profile_id: str) -> float:
     """Compute total duration of all segments for a profile."""
     repo = get_repository()
@@ -3441,6 +3451,8 @@ async def delete_pipeline(
     Delete a pipeline and all its data from DB and in-memory cache.
     Only the owning profile can delete their pipelines.
     """
+    _require_owned_pipeline(pipeline_id, profile.profile_id)
+
     # Remove from DB (verify ownership first, then clean up in-memory cache)
     db_found = False
     try:
@@ -4317,11 +4329,10 @@ async def update_pipeline_scripts(
 async def update_pipeline_script_names(
     pipeline_id: str,
     request: PipelineUpdateScriptNamesRequest,
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """Rename script variants without invalidating their audio or previews."""
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     scripts = pipeline.get("scripts", [])
     if len(request.script_names) != len(scripts):
@@ -4383,9 +4394,7 @@ async def regenerate_script(
     Re-uses the original pipeline's idea, context, and context_products.
     Generates 1 new variant and replaces the script at variant_index.
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
@@ -4718,9 +4727,7 @@ async def rename_pipeline(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Update the name of an existing pipeline."""
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     pipeline["name"] = request.name
 
@@ -4746,9 +4753,7 @@ async def approve_tts_variant(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Mark a variant's TTS voice-over as approved/unapproved (Step 2 verification)."""
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     tts_previews = pipeline.get("tts_previews", {})
     key = str(variant_index)
@@ -8422,21 +8427,18 @@ def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
 
 
 @router.get("/status/{pipeline_id}", response_model=PipelineStatusResponse)
-async def get_pipeline_status(pipeline_id: str):
+async def get_pipeline_status(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """
     Get status of all variants in a pipeline.
 
-    **Intentionally public** (no auth) — the pipeline UUID acts as an
-    unguessable capability token, enabling status polling without
-    re-authenticating on every request.  This is safe because:
-    - UUIDs are 128-bit random (2^122 entropy with v4)
-    - Pipeline IDs are never exposed in URLs visible to other users
-    - Pipelines expire after 30 days (TTL enforced on read).
+    Requires the active profile to own the pipeline; UUID knowledge is not an
+    authorization capability.
     """
     # Try in-memory first, then DB fallback
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
     _mark_stale_render_jobs(pipeline_id, pipeline)
     await _reconcile_regeneration_metering(pipeline_id)
@@ -8693,7 +8695,10 @@ async def get_pipeline_status(pipeline_id: str):
 
 
 @router.get("/scripts/{pipeline_id}")
-async def get_pipeline_scripts(pipeline_id: str):
+async def get_pipeline_scripts(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """
     PIP-10: Dedicated endpoint for retrieving pipeline scripts.
 
@@ -8701,9 +8706,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     Intentionally public (same pattern as /status) — pipeline UUID
     acts as capability token.
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
 
     # Build preview_info from stored previews (needed for history restore)
@@ -9987,16 +9990,14 @@ async def get_preview_status(
     pipeline_id: str,
     variant_index: int,
     visual_version: Optional[str] = None,
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """
     Get status of a server-side preview render.
 
-    Intentionally public (same pattern as /status endpoint) — pipeline UUID
-    acts as capability token.
+    The active profile must own the pipeline.
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     preview_key = _build_preview_key(variant_index, visual_version)
     render_state = pipeline.get("preview_renders", {}).get(preview_key)
@@ -10022,20 +10023,18 @@ async def stream_preview_progress(
     pipeline_id: str,
     variant_index: int,
     visual_version: Optional[str] = None,
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """
     SSE stream of preview render progress (F2 — replaces 2s polling).
 
     Emits a ``progress`` event whenever the render state changes (checked every
     300ms) and closes after a terminal ``completed``/``failed`` event. Clients
-    use ``EventSource``; intentionally public like /preview-status (the
-    pipeline UUID acts as capability token).
+    use ``EventSource`` and must authenticate as the owning profile.
     """
     from sse_starlette.sse import EventSourceResponse
 
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     preview_key = _build_preview_key(variant_index, visual_version)
 
@@ -10070,16 +10069,14 @@ async def get_preview_video(
     variant_index: int,
     request: Request,
     visual_version: Optional[str] = None,
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """
     Stream the preview MP4 video for a variant.
 
-    Supports HTTP Range requests for seeking. Intentionally public
-    (same pattern as /status endpoint).
+    Supports HTTP Range requests for seeking and requires pipeline ownership.
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     preview_key = _build_preview_key(variant_index, visual_version)
     render_state = pipeline.get("preview_renders", {}).get(preview_key)
@@ -10135,9 +10132,7 @@ async def generate_video_captions(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Generate AI social media caption variants for rendered pipeline clips using Gemini."""
-    pipeline = _get_pipeline_or_load(req.pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(req.pipeline_id, ctx.profile_id)
 
     scripts = pipeline.get("scripts", [])
     pipeline_context = _strip_embedded_product_blocks(pipeline.get("context", ""))
@@ -10315,14 +10310,13 @@ class SaveSelectedCaptionsRequest(BaseModel):
 @router.post("/selected-captions")  # POST alias for navigator.sendBeacon (only supports POST)
 async def save_selected_captions(
     req: SaveSelectedCaptionsRequest,
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """
     Save the user's final caption selection/edits per variant.
     Stores in pipeline["selected_captions"] separately from the AI-generated arrays.
     """
-    pipeline = _get_pipeline_or_load(req.pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail="Pipeline not found")
+    pipeline = _require_owned_pipeline(req.pipeline_id, profile.profile_id)
 
     render_jobs = pipeline.get("render_jobs", {})
     normalized_captions: Dict[str, str] = {}

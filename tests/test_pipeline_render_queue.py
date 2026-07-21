@@ -69,7 +69,10 @@ def test_status_exposes_queue_position_and_recent_duration_eta(monkeypatch):
         pipeline_routes._pipelines[pipeline_id] = _queued_pipeline(pipeline_id)
         monkeypatch.setattr(pipeline_routes, "get_render_queue", lambda: queue)
 
-        response = await pipeline_routes.get_pipeline_status(pipeline_id)
+        response = await pipeline_routes.get_pipeline_status(
+            pipeline_id,
+            ProfileContext(profile_id="profile-1", user_id="user-1"),
+        )
         queued_status = response.variants[0]
         assert queued_status.status == "queued"
         assert queued_status.queue_position == 1

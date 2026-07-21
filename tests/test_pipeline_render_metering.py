@@ -261,7 +261,10 @@ def test_status_reconciles_capture_after_output_persistence(monkeypatch):
         monkeypatch.setattr(pipeline_routes, "settle_metering_record", settle)
         monkeypatch.setattr(pipeline_routes, "_db_update_render_jobs", lambda *_args: None)
 
-        response = await pipeline_routes.get_pipeline_status(pipeline_id)
+        response = await pipeline_routes.get_pipeline_status(
+            pipeline_id,
+            ProfileContext(profile_id="profile-1", user_id="user-1"),
+        )
 
         assert response.variants[0].status == "completed"
         assert pipeline["render_jobs"][0]["metering"]["state"] == "captured"
@@ -328,7 +331,10 @@ def test_status_replays_lost_render_reserve_response_then_refunds(monkeypatch):
         monkeypatch.setattr(pipeline_routes, "settle_metering_record", settle)
         monkeypatch.setattr(pipeline_routes, "_db_update_render_jobs", lambda *_args: None)
 
-        response = await pipeline_routes.get_pipeline_status(pipeline_id)
+        response = await pipeline_routes.get_pipeline_status(
+            pipeline_id,
+            ProfileContext(profile_id="profile-1", user_id="user-1"),
+        )
 
         assert response.variants[0].status == "failed"
         assert events == [
