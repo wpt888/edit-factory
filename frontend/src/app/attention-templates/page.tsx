@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { MusicAssetPickerDialog } from "@/components/dialogs/music-asset-picker-dialog";
 import { EditorHeader } from "@/components/editor-header";
@@ -70,6 +71,7 @@ export default function AttentionTemplatesPage() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState("");
   const [audioPickerTarget, setAudioPickerTarget] = useState<{ imageId: string; track: number } | null>(null);
+  const [defaultContentTarget, setDefaultContentTarget] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const previewCanvasRef = useRef<HTMLDivElement>(null);
   const previewMsRef = useRef(0);
@@ -325,6 +327,27 @@ export default function AttentionTemplatesPage() {
                     <Field label={`Effect volume · ${selectedImage.sfxVolumeDb > 0 ? "+" : ""}${selectedImage.sfxVolumeDb.toFixed(0)} dB`}><Slider min={-60} max={12} step={1} value={[selectedImage.sfxVolumeDb]} onValueChange={([value]) => updateImage(selectedImage.id, { sfxVolumeDb: value })} /></Field>
                   </div>
                 </div>
+                <div className="border-t border-border/70 pt-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium"><ImagePlus className="size-3.5 text-primary" />Default content</div>
+                  <div className="space-y-2">
+                    {selectedImage.defaultAsset ? (
+                      <div className="flex items-center gap-2" data-testid="attention-default-content">
+                        <div className="size-12 shrink-0 overflow-hidden rounded border bg-muted/40">
+                          {selectedImage.defaultAsset.type === "video"
+                            ? <video src={selectedImage.defaultAsset.url} muted playsInline preload="metadata" className="size-full object-cover" />
+                            : <img src={selectedImage.defaultAsset.url} alt="Slot default content" className="size-full object-cover" />}
+                        </div>
+                        <p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{selectedImage.defaultAsset.type === "video" ? "Video" : "Image"} · pre-fills this slot in Step 3</p>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground">No default. Leave empty and this slot is filled per pipeline in Step 3.</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => setDefaultContentTarget(selectedImage.id)}><ImagePlus className="mr-1.5 size-3.5" />{selectedImage.defaultAsset ? "Change content" : "Set default content"}</Button>
+                      {selectedImage.defaultAsset && <Button type="button" variant="ghost" size="sm" className="h-8 text-xs text-destructive" onClick={() => updateImage(selectedImage.id, { defaultAsset: undefined })}>Clear</Button>}
+                    </div>
+                  </div>
+                </div>
                 <Button type="button" variant="outline" size="sm" className="w-full border-destructive/30 text-destructive" onClick={() => removeImage(selectedImage.id)}><Trash2 className="mr-2 size-3.5" />Remove slot</Button>
               </> : <p className="py-3 text-center text-[11px] text-muted-foreground">Add or select a slot on the timeline to edit its layout and timing.</p>}
             </InspectorSection>
@@ -374,6 +397,14 @@ export default function AttentionTemplatesPage() {
       </div>
 
       <input ref={videoInputRef} className="hidden" type="file" accept="video/*" onChange={event => { const file = event.target.files?.[0]; if (file) setVideoUrl(URL.createObjectURL(file)); }} />
+      <AttentionAssetPickerDialog
+        open={defaultContentTarget !== null}
+        onOpenChange={open => { if (!open) setDefaultContentTarget(null); }}
+        onSelect={asset => {
+          if (defaultContentTarget) updateImage(defaultContentTarget, { defaultAsset: asset });
+          setDefaultContentTarget(null);
+        }}
+      />
       <MusicAssetPickerDialog
         open={audioPickerTarget !== null}
         onOpenChange={open => { if (!open) setAudioPickerTarget(null); }}
