@@ -31,7 +31,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional, Literal
+from urllib.parse import unquote, urlparse
 
+from app.config import get_settings
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 W_OUT = 1080
 H_OUT = 1920
 FPS = 30
+MAX_OVERLAY_DOWNLOAD_BYTES = 25 * 1024 * 1024
 
 # Pre-scale factor for smooth zoompan: 4x prevents jittery motion
 W_LARGE = W_OUT * 4   # 4320px
@@ -66,47 +69,110 @@ PIP_POSITION_MAP = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-async def _download_image(url_or_path: str, temp_dir: str) -> Optional[str]:
-    """Download an image from a URL to temp_dir, or verify a local path exists.
+class OverlaySourceError(ValueError):
+    """Raised when an overlay source is unsafe or cannot be obtained."""
+
+
+def _allowed_local_roots(temp_dir: str) -> tuple[Path, ...]:
+    settings = get_settings()
+    project_root = Path(__file__).resolve().parents[3]
+    candidates = [
+        Path(temp_dir),
+        project_root / "assets",
+        project_root / "uploads",
+        project_root / "input",
+        project_root / "media",
+        project_root / "output",
+        project_root / "temp",
+    ]
+    for attribute in ("input_dir", "media_dir", "output_dir", "temp_dir"):
+        configured = getattr(settings, attribute, None)
+        if configured:
+            candidates.append(Path(configured))
+    return tuple(dict.fromkeys(path.resolve() for path in candidates))
+
+
+def _allowed_remote_hosts() -> set[str]:
+    supabase_url = str(getattr(get_settings(), "supabase_url", "") or "")
+    host = (urlparse(supabase_url).hostname or "").lower()
+    return {host} if host else set()
+
+
+def _validate_local_source(raw_path: str, temp_dir: str) -> Path:
+    source = Path(raw_path).expanduser().resolve()
+    if not source.is_file():
+        raise OverlaySourceError("Overlay source file does not exist")
+    if not any(source.is_relative_to(root) for root in _allowed_local_roots(temp_dir)):
+        raise OverlaySourceError("Overlay source is outside application-managed directories")
+    return source
+
+
+def _validate_remote_source(raw_url: str) -> None:
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise OverlaySourceError("Overlay URL must use HTTP(S)")
+    if parsed.username or parsed.password:
+        raise OverlaySourceError("Overlay URL credentials are not allowed")
+    if parsed.hostname.lower() not in _allowed_remote_hosts():
+        raise OverlaySourceError("Overlay URL host is not allowlisted")
+
+
+async def _download_image(url_or_path: str, temp_dir: str) -> str:
+    """Resolve an application-owned local asset or download an allowlisted URL.
 
     Args:
         url_or_path: Either a local filesystem path or an http/https URL.
         temp_dir: Directory for downloaded files.
 
     Returns:
-        Local path to the image on success, None on failure.
+        Local path to the image on success.
+
+    Raises:
+        OverlaySourceError: The source is unsafe, too large, or unavailable.
     """
     if not url_or_path:
-        return None
+        raise OverlaySourceError("Overlay source is required")
 
-    # Local path — verify it exists
-    if not url_or_path.startswith("http"):
-        if os.path.exists(url_or_path):
-            return url_or_path
-        logger.warning("[overlay_renderer] Local image path not found: %s", url_or_path)
-        return None
+    parsed = urlparse(url_or_path)
+    if parsed.scheme == "file":
+        raise OverlaySourceError("file:// overlay URLs are not allowed")
+    if parsed.scheme not in {"http", "https"}:
+        if parsed.scheme and not (len(parsed.scheme) == 1 and url_or_path[1:3] in {":\\", ":/"}):
+            raise OverlaySourceError("Unsupported overlay source scheme")
+        return str(_validate_local_source(url_or_path, temp_dir))
 
-    # URL — download via httpx
+    _validate_remote_source(url_or_path)
+    dest = Path(temp_dir) / ("overlay_img_" + _url_basename(url_or_path))
     try:
         import httpx  # already in requirements
 
-        dest = os.path.join(temp_dir, "overlay_img_" + _url_basename(url_or_path))
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url_or_path)
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
-                f.write(resp.content)
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            async with client.stream("GET", url_or_path) as resp:
+                resp.raise_for_status()
+                content_length = resp.headers.get("content-length")
+                if content_length and int(content_length) > MAX_OVERLAY_DOWNLOAD_BYTES:
+                    raise OverlaySourceError("Overlay download exceeds the size limit")
+                total = 0
+                with dest.open("wb") as output:
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_OVERLAY_DOWNLOAD_BYTES:
+                            raise OverlaySourceError("Overlay download exceeds the size limit")
+                        output.write(chunk)
         logger.debug("[overlay_renderer] Downloaded image: %s -> %s", url_or_path, dest)
-        return dest
+        return str(dest)
+    except OverlaySourceError:
+        dest.unlink(missing_ok=True)
+        raise
     except Exception as exc:
-        logger.warning("[overlay_renderer] Failed to download image %s: %s", url_or_path, exc)
-        return None
+        dest.unlink(missing_ok=True)
+        logger.error("[overlay_renderer] Failed to download allowlisted overlay source: %s", exc)
+        raise OverlaySourceError("Failed to download overlay source") from exc
 
 
 def _url_basename(url: str) -> str:
     """Extract a safe filename from a URL, preserving extension."""
     try:
-        from urllib.parse import urlparse, unquote
         path = urlparse(url).path
         base = unquote(os.path.basename(path)) or "image.jpg"
         # Keep only safe characters
