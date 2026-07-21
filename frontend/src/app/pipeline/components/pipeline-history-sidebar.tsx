@@ -4,8 +4,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,8 +16,8 @@ import {
   Pause,
 } from "lucide-react";
 import type { PipelineListItem } from "../pipeline-types";
-import { WORKSPACE_CARD_BG } from "../pipeline-utils";
 import type { Dispatch, SetStateAction } from "react";
+import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // Loose ctx-bag type: only fields needing contextual typing for inline
 // callbacks are typed precisely; everything else stays `any`.
@@ -89,23 +87,16 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
             className={`w-full min-w-0 bg-background ${isEditingWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0" : ""}`}
             data-testid="pipeline-history-sidebar"
           >
-            <Card className={isEditingWorkspace
-              ? `min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 ${WORKSPACE_CARD_BG}`
-              : "min-[1280px]:sticky min-[1280px]:top-16"
+            <Card variant={isEditingWorkspace ? "workspace" : "default"} className={isEditingWorkspace
+              ? "gap-0 py-0 min-[1280px]:h-full min-[1280px]:min-h-0"
+              : "gap-0 py-0 min-[1280px]:sticky min-[1280px]:top-16"
             }>
-              <CardHeader
-                className={isEditingWorkspace
-                  ? "min-[1280px]:h-10 min-[1280px]:shrink-0 min-[1280px]:content-center min-[1280px]:border-b min-[1280px]:px-4 min-[1280px]:py-0"
-                  : "pb-3"
-                }
+              <WorkspacePanelHeader
+                icon={Clock}
+                title="Script History"
                 data-testid="pipeline-history-header"
-              >
-                  <CardTitle className="flex items-center gap-2 text-sm">
-                    <Clock className="size-4" />
-                    Script History
-                  </CardTitle>
-              </CardHeader>
-              <CardContent className={`max-h-[28rem] space-y-2 overflow-y-auto min-[1280px]:max-h-[calc(100vh-5rem)] ${
+              />
+              <CardContent className={`max-h-[28rem] space-y-2 overflow-y-auto py-3 min-[1280px]:max-h-[calc(100vh-5rem)] ${
                 isEditingWorkspace ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:max-h-none min-[1280px]:px-3 min-[1280px]:py-3" : ""
               }`}>
                 {historyLoading ? (

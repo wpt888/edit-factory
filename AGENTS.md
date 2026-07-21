@@ -18,6 +18,8 @@ Frontend E2E: `cd frontend && npm test`
 ## Coding Style & Naming Conventions
 Follow existing style in each area rather than reformatting unrelated files. Python uses 4-space indentation, snake_case filenames, and typed service methods where practical. TypeScript/React uses the repo’s ESLint config, PascalCase for components, camelCase for hooks/utilities, and `.spec.ts` for Playwright tests. Keep route-specific UI in `frontend/src/app/...`; move reusable pieces into `frontend/src/components/` or `frontend/src/lib/`.
 
+For any frontend UI work, `frontend/DESIGN_SYSTEM.md` is the canonical visual contract and `frontend/AGENTS.md` contains the scoped agent rules. Read both before editing UI. Run `npm run design:check` along with the normal frontend checks.
+
 ## Testing Guidelines
 Add backend tests in `tests/test_<feature>.py`. Pytest is configured through `pyproject.toml` and currently tracks coverage for `app.services.job_storage` and `app.services.cost_tracker`; keep or improve that coverage when touching those modules. Add frontend flows as Playwright specs in `frontend/tests/`, using descriptive names like `e2e-pipeline.spec.ts` or `verify-voice-selector.spec.ts`.
 

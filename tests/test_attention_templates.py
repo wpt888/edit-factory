@@ -53,7 +53,7 @@ def test_template_size_and_zone_thread_into_cues():
     )
     assert cues
     assert cues[0]["zone"] == "front"
-    assert all(l["width"] == 0.5 and l["height"] == 0.5 for l in cues[0]["layers"])
+    assert all(layer["width"] == 0.5 and layer["height"] == 0.5 for layer in cues[0]["layers"])
 
 
 def test_track_template_threads_slot_rendering_into_layer():
@@ -79,3 +79,25 @@ def test_track_template_defaults_invalid_slot_fit_to_contain():
         duration_ms=5000,
     )
     assert cues[0]["layers"][0]["fit"] == "contain"
+
+
+def test_track_template_threads_each_slots_sound_effect_into_its_cue():
+    cues = template_track_cues(
+        template={
+            "sfx": "legacy-default.wav",
+            "tracks": [[{
+                "id": "slot-1",
+                "startMs": 750,
+                "durationMs": 1250,
+                "sfxUrl": "https://example.com/whoosh.mp3",
+                "sfxVolumeDb": -7.5,
+                "sfxTrack": 2,
+            }]],
+        },
+        asset_ids=["asset-1"],
+        duration_ms=5000,
+    )
+
+    assert cues[0]["sfxUrl"] == "https://example.com/whoosh.mp3"
+    assert cues[0]["sfxAssetId"] == "legacy-default.wav"
+    assert cues[0]["sfxVolumeDb"] == -7.5

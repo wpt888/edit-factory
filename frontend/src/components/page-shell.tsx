@@ -21,7 +21,8 @@ export function PageShell({ width = "default", className, ...props }: PageShellP
   return (
     <div
       data-slot="page-shell"
-      className={cn("mx-auto w-full px-4 sm:px-6 lg:px-8 py-8", SHELL_WIDTHS[width], className)}
+      data-width={width}
+      className={cn("mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8", SHELL_WIDTHS[width], className)}
       {...props}
     />
   );

@@ -5,7 +5,8 @@ const nextConfig: NextConfig = {
   // Keep the development cache away from the production standalone bundle.
   // `next dev` recreates its dist directory and would otherwise erase
   // `.next/standalone/server.js`, which the Electron shell launches.
-  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
+  distDir: process.env.NEXT_DIST_DIR
+    ?? (process.env.NODE_ENV === "development" ? ".next-dev" : ".next"),
 
   // Enable standalone output for Docker deployment
   output: "standalone",

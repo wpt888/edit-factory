@@ -34,12 +34,14 @@ type MusicAssetPickerDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (asset: { url: string; label?: string }) => void;
+  purpose?: "music" | "sound-effect";
 };
 
 export function MusicAssetPickerDialog({
   open,
   onOpenChange,
   onSelect,
+  purpose = "music",
 }: MusicAssetPickerDialogProps) {
   const [tab, setTab] = useState<"gallery" | "upload" | "url">("gallery");
   const [tracks, setTracks] = useState<CloudAudio[]>([]);
@@ -48,6 +50,7 @@ export function MusicAssetPickerDialog({
   const [uploading, setUploading] = useState(false);
   const [url, setUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isSoundEffect = purpose === "sound-effect";
 
   const loadTracks = useCallback(async () => {
     setLoading(true);
@@ -69,16 +72,20 @@ export function MusicAssetPickerDialog({
   }, []);
 
   useEffect(() => {
-    if (!open) {
-      setUrl("");
-      return;
-    }
-    void loadTracks();
+    if (!open) return;
+    const timer = window.setTimeout(() => void loadTracks(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadTracks, open]);
 
   const choose = (asset: { url: string; label?: string }) => {
     onSelect(asset);
+    setUrl("");
     onOpenChange(false);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setUrl("");
+    onOpenChange(nextOpen);
   };
 
   const uploadFile = async (file: File) => {
@@ -110,13 +117,13 @@ export function MusicAssetPickerDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col">
         <DialogHeader>
-          <DialogTitle>Choose background music</DialogTitle>
+          <DialogTitle>{isSoundEffect ? "Choose sound effect" : "Choose background music"}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1" role="tablist" aria-label="Music source">
+        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1" role="tablist" aria-label={isSoundEffect ? "Sound effect source" : "Music source"}>
           {([
             ["gallery", "Library", Cloud],
             ["upload", "Upload", Upload],
@@ -152,7 +159,7 @@ export function MusicAssetPickerDialog({
             ) : tracks.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
                 <Music className="size-8" />
-                No uploaded tracks yet.
+                {isSoundEffect ? "No uploaded sound effects yet." : "No uploaded tracks yet."}
               </div>
             ) : (
               <ul className="divide-y divide-white/5 py-1" data-testid="music-gallery">
@@ -206,10 +213,10 @@ export function MusicAssetPickerDialog({
             }}
           >
             <label className="space-y-1 text-sm font-medium">
-              Music URL
+              {isSoundEffect ? "Sound effect URL" : "Music URL"}
               <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." autoFocus />
             </label>
-            <Button type="submit" disabled={!url.trim()}>Use music URL</Button>
+            <Button type="submit" disabled={!url.trim()}>{isSoundEffect ? "Use sound effect URL" : "Use music URL"}</Button>
           </form>
         )}
       </DialogContent>

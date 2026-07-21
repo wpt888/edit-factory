@@ -163,7 +163,6 @@ export default function WikiPage() {
   return (
     <PageShell>
       <PageHeader
-        className="mb-4"
         icon={<NotebookPen className="size-6 text-primary" />}
         title={
           <span className="flex items-center gap-2">

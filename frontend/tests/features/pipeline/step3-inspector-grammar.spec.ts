@@ -126,6 +126,14 @@ test("Step 3 renders both inspectors on the unified grammar", async ({ page }) =
   await expect(renderSettings).toBeVisible({ timeout: 15_000 });
   await expect(renderSettings.getByText("Encoding Mode", { exact: true })).toBeVisible();
 
+  const subtitlePanel = page.getByTestId("step3-inspector");
+  const previewTargetPanel = page.getByTestId("step3-preview-target-panel");
+  const variantPanel = page.getByTestId("step3-variant-canvas");
+  await expect(subtitlePanel.locator('[data-slot="workspace-panel-header"]').filter({ hasText: "Subtitle Style" })).toBeVisible();
+  await expect(previewTargetPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Preview Target");
+  await expect(variantPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Variant Previews");
+  await expect(previewTargetPanel.locator(':scope > [data-slot="workspace-panel-header"]')).toHaveCount(1);
+
   // Open the flush collapsible sections so the grammar (dividers, no boxes) shows.
   await renderSettings.getByRole("button", { name: /Video adjustments/ }).click();
   await renderSettings.getByRole("button", { name: /Audio adjustments/ }).click();

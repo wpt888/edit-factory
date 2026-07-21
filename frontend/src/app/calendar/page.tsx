@@ -18,7 +18,7 @@ export default function CalendarPage() {
 
   return (
     <PageShell width="wide">
-      <PageHeader className="mb-6" title="Calendar" />
+      <PageHeader title="Calendar" />
       <PostizMonthlyCalendar />
     </PageShell>
   );

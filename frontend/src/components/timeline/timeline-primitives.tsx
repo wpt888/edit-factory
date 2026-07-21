@@ -14,16 +14,12 @@ const majorStepFor = (duration: number) => {
 export function TimelineRuler({
   duration,
   startTime = 0,
-  currentTime,
-  playheadStyle,
   className,
   style,
   onPointerDown,
 }: {
   duration: number;
   startTime?: number;
-  currentTime?: number;
-  playheadStyle?: CSSProperties;
   className?: string;
   style?: CSSProperties;
   onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
@@ -67,16 +63,6 @@ export function TimelineRuler({
       <span className="absolute bottom-3 right-1 font-mono text-[9px] font-semibold text-lime-200">
         {formatTimeShort(startTime + duration)}
       </span>
-
-      {currentTime !== undefined && (
-        <span
-          className="pointer-events-none absolute inset-y-0 z-20 w-px bg-rose-400"
-          style={{
-            left: `${Math.max(0, Math.min(1, (currentTime - startTime) / safeDuration)) * 100}%`,
-            ...playheadStyle,
-          }}
-        />
-      )}
     </div>
   );
 }

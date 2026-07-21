@@ -3,18 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, ChevronDown, ChevronRight, CopyPlus, Film, ImagePlus,
-  Layers3, Library, Loader2, Maximize2, Minus, Pause, Play, Plus,
-  Save, Settings2, ShieldCheck, Trash2, Upload,
+  ArrowLeft, CopyPlus, Film, ImagePlus, Layers3, Library, Loader2,
+  Maximize2, Music, Pause, Play, Plus, Save, ShieldCheck, Trash2,
+  Upload, Volume2, Waves,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
+import { MusicAssetPickerDialog } from "@/components/dialogs/music-asset-picker-dialog";
 import { EditorHeader } from "@/components/editor-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { InspectorField, InspectorSection } from "@/components/ui/inspector";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -24,10 +26,14 @@ import {
 } from "@/components/ui/select";
 import {
   MultiTrackTimeline,
+  TIMELINE_END_GUTTER,
+  TIMELINE_LABEL_WIDTH,
   TIMELINE_MAX_ZOOM,
+  TIMELINE_MIN_WIDTH,
   TIMELINE_MIN_ZOOM,
 } from "@/components/timeline/multi-track-timeline";
-import { TimelineClipShell } from "@/components/timeline/timeline-primitives";
+import { TimelineClipShell, TimelineWaveform } from "@/components/timeline/timeline-primitives";
+import { TimelineTrackControls } from "@/components/timeline/timeline-track-controls";
 import { apiDelete, apiGetWithRetry, apiPost, apiPut } from "@/lib/api";
 import type { AttentionAnimationPreset } from "@/types/attention-timeline";
 import {
@@ -63,6 +69,7 @@ export default function AttentionTemplatesPage() {
   const [deleting, setDeleting] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState("");
+  const [audioPickerTarget, setAudioPickerTarget] = useState<{ imageId: string; track: number } | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const previewCanvasRef = useRef<HTMLDivElement>(null);
   const previewMsRef = useRef(0);
@@ -155,10 +162,33 @@ export default function AttentionTemplatesPage() {
     setTracks(draft.tracks.map((track, index) => index === trackIndex ? [...track, image] : track));
     setSelectedImageId(image.id);
   };
-  const addTrack = () => setTracks([...draft.tracks, []]);
-  const removeTrack = (trackIndex: number) => {
-    if (draft.tracks.length <= 1) return;
+  const addVideoTrack = () => {
+    if (draft.tracks.length >= 10) return;
+    setTracks([...draft.tracks, []]);
+  };
+  const removeVideoTrack = (trackIndex: number) => {
+    if (
+      draft.tracks.length <= 1
+      || trackIndex !== draft.tracks.length - 1
+      || draft.tracks[trackIndex]?.length > 0
+    ) return;
+    const removedIds = new Set(draft.tracks[trackIndex]?.map(image => image.id));
     setTracks(draft.tracks.filter((_, index) => index !== trackIndex));
+    if (removedIds.has(selectedImageId)) setSelectedImageId("");
+  };
+  const addAudioTrack = () => setDraft(current => ({
+    ...current,
+    audioTrackCount: Math.min(10, current.audioTrackCount + 1),
+  }));
+  const removeAudioTrack = (trackIndex: number) => setDraft(current => {
+    if (current.audioTrackCount <= 1 || trackIndex !== current.audioTrackCount) return current;
+    if (current.tracks.flat().some(image => image.sfxTrack === trackIndex)) return current;
+    return { ...current, audioTrackCount: current.audioTrackCount - 1 };
+  });
+  const chooseSoundEffect = (imageId: string, track: number) => {
+    updateImage(imageId, { sfxTrack: track });
+    setSelectedImageId(imageId);
+    setAudioPickerTarget({ imageId, track });
   };
 
   const saveTemplate = async () => {
@@ -263,25 +293,42 @@ export default function AttentionTemplatesPage() {
           <div className="border-b border-border p-4">
             <div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Template settings</p><p className="mt-0.5 text-[11px] text-muted-foreground">Reusable layout and timing</p></div>{isSystem && <Badge variant="outline" className="border-primary/30 text-primary"><ShieldCheck className="mr-1 size-3" />System</Badge>}</div>
           </div>
-          <fieldset disabled={!editable || saving} className="disabled:opacity-55">
-            <InspectorSection title="Template" open>
-              <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-9" /></Field>
+          <fieldset disabled={!editable || saving} className="divide-y divide-border/70 px-3 disabled:opacity-55">
+            <InspectorSection title="Template" defaultOpen>
+              <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-8 px-2 text-xs" /></Field>
               <Field label="Subtitle layer"><Select value={draft.zone} onValueChange={value => setDraft(current => ({ ...current, zone: value as AttentionTemplatePayload["zone"] }))}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="behind">Captions over images</SelectItem><SelectItem value="front">Images over captions</SelectItem></SelectContent></Select></Field>
               <Field label="Animation"><Select value={draft.animation} onValueChange={value => setDraft(current => ({ ...current, animation: value as AttentionAnimationPreset }))}><SelectTrigger size="sm" className="w-full text-xs capitalize"><SelectValue /></SelectTrigger><SelectContent>{ANIMATIONS.map(animation => <SelectItem key={animation} value={animation} className="capitalize">{animation}</SelectItem>)}</SelectContent></Select></Field>
               <NumberField label="Variant start gap" value={draft.variantGapMs / 1000} unit="s" step={.1} onChange={value => setDraft(current => ({ ...current, variantGapMs: clamp(Math.round(value * 1000), 0, 30000) }))} />
-              <p className="text-[10px] leading-relaxed text-muted-foreground">Variant 1 uses the authored timing. Each following variant starts another {formatGap(draft.variantGapMs)} later.</p>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">Variant 1 uses the authored timing. Each following variant starts another {formatGap(draft.variantGapMs)} later.</p>
             </InspectorSection>
-            <InspectorSection title="Image slot" value={selectedImage ? "Selected" : "No selection"} open>
+            <InspectorSection title="Image slot" summary={selectedImage ? "Selected" : "No selection"} defaultOpen>
               {selectedImage ? <>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Position X" value={selectedImage.x * 100} unit="%" onChange={value => updateImage(selectedImage.id, { x: clamp(value / 100, 0, 1) })} /><NumberField label="Position Y" value={selectedImage.y * 100} unit="%" onChange={value => updateImage(selectedImage.id, { y: clamp(value / 100, 0, 1) })} /><NumberField label="Width" value={selectedImage.width * 100} unit="%" onChange={value => updateImage(selectedImage.id, { width: clamp(value / 100, .01, 1) })} /><NumberField label="Height" value={selectedImage.height * 100} unit="%" onChange={value => updateImage(selectedImage.id, { height: clamp(value / 100, .01, 1) })} /></div>
                 <Field label="Media fit"><Select value={selectedImage.fit} onValueChange={value => updateImage(selectedImage.id, { fit: value as AttentionTemplateImage["fit"] })}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="contain">Contain · show the whole image</SelectItem><SelectItem value="cover">Cover · fill and crop</SelectItem></SelectContent></Select></Field>
-                <p className="text-[10px] leading-relaxed text-muted-foreground">The pipeline supplies the real image. Contain safely handles portrait and landscape media; Cover fills the slot and may crop it.</p>
-                <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><input type="range" min="0" max="100" value={selectedImage.opacity * 100} onChange={event => updateImage(selectedImage.id, { opacity: Number(event.target.value) / 100 })} className="w-full accent-primary" /></Field>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">The pipeline supplies the real image. Contain safely handles portrait and landscape media; Cover fills the slot and may crop it.</p>
+                <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><Slider min={0} max={100} step={1} value={[Math.round(selectedImage.opacity * 100)]} onValueChange={([value]) => updateImage(selectedImage.id, { opacity: value / 100 })} /></Field>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Start" value={selectedImage.startMs / 1000} unit="s" step={.1} onChange={value => { const ms = Math.max(0, Math.round(value * 1000)); updateImage(selectedImage.id, { startMs: ms }); setPreviewMs(ms); }} /><NumberField label="Duration" value={selectedImage.durationMs / 1000} unit="s" step={.1} onChange={value => updateImage(selectedImage.id, { durationMs: Math.max(100, Math.round(value * 1000)) })} /></div>
+                <div className="border-t border-border/70 pt-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Waves className="size-3.5 text-amber-300" />Paired sound effect</div>
+                  <div className="space-y-3">
+                    <Field label="Audio track">
+                      <Select value={String(selectedImage.sfxTrack)} onValueChange={value => updateImage(selectedImage.id, { sfxTrack: Number(value) })}>
+                        <SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{Array.from({ length: draft.audioTrackCount }, (_, index) => <SelectItem key={index + 1} value={String(index + 1)}>A{index + 1}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </Field>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => chooseSoundEffect(selectedImage.id, selectedImage.sfxTrack)}><Music className="mr-1.5 size-3.5" />{selectedImage.sfxUrl || selectedImage.sfxAssetId ? "Change effect" : "Choose effect"}</Button>
+                      {(selectedImage.sfxUrl || selectedImage.sfxAssetId) && <Button type="button" variant="ghost" size="sm" className="h-8 text-xs text-destructive" onClick={() => updateImage(selectedImage.id, { sfxUrl: undefined, sfxAssetId: undefined, sfxLabel: undefined })}>Clear</Button>}
+                    </div>
+                    <p className="truncate text-[11px] text-muted-foreground">{selectedImage.sfxLabel || selectedImage.sfxUrl || selectedImage.sfxAssetId || "The audio slot is ready; choose the effect that should play with this image."}</p>
+                    <Field label={`Effect volume · ${selectedImage.sfxVolumeDb > 0 ? "+" : ""}${selectedImage.sfxVolumeDb.toFixed(0)} dB`}><Slider min={-60} max={12} step={1} value={[selectedImage.sfxVolumeDb]} onValueChange={([value]) => updateImage(selectedImage.id, { sfxVolumeDb: value })} /></Field>
+                  </div>
+                </div>
                 <Button type="button" variant="outline" size="sm" className="w-full border-destructive/30 text-destructive" onClick={() => removeImage(selectedImage.id)}><Trash2 className="mr-2 size-3.5" />Remove slot</Button>
-              </> : <div className="rounded border border-dashed border-border p-5 text-center text-xs text-muted-foreground/70">Add or select a slot on the timeline to edit its layout and timing.</div>}
+              </> : <p className="py-3 text-center text-[11px] text-muted-foreground">Add or select a slot on the timeline to edit its layout and timing.</p>}
             </InspectorSection>
-            <InspectorSection title="Canvas" value={canvasLabel} open>
+            <InspectorSection title="Canvas" summary={canvasLabel} defaultOpen>
               <Field label="Video format">
                 <Select
                   value={canvasPreset ? `${canvasPreset.width}x${canvasPreset.height}` : "custom"}
@@ -322,24 +369,102 @@ export default function AttentionTemplatesPage() {
             <div className="flex h-10 shrink-0 items-center justify-center gap-2 border-t border-border bg-card"><Button variant="ghost" size="icon" className="size-7" onClick={() => setPreviewMs(0)}><ArrowLeft className="size-3.5" /></Button><Button variant="outline" size="icon" className="size-8 rounded-full" onClick={() => setPlaying(value => !value)}>{playing ? <Pause className="size-3.5" /> : <Play className="ml-0.5 size-3.5" />}</Button><span className="w-24 font-mono text-[10px] text-muted-foreground">{formatMs(previewMs)} / {formatMs(endMs)}</span></div>
           </section>
 
-          <Timeline tracks={draft.tracks} endMs={endMs} previewMs={previewMs} zoom={zoom} selectedImageId={selectedImageId} editable={editable} onSeek={setPreviewMs} onSelect={id => setSelectedImageId(id)} onDeselect={() => setSelectedImageId("")} onAddSlot={addSlot} onAddTrack={addTrack} onRemoveTrack={removeTrack} onZoom={setZoom} onUpdateImage={updateImage} onNeedMoreTime={() => setTimelineRangeMs(current => Math.max(current, endMs) + TIMELINE_CHUNK_MS)} />
+          <Timeline tracks={draft.tracks} audioTrackCount={draft.audioTrackCount} endMs={endMs} previewMs={previewMs} zoom={zoom} selectedImageId={selectedImageId} editable={editable} onSeek={setPreviewMs} onSelect={id => setSelectedImageId(id)} onDeselect={() => setSelectedImageId("")} onAddSlot={addSlot} onAddVideoTrack={addVideoTrack} onRemoveVideoTrack={removeVideoTrack} onAddAudioTrack={addAudioTrack} onRemoveAudioTrack={removeAudioTrack} onChooseSoundEffect={chooseSoundEffect} onZoom={setZoom} onUpdateImage={updateImage} onNeedMoreTime={() => setTimelineRangeMs(current => Math.max(current, endMs) + TIMELINE_CHUNK_MS)} />
         </main>
       </div>
 
       <input ref={videoInputRef} className="hidden" type="file" accept="video/*" onChange={event => { const file = event.target.files?.[0]; if (file) setVideoUrl(URL.createObjectURL(file)); }} />
+      <MusicAssetPickerDialog
+        open={audioPickerTarget !== null}
+        onOpenChange={open => { if (!open) setAudioPickerTarget(null); }}
+        purpose="sound-effect"
+        onSelect={({ url, label }) => {
+          if (!audioPickerTarget) return;
+          updateImage(audioPickerTarget.imageId, {
+            sfxUrl: url,
+            sfxAssetId: undefined,
+            sfxLabel: label ?? "Sound effect",
+            sfxTrack: audioPickerTarget.track,
+          });
+          setAudioPickerTarget(null);
+        }}
+      />
       <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Delete personal attention template?" description={`This removes “${selectedTemplate?.name ?? "this template"}” from your profile. Existing timelines keep their applied images.`} confirmLabel="Delete template" variant="destructive" loading={deleting} onConfirm={() => void deleteTemplate()} />
     </div>
   );
 }
 
 function TemplateLibrary({ templates, selectedId, loading, onSelect, onCreate }: { templates: AttentionTemplate[]; selectedId: string; loading: boolean; onSelect: (template: AttentionTemplate) => void; onCreate: () => void }) {
-  return <div className="absolute right-4 top-12 z-[80] w-80 rounded-lg border border-border bg-card p-2 shadow-2xl"><div className="flex items-center justify-between px-2 py-2"><div><p className="text-sm font-semibold">Template Library</p><p className="text-[10px] text-muted-foreground">Choose a reusable layout</p></div><Button size="icon" className="size-7" onClick={onCreate}><Plus className="size-4" /></Button></div><div className="max-h-80 space-y-1 overflow-y-auto">{loading ? <div className="flex justify-center p-8"><Loader2 className="size-5 animate-spin text-primary" /></div> : templates.length === 0 ? <p className="p-8 text-center text-xs text-muted-foreground">No saved templates yet.</p> : templates.map(template => { const config = normalizeAttentionTemplate(template); const count = config.tracks.flat().length; return <button key={template.id} onClick={() => onSelect(template)} className={`flex w-full items-center justify-between rounded-md border px-3 py-2.5 text-left ${selectedId === template.id ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}><div className="min-w-0"><p className="truncate text-xs font-medium">{template.name}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{config.tracks.length} video tracks · {count} slots</p></div>{template.is_system && <ShieldCheck className="size-3.5 text-primary" />}</button>; })}</div></div>;
+  return <div className="absolute right-4 top-12 z-[80] w-80 rounded-lg border border-border bg-card p-2 shadow-2xl"><div className="flex items-center justify-between px-2 py-2"><div><p className="text-sm font-semibold">Template Library</p><p className="text-[10px] text-muted-foreground">Choose a reusable layout</p></div><Button size="icon" className="size-7" onClick={onCreate}><Plus className="size-4" /></Button></div><div className="max-h-80 space-y-1 overflow-y-auto">{loading ? <div className="flex justify-center p-8"><Loader2 className="size-5 animate-spin text-primary" /></div> : templates.length === 0 ? <p className="p-8 text-center text-xs text-muted-foreground">No saved templates yet.</p> : templates.map(template => { const config = normalizeAttentionTemplate(template); const count = config.tracks.flat().length; return <button key={template.id} onClick={() => onSelect(template)} className={`flex w-full items-center justify-between rounded-md border px-3 py-2.5 text-left ${selectedId === template.id ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}><div className="min-w-0"><p className="truncate text-xs font-medium">{template.name}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{config.tracks.length} video · {config.audioTrackCount} audio · {count} slots</p></div>{template.is_system && <ShieldCheck className="size-3.5 text-primary" />}</button>; })}</div></div>;
 }
 
-function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, onSeek, onSelect, onDeselect, onAddSlot, onAddTrack, onRemoveTrack, onZoom, onUpdateImage, onNeedMoreTime }: { tracks: AttentionTemplateImage[][]; endMs: number; previewMs: number; zoom: number; selectedImageId: string; editable: boolean; onSeek: (ms: number) => void; onSelect: (id: string) => void; onDeselect: () => void; onAddSlot: (track: number) => void; onAddTrack: () => void; onRemoveTrack: (track: number) => void; onZoom: (zoom: number) => void; onUpdateImage: (id: string, patch: Partial<AttentionTemplateImage>) => void; onNeedMoreTime: () => void }) {
+type AttentionTimelineProps = {
+  tracks: AttentionTemplateImage[][];
+  audioTrackCount: number;
+  endMs: number;
+  previewMs: number;
+  zoom: number;
+  selectedImageId: string;
+  editable: boolean;
+  onSeek: (ms: number) => void;
+  onSelect: (id: string) => void;
+  onDeselect: () => void;
+  onAddSlot: (track: number) => void;
+  onAddVideoTrack: () => void;
+  onRemoveVideoTrack: (track: number) => void;
+  onAddAudioTrack: () => void;
+  onRemoveAudioTrack: (track: number) => void;
+  onChooseSoundEffect: (imageId: string, track: number) => void;
+  onZoom: (zoom: number) => void;
+  onUpdateImage: (id: string, patch: Partial<AttentionTemplateImage>) => void;
+  onNeedMoreTime: () => void;
+};
+
+function Timeline({
+  tracks,
+  audioTrackCount,
+  endMs,
+  previewMs,
+  zoom,
+  selectedImageId,
+  editable,
+  onSeek,
+  onSelect,
+  onDeselect,
+  onAddSlot,
+  onAddVideoTrack,
+  onRemoveVideoTrack,
+  onAddAudioTrack,
+  onRemoveAudioTrack,
+  onChooseSoundEffect,
+  onZoom,
+  onUpdateImage,
+  onNeedMoreTime,
+}: AttentionTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const laneWidth = Math.round(endMs / 1000 * 100 * zoom);
-  const secondWidth = laneWidth / (endMs / 1000);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [hiddenVideoTracks, setHiddenVideoTracks] = useState<Set<number>>(() => new Set());
+  const [mutedAudioTracks, setMutedAudioTracks] = useState<Set<number>>(() => new Set());
+  const [trackHeights, setTrackHeights] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const measure = () => setViewportWidth(scroller.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, []);
+
+  const fitLaneWidth = Math.max(
+    TIMELINE_MIN_WIDTH,
+    viewportWidth - TIMELINE_LABEL_WIDTH - TIMELINE_END_GUTTER,
+  );
+  const laneWidth = Math.round(fitLaneWidth * zoom);
+  const allImages = tracks.flat();
+  const selectedImage = allImages.find(image => image.id === selectedImageId);
+  const slotNumberById = new Map(allImages.map((image, index) => [image.id, index + 1]));
 
   const seek = (event: React.PointerEvent<HTMLElement>) => {
     if ((event.target as HTMLElement).closest("[data-timeline-block]")) return;
@@ -349,8 +474,18 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
   };
   const extendNearEdge = () => {
     const scroller = scrollRef.current;
-    if (scroller && scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 500) onNeedMoreTime();
+    if (zoom > 1 && scroller && scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 500) onNeedMoreTime();
   };
+  const toggleVideoTrack = (track: number) => setHiddenVideoTracks(current => {
+    const next = new Set(current);
+    if (next.has(track)) next.delete(track); else next.add(track);
+    return next;
+  });
+  const toggleAudioTrack = (track: number) => setMutedAudioTracks(current => {
+    const next = new Set(current);
+    if (next.has(track)) next.delete(track); else next.add(track);
+    return next;
+  });
   const beginDrag = (event: React.PointerEvent, image: AttentionTemplateImage, mode: "move" | "start" | "end") => {
     if (!editable) return;
     event.preventDefault();
@@ -378,31 +513,161 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
     window.addEventListener("pointercancel", up);
   };
 
+  const gridClass = "cursor-ew-resize bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%]";
+  const videoLanes = tracks.map((images, trackIndex) => {
+    const trackNumber = trackIndex + 2;
+    const trackId = `V${trackNumber}`;
+    const hidden = hiddenVideoTracks.has(trackNumber);
+    const canDelete = tracks.length > 1 && trackIndex === tracks.length - 1 && images.length === 0;
+    return {
+      label: trackId,
+      description: `Attention image track ${trackIndex + 1}`,
+      height: "h-12",
+      heightPx: trackHeights[trackId] ?? 48,
+      onHeightChange: (height: number) => setTrackHeights(current => ({ ...current, [trackId]: height })),
+      action: (
+        <TimelineTrackControls
+          id={trackId}
+          kind="video"
+          disabled={!editable}
+          monitored={!hidden}
+          onMonitorChange={() => toggleVideoTrack(trackNumber)}
+          addMedia={() => onAddSlot(trackIndex)}
+          onAddTrack={onAddVideoTrack}
+          canDelete={canDelete}
+          deleteUnavailable="Only the highest empty video track can be deleted"
+          onDelete={() => onRemoveVideoTrack(trackIndex)}
+        />
+      ),
+      axisClassName: gridClass,
+      axisProps: {
+        onPointerDown: seek,
+        "data-track-index": trackNumber,
+      },
+      showEndLine: true,
+      content: hidden ? null : images.map(image => {
+        const slotNumber = slotNumberById.get(image.id) ?? 1;
+        return (
+          <TimelineClipShell
+            key={image.id}
+            testId={`attention-slot-${image.id}`}
+            className={`z-10 flex min-w-8 cursor-grab select-none items-center text-[10px] ${selectedImageId === image.id ? "border-primary bg-primary/25 ring-1 ring-primary/30" : ""}`}
+            style={{ left: `${image.startMs / endMs * 100}%`, width: `${image.durationMs / endMs * 100}%` }}
+            onPointerDown={event => beginDrag(event, image, "move")}
+            onClick={() => { onSelect(image.id); onSeek(image.startMs); }}
+            title={`Slot ${slotNumber}`}
+          >
+            <span className="absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize border-r border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "start")} />
+            <ImagePlus className="ml-3 mr-1 size-3 shrink-0" />
+            <span className="truncate">Slot {slotNumber}</span>
+            <span className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize border-l border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "end")} />
+          </TimelineClipShell>
+        );
+      }),
+    };
+  }).reverse();
+
+  const baseVideoLane = {
+    label: "V1",
+    description: "Reference video",
+    height: "h-12",
+    heightPx: trackHeights.V1 ?? 48,
+    onHeightChange: (height: number) => setTrackHeights(current => ({ ...current, V1: height })),
+    action: (
+      <TimelineTrackControls
+        id="V1"
+        kind="video"
+        monitored={!hiddenVideoTracks.has(1)}
+        onMonitorChange={() => toggleVideoTrack(1)}
+        addMediaUnavailable="Load the reference video from Canvas settings"
+        onAddTrack={onAddVideoTrack}
+        deleteUnavailable="The reference video track is required"
+        disabled={!editable}
+      />
+    ),
+    axisClassName: gridClass,
+    axisProps: { onPointerDown: seek, "data-magnetic-lane": "" },
+    showEndLine: true,
+    content: hiddenVideoTracks.has(1) ? null : (
+      <div className="absolute inset-y-1 left-0 flex items-center gap-1.5 overflow-hidden rounded-sm border border-white/10 bg-white/5 px-2 text-white/45" style={{ width: "100%" }}>
+        <Film className="size-3 shrink-0" />
+        <span className="truncate">Reference video</span>
+      </div>
+    ),
+  };
+
+  const audioLanes = Array.from({ length: audioTrackCount }, (_, offset) => {
+    const trackNumber = offset + 1;
+    const trackId = `A${trackNumber}`;
+    const assignedImages = allImages.filter(image => image.sfxTrack === trackNumber);
+    const muted = mutedAudioTracks.has(trackNumber);
+    const canDelete = audioTrackCount > 1 && trackNumber === audioTrackCount && assignedImages.length === 0;
+    return {
+      label: trackId,
+      description: trackNumber === 1 ? "Attention sound effects" : "Sound effects",
+      height: "h-11",
+      heightPx: trackHeights[trackId] ?? 44,
+      onHeightChange: (height: number) => setTrackHeights(current => ({ ...current, [trackId]: height })),
+      action: (
+        <TimelineTrackControls
+          id={trackId}
+          kind="audio"
+          disabled={!editable}
+          monitored={!muted}
+          onMonitorChange={() => toggleAudioTrack(trackNumber)}
+          addMedia={selectedImage ? () => onChooseSoundEffect(selectedImage.id, trackNumber) : undefined}
+          addMediaUnavailable="Select an image slot before choosing its sound effect"
+          onAddTrack={onAddAudioTrack}
+          canDelete={canDelete}
+          deleteUnavailable="Only the highest empty audio track can be deleted"
+          onDelete={() => onRemoveAudioTrack(trackNumber)}
+        />
+      ),
+      axisClassName: `${gridClass} ${muted ? "opacity-55" : ""}`,
+      axisProps: { onPointerDown: seek, "data-audio-track-index": trackNumber },
+      showEndLine: true,
+      content: assignedImages.map(image => {
+        const slotNumber = slotNumberById.get(image.id) ?? 1;
+        const hasEffect = Boolean(image.sfxUrl || image.sfxAssetId);
+        return (
+          <TimelineClipShell
+            key={`audio-${image.id}`}
+            testId={`attention-audio-slot-${image.id}`}
+            className={`z-10 flex min-w-8 cursor-grab select-none items-center border-amber-300/55 px-1.5 text-[9px] text-amber-100 ${hasEffect ? "bg-amber-400/15" : "border-dashed bg-amber-400/5"} ${selectedImageId === image.id ? "ring-1 ring-amber-300" : ""}`}
+            style={{ left: `${image.startMs / endMs * 100}%`, width: `${image.durationMs / endMs * 100}%` }}
+            onPointerDown={event => beginDrag(event, image, "move")}
+            onClick={() => { onSelect(image.id); onSeek(image.startMs); onChooseSoundEffect(image.id, trackNumber); }}
+            title={hasEffect ? image.sfxLabel || "Sound effect" : `Choose sound effect for Slot ${slotNumber}`}
+          >
+            <TimelineWaveform peaks={[]} colorClassName="bg-amber-300/70" className="inset-y-2 opacity-35" />
+            <Volume2 className="relative z-10 mr-1 size-3 shrink-0 text-amber-300" />
+            <span className="relative z-10 truncate">{hasEffect ? image.sfxLabel || `SFX · Slot ${slotNumber}` : `Choose SFX · Slot ${slotNumber}`}</span>
+          </TimelineClipShell>
+        );
+      }),
+    };
+  });
+
   return (
-    <section className="flex min-h-0 flex-col bg-card" data-testid="attention-track-list">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
-        <div className="flex items-center gap-2">
-          <Settings2 className="size-3.5 text-primary" />
+    <section className="flex min-h-0 min-w-0 flex-col bg-card" data-testid="attention-track-list">
+      <div className="flex h-10 shrink-0 items-center border-b border-border px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Layers3 className="size-3.5 shrink-0 text-primary" />
           <span className="text-xs font-semibold">Timeline</span>
-          <span className="text-[10px] text-muted-foreground">Add slots, then drag or trim them · scroll right for more time</span>
+          <span className="truncate text-[10px] text-muted-foreground">Add image slots from V tracks; every slot gets a paired SFX block on an A track</span>
         </div>
-        <Button disabled={!editable} variant="ghost" size="sm" className="h-7 text-primary" onClick={onAddTrack}>
-          <Plus className="mr-1 size-3.5" />Add track
-        </Button>
       </div>
       <MultiTrackTimeline
         scrollRef={scrollRef}
-        className="min-h-0 flex-1"
+        className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
         containerProps={{
           "data-testid": "attention-timeline-scroll",
+          "aria-label": "Attention template multi-track timeline",
+          tabIndex: 0,
           onScroll: extendNearEdge,
         }}
         laneWidth={laneWidth}
-        ruler={{
-          duration: endMs / 1000,
-          className: "cursor-ew-resize",
-          onPointerDown: seek,
-        }}
+        ruler={{ duration: endMs / 1000, className: "cursor-ew-resize", onPointerDown: seek }}
         playhead={{ style: { left: `${clamp(previewMs / endMs, 0, 1) * 100}%` } }}
         zoom={zoom}
         minZoom={TIMELINE_MIN_ZOOM}
@@ -412,57 +677,14 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
           onZoom(1);
           if (scrollRef.current) scrollRef.current.scrollLeft = 0;
         }}
-        lanes={tracks.map((images, trackIndex) => ({
-          label: `V${trackIndex + 2}`,
-          description: `Attention image track ${trackIndex + 1}`,
-          height: "h-12",
-          action: (
-            <div className="flex">
-              <Button disabled={!editable} variant="ghost" size="icon" className="size-6 text-primary" onClick={() => onAddSlot(trackIndex)} title="Add image slot" aria-label={`Add image slot to V${trackIndex + 2}`}>
-                <Plus className="size-3.5" />
-              </Button>
-              {tracks.length > 1 && (
-                <Button disabled={!editable} variant="ghost" size="icon" className="size-6 text-muted-foreground/50 hover:text-destructive" onClick={() => onRemoveTrack(trackIndex)} title="Remove track" aria-label={`Remove V${trackIndex + 2}`}>
-                  <Minus className="size-3" />
-                </Button>
-              )}
-            </div>
-          ),
-          axisClassName: "cursor-ew-resize bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px)]",
-          axisProps: {
-            style: { backgroundSize: `${secondWidth}px 100%` },
-            onPointerDown: seek,
-          },
-          showEndLine: true,
-          content: (
-            <>
-              {images.map((image, index) => (
-                <TimelineClipShell
-                  key={image.id}
-                  testId={`attention-slot-${image.id}`}
-                  className={`flex cursor-grab select-none items-center text-[10px] ${selectedImageId === image.id ? "border-primary bg-primary/25 ring-1 ring-primary/30" : ""}`}
-                  style={{ left: `${image.startMs / endMs * 100}%`, width: `${Math.max(.3, image.durationMs / endMs * 100)}%` }}
-                  onPointerDown={event => beginDrag(event, image, "move")}
-                  onClick={() => { onSelect(image.id); onSeek(image.startMs); }}
-                  title={`Slot ${index + 1}`}
-                >
-                  <span className="absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize border-r border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "start")} />
-                  <ImagePlus className="ml-3 mr-1 size-3 shrink-0" />
-                  <span className="truncate">Slot {index + 1}</span>
-                  <span className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize border-l border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "end")} />
-                </TimelineClipShell>
-              ))}
-            </>
-          ),
-        }))}
+        lanes={[...videoLanes, baseVideoLane, ...audioLanes]}
       />
     </section>
   );
 }
 
-function InspectorSection({ title, value, open = false, children }: { title: string; value?: string; open?: boolean; children: React.ReactNode }) { const [expanded, setExpanded] = useState(open); return <section className="border-b border-border"><button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left" onClick={() => setExpanded(value => !value)}><span className="text-sm font-medium">{title}</span><span className="flex items-center gap-2 text-xs text-muted-foreground">{value}{expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</span></button>{expanded && <div className="space-y-3 px-4 pb-4">{children}</div>}</section>; }
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block space-y-1.5"><Label className="text-[11px] text-muted-foreground">{label}</Label>{children}</label>; }
-function NumberField({ label, value, unit, step = 1, onChange }: { label: string; value: number; unit: string; step?: number; onChange: (value: number) => void }) { return <Field label={label}><div className="relative"><Input type="number" value={Number(value.toFixed(2))} step={step} onChange={event => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} className="h-8 pr-7 text-xs" /><span className="absolute right-2 top-2 text-[10px] text-muted-foreground/70">{unit}</span></div></Field>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <InspectorField label={label}>{children}</InspectorField>; }
+function NumberField({ label, value, unit, step = 1, onChange }: { label: string; value: number; unit: string; step?: number; onChange: (value: number) => void }) { return <Field label={label}><div className="relative"><Input type="number" value={Number(value.toFixed(2))} step={step} onChange={event => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} className="h-8 pr-7 text-xs" /><span className="absolute right-2 top-2 font-mono text-[11px] tabular-nums text-muted-foreground">{unit}</span></div></Field>; }
 function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
 function formatMs(ms: number) { const seconds = Math.max(0, ms) / 1000; return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`; }
 function formatGap(ms: number) { return `${Number((ms / 1000).toFixed(1))}s`; }

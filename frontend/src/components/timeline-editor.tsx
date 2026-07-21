@@ -45,16 +45,7 @@ import {
   Maximize2,
   Pin,
   Music,
-  Eye,
-  EyeOff,
-  MoreHorizontal,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
 import { segmentFileUrl } from "@/lib/media-url";
@@ -89,10 +80,15 @@ import {
   buildLegacyComposition,
   rollCompositionBoundary as rollCompositionBoundaryPure,
 } from "@/lib/composition-reflow";
-import { VideoLane } from "@/components/timeline/lanes/video-lane";
+import {
+  VideoClipDragPreview,
+  VideoLane,
+  type VideoClipDragPreviewState,
+} from "@/components/timeline/lanes/video-lane";
 import { ImageLane } from "@/components/timeline/lanes/image-lane";
 import { OverlayLane } from "@/components/timeline/lanes/overlay-lane";
 import { deriveTracks, cuesOnTrack } from "@/components/timeline/timeline-tracks";
+import { TimelineTrackControls } from "@/components/timeline/timeline-track-controls";
 import { SafeZoneOverlay, type SafeZoneType } from "@/components/safe-zone-overlay";
 
 // Fill the card width; the vh term caps the 9:16 frame at ~45vh tall — maximize for a big view.
@@ -108,11 +104,14 @@ const expandedPreviewFrameStyle: React.CSSProperties = {
   maxWidth: "100%",
 };
 
-// Full-editor center pane: height comes from flex-1, width follows 9:16.
+// Fit the 9:16 program monitor inside both dimensions of its size container.
+// Using container units keeps the frame portrait even when the maximized
+// editor is much wider than it is tall.
 const fullPreviewFrameStyle: React.CSSProperties = {
   aspectRatio: "9 / 16",
-  width: "auto",
+  width: "min(100cqw, calc(100cqh * 9 / 16))",
   maxWidth: "100%",
+  maxHeight: "100%",
 };
 
 const RENDER_WIDTH = 1080;
@@ -575,17 +574,29 @@ export function TimelineEditor({
         // track; dropping outside any image lane keeps the origin track.
         const laneEl = document
           .elementFromPoint(moveEvent.clientX, moveEvent.clientY)
-          ?.closest("[data-track-index]") as HTMLElement | null;
+          ?.closest('[data-track-kind="video"][data-track-index]') as HTMLElement | null;
         const hovered = laneEl ? Number(laneEl.getAttribute("data-track-index")) : NaN;
-        updateCueTiming(cue.id, start, originalDuration, Number.isFinite(hovered) ? hovered : originTrack);
+        if (Number.isFinite(hovered) && hovered >= 2) {
+          updateCueTiming(cue.id, start, originalDuration, hovered);
+        } else {
+          // Audio, subtitle, and V1 are incompatible attention-image targets.
+          updateCueTiming(cue.id, originalStart, originalDuration, originTrack);
+        }
       }
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    };
+    const onUp = () => cleanup();
+    const onCancel = () => {
+      cleanup();
+      updateCueTiming(cue.id, originalStart, originalDuration, originTrack);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   }, [attentionTimeline, audioDuration, matches, onAttentionTimelineChange, updateCueTiming]);
 
   // Full source, thumbnail-enriched, before the magnetic/overlay split.
@@ -860,14 +871,12 @@ export function TimelineEditor({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [compositionDragId, setCompositionDragId] = useState<string | null>(null);
+  const [videoClipDragPreview, setVideoClipDragPreview] = useState<VideoClipDragPreviewState | null>(null);
+  const suppressCompositionClickRef = useRef(false);
   // Premiere-style insertion point while dragging a clip: index in
   // displayedComposition + the boundary time where the indicator line sits.
   const [compositionDropTarget, setCompositionDropTarget] = useState<{ index: number; time: number } | null>(null);
-  // `dragover` and `drop` can arrive in one browser frame. Mirror the live
-  // target synchronously so drop never reads the previous React render.
-  const compositionDropTargetRef = useRef<{ index: number; time: number } | null>(null);
   const setLiveCompositionDropTarget = (target: { index: number; time: number } | null) => {
-    compositionDropTargetRef.current = target;
     setCompositionDropTarget(target);
   };
 
@@ -2734,68 +2743,179 @@ export function TimelineEditor({
     commitComposition(updated);
   }, [commitComposition, displayedComposition]);
 
-  // Premiere-style clip move: while a clip drags anywhere over the Video lane,
-  // compute the insertion boundary from the cursor X and show a live indicator;
-  // dropping inserts the clip at that boundary. Intros stay before body clips.
-  const updateCompositionDropTarget = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!compositionDragId) return;
-    const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
+  // Pointer-driven video move. Unlike native HTML drag-and-drop, this keeps a
+  // real clip preview under the cursor and works consistently while playback is
+  // active. V1 remains magnetic; upper video tracks use absolute positioning.
+  // Audio/subtitle lanes are deliberately invalid targets.
+  const beginCompositionClipDrag = (
+    event: React.PointerEvent<HTMLDivElement>,
+    clip: CompositionClip,
+  ) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    const originAxis = event.currentTarget.closest("[data-magnetic-lane]") as HTMLElement | null;
+    if (!originAxis) return;
+
+    const pointerStartX = event.clientX;
+    const pointerStartY = event.clientY;
+    const total = Math.max(0.05, timelineDurationRef.current);
+    const originRect = originAxis.getBoundingClientRect();
+    const pointerTime = ((event.clientX - originRect.left) / Math.max(1, originRect.width)) * total;
+    const grabOffset = Math.max(0, Math.min(clip.timeline_duration, pointerTime - clip.timeline_start));
+    const sourceIndex = displayedComposition.findIndex((candidate) => candidate.id === clip.id);
     if (sourceIndex < 0) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const rect = event.currentTarget.getBoundingClientRect();
-    const total = displayedComposition.reduce(
-      (sum, clip) => Math.max(sum, clip.timeline_start + clip.timeline_duration),
-      0,
-    );
-    const time = Math.min(total, Math.max(0, ((event.clientX - rect.left) / Math.max(1, rect.width)) * total));
-    const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
-    let index = displayedComposition.filter(
-      (clip) => clip.timeline_start + clip.timeline_duration / 2 < time,
-    ).length;
-    index = displayedComposition[sourceIndex].kind === "intro"
-      ? Math.min(index, introCount)
-      : Math.max(index, introCount);
-    const boundaryTime = index >= displayedComposition.length
-      ? total
-      : displayedComposition[index].timeline_start;
-    setLiveCompositionDropTarget({ index, time: boundaryTime });
-  };
 
-  // The visible space after the green end marker is a separate layout gutter,
-  // not part of the V1 axis. Make it the final insertion boundary as users
-  // naturally drag a clip past that marker when moving it to the right.
-  const updateCompositionEndDropTarget = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!compositionDragId) return;
-    const draggedClip = displayedComposition.find((clip) => clip.id === compositionDragId);
-    if (!draggedClip) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
+    const snapPoints = [
+      ...matches.flatMap((match) => [match.srt_start, match.srt_end]),
+      ...displayedComposition.flatMap((candidate) => [
+        candidate.timeline_start,
+        candidate.timeline_start + candidate.timeline_duration,
+      ]),
+    ];
+    const snapStart = (value: number, disabled: boolean) => {
+      if (disabled) return value;
+      const nearest = snapPoints.reduce(
+        (best, point) => Math.abs(point - value) < Math.abs(best - value) ? point : best,
+        value,
+      );
+      return Math.abs(nearest - value) <= 0.15 ? nearest : value;
+    };
+    const clampToFreeTrack = (requestedStart: number, targetTrack: number) => {
+      const duration = clip.timeline_duration;
+      const maximumStart = Math.max(0, total - duration);
+      const requested = Math.max(0, Math.min(maximumStart, requestedStart));
+      const siblings = displayedOverlays
+        .filter((candidate) => candidate.id !== clip.id && (candidate.track ?? 2) === targetTrack)
+        .sort((a, b) => a.timeline_start - b.timeline_start);
+      const candidates: number[] = [requested, 0, maximumStart];
+      for (const sibling of siblings) {
+        candidates.push(sibling.timeline_start - duration, sibling.timeline_start + sibling.timeline_duration);
+      }
+      const fits = (start: number) => siblings.every((sibling) => (
+        start + duration <= sibling.timeline_start + 0.0001
+        || start >= sibling.timeline_start + sibling.timeline_duration - 0.0001
+      ));
+      return candidates
+        .map((candidate) => Math.max(0, Math.min(maximumStart, candidate)))
+        .filter(fits)
+        .sort((a, b) => Math.abs(a - requested) - Math.abs(b - requested))[0] ?? requested;
+    };
 
-    const total = displayedComposition.reduce(
-      (maximum, clip) => Math.max(maximum, clip.timeline_start + clip.timeline_duration),
-      0,
-    );
-    const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
-    const index = draggedClip.kind === "intro" ? introCount : displayedComposition.length;
-    const time = index >= displayedComposition.length
-      ? total
-      : displayedComposition[index].timeline_start;
-    setLiveCompositionDropTarget({ index, time });
-  };
+    type DragTarget = { targetTrack: number; timelineStart: number; insertIndex?: number };
+    let armed = false;
+    let latestTarget: DragTarget | null = null;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
 
-  const dropCompositionClipAtTarget = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const target = compositionDropTargetRef.current;
-    const sourceIndex = displayedComposition.findIndex((clip) => clip.id === compositionDragId);
-    setCompositionDragId(null);
-    setLiveCompositionDropTarget(null);
-    if (!target || sourceIndex < 0) return;
-    if (target.index === sourceIndex || target.index === sourceIndex + 1) return;
-    const updated = [...displayedComposition];
-    const [moved] = updated.splice(sourceIndex, 1);
-    updated.splice(target.index > sourceIndex ? target.index - 1 : target.index, 0, moved);
-    commitComposition(updated);
+    const update = (moveEvent: PointerEvent) => {
+      if (!armed && Math.hypot(moveEvent.clientX - pointerStartX, moveEvent.clientY - pointerStartY) < 4) return;
+      if (!armed) {
+        armed = true;
+        suppressCompositionClickRef.current = true;
+        setCompositionDragId(clip.id);
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      moveEvent.preventDefault();
+
+      const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null;
+      const magneticAxis = element?.closest("[data-magnetic-lane]") as HTMLElement | null;
+      const magneticEndGutter = element?.closest("[data-magnetic-end-gutter]") as HTMLElement | null;
+      const freeVideoAxis = element?.closest('[data-track-kind="video"][data-track-index]') as HTMLElement | null;
+
+      if (magneticAxis || magneticEndGutter) {
+        const introCount = displayedComposition.filter((candidate) => candidate.kind === "intro").length;
+        const time = magneticEndGutter
+          ? total
+          : Math.min(total, Math.max(0, (
+              (moveEvent.clientX - magneticAxis!.getBoundingClientRect().left)
+              / Math.max(1, magneticAxis!.getBoundingClientRect().width)
+            ) * total));
+        let insertIndex = magneticEndGutter
+          ? displayedComposition.length
+          : displayedComposition.filter((candidate) => (
+              candidate.timeline_start + candidate.timeline_duration / 2 < time
+            )).length;
+        insertIndex = clip.kind === "intro"
+          ? Math.min(insertIndex, introCount)
+          : Math.max(insertIndex, introCount);
+        const boundaryTime = insertIndex >= displayedComposition.length
+          ? displayedComposition.reduce(
+              (maximum, candidate) => Math.max(maximum, candidate.timeline_start + candidate.timeline_duration),
+              0,
+            )
+          : displayedComposition[insertIndex].timeline_start;
+        const timelineStart = Math.max(0, Math.min(total - clip.timeline_duration, time - grabOffset));
+        latestTarget = { targetTrack: 1, timelineStart, insertIndex };
+        setLiveCompositionDropTarget({ index: insertIndex, time: boundaryTime });
+        setVideoClipDragPreview({ clip, targetTrack: 1, timelineStart });
+        return;
+      }
+
+      if (freeVideoAxis) {
+        const hoveredTrack = Number(freeVideoAxis.getAttribute("data-track-index"));
+        if (Number.isFinite(hoveredTrack) && hoveredTrack >= 2) {
+          const rect = freeVideoAxis.getBoundingClientRect();
+          const time = ((moveEvent.clientX - rect.left) / Math.max(1, rect.width)) * total;
+          const timelineStart = clampToFreeTrack(
+            snapStart(time - grabOffset, moveEvent.altKey),
+            clampOverlayTrack(hoveredTrack),
+          );
+          latestTarget = { targetTrack: clampOverlayTrack(hoveredTrack), timelineStart };
+          setLiveCompositionDropTarget(null);
+          setVideoClipDragPreview({ clip, targetTrack: latestTarget.targetTrack, timelineStart });
+          return;
+        }
+      }
+
+      // Incompatible lane (audio, subtitles, or outside the timeline): make the
+      // invalid drop explicit and preserve the clip's original position.
+      latestTarget = null;
+      setLiveCompositionDropTarget(null);
+      setVideoClipDragPreview(null);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", update);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setCompositionDragId(null);
+      setLiveCompositionDropTarget(null);
+      setVideoClipDragPreview(null);
+      if (armed) {
+        window.setTimeout(() => {
+          suppressCompositionClickRef.current = false;
+        }, 0);
+      }
+    };
+    const finish = (upEvent: PointerEvent) => {
+      if (armed) update(upEvent);
+      const target = latestTarget;
+      cleanup();
+      if (!armed || !target) return;
+      if (target.targetTrack >= 2) {
+        convertClipToOverlay(clip.id, target.targetTrack, target.timelineStart);
+        return;
+      }
+      const insertIndex = target.insertIndex;
+      if (insertIndex == null || insertIndex === sourceIndex || insertIndex === sourceIndex + 1) return;
+      const updated = [...displayedComposition];
+      const [moved] = updated.splice(sourceIndex, 1);
+      updated.splice(insertIndex > sourceIndex ? insertIndex - 1 : insertIndex, 0, moved);
+      commitComposition(updated);
+    };
+    const cancel = () => cleanup();
+    const onKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key !== "Escape") return;
+      keyEvent.preventDefault();
+      cancel();
+    };
+    window.addEventListener("pointermove", update, { passive: false });
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", onKeyDown);
   };
 
   // ── Phase C: free video overlays (V2..Vn) ──────────────────────────────────
@@ -2804,7 +2924,7 @@ export function TimelineEditor({
   const clampOverlayTrack = (track: number) => Math.min(4, Math.max(2, Math.round(track)));
 
   // Boundary index in the magnetic sequence for an absolute output time (used
-  // when converting an overlay back into V1). Mirrors updateCompositionDropTarget.
+  // when converting an overlay back into V1). Mirrors the pointer target math.
   const magneticInsertionAt = (timeSec: number) => {
     const introCount = displayedComposition.filter((clip) => clip.kind === "intro").length;
     const raw = displayedComposition.filter(
@@ -2815,7 +2935,7 @@ export function TimelineEditor({
 
   // V1 clip block → overlay track: keep its absolute timeline_start, default the
   // box to full-frame contain, force body/no-transition; V1 reflows closed.
-  const convertClipToOverlay = (clipId: string, trackIndex: number) => {
+  const convertClipToOverlay = (clipId: string, trackIndex: number, timelineStart?: number) => {
     const clip = displayedComposition.find((candidate) => candidate.id === clipId);
     if (!clip) return;
     if (overlayClips.length >= MAX_FREE_OVERLAYS) {
@@ -2827,6 +2947,7 @@ export function TimelineEditor({
       ...rest,
       kind: "body",
       track: clampOverlayTrack(trackIndex),
+      timeline_start: timelineStart ?? clip.timeline_start,
       overlay_box: { ...DEFAULT_OVERLAY_BOX },
     };
     const nextMagnetic = displayedComposition.filter((candidate) => candidate.id !== clipId);
@@ -2880,6 +3001,9 @@ export function TimelineEditor({
     const originSrcStart = clip.start_time;
     const originSrcEnd = clip.end_time;
     const originTrack = clip.track ?? 2;
+    const originRect = laneEl.getBoundingClientRect();
+    const pointerTime = ((event.clientX - originRect.left) / Math.max(1, originRect.width)) * total;
+    const grabOffset = Math.max(0, Math.min(originDur, pointerTime - originStart));
     const snapPts = [
       ...matches.flatMap((m) => [m.srt_start, m.srt_end]),
       ...displayedComposition.flatMap((c) => [c.timeline_start, c.timeline_start + c.timeline_duration]),
@@ -2907,6 +3031,7 @@ export function TimelineEditor({
     let pendingV1: { index: number; time: number } | null = null;
     let draftTrack = originTrack;
     let latest: CompositionClip[] = displayedOverlays;
+    let validMoveTarget = edge !== "move";
     const setClip = (patch: Partial<CompositionClip>) => {
       latest = displayedOverlays.map((o) => (o.id === clip.id ? { ...o, ...patch } : o));
       setOverlayDraft(latest);
@@ -2917,7 +3042,7 @@ export function TimelineEditor({
       // Which lane is the cursor over? Magnetic V1 → convert target; image track → track change.
       const el = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null;
       const overV1 = el?.closest("[data-magnetic-lane]") as HTMLElement | null;
-      const overImage = el?.closest("[data-track-index]") as HTMLElement | null;
+      const overImage = el?.closest('[data-track-kind="video"][data-track-index]') as HTMLElement | null;
 
       if (edge === "move" && overV1) {
         // Hovering the V1 lane: show the magnetic insertion indicator instead of
@@ -2927,11 +3052,18 @@ export function TimelineEditor({
         const index = magneticInsertionAt(t);
         const time = index >= displayedComposition.length ? total : displayedComposition[index].timeline_start;
         pendingV1 = { index, time };
+        validMoveTarget = true;
         setLiveCompositionDropTarget({ index, time });
+        setVideoClipDragPreview({
+          clip,
+          targetTrack: 1,
+          timelineStart: Math.max(0, Math.min(total - originDur, t - grabOffset)),
+        });
         return;
       }
       pendingV1 = null;
       setLiveCompositionDropTarget(null);
+      setVideoClipDragPreview(null);
 
       if (edge === "resize") {
         const dur = Math.max(0.05, snap(originStart + originDur + deltaSec, moveEvent.altKey) - originStart);
@@ -2944,26 +3076,45 @@ export function TimelineEditor({
         setClip({ timeline_start: start, timeline_duration: rightEdge - start, start_time: srcStart, end_time: originSrcEnd, track: draftTrack });
       } else {
         // move: horizontal reposition + vertical track change over an image lane.
-        if (overImage) {
-          const hovered = Number(overImage.getAttribute("data-track-index"));
-          if (Number.isFinite(hovered) && hovered >= 2) draftTrack = clampOverlayTrack(hovered);
+        const hovered = overImage ? Number(overImage.getAttribute("data-track-index")) : NaN;
+        if (!Number.isFinite(hovered) || hovered < 2) {
+          validMoveTarget = false;
+          latest = displayedOverlays;
+          setOverlayDraft(displayedOverlays);
+          return;
         }
+        validMoveTarget = true;
+        draftTrack = clampOverlayTrack(hovered);
         const start = clampStart(snap(originStart + deltaSec, moveEvent.altKey), originDur, draftTrack);
         setClip({ timeline_start: start, track: draftTrack });
       }
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       setLiveCompositionDropTarget(null);
+      setVideoClipDragPreview(null);
+    };
+    const onUp = () => {
+      cleanup();
       if (pendingV1) {
         convertOverlayToMagnetic(clip.id, pendingV1.index);
         return;
       }
+      if (!validMoveTarget) {
+        setOverlayDraft(null);
+        return;
+      }
       emitTimeline([...displayedComposition, ...latest]);
+    };
+    const onCancel = () => {
+      cleanup();
+      setOverlayDraft(null);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   };
 
   const nudgeCompositionSource = (clipId: string, edge: "in" | "out", delta: number) => {
@@ -3590,13 +3741,15 @@ export function TimelineEditor({
               <div
                 ref={displayMode === "card" ? compactPreviewStageRef : undefined}
                 data-testid={displayMode === "card" ? "compact-preview-stage" : undefined}
-                className={`relative flex justify-center overflow-hidden ${displayMode === "full" ? "min-h-0 flex-1" : ""}`}
+                className={`relative flex justify-center overflow-hidden ${displayMode === "full" ? "min-h-0 flex-1 items-center" : ""}`}
+                style={displayMode === "full" ? { containerType: "size" } : undefined}
               >
                 {/* Video display with subtitle overlay */}
                 <div
                   ref={compactPreviewMeasurement.ref}
+                  data-testid={displayMode === "full" ? "full-preview-frame" : undefined}
                   className={`group relative isolate flex items-center justify-center overflow-hidden bg-black ${
-                    displayMode === "full" ? "min-h-0 flex-1" : ""
+                    displayMode === "full" ? "shrink-0" : ""
                   }`}
                   style={displayMode === "full" ? fullPreviewFrameStyle : compactPreviewFrameStyle}
                 >
@@ -4019,12 +4172,6 @@ export function TimelineEditor({
               willChange: "transform",
             };
             const sfxCues = attentionCues.filter(cue => cue.sfxAssetId || cue.sfxUrl);
-            const playhead = isPreviewActive ? (
-              <div
-                className="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary"
-                style={smoothPlayheadStyle}
-              />
-            ) : null;
 
             const canInsertSlide = !!(onInterstitialSlidesChange || onAttentionTimelineChange);
             const overlayTrackIndices = displayedOverlays.map((clip) => clip.track ?? 2);
@@ -4055,22 +4202,6 @@ export function TimelineEditor({
               if (!isHighestEmptySessionTrack) return;
               setMinimumAudioTrackCount((count) => Math.max(2, count - 1));
             };
-            const laneAddButton = (
-              label: string,
-              onClick?: () => void,
-              disabledReason?: string,
-            ) => (
-              <button
-                type="button"
-                onClick={onClick}
-                disabled={!onClick}
-                className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:text-white/20 disabled:hover:bg-transparent"
-                title={onClick ? label : disabledReason}
-                aria-label={onClick ? label : `${label} unavailable`}
-              >
-                <Plus className="size-3" />
-              </button>
-            );
             const trackControls = ({
               id,
               kind,
@@ -4090,56 +4221,24 @@ export function TimelineEditor({
               deleteUnavailable?: string;
               onDelete?: () => void;
             }) => {
-              const hidden = kind === "video" && hiddenVideoTracks.has(index);
-              const muted = kind === "audio" && mutedAudioTracks.has(index);
+              const monitored = kind === "video"
+                ? !hiddenVideoTracks.has(index)
+                : !mutedAudioTracks.has(index);
               return (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => kind === "video"
+                <TimelineTrackControls
+                  id={id}
+                  kind={kind}
+                  monitored={monitored}
+                  onMonitorChange={() => kind === "video"
                       ? toggleVideoTrackVisibility(index)
                       : toggleAudioTrackMute(index)}
-                    aria-label={kind === "video"
-                      ? `${hidden ? "Show" : "Hide"} video track ${id}`
-                      : `${muted ? "Unmute" : "Mute"} audio track ${id}`}
-                    aria-pressed={hidden || muted}
-                    className={`flex size-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-white/10 ${
-                      hidden || muted ? "bg-primary/15 text-primary" : "text-white/50"
-                    }`}
-                    title={kind === "video" ? `${hidden ? "Show" : "Hide"} ${id}` : `${muted ? "Unmute" : "Mute"} ${id}`}
-                  >
-                    {kind === "video"
-                      ? hidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />
-                      : <span className="text-[9px] font-bold">M</span>}
-                  </button>
-                  {laneAddButton(`Add media to ${id}`, addMedia, addMediaUnavailable)}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex size-5 shrink-0 items-center justify-center rounded text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-                        aria-label={`Open ${id} track settings`}
-                        title={`${id} track settings`}
-                      >
-                        <MoreHorizontal className="size-3.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="min-w-44 text-xs">
-                      <DropdownMenuItem onSelect={kind === "video" ? addVideoTrack : addAudioTrack}>
-                        <Plus className="size-3.5" /> Add {kind} track
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        variant="destructive"
-                        disabled={!canDelete}
-                        onSelect={onDelete}
-                        title={!canDelete ? deleteUnavailable : undefined}
-                        aria-label={`Delete ${kind} track ${id}`}
-                      >
-                        <Trash2 className="size-3.5" /> Delete {kind} track
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                  addMedia={addMedia}
+                  addMediaUnavailable={addMediaUnavailable}
+                  onAddTrack={kind === "video" ? addVideoTrack : addAudioTrack}
+                  canDelete={canDelete}
+                  deleteUnavailable={deleteUnavailable}
+                  onDelete={onDelete}
+                />
               );
             };
             // Image tracks Vn..V2, top-to-bottom (V1 is the magnetic video lane).
@@ -4151,14 +4250,16 @@ export function TimelineEditor({
               heightPx?: number;
               onHeightChange?: (height: number) => void;
               attention?: boolean;
+              trackKind?: "video" | "audio";
               trackIndex?: number;
               magneticLane?: boolean;
               stub?: boolean;
               action?: React.ReactNode;
               meta?: React.ReactNode;
               content: React.ReactNode;
-              dragProps?: React.HTMLAttributes<HTMLDivElement>;
-              endGutterProps?: React.HTMLAttributes<HTMLDivElement>;
+              endGutterProps?: React.HTMLAttributes<HTMLDivElement> & {
+                "data-magnetic-end-gutter"?: string;
+              };
             };
             const lanes: LaneDef[] = [
               // Subtitles — burned in above everything, always the top lane.
@@ -4166,6 +4267,7 @@ export function TimelineEditor({
                 label: `V${subtitleTrackIndex}`,
                 description: "Subtitles",
                 height: "h-8",
+                trackKind: "video",
                 action: trackControls({
                   id: `V${subtitleTrackIndex}`,
                   kind: "video",
@@ -4192,6 +4294,7 @@ export function TimelineEditor({
                 label: `V${track.index}`,
                 height: "h-9",
                 attention: true,
+                trackKind: "video",
                 trackIndex: track.index,
                 action: trackControls({
                   id: track.id,
@@ -4207,23 +4310,6 @@ export function TimelineEditor({
                   deleteUnavailable: "Move or remove this track's clips before deleting it",
                   onDelete: () => removeVideoTrack(track.index),
                 }),
-                // Accept a V1 clip block (HTML5 drag) dropped here → convert it
-                // into a free video overlay on this track.
-                dragProps: {
-                  onDragOver: (event) => {
-                    if (!compositionDragId) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                  },
-                  onDrop: (event) => {
-                    if (!compositionDragId) return;
-                    event.preventDefault();
-                    const id = compositionDragId;
-                    setCompositionDragId(null);
-                    setLiveCompositionDropTarget(null);
-                    convertClipToOverlay(id, track.index);
-                  },
-                },
                 content: (
                   <>
                     <ImageLane
@@ -4254,6 +4340,14 @@ export function TimelineEditor({
                       }}
                       onBeginTimingDrag={beginOverlayTimingDrag}
                     />
+                    {videoClipDragPreview?.targetTrack === track.index && (
+                      <VideoClipDragPreview
+                        preview={videoClipDragPreview}
+                        mediaApiUrl={mediaApiUrl}
+                        left={pct(videoClipDragPreview.timelineStart)}
+                        width={widthPct(videoClipDragPreview.clip.timeline_duration)}
+                      />
+                    )}
                   </>
                 ),
               })),
@@ -4262,6 +4356,7 @@ export function TimelineEditor({
                 label: "V1",
                 description: "Main video",
                 height: "h-16",
+                trackKind: "video",
                 magneticLane: true,
                 action: trackControls({
                   id: "V1",
@@ -4271,19 +4366,9 @@ export function TimelineEditor({
                   addMediaUnavailable: "No video segments are available",
                   deleteUnavailable: "The main video track is required",
                 }),
-                dragProps: {
-                  onDragOver: updateCompositionDropTarget,
-                  onDrop: dropCompositionClipAtTarget,
-                  onDragLeave: (event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                      setLiveCompositionDropTarget(null);
-                    }
-                  },
-                },
                 endGutterProps: {
                   "aria-label": "Drop clip at end of V1",
-                  onDragOver: updateCompositionEndDropTarget,
-                  onDrop: dropCompositionClipAtTarget,
+                  "data-magnetic-end-gutter": "",
                 },
                 content: (
                   <VideoLane
@@ -4296,6 +4381,7 @@ export function TimelineEditor({
                     previewActiveIndex={previewActiveIndex}
                     compositionDragId={compositionDragId}
                     compositionDropTarget={compositionDropTarget}
+                    dragPreview={videoClipDragPreview}
                     transitionBoundaries={transitionBoundaries}
                     transitionDragTarget={transitionDragTarget}
                     suppressTransitionClickRef={suppressTransitionClickRef}
@@ -4306,11 +4392,8 @@ export function TimelineEditor({
                       setSelectedMusic(false);
                     }}
                     onJumpToIndex={jumpToIndex}
-                    onClipDragStart={setCompositionDragId}
-                    onClipDragEnd={() => {
-                      setCompositionDragId(null);
-                      setLiveCompositionDropTarget(null);
-                    }}
+                    onClipPointerDown={beginCompositionClipDrag}
+                    suppressClipClickRef={suppressCompositionClickRef}
                     onRollPointerDown={beginCompositionRoll}
                     onEndResizePointerDown={beginCompositionEndResize}
                     onBoundaryChange={setBoundaryTransition}
@@ -4323,6 +4406,8 @@ export function TimelineEditor({
                 label: "A1",
                 description: "Voiceover",
                 height: "h-10",
+                trackKind: "audio",
+                trackIndex: 1,
                 action: trackControls({
                   id: "A1",
                   kind: "audio",
@@ -4351,6 +4436,8 @@ export function TimelineEditor({
                 label: "A2",
                 description: "Music",
                 height: "h-8",
+                trackKind: "audio",
+                trackIndex: 2,
                 stub: !onMusicChange,
                 action: trackControls({
                   id: "A2",
@@ -4418,6 +4505,8 @@ export function TimelineEditor({
                   label: `A${index}`,
                   description: isSfxTrack ? "Sound effects" : "Audio",
                   height: "h-7",
+                  trackKind: "audio",
+                  trackIndex: index,
                   action: trackControls({
                     id: `A${index}`,
                     kind: "audio",
@@ -4465,11 +4554,10 @@ export function TimelineEditor({
                 laneWidth={laneWidth}
                 ruler={{
                   duration: totalDuration,
-                  currentTime: previewCurrentTime,
-                  playheadStyle: smoothPlayheadStyle,
                   className: "cursor-ew-resize",
                   onPointerDown: beginMultiTrackScrub,
                 }}
+                playhead={{ style: smoothPlayheadStyle }}
                 zoom={timelineZoom}
                 minZoom={TIMELINE_MIN_ZOOM}
                 maxZoom={TIMELINE_MAX_ZOOM}
@@ -4494,22 +4582,22 @@ export function TimelineEditor({
                     axisClassName: lane.stub
                       ? "opacity-60"
                       : "cursor-ew-resize bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%]",
-                  axisProps: lane.stub ? {} : {
+                    axisProps: lane.stub ? {} : {
                       title: "Drag to move the playhead",
                       onPointerDown: beginMultiTrackScrub,
                       ...(lane.attention ? { "data-attention-track": "" } : {}),
-                      ...(lane.trackIndex != null ? { "data-track-index": lane.trackIndex } : {}),
-                      ...(lane.magneticLane ? { "data-magnetic-lane": "" } : {}),
-                    ...(lane.dragProps ?? {}),
-                  },
-                  endGutterProps: lane.endGutterProps,
+                      ...(lane.trackKind ? { "data-track-kind": lane.trackKind } : {}),
+                      ...(lane.trackKind === "video" && lane.trackIndex != null
+                        ? { "data-track-index": lane.trackIndex }
+                        : {}),
+                      ...(lane.magneticLane ? {
+                        "data-magnetic-lane": "",
+                        "data-track-kind": "video",
+                      } : {}),
+                    },
+                    endGutterProps: lane.endGutterProps,
                     showEndLine: !lane.stub,
-                    content: (
-                      <>
-                        {lane.content}
-                        {playhead}
-                      </>
-                    ),
+                    content: lane.content,
                   };
                 })}
               />

@@ -51,6 +51,7 @@ import {
   LayoutTemplate,
   Pencil,
   ScanLine,
+  Crosshair,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -77,6 +78,7 @@ import {
 import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
+import { WorkspacePanelHeader } from "./workspace-panel-header";
 import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
 import {
   findMatchingSubtitleTemplateGroup,
@@ -580,22 +582,21 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   );
 
   const subtitleStyleCard = (
-    <Card variant="workspace" className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents`}>
-      <CardHeader className="pb-1 min-[1280px]:bg-surface-canvas min-[1280px]:py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-1">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Type className="size-4" />
-              Subtitle Style
-              {!subtitleSettingsLoaded && <Loader2 className="size-3 animate-spin" />}
-            </CardTitle>
+    <Card variant="workspace" className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 gap-0 py-0 min-[1280px]:contents`}>
+      <WorkspacePanelHeader
+        icon={Type}
+        title="Subtitle Style"
+        className="min-[1280px]:bg-surface-canvas"
+        data-testid="step3-subtitle-style-header"
+        titleAccessory={!subtitleSettingsLoaded ? <Loader2 className="size-3 animate-spin" /> : undefined}
+        actions={(
+          <>
             <InlineInfo label="About subtitle styles">
               {metaMultiplication
                 ? "Switch between A and B to preview and edit each platform style. Changes are saved automatically and shared across all scripts."
                 : "This style applies to every variant in the pipeline and is saved automatically."}
             </InlineInfo>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
           {subtitleSaveState === "saving" && (
             <>
               <Loader2 className="size-3 animate-spin" />
@@ -614,9 +615,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               <span className="text-red-600">Save failed</span>
             </>
           )}
-          </div>
-        </div>
-      </CardHeader>
+            </div>
+          </>
+        )}
+      />
       <CardContent className="space-y-3 min-[1280px]:contents">
         {/* Keep the preview and controls in one continuous scroll surface.
             A nested sticky region made the preview and settings move in
@@ -937,24 +939,34 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   id="subtitle-style-preview"
                   role="tabpanel"
                   data-testid="subtitle-sticky-preview"
-                  className="min-w-0 border-b bg-background p-3 min-[1280px]:h-full min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-b-0"
+                  className="min-w-0 border-b bg-background min-[1280px]:h-full min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-b-0"
                   aria-label="Live subtitle preview"
                 >
-                  <SubtitleStylePreviewPanel
-                    activeStyleKey={activeSubtitleStyleKey}
-                    getSubtitleSettingsFor={getSubtitleSettingsFor}
-                    getPreviewSubtitleSettingsFor={getPreviewSubtitleSettingsFor}
-                    hasStyleOverride={(styleKey) => Boolean(
-                      subtitleOverrides[styleKey]
-                        && Object.keys(subtitleOverrides[styleKey] ?? {}).length > 0
-                    )}
-                    getStylePreviewText={getStylePreviewText}
-                    pipelineId={pipelineId ?? undefined}
-                    previewCards={previewCards}
-                    subtitleRotation={subtitleRotation}
-                    userSubtitlePresets={userSubtitlePresets}
-                    variantTemplateSelections={variantTemplateSelections}
-                  />
+                  <Card variant="workspace" className="min-h-full gap-0 py-0" data-testid="step3-preview-target-panel">
+                    <WorkspacePanelHeader
+                      icon={Crosshair}
+                      title="Preview Target"
+                      sticky
+                      data-testid="step3-preview-target-header"
+                    />
+                    <CardContent className="min-[1280px]:px-4 min-[1280px]:py-3">
+                      <SubtitleStylePreviewPanel
+                        activeStyleKey={activeSubtitleStyleKey}
+                        getSubtitleSettingsFor={getSubtitleSettingsFor}
+                        getPreviewSubtitleSettingsFor={getPreviewSubtitleSettingsFor}
+                        hasStyleOverride={(styleKey) => Boolean(
+                          subtitleOverrides[styleKey]
+                            && Object.keys(subtitleOverrides[styleKey] ?? {}).length > 0
+                        )}
+                        getStylePreviewText={getStylePreviewText}
+                        pipelineId={pipelineId ?? undefined}
+                        previewCards={previewCards}
+                        subtitleRotation={subtitleRotation}
+                        userSubtitlePresets={userSubtitlePresets}
+                        variantTemplateSelections={variantTemplateSelections}
+                      />
+                    </CardContent>
+                  </Card>
                 </aside>
 
                 <section
@@ -962,22 +974,20 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   aria-label="Variant previews"
                   data-testid="step3-variant-canvas"
                 >
-                <header
-                  className="sticky top-0 z-[60] hidden h-14 items-center border-b bg-background px-4 min-[1280px]:flex"
+                <WorkspacePanelHeader
+                  icon={Film}
+                  title="Variant Previews"
+                  sticky
+                  className="hidden min-[1280px]:flex"
                   data-testid="step3-variant-header"
-                >
-                  <div className="flex items-center gap-1">
-                    <h2 className="flex items-center gap-2 text-sm font-semibold leading-none">
-                      <Film className="size-4" />
-                      Variant Previews
-                    </h2>
+                  actions={(
                     <InlineInfo label="About variant previews">
                       {metaMultiplication
                         ? "Each script is generated in two visual versions, A and B, with different footage selections. Compare them and choose the stronger result before rendering."
                         : "Each preview is a visual version of its script that you can review and refine before rendering."}
                     </InlineInfo>
-                  </div>
-                </header>
+                  )}
+                />
 
             {/* Variant preview grid */}
             <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border min-[1480px]:grid-cols-2">

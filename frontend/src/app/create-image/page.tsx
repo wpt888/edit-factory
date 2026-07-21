@@ -39,7 +39,7 @@ import {
   Download,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
-import { PageHeader } from "@/components/page-header";
+import { GeneratorShell } from "@/components/generator-shell";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -846,12 +846,11 @@ export default function CreateImagePage() {
   // ============== Render ==============
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
-      <PageHeader
-        title="AI Image Generator"
-        description="Generate product images with AI, add your logo, and share"
-        actions={
+    <GeneratorShell
+      icon={<ImageIcon className="size-6 text-primary" />}
+      title="AI Image Generator"
+      description="Generate product images with AI, add your logo, and share."
+      actions={
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -880,28 +879,28 @@ export default function CreateImagePage() {
             </Button>
           )}
         </div>
-        }
-      />
-
-      {/* Step indicators */}
-      <div className="flex items-center gap-2">
-        {[1, 2, 3].map((s) => (
-          <Badge
-            key={s}
-            variant={step === s ? "default" : step > s ? "secondary" : "outline"}
-            className="cursor-pointer"
-            onClick={() => {
-              if (s === 1) setStep(1);
-              else if (s === 2 && currentImage) setStep(2);
-              else if (s === 3 && currentImage) setStep(3);
-            }}
-          >
-            {s === 1 && "1. Generate"}
-            {s === 2 && "2. Logo"}
-            {s === 3 && "3. Share"}
-          </Badge>
-        ))}
-      </div>
+      }
+      progress={(
+        <div className="flex items-center gap-2" aria-label="Image generation progress">
+          {[1, 2, 3].map((s) => (
+            <Badge
+              key={s}
+              variant={step === s ? "default" : step > s ? "secondary" : "outline"}
+              className="cursor-pointer"
+              onClick={() => {
+                if (s === 1) setStep(1);
+                else if (s === 2 && currentImage) setStep(2);
+                else if (s === 3 && currentImage) setStep(3);
+              }}
+            >
+              {s === 1 && "1. Generate"}
+              {s === 2 && "2. Logo"}
+              {s === 3 && "3. Share"}
+            </Badge>
+          ))}
+        </div>
+      )}
+    >
 
       {/* History panel */}
       {showHistory && (
@@ -970,7 +969,7 @@ export default function CreateImagePage() {
               <div className="space-y-2">
                 <Label>Library item (optional)</Label>
                 <Select value={selectedProductId} onValueChange={setSelectedProductId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select an item..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -1015,7 +1014,7 @@ export default function CreateImagePage() {
                   </Button>
                 </div>
                 <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Choose a template..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -1058,7 +1057,7 @@ export default function CreateImagePage() {
               <div className="space-y-2">
                 <Label>Model</Label>
                 <Select value={selectedModel} onValueChange={setSelectedModel}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1076,7 +1075,7 @@ export default function CreateImagePage() {
                 <div className="space-y-2">
                   <Label>Resolution</Label>
                   <Select value={resolution} onValueChange={setResolution}>
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1094,7 +1093,7 @@ export default function CreateImagePage() {
               <div className="space-y-2">
                 <Label>Aspect Ratio</Label>
                 <Select value={aspectRatio} onValueChange={setAspectRatio}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1862,6 +1861,6 @@ export default function CreateImagePage() {
           setConfirmDeleteLogo(false);
         }}
       />
-    </div>
+    </GeneratorShell>
   );
 }

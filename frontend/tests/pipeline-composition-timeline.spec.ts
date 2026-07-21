@@ -195,10 +195,19 @@ test("maximized editor exposes gapless movable and roll-trimmable composition cl
   // Editing the playhead is independent from preview playback. A fresh Step 3
   // timeline must accept click-to-seek before the user has pressed Play.
   await expect(previewPosition).toBeDisabled();
+  // The shell renders exactly ONE cursor spanning every lane — never one per lane.
+  const lanePlayheads = timeline.locator("[data-timeline-lane-playhead]");
+  await expect(lanePlayheads).toHaveCount(1);
+  await expect(lanePlayheads.first()).toBeVisible();
+  const playheadBeforeSeek = await lanePlayheads.first().boundingBox();
+  expect(playheadBeforeSeek).not.toBeNull();
   await timeline.locator("[data-timeline-axis]").first().click({ position: { x: 300, y: 8 } });
   await expect.poll(async () => Number(await previewPosition.inputValue())).toBeGreaterThan(1);
+  await expect.poll(async () => (await lanePlayheads.first().boundingBox())?.x ?? 0)
+    .toBeGreaterThan(playheadBeforeSeek!.x + 100);
 
   // Hovering over the timeline while scrolling the preview page must not zoom.
+  await timeline.evaluate((element) => (element as HTMLElement).blur());
   await timeline.hover();
   await page.mouse.wheel(0, -100);
   await expect(zoomLevel).toHaveText("1.00x");

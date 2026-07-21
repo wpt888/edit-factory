@@ -69,17 +69,19 @@ export function InspectorSection({
   title,
   summary,
   open,
+  defaultOpen,
   onOpenChange,
   children,
 }: {
   title: string;
   summary?: string;
   open?: boolean;
+  defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
-    <Collapsible open={open} onOpenChange={onOpenChange}>
+    <Collapsible open={open} defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
       <CollapsibleTrigger className="flex h-8 w-full items-center gap-3 px-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring [&[data-state=open]_svg]:rotate-180">
         <span className="text-sm font-medium text-foreground">{title}</span>
         {summary && (

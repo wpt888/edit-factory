@@ -45,8 +45,13 @@ interface FetchOptions extends RequestInit {
 // Pages are unmounted during App Router navigation, but the API client module
 // remains alive in the Electron renderer. Cache read-only responses here rather
 // than in each page so returning to any section can immediately reuse data
-// already loaded for the current profile. Mutations clear the cache below.
+// already loaded for the current profile. Stale-while-revalidate: a cache hit
+// is served instantly and refreshed in the background, so polling loops see
+// updates one cycle late instead of never. Mutations clear the cache below.
 const getResponseCache = new Map<string, Response>();
+const revalidatingKeys = new Set<string>();
+// ponytail: coarse cap, wholesale clear; LRU if any page ever holds >200 distinct GETs
+const CACHE_MAX_ENTRIES = 200;
 
 const VOLATILE_GET_PATH = /(?:\/(?:[^/?]*status|progress|health|logs|events)(?:[/?]|$)|\/segments\/source-videos(?:\/[^/?]+)?(?:\?|$))/i;
 
@@ -65,8 +70,33 @@ function getCacheKey(endpoint: string) {
 function canUseMemoryCache(endpoint: string, options: FetchOptions) {
   return options.memoryCache !== false
     && options.cache !== "no-store"
-    && !options.signal
+    // Cache-busted URLs (`?_t=Date.now()`) are unique per call: caching them
+    // can never hit and would only grow the map (pipeline audio blobs).
+    && !/[?&]_t=/.test(endpoint)
     && !VOLATILE_GET_PATH.test(endpoint);
+}
+
+function storeCachedResponse(cacheKey: string, response: Response) {
+  if (getResponseCache.size >= CACHE_MAX_ENTRIES) getResponseCache.clear();
+  getResponseCache.set(cacheKey, response);
+}
+
+/** Refresh a cached GET in the background; keeps the last good data on failure. */
+function revalidateInBackground(
+  endpoint: string,
+  options: FetchOptions,
+  cacheKey: string
+) {
+  if (revalidatingKeys.has(cacheKey)) return;
+  revalidatingKeys.add(cacheKey);
+  // Drop the caller's signal: the component may unmount (and abort) while the
+  // background refresh is still useful for the next visit.
+  const rest = { ...options };
+  delete rest.signal;
+  apiFetch(endpoint, { ...rest, method: "GET" })
+    .then((response) => storeCachedResponse(cacheKey, response))
+    .catch(() => {})
+    .finally(() => revalidatingKeys.delete(cacheKey));
 }
 
 /** Clears session-only GET data after a write, preventing stale page restores. */
@@ -205,10 +235,13 @@ export async function apiGet(
   const cacheable = canUseMemoryCache(endpoint, options);
   const cacheKey = cacheable ? getCacheKey(endpoint) : null;
   const cached = cacheKey ? getResponseCache.get(cacheKey) : undefined;
-  if (cached) return cached.clone();
+  if (cacheKey && cached) {
+    revalidateInBackground(endpoint, options, cacheKey);
+    return cached.clone();
+  }
 
   const response = await apiFetch(endpoint, { ...options, method: "GET" });
-  if (cacheKey) getResponseCache.set(cacheKey, response.clone());
+  if (cacheKey) storeCachedResponse(cacheKey, response.clone());
   return response;
 }
 

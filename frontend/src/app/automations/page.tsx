@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page-shell";
+import { PageHeader } from "@/components/page-header";
 
 type WorkflowNode = {
   id: string;
@@ -207,32 +208,28 @@ export default function AutomationsPage() {
 
   return (
     <PageShell className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="rounded-lg border border-border bg-card p-2.5">
-            <Workflow className="size-6" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-heading text-3xl font-bold tracking-tight">Automations</h1>
+      <PageHeader
+        icon={<Workflow className="size-7 text-primary" />}
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+              Automations
               <Badge variant="outline" className="gap-1">
                 <Cloud className="size-3" /> Cloud sync
               </Badge>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The same workflows as Blipost web, kept in sync through your signed-in account.
-            </p>
-          </div>
-        </div>
+          </span>
+        }
+        description="The same workflows as Blipost web, kept in sync through your signed-in account."
+        actions={
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => void load()} disabled={loading || saving}>
             <RefreshCw className={cn("size-4", loading && "animate-spin")} /> Refresh
           </Button>
-          <Button onClick={() => void createAutomation()} disabled={loading || saving || !data?.connected}>
+          <Button variant="cta" onClick={() => void createAutomation()} disabled={loading || saving || !data?.connected}>
             <Plus className="size-4" /> New automation
           </Button>
         </div>
-      </div>
+        }
+      />
 
       {loadError && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">

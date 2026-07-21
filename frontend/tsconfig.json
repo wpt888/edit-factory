@@ -37,8 +37,14 @@
     "**/*.mts",
     ".next-dev/types/**/*.ts",
     ".next-dev/dev/types/**/*.ts",
+    ".next-design/types/**/*.ts",
+    ".next-design/dev/types/**/*.ts",
     ".next-verify/types/**/*.ts",
-    ".next-verify/dev/types/**/*.ts"
+    ".next-verify/dev/types/**/*.ts",
+    ".next-design-live/types/**/*.ts",
+    ".next-design-live/dev/types/**/*.ts",
+    ".next-subtitle-template-verify/types/**/*.ts",
+    ".next-subtitle-template-verify/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

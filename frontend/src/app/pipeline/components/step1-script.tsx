@@ -5,8 +5,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,13 +51,15 @@ import {
   Info,
   Pencil,
   Settings2,
+  Lightbulb,
 } from "lucide-react";
-import { DebouncedInput, DebouncedTextarea, WORKSPACE_CARD_BG } from "../pipeline-utils";
+import { DebouncedInput, DebouncedTextarea } from "../pipeline-utils";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
 import { WorkspaceSplit } from "./workspace-split";
 import { AttentionTemplatePicker } from "@/components/attention-template-picker";
+import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
 // inline callbacks below are typed precisely; everything else stays `any`.
@@ -174,14 +174,16 @@ export function Step1Script({ ctx }: { ctx: any }) {
               aria-label="Video idea editor"
               data-testid="step1-idea-canvas"
             >
-            <Card className={workspaceLayout ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}` : undefined}>
-              <CardHeader className={workspaceLayout ? "min-[1280px]:border-b min-[1280px]:px-5 min-[1280px]:pb-4" : undefined}>
-                <CardTitle>Video Idea</CardTitle>
+            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 py-0">
+              <WorkspacePanelHeader
+                icon={Lightbulb}
+                title="Video Idea"
+                data-testid="step1-idea-header"
+              />
+              <CardContent className={`space-y-4 pt-4 ${workspaceLayout ? "min-[1280px]:pb-5" : ""}`}>
                 <CardDescription>
                   Describe the video you want to create, then generate scripts.
                 </CardDescription>
-              </CardHeader>
-              <CardContent className={`space-y-4 ${workspaceLayout ? "min-[1280px]:px-5 min-[1280px]:pb-5" : ""}`}>
                 <div className="space-y-2">
                   <Label htmlFor="idea">Video Idea *</Label>
                   <DebouncedTextarea

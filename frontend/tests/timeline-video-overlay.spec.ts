@@ -208,6 +208,9 @@ test("dragging a V1 clip onto V2 converts it to an overlay (track + overlay_box)
   await page.mouse.down();
   await page.mouse.move(a.x + a.width / 2 + 15, a.y + a.height / 2, { steps: 3 });
   await page.mouse.move(v2Box.x + v2Box.width * 0.9, v2Box.y + v2Box.height / 2, { steps: 15 });
+  const dragPreview = editor.getByTestId("composition-drag-preview");
+  await expect(dragPreview).toBeVisible();
+  await expect(dragPreview).toHaveAttribute("data-drag-target-track", "2");
   await page.mouse.up();
 
   await expect.poll(() => {
@@ -219,8 +222,11 @@ test("dragging a V1 clip onto V2 converts it to an overlay (track + overlay_box)
   const tl = lastPut(harness)!;
   // body-a left the magnetic sequence; remaining magnetic clips reflow from 0.
   const magnetic = tl.filter((c) => (c.track ?? 1) === 1);
+  const converted = tl.find((c) => c.id === "body-a")!;
   expect(magnetic.some((c) => c.id === "body-a")).toBe(false);
   expect(magnetic[0].timeline_start).toBeCloseTo(0, 2);
+  // The drop X is persisted instead of retaining the clip's old V1 start (0s).
+  expect(converted.timeline_start).toBeGreaterThan(1.5);
 });
 
 test("dragging an overlay onto V1 strips track/overlay_box and splices into the sequence", async ({ page }) => {
@@ -236,6 +242,7 @@ test("dragging an overlay onto V1 strips track/overlay_box and splices into the 
   await page.mouse.move(ovBox.x + ovBox.width / 2, ovBox.y + ovBox.height / 2 + 8, { steps: 3 });
   // Drop over the middle of the V1 lane (a boundary in the magnetic sequence).
   await page.mouse.move(v1Box.x + v1Box.width * 0.5, v1Box.y + v1Box.height / 2, { steps: 15 });
+  await expect(editor.getByTestId("composition-drag-preview")).toHaveAttribute("data-drag-target-track", "1");
   await page.mouse.up();
 
   await expect.poll(() => {
@@ -268,4 +275,24 @@ test("an overlay cannot be dragged to overlap a same-track sibling", async ({ pa
   const moved = tl.find((c) => c.id === "ov-1")!;
   const other = tl.find((c) => c.id === "ov-2")!;
   expect(moved.timeline_start + moved.timeline_duration).toBeLessThanOrEqual(other.timeline_start + 0.05);
+});
+
+test("a video clip cannot be dropped onto an audio track", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const clip = editor.getByTestId("composition-clip-body-a");
+  const audioTrack = editor.locator('[data-track-kind="audio"]').first();
+  const clipBox = (await clip.boundingBox())!;
+  const audioBox = (await audioTrack.boundingBox())!;
+  const writesBefore = harness.compositionPuts.length;
+
+  await page.mouse.move(clipBox.x + clipBox.width / 2, clipBox.y + clipBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(clipBox.x + clipBox.width / 2 + 12, clipBox.y + clipBox.height / 2, { steps: 3 });
+  await page.mouse.move(audioBox.x + audioBox.width * 0.75, audioBox.y + audioBox.height / 2, { steps: 12 });
+  await expect(editor.getByTestId("composition-drag-preview")).toHaveCount(0);
+  await page.mouse.up();
+
+  expect(harness.compositionPuts).toHaveLength(writesBefore);
+  await expect(editor.getByTestId("composition-clip-body-a")).toBeVisible();
+  await expect(editor.getByTestId("overlay-clip-body-a")).toHaveCount(0);
 });

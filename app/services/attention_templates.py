@@ -64,14 +64,21 @@ def template_track_cues(
                 continue
             asset = assets[asset_cursor % len(assets)]
             asset_cursor += 1
+            sfx_asset_id = image.get("sfxAssetId") or template.get("sfx")
+            sfx_url = image.get("sfxUrl")
+            try:
+                sfx_volume_db = float(image.get("sfxVolumeDb") or 0)
+            except (TypeError, ValueError):
+                sfx_volume_db = 0.0
             cues.append({
                 "id": f"attention-t{track_index}-{image_index}-{start}",
                 "startMs": start,
                 "durationMs": max(100, int(image.get("durationMs", 1200))),
                 "track": 2 + track_index,
                 "zone": zone,
-                "sfxAssetId": template.get("sfx"),
-                "sfxVolumeDb": 0,
+                "sfxAssetId": sfx_asset_id,
+                "sfxUrl": sfx_url,
+                "sfxVolumeDb": max(-60.0, min(12.0, sfx_volume_db)),
                 "templateId": template.get("id"),
                 "layers": [{
                     "id": f"cue-t{track_index}-{image_index}-layer-0",

@@ -1351,7 +1351,27 @@ export function VideoSegmentPlayer({
         ruler={{
           startTime: visibleStart,
           duration: visibleDuration,
-          currentTime,
+        }}
+        playhead={{
+          lineRef: playheadRef,
+          style: {
+            // While playing, the rAF loop owns this via updatePlayheadDOM;
+            // re-apply its latest value so the throttled re-render never
+            // yanks the line back to a stale position.
+            left: `${isPlaying ? playheadPosRef.current : getPlayheadPosition()}%`,
+            display: (isPlaying ? playheadPosRef.current : getPlayheadPosition()) >= 0
+              && (isPlaying ? playheadPosRef.current : getPlayheadPosition()) <= 100 ? undefined : 'none',
+          },
+          handle: (
+            <button
+              type="button"
+              className="absolute -left-1.5 -top-0.5 size-3 cursor-grab rounded-full border-2 border-zinc-900 bg-primary shadow active:cursor-grabbing"
+              style={{ pointerEvents: 'auto' }}
+              onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
+              aria-label="Move playhead"
+              title="Drag playhead"
+            />
+          ),
         }}
         zoom={zoomLevel}
         minZoom={1}
@@ -1487,32 +1507,6 @@ export function VideoSegmentPlayer({
                     style={{ left: `${getGroupMarkStartPosition()}%` }}
                   />
                 )}
-
-                {/* Playhead — always rendered so playheadRef is available during scrubbing.
-                    Visibility controlled via style to allow updatePlayheadDOM to work even when
-                    the playhead starts off-screen and scrubs into view. */}
-                <div
-                  ref={playheadRef}
-                  className="absolute -top-1 -bottom-1 z-40 w-px bg-white shadow-[0_0_4px_rgba(255,255,255,0.8)]"
-                  style={{
-                    // While playing, the rAF loop owns this via updatePlayheadDOM;
-                    // re-apply its latest value so the throttled re-render never
-                    // yanks the line back to a stale position.
-                    left: `${isPlaying ? playheadPosRef.current : getPlayheadPosition()}%`,
-                    pointerEvents: 'none',
-                    display: (isPlaying ? playheadPosRef.current : getPlayheadPosition()) >= 0
-                      && (isPlaying ? playheadPosRef.current : getPlayheadPosition()) <= 100 ? '' : 'none',
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="absolute -left-1.5 -top-0.5 size-3 cursor-grab rounded-full border-2 border-zinc-900 bg-white shadow active:cursor-grabbing"
-                    style={{ pointerEvents: 'auto' }}
-                    onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
-                    aria-label="Move playhead"
-                    title="Drag playhead"
-                  />
-                </div>
 
                 {/* Pan slider — only relevant while zoomed in (window model). */}
                 {zoomLevel > 1 && (

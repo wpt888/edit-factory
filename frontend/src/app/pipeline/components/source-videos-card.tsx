@@ -7,8 +7,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -24,7 +22,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { formatDuration, WORKSPACE_CARD_BG } from "../pipeline-utils";
+import { formatDuration } from "../pipeline-utils";
+import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspace?: boolean }) {
@@ -48,27 +47,19 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
 
   return (
     <Card
+      variant={workspace ? "workspace" : "default"}
       className={workspace
-        ? `min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}`
-        : "order-[-1] min-[1100px]:col-start-1 min-[1100px]:row-start-2"
+        ? "gap-0 py-0"
+        : "order-[-1] gap-0 py-0 min-[1100px]:col-start-1 min-[1100px]:row-start-2"
       }
       data-testid="source-videos-panel"
     >
-      <CardHeader className={workspace ? "min-[1280px]:px-4" : undefined}>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Film className="size-4" />
-              Source Videos
-            </CardTitle>
-            <CardDescription>
-              {sourceVideos.length <= 1
-                ? "Source video for segment matching"
-                : `Select which videos to match segments from (${selectedSourceIds.size} of ${sourceVideos.length} selected)`}
-            </CardDescription>
-          </div>
-          {sourceVideos.length > 1 && (
-            <div className="flex gap-2">
+      <WorkspacePanelHeader
+        icon={Film}
+        title="Source Videos"
+        data-testid="source-videos-header"
+        actions={sourceVideos.length > 1 ? (
+          <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -85,11 +76,15 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               >
                 Select All
               </Button>
-            </div>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className={workspace ? "min-[1280px]:px-4 min-[1280px]:pb-4" : undefined}>
+          </div>
+        ) : undefined}
+      />
+      <CardContent className={workspace ? "space-y-3 min-[1280px]:py-4" : "space-y-3 pt-4"}>
+        <CardDescription>
+          {sourceVideos.length <= 1
+            ? "Source video for segment matching"
+            : `Select which videos to match segments from (${selectedSourceIds.size} of ${sourceVideos.length} selected)`}
+        </CardDescription>
         {sourceVideosLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />

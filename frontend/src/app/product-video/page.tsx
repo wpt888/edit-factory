@@ -246,10 +246,9 @@ function ProductVideoContent() {
   const isFormDisabled = isPolling || isGenerating;
 
   return (
-    <div className="min-h-full bg-background">
       <PageShell width="narrow">
         {/* Back navigation */}
-        <div className="mb-6">
+        <div>
           <Link
             href={source === "local" ? "/product-library" : "/products"}
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -260,7 +259,7 @@ function ProductVideoContent() {
         </div>
 
         {/* Page title */}
-        <PageHeader className="mb-6" icon={<Video className="size-7 text-primary" />} title="Generate Video" />
+        <PageHeader icon={<Video className="size-7 text-primary" />} title="Generate Video" />
 
         {/* Empty state when no product is selected */}
         {!productId && (
@@ -693,7 +692,6 @@ function ProductVideoContent() {
           </Card>
         )}
       </PageShell>
-    </div>
   );
 }
 

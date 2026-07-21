@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { EditorHeader } from "@/components/editor-header";
 import { ArrowLeft, CheckCircle, Clock, Download, Film, Loader2, Sparkles, Upload } from "lucide-react";
 import { useRef, type Dispatch, type SetStateAction } from "react";
 
@@ -135,81 +136,18 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
   };
 
   return (
-    <div
-      className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/85"
-      data-testid="pipeline-toolbar"
-    >
-      {/* Matches the EditorHeader recipe: size-4 icon, text-sm title, "/ item" breadcrumb. */}
-      <div className="flex min-w-0 shrink-0 items-center gap-3" data-testid="pipeline-toolbar-context">
-        <Film className="size-4 shrink-0 text-primary" />
-        <span className="truncate text-sm font-semibold">
-          Multi-Variant Pipeline
-        </span>
-        <span className="hidden text-muted-foreground/40 min-[1600px]:inline">/</span>
-        <span className="hidden truncate text-xs text-muted-foreground min-[1600px]:inline">
-          {STEP_CONTEXT_LABELS[step]}
-        </span>
-        <span className="hidden shrink-0 rounded border px-2 py-0.5 text-xs tabular-nums text-muted-foreground min-[1800px]:inline">
-          {contextCount}
-        </span>
-      </div>
-
+    <EditorHeader
+      className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85"
+      testId="pipeline-toolbar"
+      icon={<Film className="size-4 shrink-0 text-primary" />}
+      title={<span data-testid="pipeline-toolbar-context">Multi-Variant Pipeline</span>}
+      breadcrumb={STEP_CONTEXT_LABELS[step]}
+      subtitle={contextCount}
+      actions={(
       <div
-        className="absolute left-1/2 hidden w-full max-w-lg -translate-x-1/2 items-center justify-center min-[1100px]:flex min-[1280px]:max-w-xl min-[1500px]:max-w-2xl"
-        aria-label="Pipeline progress"
-        data-testid="pipeline-progress"
+        className="flex shrink-0 items-center justify-end gap-1"
+        data-testid="pipeline-toolbar-actions"
       >
-      <div className="flex w-full max-w-2xl min-w-0 items-center">
-        {PIPELINE_STEPS.map((item, index) => {
-          const isComplete = item.num < step;
-          const isActive = item.num === step;
-          const canOpen = canOpenStep(item.num);
-
-          return (
-            <div key={item.num} className="flex min-w-0 flex-1 items-center last:flex-none">
-              <button
-                type="button"
-                disabled={!canOpen}
-                aria-current={isActive ? "step" : undefined}
-                onClick={() => openStep(item.num)}
-                className={`group flex h-10 items-center gap-2.5 px-1 text-sm transition-colors disabled:opacity-100 ${
-                  isActive
-                    ? "font-semibold text-primary"
-                    : canOpen
-                      ? "text-muted-foreground hover:text-foreground"
-                      : "cursor-default text-muted-foreground/45"
-                }`}
-                data-testid={`pipeline-step-${item.num}`}
-              >
-                <span
-                  className={`flex size-8 items-center justify-center rounded-full border-2 bg-background text-sm font-semibold transition-[border-color,box-shadow,color] ${
-                    isActive
-                      ? "border-primary text-primary ring-2 ring-primary/15"
-                      : isComplete
-                        ? "border-primary text-primary group-hover:ring-2 group-hover:ring-primary/10"
-                        : canOpen
-                          ? "border-primary/65 text-primary group-hover:border-primary group-hover:ring-2 group-hover:ring-primary/10"
-                          : "border-border text-muted-foreground/55"
-                  }`}
-                >
-                  {isComplete ? <CheckCircle className="size-4" /> : item.num}
-                </span>
-                <span>{item.label}</span>
-              </button>
-              {index < PIPELINE_STEPS.length - 1 && (
-                <div
-                  className={`mx-3 h-px min-w-4 flex-1 ${
-                    step > item.num ? "bg-primary/45" : "bg-border"
-                  }`}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      </div>
-
-      <div className="ml-auto flex shrink-0 items-center justify-end gap-1" data-testid="pipeline-toolbar-actions">
         <input
           ref={templateInputRef}
           type="file"
@@ -289,6 +227,62 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
           </Button>
         )}
       </div>
-    </div>
+      )}
+    >
+      <div
+        className="absolute left-1/2 hidden w-full max-w-2xl -translate-x-1/2 items-center justify-center min-[1950px]:flex"
+        aria-label="Pipeline progress"
+        data-testid="pipeline-progress"
+      >
+        <div className="flex w-full max-w-2xl min-w-0 items-center">
+          {PIPELINE_STEPS.map((item, index) => {
+            const isComplete = item.num < step;
+            const isActive = item.num === step;
+            const canOpen = canOpenStep(item.num);
+
+            return (
+              <div key={item.num} className="flex min-w-0 flex-1 items-center last:flex-none">
+                <button
+                  type="button"
+                  disabled={!canOpen}
+                  aria-current={isActive ? "step" : undefined}
+                  onClick={() => openStep(item.num)}
+                  className={`group flex h-10 items-center gap-2.5 px-1 text-sm transition-colors disabled:opacity-100 ${
+                    isActive
+                      ? "font-semibold text-primary"
+                      : canOpen
+                        ? "text-muted-foreground hover:text-foreground"
+                        : "cursor-default text-muted-foreground/45"
+                  }`}
+                  data-testid={`pipeline-step-${item.num}`}
+                >
+                  <span
+                    className={`flex size-8 items-center justify-center rounded-full border-2 bg-background text-sm font-semibold transition-[border-color,box-shadow,color] ${
+                      isActive
+                        ? "border-primary text-primary ring-2 ring-primary/15"
+                        : isComplete
+                          ? "border-primary text-primary group-hover:ring-2 group-hover:ring-primary/10"
+                          : canOpen
+                            ? "border-primary/65 text-primary group-hover:border-primary group-hover:ring-2 group-hover:ring-primary/10"
+                            : "border-border text-muted-foreground/55"
+                    }`}
+                  >
+                    {isComplete ? <CheckCircle className="size-4" /> : item.num}
+                  </span>
+                  <span>{item.label}</span>
+                </button>
+                {index < PIPELINE_STEPS.length - 1 && (
+                  <div
+                    className={`mx-3 h-px min-w-4 flex-1 ${
+                      step > item.num ? "bg-primary/45" : "bg-border"
+                    }`}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </EditorHeader>
   );
 }

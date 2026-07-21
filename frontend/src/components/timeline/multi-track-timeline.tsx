@@ -55,11 +55,22 @@ export interface MultiTrackTimelineProps {
   ruler: {
     startTime?: number;
     duration: number;
-    currentTime?: number;
-    playheadStyle?: CSSProperties;
     className?: string;
     style?: CSSProperties;
     onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
+  };
+  /**
+   * The single playback cursor for the whole timeline. The shell renders one
+   * line spanning every lane; the caller only positions it via `style`
+   * (static `left: "42%"` or a CSS-var transform for rAF-driven playback) or
+   * imperatively through `lineRef` (style.left / style.display). Consumers must
+   * not render their own per-lane cursors.
+   */
+  playhead?: {
+    style?: CSSProperties;
+    lineRef?: Ref<HTMLDivElement>;
+    /** Optional grab handle rendered at the top of the line (needs pointer-events: auto). */
+    handle?: ReactNode;
   };
   zoom: number;
   minZoom?: number;
@@ -81,6 +92,7 @@ export function MultiTrackTimeline({
   containerProps,
   laneWidth,
   ruler,
+  playhead,
   zoom,
   minZoom = TIMELINE_MIN_ZOOM,
   maxZoom = TIMELINE_MAX_ZOOM,
@@ -116,7 +128,7 @@ export function MultiTrackTimeline({
       className={cn("isolate overflow-auto bg-[#0d0f0d] text-[10px] text-white", className)}
       {...containerProps}
     >
-      <div className="w-max min-w-full">
+      <div className="relative w-max min-w-full">
         {/* Time ruler and zoom controls for the shared track scale. Sticky so it
             stays pinned when the lane stack scrolls vertically (card mode). */}
         <div className="sticky top-0 z-50 flex bg-[#0d0f0d]">
@@ -135,8 +147,6 @@ export function MultiTrackTimeline({
           <TimelineRuler
             startTime={ruler.startTime}
             duration={ruler.duration}
-            currentTime={ruler.currentTime}
-            playheadStyle={ruler.playheadStyle}
             className={cn("shrink-0", ruler.className)}
             style={{ width: laneWidth, ...ruler.style }}
             onPointerDown={ruler.onPointerDown}
@@ -200,6 +210,26 @@ export function MultiTrackTimeline({
             </div>
           </div>
         ))}
+
+        {/* Single playback cursor spanning every lane. Lives above lane content
+            (z-30) but under the sticky label gutter (z-40) and ruler row (z-50),
+            so it clips cleanly while scrolling. */}
+        {playhead && (
+          <div
+            aria-hidden={playhead.handle ? undefined : true}
+            className="pointer-events-none absolute inset-y-0 z-30"
+            style={{ left: TIMELINE_LABEL_WIDTH, width: laneWidth }}
+          >
+            <div
+              ref={playhead.lineRef}
+              data-timeline-lane-playhead
+              className="absolute inset-y-0 w-px bg-primary"
+              style={playhead.style}
+            >
+              {playhead.handle}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

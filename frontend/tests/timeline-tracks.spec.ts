@@ -214,6 +214,32 @@ const openFullEditor = async (
 const laneLabels = async (editor: ReturnType<Page["getByTestId"]>) =>
   (await editor.locator("span.truncate").allInnerTexts()).map((t) => t.trim());
 
+test("maximized program monitor fits the workspace at a 9:16 aspect ratio", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  const frame = editor.getByTestId("full-preview-frame");
+  await expect(frame).toBeVisible();
+
+  const frameBox = await frame.boundingBox();
+  expect(frameBox).not.toBeNull();
+  expect(frameBox!.width / frameBox!.height).toBeCloseTo(9 / 16, 2);
+  expect(frameBox!.width).toBeLessThan(frameBox!.height);
+});
+
+test("maximized editor stays above the sticky Variant Previews header", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  const header = page.getByTestId("step3-variant-header");
+
+  await expect(header).toBeVisible();
+  expect(await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const topmost = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    const fullEditor = document.querySelector<HTMLElement>('[data-testid="step3-full-editor"]');
+    return Boolean(fullEditor && topmost && (topmost === fullEditor || fullEditor.contains(topmost)));
+  })).toBe(true);
+
+  await expect(editor).toBeVisible();
+});
+
 test("lanes use unified V/A ids and stack V3 above V2 above V1 above A1", async ({ page }) => {
   const { editor } = await openFullEditor(page);
   const labels = await laneLabels(editor);

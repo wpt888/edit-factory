@@ -296,7 +296,7 @@ export default function ProductLibraryPage() {
   };
 
   return (
-    <div className="min-h-full bg-background">
+    <>
       <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
@@ -362,7 +362,7 @@ export default function ProductLibraryPage() {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {products.map((product) => (
-              <Card key={product.id} className="relative overflow-hidden hover:shadow-md transition-shadow" data-testid="product-card">
+              <Card key={product.id} className="relative overflow-hidden transition-colors hover:border-muted-foreground/40" data-testid="product-card">
                 <div className="absolute left-2 top-2 z-10 rounded bg-background/90 p-1 shadow">
                   <Checkbox
                     checked={selectedIds.has(product.id)}
@@ -592,6 +592,6 @@ export default function ProductLibraryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

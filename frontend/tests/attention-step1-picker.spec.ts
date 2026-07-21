@@ -54,7 +54,7 @@ test("step 1 exposes template layout and numbered content slots", async ({ page 
 
   const picker = page.getByTestId("attention-template-picker");
   await expect(picker).toBeVisible();
-  await picker.getByRole("combobox").click();
+  await picker.getByRole("combobox", { name: "Layout template" }).click();
   await page.getByRole("option", { name: "Tornado Stack · System" }).click();
   await expect(page.getByTestId("attention-stagger-seconds")).toBeVisible();
   await expect(page.getByTestId("attention-max-variants")).toBeVisible();

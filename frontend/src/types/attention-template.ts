@@ -13,6 +13,13 @@ export type AttentionTemplateImage = {
   fit: "contain" | "cover";
   startMs: number;
   durationMs: number;
+  /** Optional sound effect scheduled with this visual slot. */
+  sfxAssetId?: string;
+  sfxUrl?: string;
+  sfxLabel?: string;
+  sfxVolumeDb: number;
+  /** 1-based audio lane used by the template editor (A1, A2, ...). */
+  sfxTrack: number;
 };
 
 /** Track-based template: tracks[i] maps to timeline lane V(2+i). */
@@ -25,6 +32,8 @@ export type AttentionTemplatePayload = {
   canvasHeight: number;
   /** Delay added to the template start for every consecutive video variant. */
   variantGapMs: number;
+  /** Empty audio lanes are retained so authored track layout survives reload. */
+  audioTrackCount: number;
   tracks: AttentionTemplateImage[][];
 };
 
@@ -35,6 +44,7 @@ export type LegacyAttentionTemplateConfig = {
   durationMs?: number;
   zone?: "behind" | "front";
   animation?: AttentionAnimationPreset;
+  sfx?: string;
 };
 
 export type AttentionTemplate = Partial<AttentionTemplatePayload> &
@@ -51,6 +61,7 @@ export const DEFAULT_ATTENTION_TEMPLATE: AttentionTemplatePayload = {
   canvasWidth: 1080,
   canvasHeight: 1920,
   variantGapMs: 1000,
+  audioTrackCount: 1,
   tracks: [[]],
 };
 
@@ -66,6 +77,8 @@ export function newTemplateImage(partial?: Partial<AttentionTemplateImage>): Att
     fit: "contain",
     startMs: 0,
     durationMs: 1200,
+    sfxVolumeDb: 0,
+    sfxTrack: 1,
     ...partial,
   };
 }
@@ -91,15 +104,29 @@ export function normalizeAttentionTemplate(
   const canvasHeight = normalizeCanvasDimension(template?.canvasHeight, 1920);
   const variantGapMs = Math.max(0, template?.variantGapMs ?? 1000);
   if (template?.tracks?.length) {
+    const normalizedTracks = template.tracks.map(track => track.map(image => ({
+      ...image,
+      opacity: image.opacity ?? 1,
+      fit: image.fit === "cover" ? "cover" as const : "contain" as const,
+      sfxAssetId: image.sfxAssetId ?? template.sfx,
+      sfxUrl: image.sfxUrl,
+      sfxLabel: image.sfxLabel,
+      sfxVolumeDb: Math.max(-60, Math.min(12, image.sfxVolumeDb ?? 0)),
+      sfxTrack: Math.max(1, Math.min(10, Math.round(image.sfxTrack ?? 1))),
+    })));
+    const highestAssignedAudioTrack = Math.max(
+      1,
+      ...normalizedTracks.flat().map(image => image.sfxTrack),
+    );
     return {
       name: template.name ?? "",
       zone,
       animation, canvasWidth, canvasHeight, variantGapMs,
-      tracks: template.tracks.map(track => track.map(image => ({
-        ...image,
-        opacity: image.opacity ?? 1,
-        fit: image.fit === "cover" ? "cover" : "contain",
-      }))),
+      audioTrackCount: Math.max(
+        highestAssignedAudioTrack,
+        Math.min(10, Math.max(1, Math.round(template.audioTrackCount ?? 1))),
+      ),
+      tracks: normalizedTracks,
     };
   }
   const layers = Math.max(1, Math.min(10, template?.layers ?? 1));
@@ -109,10 +136,19 @@ export function normalizeAttentionTemplate(
   return {
     name: template?.name ?? DEFAULT_ATTENTION_TEMPLATE.name,
     zone,
-    animation, canvasWidth, canvasHeight, variantGapMs,
+    animation, canvasWidth, canvasHeight, variantGapMs, audioTrackCount: 1,
     tracks: template
       ? positions.map((position, index) =>
-          [newTemplateImage({ id: `legacy-${index}`, x: position.x, y: position.y, width: size, height: size, startMs: 0, durationMs })])
+          [newTemplateImage({
+            id: `legacy-${index}`,
+            x: position.x,
+            y: position.y,
+            width: size,
+            height: size,
+            startMs: 0,
+            durationMs,
+            sfxAssetId: template.sfx,
+          })])
       : [[]],
   };
 }

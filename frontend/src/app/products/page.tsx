@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiGetWithRetry, apiPost, handleApiError } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
@@ -455,7 +456,7 @@ export default function ProductsPage() {
   const showProducts = activeTab === "catalog" || (activeTab === "feed" && selectedFeedId);
 
   return (
-    <div className="min-h-full bg-background">
+    <>
       <PageShell className="space-y-6">
         {/* Header */}
         <PageHeader
@@ -465,36 +466,29 @@ export default function ProductsPage() {
         />
 
         {/* Tab switcher */}
-        <div className="flex gap-1 mb-4 p-1 bg-muted rounded-lg w-fit">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as "catalog" | "feed")}
+          className="w-fit"
+        >
+          <TabsList>
           {CATALOG_ENABLED && (
-            <button
-              onClick={() => setActiveTab("catalog")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                activeTab === "catalog"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <TabsTrigger value="catalog" className="px-4">
               <BookOpen className="size-4" />
               Catalog
-            </button>
+            </TabsTrigger>
           )}
-          <button
-            onClick={() => setActiveTab("feed")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === "feed"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
+          <TabsTrigger value="feed" className="px-4">
             <Tag className="size-4" />
             Feed
-          </button>
-        </div>
+          </TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {/* Feed selector bar — only visible on Feed tab */}
         {activeTab === "feed" && (
-          <div className="flex flex-wrap items-center gap-3 mb-4 p-4 bg-card border rounded-lg">
+          <Card>
+            <CardContent className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 flex-1 min-w-[200px]">
               <Tag className="size-4 text-muted-foreground shrink-0" />
               <Select
@@ -569,11 +563,13 @@ export default function ProductsPage() {
                 Add Your First Feed
               </Button>
             )}
-          </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Filter bar */}
-        <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-card border rounded-lg">
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-3">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -626,7 +622,8 @@ export default function ProductsPage() {
               ))}
             </SelectContent>
           </Select>
-        </div>
+          </CardContent>
+        </Card>
 
         {/* Product card grid */}
         {!showProducts ? (
@@ -651,7 +648,7 @@ export default function ProductsPage() {
         ) : (
           <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 ${selectedProductIds.size > 0 ? "pb-24" : ""}`}>
             {products.map((product) => (
-              <Card key={product.id} className={`overflow-hidden hover:shadow-md transition-shadow ${selectedProductIds.has(product.id) ? "ring-2 ring-primary" : ""}`}>
+              <Card key={product.id} className={`overflow-hidden transition-colors hover:border-muted-foreground/40 ${selectedProductIds.has(product.id) ? "border-primary ring-1 ring-primary/35" : ""}`}>
                 <div className="relative">
                   {/* Multi-select checkbox */}
                   <div
@@ -794,7 +791,7 @@ export default function ProductsPage() {
 
       {/* Sticky action bar — visible when products are selected */}
       {selectedProductIds.size > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-card border-t shadow-lg z-50 p-4">
+        <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-surface-panel p-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="font-medium">{selectedProductIds.size} selected</span>
@@ -805,7 +802,7 @@ export default function ProductsPage() {
                 Clear
               </Button>
             </div>
-            <Button onClick={() => setBatchDialogOpen(true)} disabled={batchLoading}>
+            <Button variant="cta" onClick={() => setBatchDialogOpen(true)} disabled={batchLoading}>
               {batchLoading ? (
                 <Loader2 className="size-4 mr-2 animate-spin" />
               ) : (
@@ -816,6 +813,6 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

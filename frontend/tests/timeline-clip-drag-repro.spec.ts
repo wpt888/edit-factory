@@ -216,10 +216,20 @@ test("dragging a video clip onto another reorders the composition", async ({ pag
   await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
   await page.mouse.down();
   await page.mouse.move(a.x + a.width / 2 + 15, a.y + a.height / 2, { steps: 3 });
+  const dragPreview = editor.getByTestId("composition-drag-preview");
+  await expect(dragPreview).toBeVisible();
+  await expect(dragPreview).toHaveAttribute("data-drag-target-track", "1");
+  const previewLeftBefore = await dragPreview.evaluate((element) => (element as HTMLElement).style.left);
   await page.mouse.move(c.x + c.width * 0.75, c.y + c.height / 2, { steps: 15 });
 
-  // Premiere-style insertion indicator is visible mid-drag.
+  // Premiere-style insertion indicator and the translucent clip both update
+  // while the pointer is still held down.
   await expect(editor.getByTestId("composition-drop-indicator")).toBeVisible();
+  await expect.poll(() => dragPreview.evaluate((element) => (element as HTMLElement).style.left)).not.toBe(previewLeftBefore);
+  await expect(editor.getByLabel("Multi-track timeline")).toHaveScreenshot(
+    "timeline-video-clip-drag-preview.png",
+    { animations: "disabled" },
+  );
   await page.screenshot({ path: "screenshots/clip-drag-indicator.png" });
   await page.mouse.up();
 

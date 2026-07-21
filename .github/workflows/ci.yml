@@ -62,8 +62,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check design-system contract
+        run: npm run design:check
+
       - name: Lint with ESLint
         run: npm run lint
 
       - name: Type-check with TypeScript
         run: npm run typecheck
+
+  frontend-design:
+    name: Next.js (rendered design contracts)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for design contracts
+        run: npx playwright install --with-deps chromium
+
+      - name: Run rendered design contracts
+        env:
+          NEXT_PUBLIC_AUTH_DISABLED: "true"
+        run: npm run test:design

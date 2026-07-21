@@ -8,9 +8,10 @@ import {
   FileAudio,
   FileImage,
   FileVideo,
+  Images,
   RefreshCw,
 } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, invalidateApiMemoryCache } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page-shell";
+import { PageHeader } from "@/components/page-header";
 
 type MediaItem = {
   id: string;
@@ -66,9 +68,7 @@ export default function MediaLibraryPage() {
     if (origin !== "all") params.set("origin", origin);
     if (kind !== "all") params.set("kind", kind);
     try {
-      const response = await apiGet(`/platform/media?${params}`, {
-        cache: "no-store",
-      });
+      const response = await apiGet(`/platform/media?${params}`);
       const data = (await response.json()) as {
         connected: boolean;
         media: MediaItem[];
@@ -92,30 +92,31 @@ export default function MediaLibraryPage() {
 
   return (
     <PageShell className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-heading text-3xl font-bold tracking-tight">
+      <PageHeader
+        icon={<Images className="size-7 text-primary" />}
+        title={
+          <span className="flex flex-wrap items-center gap-2">
               Media Library
-            </h1>
             <Badge variant="outline" className="gap-1">
               <Cloud className="size-3" /> Shared cloud
             </Badge>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            The same assets created on web or desktop, grouped by how they were
-            produced.
-          </p>
-        </div>
+          </span>
+        }
+        description="The same assets created on web or desktop, grouped by how they were produced."
+        actions={
         <Button
           variant="outline"
-          onClick={() => void load()}
+          onClick={() => {
+            invalidateApiMemoryCache();
+            void load();
+          }}
           disabled={loading}
         >
           <RefreshCw className={cn("size-4", loading && "animate-spin")} />{" "}
           Refresh
         </Button>
-      </div>
+        }
+      />
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {error}
@@ -138,7 +139,8 @@ export default function MediaLibraryPage() {
       )}
       {connected && (
         <>
-          <div className="space-y-3 rounded-lg border bg-card p-4">
+          <Card>
+            <CardContent className="space-y-3">
             <FilterRow
               label="Source"
               values={ORIGINS}
@@ -151,7 +153,8 @@ export default function MediaLibraryPage() {
               value={kind}
               onChange={setKind}
             />
-          </div>
+            </CardContent>
+          </Card>
           {items.length === 0 && !loading ? (
             <Card>
               <CardContent className="py-12 text-center text-sm text-muted-foreground">

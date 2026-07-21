@@ -42,6 +42,8 @@ type WorkspaceSplitProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
   splitId: string;
   /** When false (e.g. guided cascade layout), render the plain fallback container. */
   enabled?: boolean;
+  /** Allow dragging panel headers to exchange their positions. */
+  reorderable?: boolean;
   /** Container classes used below the desktop breakpoint or when disabled. */
   fallbackClassName?: string;
   groupClassName?: string;
@@ -59,6 +61,7 @@ type WorkspaceSplitProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
 export function WorkspaceSplit({
   splitId,
   enabled = true,
+  reorderable = true,
   fallbackClassName,
   groupClassName,
   leftSizing,
@@ -183,6 +186,7 @@ export function WorkspaceSplit({
     side: SplitPanelSide,
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
+    if (!reorderable) return;
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest(INTERACTIVE_HEADER_SELECTOR)) return;
@@ -276,7 +280,12 @@ export function WorkspaceSplit({
       {...rest}
     >
       {panels[0]}
-      <Separator className="relative z-30 w-px shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2" />
+      <Separator
+        aria-label={`Resize ${splitId} panels`}
+        data-workspace-split-resize-handle={splitId}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="relative z-30 w-px shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+      />
       {panels[1]}
     </ResizablePanelGroup>
   );

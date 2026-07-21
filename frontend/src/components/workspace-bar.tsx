@@ -161,7 +161,7 @@ export function WorkspaceBar({ titlebar = false }: WorkspaceBarProps) {
                 className={cn(
                   "group relative flex min-w-32 max-w-56 shrink-0 cursor-grab items-center gap-2 border-r border-sidebar-border px-3 text-sm transition-colors active:cursor-grabbing",
                   active
-                    ? "z-10 bg-background text-foreground ring-1 ring-inset ring-lime"
+                    ? "z-10 bg-background text-foreground after:absolute after:inset-x-0 after:top-0 after:h-px after:bg-lime"
                     : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground",
                   isDragged && "opacity-40",
                 )}

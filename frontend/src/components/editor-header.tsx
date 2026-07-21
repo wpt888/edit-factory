@@ -15,6 +15,8 @@ export interface EditorHeaderProps {
   actions?: ReactNode;
   /** Extra classes on the <header> (e.g. "relative z-50" for anchored popovers). */
   className?: string;
+  /** Stable selector for browser tests. */
+  testId?: string;
   /** Overlays anchored inside the header (popovers, menus). */
   children?: ReactNode;
 }
@@ -25,9 +27,12 @@ export interface EditorHeaderProps {
  * breadcrumb + subtitle on the left and actions on the right. Document-style
  * pages keep using PageHeader instead.
  */
-export function EditorHeader({ icon, title, breadcrumb, subtitle, actions, className, children }: EditorHeaderProps) {
+export function EditorHeader({ icon, title, breadcrumb, subtitle, actions, className, testId, children }: EditorHeaderProps) {
   return (
-    <header className={`flex h-14 shrink-0 items-center justify-between border-b border-border px-4 ${className ?? ""}`}>
+    <header
+      className={`flex h-14 shrink-0 items-center justify-between border-b border-border px-4 ${className ?? ""}`}
+      data-testid={testId}
+    >
       <div className="flex min-w-0 items-center gap-3">
         {icon}
         <div className="min-w-0">

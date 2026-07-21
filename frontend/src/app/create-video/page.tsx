@@ -6,7 +6,7 @@ import { Clapperboard, FileVideo, Loader2, Sparkles, Video } from "lucide-react"
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/page-header";
+import { GeneratorShell } from "@/components/generator-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -81,18 +81,12 @@ export default function CreateVideoPage() {
   const failed = status?.status === "failed";
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 sm:px-6 lg:px-8 py-8">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-primary"><Sparkles className="size-5" /> Seedance 2.0</div>
-          <PageHeader
-            title="AI Video Generator"
-            description="Create a local, editable video asset from a prompt."
-          />
-        </div>
-        <Clapperboard className="size-10 text-primary/70" />
-      </div>
-
+    <GeneratorShell
+      icon={<Clapperboard className="size-6 text-primary" />}
+      eyebrow={<><Sparkles className="size-4" /> Seedance 2.0</>}
+      title="AI Video Generator"
+      description="Create a local, editable video asset from a prompt."
+    >
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <Card>
           <CardHeader><CardTitle>Describe your video</CardTitle><CardDescription>Seedance can generate motion and synchronized audio directly.</CardDescription></CardHeader>
@@ -100,12 +94,12 @@ export default function CreateVideoPage() {
             <div className="space-y-2"><Label htmlFor="name">Asset name (optional)</Label><Input id="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Summer campaign opener" /></div>
             <div className="space-y-2"><Label htmlFor="prompt">Prompt</Label><Textarea id="prompt" rows={7} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="A cinematic vertical product reveal..." /></div>
             <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2"><Label>Duration</Label><Select value={duration} onValueChange={setDuration} disabled={!DESKTOP_MODE}><SelectTrigger><SelectValue placeholder={`${duration} seconds`} /></SelectTrigger><SelectContent>{DURATION_OPTIONS.map((value) => <SelectItem key={value} value={value}>{value} seconds</SelectItem>)}</SelectContent></Select>{!DESKTOP_MODE && <p className="text-xs text-muted-foreground">Web generations use the fixed 5-second credit rate.</p>}</div>
-              <div className="space-y-2"><Label>Format</Label><Select value={aspectRatio} onValueChange={setAspectRatio}><SelectTrigger><SelectValue placeholder={aspectRatio === "9:16" ? "Vertical 9:16" : aspectRatio === "16:9" ? "Landscape 16:9" : "Square 1:1"} /></SelectTrigger><SelectContent><SelectItem value="9:16">Vertical 9:16</SelectItem><SelectItem value="16:9">Landscape 16:9</SelectItem><SelectItem value="1:1">Square 1:1</SelectItem></SelectContent></Select></div>
-              <div className="space-y-2"><Label>Resolution</Label><Select value={resolution} onValueChange={setResolution}><SelectTrigger><SelectValue placeholder={resolution} /></SelectTrigger><SelectContent><SelectItem value="480p">480p</SelectItem><SelectItem value="720p">720p</SelectItem><SelectItem value="1080p">1080p</SelectItem></SelectContent></Select></div>
+              <div className="space-y-2"><Label>Duration</Label><Select value={duration} onValueChange={setDuration} disabled={!DESKTOP_MODE}><SelectTrigger className="w-full"><SelectValue placeholder={`${duration} seconds`} /></SelectTrigger><SelectContent>{DURATION_OPTIONS.map((value) => <SelectItem key={value} value={value}>{value} seconds</SelectItem>)}</SelectContent></Select>{!DESKTOP_MODE && <p className="text-xs text-muted-foreground">Web generations use the fixed 5-second credit rate.</p>}</div>
+              <div className="space-y-2"><Label>Format</Label><Select value={aspectRatio} onValueChange={setAspectRatio}><SelectTrigger className="w-full"><SelectValue placeholder={aspectRatio === "9:16" ? "Vertical 9:16" : aspectRatio === "16:9" ? "Landscape 16:9" : "Square 1:1"} /></SelectTrigger><SelectContent><SelectItem value="9:16">Vertical 9:16</SelectItem><SelectItem value="16:9">Landscape 16:9</SelectItem><SelectItem value="1:1">Square 1:1</SelectItem></SelectContent></Select></div>
+              <div className="space-y-2"><Label>Resolution</Label><Select value={resolution} onValueChange={setResolution}><SelectTrigger className="w-full"><SelectValue placeholder={resolution} /></SelectTrigger><SelectContent><SelectItem value="480p">480p</SelectItem><SelectItem value="720p">720p</SelectItem><SelectItem value="1080p">1080p</SelectItem></SelectContent></Select></div>
             </div>
             <div className="flex items-center justify-between rounded-lg border p-4"><div><Label htmlFor="audio">Generate native audio</Label><p className="text-sm text-muted-foreground">Keep this on for generated ambience, effects, or speech.</p></div><Switch id="audio" checked={generateAudio} onCheckedChange={setGenerateAudio} /></div>
-            <Button className="w-full" size="lg" onClick={generate} disabled={generating}>{generating ? <><Loader2 className="mr-2 size-4 animate-spin" />Generating video…</> : <><Video className="mr-2 size-4" />Generate with Seedance 2.0</>}</Button>
+            <Button variant="cta" className="w-full" size="lg" onClick={generate} disabled={generating}>{generating ? <><Loader2 className="mr-2 size-4 animate-spin" />Generating video…</> : <><Video className="mr-2 size-4" />Generate with Seedance 2.0</>}</Button>
           </CardContent>
         </Card>
 
@@ -117,6 +111,6 @@ export default function CreateVideoPage() {
           {done && <div className="space-y-2"><Button asChild className="w-full"><Link href="/librarie"><FileVideo className="mr-2 size-4" />Open Library</Link></Button><Button asChild className="w-full" variant="outline"><Link href="/segments">Open Source Videos</Link></Button></div>}
         </CardContent></Card>
       </div>
-    </div>
+    </GeneratorShell>
   );
 }

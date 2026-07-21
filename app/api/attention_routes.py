@@ -1,4 +1,5 @@
 """Profile-scoped Attention Hook templates."""
+import logging
 import uuid
 from typing import Any, Dict, Literal, Optional
 
@@ -10,6 +11,7 @@ from app.repositories.factory import get_repository
 from app.services.attention_templates import SYSTEM_TEMPLATES
 
 router = APIRouter(prefix="/attention-templates", tags=["Attention Hooks"])
+logger = logging.getLogger(__name__)
 
 
 class AttentionTemplateImage(BaseModel):
@@ -22,6 +24,11 @@ class AttentionTemplateImage(BaseModel):
     fit: Literal["contain", "cover"] = "contain"
     startMs: int = Field(default=0, ge=0, le=600000)
     durationMs: int = Field(default=1200, ge=100, le=600000)
+    sfxAssetId: Optional[str] = Field(default=None, max_length=500)
+    sfxUrl: Optional[str] = Field(default=None, max_length=4096)
+    sfxLabel: Optional[str] = Field(default=None, max_length=120)
+    sfxVolumeDb: float = Field(default=0.0, ge=-60.0, le=12.0)
+    sfxTrack: int = Field(default=1, ge=1, le=10)
 
 
 class AttentionTemplateBody(BaseModel):
@@ -33,6 +40,7 @@ class AttentionTemplateBody(BaseModel):
     animation: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "pop"
     variantGapMs: int = Field(default=1000, ge=0, le=30000)
     sfx: Optional[str] = Field(default=None, max_length=500)
+    audioTrackCount: int = Field(default=1, ge=1, le=10)
     tracks: list[list[AttentionTemplateImage]] = Field(default_factory=lambda: [[]], max_length=10)
 
 
@@ -47,7 +55,19 @@ def _owned(repo, template_id: str, profile_id: str) -> Dict[str, Any]:
 
 @router.get("")
 async def list_attention_templates(profile: ProfileContext = Depends(get_profile_context)):
-    personal = get_repository().list_attention_templates(profile.profile_id)
+    try:
+        personal = get_repository().list_attention_templates(profile.profile_id)
+    except Exception:
+        # Personal templates are an optional extension of the built-in library.
+        # A deployment that has not applied the attention-template migration (or
+        # a temporarily unavailable datastore) must not make the whole editor
+        # unusable: the deterministic system templates need no persistence.
+        logger.exception(
+            "Could not load personal attention templates for profile %s; "
+            "serving system templates only",
+            profile.profile_id,
+        )
+        personal = []
     return {"templates": [*SYSTEM_TEMPLATES, *[{**row.get("config", {}), "id": row["id"], "name": row["name"], "is_system": False} for row in personal]]}
 
 

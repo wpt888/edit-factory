@@ -40,17 +40,24 @@ export interface VideoLaneProps {
   previewActiveIndex: number;
   compositionDragId: string | null;
   compositionDropTarget: { index: number; time: number } | null;
+  dragPreview: VideoClipDragPreviewState | null;
   transitionBoundaries: EffectiveBoundaryTransition[];
   transitionDragTarget: number | null;
   suppressTransitionClickRef: React.MutableRefObject<boolean>;
   onSelectClip: (clipId: string) => void;
   onJumpToIndex: (idx: number) => void;
-  onClipDragStart: (clipId: string) => void;
-  onClipDragEnd: () => void;
+  onClipPointerDown: (event: React.PointerEvent<HTMLDivElement>, clip: CompositionClip) => void;
+  suppressClipClickRef: React.MutableRefObject<boolean>;
   onRollPointerDown: (event: React.PointerEvent<HTMLSpanElement>, idx: number) => void;
   onEndResizePointerDown: (event: React.PointerEvent<HTMLSpanElement>) => void;
   onBoundaryChange: (clipId: string, next: TransitionSpec | null | undefined) => void;
   onBoundaryDragStart: (event: React.PointerEvent, originIdx: number, spec: TransitionSpec) => void;
+}
+
+export interface VideoClipDragPreviewState {
+  clip: CompositionClip;
+  targetTrack: number;
+  timelineStart: number;
 }
 
 export function VideoLane({
@@ -63,13 +70,14 @@ export function VideoLane({
   previewActiveIndex,
   compositionDragId,
   compositionDropTarget,
+  dragPreview,
   transitionBoundaries,
   transitionDragTarget,
   suppressTransitionClickRef,
   onSelectClip,
   onJumpToIndex,
-  onClipDragStart,
-  onClipDragEnd,
+  onClipPointerDown,
+  suppressClipClickRef,
   onRollPointerDown,
   onEndResizePointerDown,
   onBoundaryChange,
@@ -86,29 +94,25 @@ export function VideoLane({
           <TimelineClipShell
             key={clip.id}
             testId={`composition-clip-${clip.id}`}
-            draggable
             className={`${clip.kind === "intro"
               ? "border-violet-300/75 bg-violet-400/15"
               : "border-lime-300/60 bg-lime-300/10"} overflow-visible ${isSelected || isHighlighted
               ? "z-10 ring-2 ring-white/80"
-              : ""} ${compositionDragId === clip.id ? "opacity-45" : "cursor-grab active:cursor-grabbing"}`}
+              : ""} ${compositionDragId === clip.id ? "opacity-30" : "cursor-grab active:cursor-grabbing"}`}
             style={{ left: pct(clip.timeline_start), width: widthPct(clip.timeline_duration) }}
-            title={`${blockLabel} · output ${formatTime(clip.timeline_start)}–${formatTime(clip.timeline_start + clip.timeline_duration)} · source ${clip.start_time.toFixed(2)}–${clip.end_time.toFixed(2)}`}
+            title={`${blockLabel} · output ${formatTime(clip.timeline_start)}–${formatTime(clip.timeline_start + clip.timeline_duration)} · source ${clip.start_time.toFixed(2)}–${clip.end_time.toFixed(2)} · drag horizontally or to another video track`}
             onClick={() => {
+              if (suppressClipClickRef.current) {
+                suppressClipClickRef.current = false;
+                return;
+              }
               if (isPreviewActive) {
                 onJumpToIndex(idx);
               } else {
                 onSelectClip(clip.id);
               }
             }}
-            onDragStart={(event) => {
-              onClipDragStart(clip.id);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", clip.id);
-            }}
-            onDragEnd={() => {
-              onClipDragEnd();
-            }}
+            onPointerDown={(event) => onClipPointerDown(event, clip)}
           >
             <div className="absolute inset-0 flex items-center justify-center bg-black/20 text-white/25">
               <Film className="size-4" />
@@ -193,7 +197,63 @@ export function VideoLane({
           style={{ left: pct(compositionDropTarget.time) }}
         />
       )}
+      {dragPreview?.targetTrack === 1 && (
+        <VideoClipDragPreview
+          preview={dragPreview}
+          mediaApiUrl={mediaApiUrl}
+          left={pct(dragPreview.timelineStart)}
+          width={widthPct(dragPreview.clip.timeline_duration)}
+        />
+      )}
     </>
+  );
+}
+
+export function VideoClipDragPreview({
+  preview,
+  mediaApiUrl,
+  left,
+  width,
+}: {
+  preview: VideoClipDragPreviewState;
+  mediaApiUrl: string;
+  left: string;
+  width: string;
+}) {
+  const { clip, targetTrack } = preview;
+  const label = clip.segment_keywords?.slice(0, 2).join(", ")
+    || (clip.kind === "intro" ? "Intro" : "Video clip");
+
+  return (
+    <div
+      data-testid="composition-drag-preview"
+      data-drag-target-track={targetTrack}
+      className="pointer-events-none absolute inset-y-1 z-[60] min-w-3 overflow-hidden rounded-sm border-2 border-primary bg-primary/55 text-primary-foreground ring-1 ring-primary/60"
+      style={{ left, width }}
+      aria-hidden="true"
+    >
+      <span className="absolute inset-0 flex items-center justify-center text-primary-foreground/30">
+        <Film className="size-4" />
+      </span>
+      {clip.thumbnail_path && (
+        <img
+          src={segmentFileUrl(mediaApiUrl, clip.thumbnail_path)}
+          alt=""
+          draggable={false}
+          className="absolute inset-0 h-full w-full object-cover opacity-45"
+        />
+      )}
+      <span className="absolute left-1 top-1 z-10 flex items-center gap-1 text-[8px] font-semibold uppercase tracking-wide text-primary-foreground">
+        <GripVertical className="size-3" />
+        Move to V{targetTrack}
+      </span>
+      <span className="absolute inset-x-1 bottom-0.5 z-10 flex items-end justify-between gap-1 text-[9px] font-medium text-white">
+        <span className="truncate drop-shadow">{label}</span>
+        <span className="shrink-0 font-mono text-[8px] text-white/75">
+          {clip.timeline_duration.toFixed(2)}s
+        </span>
+      </span>
+    </div>
   );
 }
 

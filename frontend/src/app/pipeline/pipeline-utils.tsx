@@ -108,13 +108,6 @@ export const DebouncedTextarea = memo(function DebouncedTextarea({
 
 // ── Pure helpers (hoisted so ScriptCard + PipelinePage can share them) ──
 
-// Workspace mode strips a Card's border/radius/shadow so it sits flush in
-// the step's toolbar-height flow. Left unset, the Card keeps its `bg-card`
-// default, which is lighter than the page's `bg-background` and shows as a
-// seam under the toolbar. Append this alongside each site's own
-// gap/padding overrides rather than duplicating the whole class list.
-export const WORKSPACE_CARD_BG = "min-[1280px]:bg-background";
-
 export const formatDuration = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);

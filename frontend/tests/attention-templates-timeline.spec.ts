@@ -8,6 +8,8 @@ const PROFILE = {
 };
 
 test("attention templates uses the shared timeline chrome and clip shell", async ({ page, context }) => {
+  let savedPayload: Record<string, unknown> | undefined;
+  let personalTemplates: Array<Record<string, unknown>> = [];
   const now = Math.floor(Date.now() / 1000);
   const user = { id: "11111111-1111-4111-8111-111111111111", aud: "authenticated", role: "authenticated", email: "timeline@blipost.com" };
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -34,9 +36,17 @@ test("attention templates uses the shared timeline chrome and clip shell", async
     localStorage.setItem("sb-supabase-auth-token", JSON.stringify(authSession));
   }, { profile: PROFILE, authSession: session });
   await page.route("**/api/v1/attention-templates", async route => {
-    await route.fulfill({ json: { templates: [] } });
+    if (route.request().method() === "POST") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+      const saved = { ...savedPayload, id: "saved-template", is_system: false };
+      personalTemplates = [saved];
+      await route.fulfill({ status: 201, json: saved });
+      return;
+    }
+    await route.fulfill({ json: { templates: personalTemplates } });
   });
 
+  await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/attention-templates");
 
   const timeline = page.getByTestId("attention-timeline-scroll");
@@ -46,12 +56,83 @@ test("attention templates uses the shared timeline chrome and clip shell", async
   await expect(timeline.getByLabel("Zoom timeline in")).toBeVisible();
 
   const timelineBox = await timeline.boundingBox();
-  const rulerBox = await timeline.locator("[data-timeline-axis]").first().boundingBox();
+  const rulerBox = await timeline.locator("[data-timeline-axis]:visible").first().boundingBox();
   expect(timelineBox).not.toBeNull();
   expect(rulerBox).not.toBeNull();
   expect(Math.round(rulerBox!.x - timelineBox!.x)).toBe(136);
 
-  await timeline.getByLabel("Add image slot to V2").click();
-  await expect(timeline.locator('[data-testid^="attention-slot-"]')).toHaveCount(1);
-  await expect(timeline.locator("[data-timeline-block]")).toContainText("Slot 1");
+  const labels = await timeline.locator("span.truncate").allInnerTexts();
+  expect(labels.indexOf("V2")).toBeLessThan(labels.indexOf("V1"));
+  expect(labels.indexOf("V1")).toBeLessThan(labels.indexOf("A1"));
+  await expect(page.getByRole("button", { name: "Add track" })).toHaveCount(0);
+
+  await timeline.getByLabel("Add media to V2").click();
+  const imageSlot = timeline.locator('[data-testid^="attention-slot-"]');
+  const audioSlot = timeline.locator('[data-testid^="attention-audio-slot-"]');
+  await expect(imageSlot).toHaveCount(1);
+  await expect(imageSlot).toBeVisible();
+  await expect(imageSlot).toContainText("Slot 1");
+  await expect(audioSlot).toHaveCount(1);
+  await expect(audioSlot).toBeVisible();
+  await expect(audioSlot).toContainText("Choose SFX · Slot 1");
+  expect((await imageSlot.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(30);
+
+  await timeline.getByRole("button", { name: "Open V2 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Add video track" }).click();
+  await expect(timeline.locator("span.truncate", { hasText: /^V3$/ })).toBeVisible();
+
+  await timeline.getByRole("button", { name: "Open A1 track settings" }).click();
+  await page.getByRole("menuitem", { name: "Add audio track" }).click();
+  await expect(timeline.locator("span.truncate", { hasText: /^A2$/ })).toBeVisible();
+
+  await expect(page.getByTestId("attention-track-list")).toHaveScreenshot("attention-template-va-timeline.png", {
+    animations: "disabled",
+  });
+
+  await audioSlot.click();
+  await expect(page.getByRole("dialog", { name: "Choose sound effect" })).toBeVisible();
+  await page.getByRole("tab", { name: "URL" }).click();
+  await page.getByLabel("Sound effect URL").fill("https://example.com/whoosh.mp3");
+  await page.getByRole("button", { name: "Use sound effect URL" }).click();
+  await expect(audioSlot).toContainText("Sound effect");
+
+  await page.getByRole("button", { name: "Save template" }).click();
+  await expect.poll(() => savedPayload).toBeTruthy();
+  const savedTracks = savedPayload?.tracks as Array<Array<Record<string, unknown>>>;
+  expect(savedPayload?.audioTrackCount).toBe(2);
+  expect(savedTracks[0][0]).toMatchObject({
+    sfxUrl: "https://example.com/whoosh.mp3",
+    sfxTrack: 1,
+  });
+});
+
+test("attention templates retries a transient fetch failure", async ({ page }) => {
+  let requestCount = 0;
+  await page.route("**/api/v1/attention-templates", async route => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      await route.abort("connectionrefused");
+      return;
+    }
+    await route.fulfill({
+      json: {
+        templates: [{
+          id: "system-quick-pulse",
+          name: "Quick Pulse",
+          is_system: true,
+          strategy: "count",
+          count: 3,
+          durationMs: 1200,
+          animation: "pop",
+        }],
+      },
+    });
+  });
+
+  await page.goto("/attention-templates");
+  await page.getByRole("button", { name: "Template Library" }).click();
+
+  await expect(page.getByText("Quick Pulse")).toBeVisible();
+  expect(requestCount).toBe(2);
+  await expect(page.getByText("Failed to fetch")).toHaveCount(0);
 });

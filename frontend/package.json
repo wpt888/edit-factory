@@ -4,12 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:test": "next dev --webpack",
     "build": "next build && node scripts/postbuild.js",
     "start": "next start",
     "lint": "eslint",
+    "design:check": "node scripts/check-design-system.mjs",
     "typecheck": "tsc --noEmit",
     "studio-auth:check": "node --experimental-strip-types scripts/verify-studio-auth.mts",
     "test": "npx playwright test",
+    "test:design": "npx playwright test tests/design-system-contract.spec.ts --reporter=list",
     "test:ui": "npx playwright test --ui",
     "test:headed": "npx playwright test --headed"
   },

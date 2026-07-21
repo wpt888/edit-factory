@@ -98,6 +98,12 @@ Frontend (Next.js, port 3000)
 - `frontend/src/lib/api.ts` - API client wrapper
 - `CAPTIONS_AENEAS/` - Standalone Tkinter caption module with Whisper engine
 
+### Frontend editor header convention
+
+Full-bleed editor screens use `frontend/src/components/editor-header.tsx` as their standard top chrome. Follow the Attention Templates header pattern: a primary-colored 16 px icon; a 14 px semibold product/section title; a muted `/` separator and 12 px current-item breadcrumb on the same line; and an optional muted 10 px supporting label or count beneath it. Keep the header 56 px tall with the standard bottom border and horizontal padding. Put page actions on the right. Do not recreate this layout ad hoc or hide the breadcrumb/count at ordinary desktop widths; reuse `EditorHeader` so Pipeline, Attention Templates, Subtitle Templates, and future full-bleed editors stay visually consistent. Document-style pages continue to use `PageHeader`.
+
+Before any frontend UI change, read `frontend/DESIGN_SYSTEM.md` and `frontend/AGENTS.md`. They are the canonical visual contract; do not infer new surface, spacing, radius, or composition rules from a legacy page.
+
 ### API Routes
 
 All routes mounted under `/api/v1` prefix. Core routers:

@@ -47,11 +47,12 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError, invalidateApiMemoryCache } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PageShell } from "@/components/page-shell";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { ImageBulkPublishDialog } from "@/components/dialogs/image-bulk-publish-dialog";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
@@ -1262,9 +1263,8 @@ function LibrarieContent() {
   // Handle no profile selected
   if (!profileLoading && !currentProfile) {
     return (
-      <div className="min-h-full bg-background">
-        <main className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+      <PageShell width="wide">
+          <div className="flex flex-col items-center justify-center px-4 py-16 text-center">
             <User className="size-16 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Profile Selected</h3>
             <p className="text-muted-foreground mb-4 max-w-md">
@@ -1274,14 +1274,15 @@ function LibrarieContent() {
               Look for the profile dropdown in the top navigation bar
             </p>
           </div>
-        </main>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="min-h-full bg-background">
-      <main className={`w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
+      <PageShell
+        width="wide"
+        className={(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : undefined}
+      >
         {/* Header */}
         <PageHeader
           title="Local Exports"
@@ -1306,7 +1307,7 @@ function LibrarieContent() {
                     <Trash2 className="size-4 mr-1" />
                     Trash
                   </Button>
-                  <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
+                  <Button onClick={() => { invalidateApiMemoryCache(); if (viewMode === "library") fetchAllClips(); else fetchTrash(); }} variant="outline" size="sm">
                     <RefreshCw className="size-4 mr-2" />
                     Refresh
                   </Button>
@@ -2815,8 +2816,7 @@ function LibrarieContent() {
             setSelectedClipIds(new Set());
           }}
         />
-      </main>
-    </div>
+      </PageShell>
   );
 }
 

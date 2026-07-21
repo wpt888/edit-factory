@@ -248,12 +248,11 @@ function BatchGenerateContent() {
   const someFailedAndDone = isDone && failedCount > 0;
 
   return (
-    <div className="min-h-full bg-background">
       <PageShell>
         {/* Header */}
-        <div className="mb-8">
+        <div className="space-y-4">
           <Link href="/product-library">
-            <Button variant="ghost" size="sm" className="mb-4 -ml-2">
+            <Button variant="ghost" size="sm" className="-ml-2">
               <ArrowLeft className="size-4 mr-2" />
               Back to Library
             </Button>
@@ -267,7 +266,8 @@ function BatchGenerateContent() {
 
         {/* Overall progress bar */}
         {batchStatus && (
-          <div className="mb-8 p-6 bg-card border rounded-lg space-y-3">
+          <Card className="gap-3">
+            <CardContent className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <p className="font-semibold">
@@ -331,7 +331,8 @@ function BatchGenerateContent() {
                 )}
               </div>
             )}
-          </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Loading state — no status yet */}
@@ -353,7 +354,6 @@ function BatchGenerateContent() {
           </div>
         )}
       </PageShell>
-    </div>
   );
 }
 

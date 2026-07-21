@@ -6,7 +6,6 @@ import {
   CardContent,
   CardFooter,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +41,8 @@ import {
   Search,
   Info,
   PencilLine,
+  FileText,
+  Settings2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -50,7 +51,6 @@ import {
   countWords,
   WORDS_PER_SECOND,
   analyzeGroupTags,
-  WORKSPACE_CARD_BG,
 } from "../pipeline-utils";
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
 import type { Dispatch, SetStateAction } from "react";
@@ -58,6 +58,7 @@ import { useRef, useState } from "react";
 import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
 import { WorkspaceSplit } from "./workspace-split";
+import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // Mirrors the inline ttsResults state shape in PipelinePage (page.tsx).
 type TtsResult = {
@@ -338,7 +339,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             >
               <aside
                 className={workspaceLayout
-                  ? "flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-px min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:bg-border"
+                  ? "flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:divide-y min-[1280px]:divide-border min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
                   : "flex min-w-0 flex-col gap-4"
                 }
                 data-testid="step2-inspector"
@@ -346,17 +347,22 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
 
             {/* ElevenLabs model selector */}
-            <Card className={`overflow-hidden ${workspaceLayout ? `min-[1280px]:mb-3 min-[1280px]:gap-4 min-[1280px]:rounded-none min-[1280px]:border-x-0 min-[1280px]:border-t-0 min-[1280px]:py-4 ${WORKSPACE_CARD_BG}` : ""}`}>
-              <CardHeader className={`flex flex-row items-center justify-between space-y-0 border-b pb-3 ${workspaceLayout ? "min-[1280px]:px-4" : ""}`}>
-                <CardTitle className="text-lg">TTS Configuration</CardTitle>
-                <ElevenCreditsBadge
+            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 overflow-hidden py-0">
+              <WorkspacePanelHeader
+                icon={Settings2}
+                title="TTS"
+                titleAccessory={(
+                  <span className="hidden min-[1600px]:inline">Configuration</span>
+                )}
+                data-testid="step2-tts-header"
+                actions={<ElevenCreditsBadge
                   credits={elevenCredits}
                   loading={elevenCreditsLoading}
                   error={elevenCreditsError}
                   onRefresh={fetchElevenCredits}
-                />
-              </CardHeader>
-              <CardContent className={`space-y-5 pt-5 ${workspaceLayout ? "min-[1280px]:px-4 min-[1280px]:pb-4" : ""}`}>
+                />}
+              />
+              <CardContent className={`space-y-5 pt-5 ${workspaceLayout ? "min-[1280px]:pb-4" : ""}`}>
                 {elevenCredits?.last_error && (
                   <Alert variant="destructive">
                     <AlertDescription className="text-xs">
@@ -610,17 +616,18 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 aria-label="Script and voice-over editor"
                 data-testid="step2-script-canvas"
               >
-                <div className={workspaceLayout ? "hidden min-[1280px]:flex min-[1280px]:h-14 min-[1280px]:shrink-0 min-[1280px]:items-center min-[1280px]:justify-between min-[1280px]:gap-3 min-[1280px]:border-b min-[1280px]:bg-background min-[1280px]:px-4" : "hidden"}>
-                  <div className="min-w-0">
-                    <h2 className="truncate text-base font-semibold">
-                      Review Scripts
-                    </h2>
-                    <p className="text-xs text-muted-foreground">
-                      {scripts.length} {scripts.length === 1 ? "script" : "scripts"} ready for review
-                    </p>
-                  </div>
-                  {renderStepActions()}
-                </div>
+                <WorkspacePanelHeader
+                  icon={FileText}
+                  title="Review Scripts"
+                  titleAccessory={(
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {scripts.length} {scripts.length === 1 ? "script" : "scripts"}
+                    </span>
+                  )}
+                  actions={renderStepActions()}
+                  className={workspaceLayout ? "hidden min-[1280px]:flex" : "hidden"}
+                  data-testid="step2-review-header"
+                />
 
                 <div className={`space-y-3 ${workspaceLayout ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:p-3" : ""}`}>
 

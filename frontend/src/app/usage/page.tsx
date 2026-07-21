@@ -214,7 +214,6 @@ export default function UsagePage() {
   };
 
   return (
-    <div className="min-h-full bg-background text-foreground">
       <PageShell className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
@@ -670,6 +669,5 @@ export default function UsagePage() {
           </Card>
         )}
       </PageShell>
-    </div>
   );
 }

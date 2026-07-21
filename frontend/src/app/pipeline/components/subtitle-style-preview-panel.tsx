@@ -172,7 +172,7 @@ export function SubtitleStylePreviewPanel({
   return (
     <div className="flex flex-col gap-3" data-testid="subtitle-style-preview-panel">
       <InspectorField
-        label="Preview target"
+        label="Style or variant"
         helper="Preview only · does not change saved subtitle settings."
       >
         <Select value={selectedTarget.id} onValueChange={setSelectedTargetId}>
