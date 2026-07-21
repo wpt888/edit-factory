@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Callable, Set
 import zoneinfo
 
+from app.repositories.models import QueryFilters
+
 logger = logging.getLogger(__name__)
 
 META_PLATFORMS: Set[str] = {"instagram-standalone", "instagram", "facebook", "threads"}
@@ -441,7 +443,6 @@ async def execute_schedule_plan(
     """
     from app.services.postiz_service import get_postiz_publisher
     from app.repositories.factory import get_repository
-    from app.repositories.models import QueryFilters
     from app.config import get_settings
 
     settings = get_settings()
@@ -465,8 +466,6 @@ async def execute_schedule_plan(
 
     items = items_result.data if items_result.data else []
     total = len(items)
-    scheduled_count = 0
-    failed_count = 0
 
     logger.info(f"Executing schedule plan {plan_id} (v{plan_version}): {total} items to process")
 
@@ -531,19 +530,16 @@ async def _execute_v2(
 
             # Build caption: prefer per-clip stored caption, fall back to template
             caption = ""
-            try:
-                clip_content = repo.table_query(
-                    "editai_clip_content", "select",
-                    filters=QueryFilters(
-                        select="caption",
-                        eq={"clip_id": clip_id},
-                        limit=1,
-                    ),
-                )
-                if clip_content.data and clip_content.data[0].get("caption"):
-                    caption = clip_content.data[0]["caption"]
-            except Exception:
-                pass  # table may not exist or query failed — fall through to template
+            clip_content = repo.table_query(
+                "editai_clip_content", "select",
+                filters=QueryFilters(
+                    select="caption",
+                    eq={"clip_id": clip_id},
+                    limit=1,
+                ),
+            )
+            if clip_content.data and clip_content.data[0].get("caption"):
+                caption = clip_content.data[0]["caption"]
 
             if not caption and caption_template:
                 project_name = ""
@@ -552,6 +548,9 @@ async def _execute_v2(
                     if proj:
                         project_name = proj.get("name", "")
                 caption = caption_template.replace("{collection_name}", project_name)
+
+            if not caption.strip():
+                raise ValueError(f"No caption found for clip {clip_id}")
 
             # Upload video (cached)
             if video_path not in upload_cache:

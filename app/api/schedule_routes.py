@@ -8,7 +8,6 @@ scheduled post plans that distribute clips across days.
 import logging
 import threading
 import uuid
-import asyncio
 from datetime import date, time, datetime, timezone
 from typing import Dict, List, Optional
 
@@ -406,14 +405,11 @@ async def create_schedule_plan(
     # Persist per-clip captions to editai_clip_content (for V2 executor to read)
     if request.captions:
         for clip_id, caption_text in request.captions.items():
-            try:
-                repo.table_query(
-                    "editai_clip_content", "upsert",
-                    data={"clip_id": clip_id, "caption": caption_text},
-                    filters=QueryFilters(on_conflict="clip_id"),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to upsert caption for clip {clip_id}: {e}")
+            repo.table_query(
+                "editai_clip_content", "upsert",
+                data={"clip_id": clip_id, "caption": caption_text},
+                filters=QueryFilters(on_conflict="clip_id"),
+            )
 
     # Launch background task
     _update_progress(job_id, 0, "Initializing schedule...", "running", 0, plan.total_clips)
@@ -969,10 +965,11 @@ async def _execute_schedule_plan_task(
 
         # Update progress
         total = scheduled_count + failed_count
+        progress_status = "failed" if final_status == "failed" else "completed"
         _update_progress(
             job_id, 100,
             f"Done: {scheduled_count} scheduled, {failed_count} failed",
-            "completed", total, total,
+            progress_status, total, total,
         )
         with _schedule_progress_lock:
             _schedule_progress[job_id]["plan_id"] = plan_id
