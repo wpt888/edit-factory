@@ -10,13 +10,18 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { CopyPlus, GripVertical, Loader2, Plus, Save, Trash2, Type } from "lucide-react";
+import { ChevronDown, CopyPlus, GripVertical, Loader2, Plus, Save, Trash2, Type } from "lucide-react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { EditorHeader } from "@/components/editor-header";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -31,14 +36,21 @@ import {
   DEFAULT_SUBTITLE_SETTINGS,
   type SubtitleSettings,
   type UserSubtitlePreset,
+  type UserSubtitleTemplate,
 } from "@/types/video-processing";
 
-type Draft = {
+type StyleDraft = {
+  id?: string;
   name: string;
   settings: SubtitleSettings;
   settingsA?: SubtitleSettings;
   settingsB?: SubtitleSettings;
   wordsPerSubtitle: number;
+};
+
+type Draft = {
+  name: string;
+  styles: StyleDraft[];
 };
 
 type Tab = "shared" | "A" | "B";
@@ -82,14 +94,20 @@ function movePanel(order: PanelId[], draggedId: PanelId, target: DropTarget): Pa
   return withoutDragged;
 }
 
-const NEW_DRAFT: Draft = {
-  name: "My subtitle template",
+const NEW_STYLE: StyleDraft = {
+  name: "Style 1",
   settings: { ...DEFAULT_SUBTITLE_SETTINGS },
   wordsPerSubtitle: 2,
 };
 
-function toDraft(preset: UserSubtitlePreset): Draft {
+const NEW_DRAFT: Draft = {
+  name: "My subtitle template",
+  styles: [NEW_STYLE],
+};
+
+function toStyleDraft(preset: UserSubtitlePreset): StyleDraft {
   return {
+    id: preset.id,
     name: preset.name,
     settings: { ...DEFAULT_SUBTITLE_SETTINGS, ...preset.settings },
     settingsA: preset.settingsA ? { ...DEFAULT_SUBTITLE_SETTINGS, ...preset.settingsA } : undefined,
@@ -98,13 +116,22 @@ function toDraft(preset: UserSubtitlePreset): Draft {
   };
 }
 
+function toDraft(template: UserSubtitleTemplate): Draft {
+  return {
+    name: template.name,
+    styles: template.styles.map(toStyleDraft),
+  };
+}
+
 export default function SubtitleTemplatesPage() {
   const { currentProfile } = useProfile();
   const profileId = currentProfile?.id ?? null;
 
-  const [presets, setPresets] = useState<UserSubtitlePreset[]>([]);
-  const [selectedId, setSelectedId] = useState("new");
-  const [draft, setDraft] = useState<Draft>({ ...NEW_DRAFT });
+  const [templates, setTemplates] = useState<UserSubtitleTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("new");
+  const [selectedStyleIndex, setSelectedStyleIndex] = useState(0);
+  const [draft, setDraft] = useState<Draft>({ ...NEW_DRAFT, styles: [{ ...NEW_STYLE }] });
+  const [expandedTemplateIds, setExpandedTemplateIds] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("shared");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -126,30 +153,34 @@ export default function SubtitleTemplatesPage() {
     storage: typeof window === "undefined" ? noopStorage : window.localStorage,
   });
 
-  const isNew = selectedId === "new";
-  const selectedPreset = presets.find((preset) => preset.id === selectedId);
+  const isNew = selectedTemplateId === "new";
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
+  const selectedStyle = draft.styles[selectedStyleIndex] ?? draft.styles[0];
 
   // Settings shown/edited for the active tab. "A"/"B" fall back to the shared
   // style until the user explicitly edits them (then the override is created).
   const activeSettings = useMemo<SubtitleSettings>(() => {
-    if (tab === "A") return draft.settingsA ?? draft.settings;
-    if (tab === "B") return draft.settingsB ?? draft.settings;
-    return draft.settings;
-  }, [tab, draft]);
+    if (tab === "A") return selectedStyle.settingsA ?? selectedStyle.settings;
+    if (tab === "B") return selectedStyle.settingsB ?? selectedStyle.settings;
+    return selectedStyle.settings;
+  }, [tab, selectedStyle]);
 
-  const loadPresets = useCallback(
-    async (preferredId?: string) => {
+  const loadTemplates = useCallback(
+    async (preferredTemplateId?: string, preferredStyleId?: string) => {
       if (!profileId) return;
       setLoading(true);
       try {
-        const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-presets`);
+        const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-templates`);
         const data = await res.json();
-        const next: UserSubtitlePreset[] = Array.isArray(data?.presets) ? data.presets : [];
-        setPresets(next);
-        const preferred = next.find((preset) => preset.id === preferredId);
+        const next: UserSubtitleTemplate[] = Array.isArray(data?.templates) ? data.templates : [];
+        setTemplates(next);
+        const preferred = next.find((template) => template.id === preferredTemplateId);
         if (preferred) {
-          setSelectedId(preferred.id);
+          const styleIndex = Math.max(0, preferred.styles.findIndex((style) => style.id === preferredStyleId));
+          setSelectedTemplateId(preferred.id);
+          setSelectedStyleIndex(styleIndex);
           setDraft(toDraft(preferred));
+          setExpandedTemplateIds((current) => current.includes(preferred.id) ? current : [...current, preferred.id]);
         }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Could not load subtitle templates");
@@ -163,8 +194,8 @@ export default function SubtitleTemplatesPage() {
   useEffect(() => {
     // Loading is the external synchronization performed by this effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadPresets();
-  }, [loadPresets]);
+    void loadTemplates();
+  }, [loadTemplates]);
 
   useEffect(() => {
     const nextOrder = readPanelOrder();
@@ -251,23 +282,56 @@ export default function SubtitleTemplatesPage() {
     };
   }, []);
 
-  const select = (preset: UserSubtitlePreset) => {
-    setSelectedId(preset.id);
-    setDraft(toDraft(preset));
+  const select = (template: UserSubtitleTemplate, styleIndex = 0) => {
+    setSelectedTemplateId(template.id);
+    setSelectedStyleIndex(styleIndex);
+    setDraft(toDraft(template));
+    setExpandedTemplateIds((current) => current.includes(template.id) ? current : [...current, template.id]);
     setTab("shared");
     setSavedAt(false);
   };
 
   const beginCreate = () => {
-    setSelectedId("new");
-    setDraft({ ...NEW_DRAFT, settings: { ...DEFAULT_SUBTITLE_SETTINGS } });
+    setSelectedTemplateId("new");
+    setSelectedStyleIndex(0);
+    setDraft({
+      ...NEW_DRAFT,
+      styles: [{ ...NEW_STYLE, settings: { ...DEFAULT_SUBTITLE_SETTINGS } }],
+    });
+    setTab("shared");
+    setSavedAt(false);
+  };
+
+  const addStyle = (template?: UserSubtitleTemplate) => {
+    const base = template && template.id !== selectedTemplateId ? toDraft(template) : draft;
+    const nextStyle: StyleDraft = {
+      ...NEW_STYLE,
+      name: `Style ${base.styles.length + 1}`,
+      settings: { ...DEFAULT_SUBTITLE_SETTINGS },
+    };
+    if (template) {
+      setSelectedTemplateId(template.id);
+      setExpandedTemplateIds((current) => current.includes(template.id) ? current : [...current, template.id]);
+    }
+    setDraft({ ...base, styles: [...base.styles, nextStyle] });
+    setSelectedStyleIndex(base.styles.length);
     setTab("shared");
     setSavedAt(false);
   };
 
   const duplicate = () => {
-    setSelectedId("new");
-    setDraft((current) => ({ ...current, name: `${current.name} copy` }));
+    setSelectedTemplateId("new");
+    setDraft((current) => ({
+      ...current,
+      name: `${current.name} copy`,
+      styles: current.styles.map((style) => ({
+        name: style.name,
+        settings: { ...style.settings },
+        settingsA: style.settingsA ? { ...style.settingsA } : undefined,
+        settingsB: style.settingsB ? { ...style.settingsB } : undefined,
+        wordsPerSubtitle: style.wordsPerSubtitle,
+      })),
+    }));
     setTab("shared");
     setSavedAt(false);
   };
@@ -275,9 +339,13 @@ export default function SubtitleTemplatesPage() {
   const applySettings = (next: SubtitleSettings) => {
     setSavedAt(false);
     setDraft((current) => {
-      if (tab === "A") return { ...current, settingsA: next };
-      if (tab === "B") return { ...current, settingsB: next };
-      return { ...current, settings: next };
+      const styles = current.styles.map((style, index) => {
+        if (index !== selectedStyleIndex) return style;
+        if (tab === "A") return { ...style, settingsA: next };
+        if (tab === "B") return { ...style, settingsB: next };
+        return { ...style, settings: next };
+      });
+      return { ...current, styles };
     });
   };
 
@@ -291,20 +359,29 @@ export default function SubtitleTemplatesPage() {
       toast.error("Template name cannot be empty");
       return;
     }
+    if (draft.styles.some((style) => !style.name.trim())) {
+      toast.error("Style names cannot be empty");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
         name,
-        settings: draft.settings,
-        settingsA: draft.settingsA,
-        settingsB: draft.settingsB,
-        wordsPerSubtitle: draft.wordsPerSubtitle,
+        styles: draft.styles.map((style) => ({
+          id: style.id,
+          name: style.name.trim(),
+          settings: style.settings,
+          settingsA: style.settingsA,
+          settingsB: style.settingsB,
+          wordsPerSubtitle: style.wordsPerSubtitle,
+        })),
       };
       const res = isNew
-        ? await apiPost(`/profiles/${profileId}/subtitle-presets`, payload)
-        : await apiPut(`/profiles/${profileId}/subtitle-presets/${selectedId}`, payload);
-      const saved = (await res.json().catch(() => null)) as UserSubtitlePreset | null;
-      await loadPresets(saved?.id ?? (isNew ? undefined : selectedId));
+        ? await apiPost(`/profiles/${profileId}/subtitle-templates`, payload)
+        : await apiPut(`/profiles/${profileId}/subtitle-templates/${selectedTemplateId}`, payload);
+      const saved = (await res.json().catch(() => null)) as UserSubtitleTemplate | null;
+      const preferredStyleId = saved?.styles[Math.min(selectedStyleIndex, (saved?.styles.length ?? 1) - 1)]?.id;
+      await loadTemplates(saved?.id ?? (isNew ? undefined : selectedTemplateId), preferredStyleId);
       setSavedAt(true);
       toast.success(isNew ? "Template created" : "Template saved");
     } catch (error) {
@@ -315,13 +392,13 @@ export default function SubtitleTemplatesPage() {
   };
 
   const remove = async () => {
-    if (!profileId || !selectedPreset) return;
+    if (!profileId || !selectedTemplate) return;
     setDeleting(true);
     try {
-      await apiDelete(`/profiles/${profileId}/subtitle-presets/${selectedPreset.id}`);
+      await apiDelete(`/profiles/${profileId}/subtitle-presets/${selectedTemplate.id}`);
       setDeleteOpen(false);
       beginCreate();
-      await loadPresets();
+      await loadTemplates();
       toast.success("Template deleted");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not delete template");
@@ -370,7 +447,7 @@ export default function SubtitleTemplatesPage() {
 
   const panelContent: Record<PanelId, ReactNode> = {
     templates: (
-      <div className="flex h-full min-w-0 flex-col bg-muted/20">
+      <div className="flex h-full min-w-0 flex-col bg-surface-canvas">
         {panelHeader("templates", "Templates", (
           <Button size="icon" variant="ghost" className="size-7" onClick={beginCreate} aria-label="New template">
             <Plus className="size-4" />
@@ -381,33 +458,102 @@ export default function SubtitleTemplatesPage() {
             <button
               type="button"
               onClick={beginCreate}
-              className={`flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left text-sm ${isNew ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}
+              className={`flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring ${isNew ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}
             >
               <Plus className="size-3.5" />New template
             </button>
+            {isNew && (
+              <div className="ml-5 space-y-1 border-l border-border pl-2" data-testid="subtitle-template-draft-styles">
+                {draft.styles.map((style, index) => (
+                  <button
+                    key={`${style.name}-${index}`}
+                    type="button"
+                    onClick={() => { setSelectedStyleIndex(index); setTab("shared"); }}
+                    data-testid="subtitle-style-row"
+                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
+                  >
+                    <span className="truncate">{style.name}</span>
+                    <span className="shrink-0 text-[10px]">{style.wordsPerSubtitle}w</span>
+                  </button>
+                ))}
+                <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle()}>
+                  <Plus className="size-3.5" />Add style
+                </Button>
+              </div>
+            )}
             {loading ? (
               <div className="flex justify-center p-8"><Loader2 className="size-5 animate-spin text-primary" /></div>
-            ) : presets.length === 0 ? (
+            ) : templates.length === 0 ? (
               <p className="p-6 text-center text-xs text-muted-foreground">No saved templates yet.</p>
             ) : (
-              presets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => select(preset)}
-                  data-testid="subtitle-template-row"
-                  className={`flex w-full flex-col rounded-md border px-3 py-2.5 text-left ${selectedId === preset.id ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}
-                >
-                  <span className="truncate text-sm font-medium">{preset.name}</span>
-                  <span className="mt-0.5 text-[11px] text-muted-foreground">
-                    {preset.wordsPerSubtitle ?? 2} words/line
-                    {(preset.settingsA || preset.settingsB) ? " · A/B" : ""}
-                  </span>
-                </button>
-              ))
+              templates.map((template) => {
+                const expanded = expandedTemplateIds.includes(template.id);
+                const visibleStyles = selectedTemplateId === template.id ? draft.styles : template.styles;
+                return (
+                  <Collapsible
+                    key={template.id}
+                    open={expanded}
+                    onOpenChange={(open) => setExpandedTemplateIds((current) => (
+                      open
+                        ? (current.includes(template.id) ? current : [...current, template.id])
+                        : current.filter((id) => id !== template.id)
+                    ))}
+                    className={`rounded-md border ${selectedTemplateId === template.id ? "border-primary/50 bg-primary/5" : "border-transparent"}`}
+                    data-testid="subtitle-template-group"
+                  >
+                    <div className="flex items-stretch gap-0.5 p-1">
+                      <CollapsibleTrigger asChild>
+                        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`${expanded ? "Collapse" : "Expand"} ${template.name}`}>
+                          <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`} />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <button
+                        type="button"
+                        onClick={() => select(template)}
+                        data-testid="subtitle-template-row"
+                        className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <span className="block truncate text-sm font-medium">{template.name}</span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {visibleStyles.length} {visibleStyles.length === 1 ? "style" : "styles"}
+                        </span>
+                      </button>
+                      <Button type="button" variant="ghost" size="icon" className="size-8 self-center" onClick={() => addStyle(template)} aria-label={`Add style to ${template.name}`}>
+                        <Plus className="size-3.5" />
+                      </Button>
+                    </div>
+                    <CollapsibleContent>
+                      <div className="mb-1 ml-5 space-y-1 border-l border-border pl-2 pr-1">
+                        {visibleStyles.map((style, index) => (
+                          <button
+                            key={style.id ?? `${style.name}-${index}`}
+                            type="button"
+                            onClick={() => {
+                              if (selectedTemplateId === template.id) {
+                                setSelectedStyleIndex(index);
+                                setTab("shared");
+                                return;
+                              }
+                              select(template, index);
+                            }}
+                            data-testid="subtitle-style-row"
+                            className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedTemplateId === template.id && selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
+                          >
+                            <span className="truncate">{style.name}</span>
+                            <span className="shrink-0 text-[10px]">{style.wordsPerSubtitle ?? 2}w</span>
+                          </button>
+                        ))}
+                        <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle(template)}>
+                          <Plus className="size-3.5" />Add style
+                        </Button>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              })
             )}
           </div>
-          {!isNew && selectedPreset && (
+          {!isNew && selectedTemplate && (
             <div className="p-3">
               <Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}>
                 <Trash2 className="mr-2 size-4" />Delete template
@@ -418,7 +564,7 @@ export default function SubtitleTemplatesPage() {
       </div>
     ),
     settings: (
-      <div className="flex h-full min-w-0 flex-col bg-background">
+      <div className="flex h-full min-w-0 flex-col bg-surface-canvas">
         {panelHeader("settings", "Subtitle settings")}
         <div className="min-h-0 flex-1 overflow-y-auto" data-testid="subtitle-template-settings">
           <div className="space-y-3 border-b border-border p-4">
@@ -431,13 +577,34 @@ export default function SubtitleTemplatesPage() {
               />
             </div>
             <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Style name</Label>
+              <Input
+                value={selectedStyle.name}
+                onChange={(event) => {
+                  setDraft((current) => ({
+                    ...current,
+                    styles: current.styles.map((style, index) => index === selectedStyleIndex ? { ...style, name: event.target.value } : style),
+                  }));
+                  setSavedAt(false);
+                }}
+                data-testid="subtitle-style-name"
+              />
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Words per subtitle</Label>
               <Input
                 type="number"
                 min={1}
                 max={20}
-                value={draft.wordsPerSubtitle}
-                onChange={(event) => { setDraft((current) => ({ ...current, wordsPerSubtitle: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })); setSavedAt(false); }}
+                value={selectedStyle.wordsPerSubtitle}
+                onChange={(event) => {
+                  const wordsPerSubtitle = Math.max(1, Math.min(20, Number(event.target.value) || 1));
+                  setDraft((current) => ({
+                    ...current,
+                    styles: current.styles.map((style, index) => index === selectedStyleIndex ? { ...style, wordsPerSubtitle } : style),
+                  }));
+                  setSavedAt(false);
+                }}
                 data-testid="subtitle-template-words"
               />
             </div>
@@ -456,7 +623,7 @@ export default function SubtitleTemplatesPage() {
             </div>
             {tab !== "shared" && (
               <p className="text-[11px] text-muted-foreground">
-                {(tab === "A" ? draft.settingsA : draft.settingsB)
+                {(tab === "A" ? selectedStyle.settingsA : selectedStyle.settingsB)
                   ? `Overriding the shared style for Meta ${tab}.`
                   : `Editing here creates a Meta ${tab} override; until then it mirrors the shared style.`}
               </p>
@@ -475,7 +642,7 @@ export default function SubtitleTemplatesPage() {
       </div>
     ),
     preview: (
-      <div className="flex h-full min-w-0 flex-col bg-muted/10">
+      <div className="flex h-full min-w-0 flex-col bg-surface-canvas">
         {panelHeader("preview", "Preview")}
         <section className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6" aria-label="Subtitle preview">
           <SubtitleEditor
@@ -496,8 +663,8 @@ export default function SubtitleTemplatesPage() {
       <EditorHeader
         icon={<Type className="size-4 text-primary" />}
         title="Subtitle Templates"
-        breadcrumb={draft.name}
-        subtitle="Reusable caption looks"
+        breadcrumb={`${draft.name} / ${selectedStyle.name}`}
+        subtitle="Reusable caption sets for video variants"
         actions={
           <>
             {savedAt && !saving && <span className="mr-1 text-xs text-muted-foreground" data-testid="subtitle-template-saved">Saved</span>}
@@ -507,7 +674,7 @@ export default function SubtitleTemplatesPage() {
             <Button variant="ghost" size="sm" onClick={beginCreate}>
               <Plus className="mr-2 size-4" />New template
             </Button>
-            <Button size="sm" onClick={() => void save()} disabled={saving || !draft.name.trim() || !profileId} data-testid="subtitle-template-save">
+            <Button variant="cta" size="sm" onClick={() => void save()} disabled={saving || !draft.name.trim() || draft.styles.some((style) => !style.name.trim()) || !profileId} data-testid="subtitle-template-save">
               <Save className="mr-2 size-4" />{saving ? "Saving..." : "Save template"}
             </Button>
           </>
@@ -555,7 +722,7 @@ export default function SubtitleTemplatesPage() {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title="Delete subtitle template?"
-        description={`This removes “${selectedPreset?.name ?? "this template"}” from your profile.`}
+        description={`This removes “${selectedTemplate?.name ?? "this template"}” and all of its subtitle styles from your profile.`}
         confirmLabel="Delete template"
         variant="destructive"
         loading={deleting}

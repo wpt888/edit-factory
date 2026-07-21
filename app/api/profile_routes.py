@@ -611,6 +611,115 @@ class UserSubtitlePresetCreate(BaseModel):
     wordsPerSubtitle: Optional[int] = Field(default=None, ge=1, le=20)
 
 
+class UserSubtitleStyleWrite(UserSubtitlePresetCreate):
+    """One editable style inside a reusable subtitle template."""
+
+    id: Optional[str] = None
+
+
+class UserSubtitleTemplateWrite(BaseModel):
+    """A named, ordered collection of subtitle styles."""
+
+    name: str
+    styles: List[UserSubtitleStyleWrite] = Field(min_length=1, max_length=20)
+
+
+def _subtitle_style_payload(
+    body: UserSubtitleStyleWrite,
+    *,
+    style_id: str,
+    created_at: str,
+) -> Dict[str, Any]:
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Style name cannot be empty")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="Style name too long (max 80 chars)")
+    if not isinstance(body.settings, dict) or not body.settings:
+        raise HTTPException(status_code=400, detail="Style settings must be a non-empty dict")
+
+    style: Dict[str, Any] = {
+        "id": style_id,
+        "name": name,
+        "created_at": created_at,
+        "settings": body.settings,
+    }
+    if body.settingsA:
+        style["settingsA"] = body.settingsA
+    if body.settingsB:
+        style["settingsB"] = body.settingsB
+    if body.wordsPerSubtitle is not None:
+        style["wordsPerSubtitle"] = body.wordsPerSubtitle
+    return style
+
+
+def _normalize_subtitle_template(item: Any) -> Optional[Dict[str, Any]]:
+    """Expose legacy single-style presets through the new template shape."""
+    if not isinstance(item, dict) or not item.get("id"):
+        return None
+
+    raw_styles = item.get("styles")
+    if isinstance(raw_styles, list):
+        styles = [style for style in raw_styles if isinstance(style, dict) and style.get("id") and style.get("settings")]
+        if not styles:
+            return None
+        return {
+            "id": str(item["id"]),
+            "name": str(item.get("name") or "Subtitle template"),
+            "created_at": str(item.get("created_at") or ""),
+            "styles": styles,
+        }
+
+    if not item.get("settings"):
+        return None
+    legacy_style = {
+        **item,
+        "name": "Default style",
+    }
+    legacy_style.pop("styles", None)
+    return {
+        "id": str(item["id"]),
+        "name": str(item.get("name") or "Subtitle template"),
+        "created_at": str(item.get("created_at") or ""),
+        "styles": [legacy_style],
+    }
+
+
+def _subtitle_templates(items: Any) -> List[Dict[str, Any]]:
+    templates: List[Dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        normalized = _normalize_subtitle_template(item)
+        if normalized:
+            templates.append(normalized)
+    return templates
+
+
+def _flatten_subtitle_presets(items: Any) -> List[Dict[str, Any]]:
+    """Keep the render/rotation contract as a flat list of style IDs."""
+    presets: List[Dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        raw_styles = item.get("styles")
+        if isinstance(raw_styles, list):
+            for style in raw_styles:
+                if not isinstance(style, dict) or not style.get("id") or not style.get("settings"):
+                    continue
+                presets.append({
+                    **style,
+                    "templateId": str(item["id"]),
+                    "templateName": str(item.get("name") or "Subtitle template"),
+                })
+            continue
+        if item.get("settings"):
+            presets.append({
+                **item,
+                "templateId": str(item["id"]),
+                "templateName": str(item.get("name") or "Subtitle template"),
+            })
+    return presets
+
+
 @router.get("/{profile_id}/subtitle-presets")
 async def list_user_subtitle_presets(
     profile_id: str,
@@ -628,12 +737,161 @@ async def list_user_subtitle_presets(
         if profile["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        return {"presets": profile.get("user_subtitle_presets") or []}
+        return {"presets": _flatten_subtitle_presets(profile.get("user_subtitle_presets") or [])}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to list subtitle presets for profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch subtitle presets")
+
+
+@router.get("/{profile_id}/subtitle-templates")
+async def list_user_subtitle_templates(
+    profile_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return named template containers with their ordered child styles."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        return {"templates": _subtitle_templates(profile.get("user_subtitle_presets") or [])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list subtitle templates for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch subtitle templates")
+
+
+@router.post("/{profile_id}/subtitle-templates")
+async def create_user_subtitle_template(
+    profile_id: str,
+    body: UserSubtitleTemplateWrite,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Create one template and all of its ordered styles atomically."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Template name cannot be empty")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="Template name too long (max 80 chars)")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        existing = list(profile.get("user_subtitle_presets") or [])
+        if len(existing) >= 50:
+            raise HTTPException(status_code=400, detail="Maximum 50 templates per profile")
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        new_template = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "created_at": created_at,
+            "styles": [
+                _subtitle_style_payload(
+                    style,
+                    style_id=str(uuid.uuid4()),
+                    created_at=created_at,
+                )
+                for style in body.styles
+            ],
+        }
+        existing.append(new_template)
+        repo.update_profile(profile_id, {
+            "user_subtitle_presets": existing,
+            "updated_at": created_at,
+        })
+        return new_template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create subtitle template for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create subtitle template")
+
+
+@router.put("/{profile_id}/subtitle-templates/{template_id}")
+async def update_user_subtitle_template(
+    profile_id: str,
+    template_id: str,
+    body: UserSubtitleTemplateWrite,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Update a template and its ordered styles while preserving known IDs."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Template name cannot be empty")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="Template name too long (max 80 chars)")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        existing = list(profile.get("user_subtitle_presets") or [])
+        updated_template = None
+        for index, item in enumerate(existing):
+            if not isinstance(item, dict) or str(item.get("id")) != template_id:
+                continue
+            normalized = _normalize_subtitle_template(item)
+            if not normalized:
+                raise HTTPException(status_code=404, detail="Template not found")
+            known_styles = {str(style["id"]): style for style in normalized["styles"]}
+            used_ids = set()
+            now = datetime.now(timezone.utc).isoformat()
+            styles = []
+            for style_body in body.styles:
+                requested_id = str(style_body.id or "")
+                known = known_styles.get(requested_id) if requested_id not in used_ids else None
+                style_id = requested_id if known else str(uuid.uuid4())
+                used_ids.add(style_id)
+                styles.append(_subtitle_style_payload(
+                    style_body,
+                    style_id=style_id,
+                    created_at=str(known.get("created_at") or now) if known else now,
+                ))
+            updated_template = {
+                "id": template_id,
+                "name": name,
+                "created_at": str(normalized.get("created_at") or now),
+                "styles": styles,
+            }
+            existing[index] = updated_template
+            break
+
+        if updated_template is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        repo.update_profile(profile_id, {
+            "user_subtitle_presets": existing,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return updated_template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update subtitle template {template_id} for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update subtitle template")
 
 
 @router.post("/{profile_id}/subtitle-presets")
@@ -733,24 +991,51 @@ async def update_user_subtitle_preset(
         existing = list(profile.get("user_subtitle_presets") or [])
         updated = None
         for index, preset in enumerate(existing):
-            if preset.get("id") != preset_id:
+            if not isinstance(preset, dict):
                 continue
-            updated = {
-                **preset,
-                "name": name,
-                "settings": body.settings,
-            }
-            for key, value in (
-                ("settingsA", body.settingsA),
-                ("settingsB", body.settingsB),
-                ("wordsPerSubtitle", body.wordsPerSubtitle),
-            ):
-                if value is None:
-                    updated.pop(key, None)
-                else:
-                    updated[key] = value
-            existing[index] = updated
-            break
+            if str(preset.get("id")) == preset_id and preset.get("settings"):
+                updated = {
+                    **preset,
+                    "name": name,
+                    "settings": body.settings,
+                }
+                for key, value in (
+                    ("settingsA", body.settingsA),
+                    ("settingsB", body.settingsB),
+                    ("wordsPerSubtitle", body.wordsPerSubtitle),
+                ):
+                    if value is None:
+                        updated.pop(key, None)
+                    else:
+                        updated[key] = value
+                existing[index] = updated
+                break
+
+            styles = preset.get("styles")
+            if not isinstance(styles, list):
+                continue
+            for style_index, style in enumerate(styles):
+                if not isinstance(style, dict) or str(style.get("id")) != preset_id:
+                    continue
+                updated = {
+                    **style,
+                    "name": name,
+                    "settings": body.settings,
+                }
+                for key, value in (
+                    ("settingsA", body.settingsA),
+                    ("settingsB", body.settingsB),
+                    ("wordsPerSubtitle", body.wordsPerSubtitle),
+                ):
+                    if value is None:
+                        updated.pop(key, None)
+                    else:
+                        updated[key] = value
+                styles[style_index] = updated
+                existing[index] = {**preset, "styles": styles}
+                break
+            if updated is not None:
+                break
         if updated is None:
             raise HTTPException(status_code=404, detail="Preset not found")
 

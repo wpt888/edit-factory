@@ -80,6 +80,8 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     {
       id: "punchy",
       name: "Punchy Karaoke",
+      templateId: "launch-captions",
+      templateName: "Launch captions",
       created_at: "",
       settings: { ...settings, textColor: "#ffffff", karaoke: true, highlightColor: "#a3e635" },
       wordsPerSubtitle: 2,
@@ -87,6 +89,8 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     {
       id: "minimal",
       name: "Minimal Clean",
+      templateId: "launch-captions",
+      templateName: "Launch captions",
       created_at: "",
       settings: { ...settings, fontSize: 42, textColor: "#f8fafc", karaoke: false },
       wordsPerSubtitle: 4,
@@ -247,10 +251,11 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   const rotationPanel = page.getByTestId("subtitle-template-rotation");
   await expect(rotationPanel).toBeVisible();
   await expect(rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" })).toBeChecked();
-  await expect(page.getByTestId("subtitle-template-badge")).toHaveText([
-    "Punchy Karaoke · 2 words",
-    "Minimal Clean · 4 words",
-    "Punchy Karaoke · 2 words",
+  await expect(rotationPanel.getByRole("combobox", { name: "Use subtitle template" })).toContainText("Launch captions");
+  await expect(page.getByTestId("subtitle-template-select")).toHaveText([
+    "Auto (Punchy Karaoke)",
+    "Auto (Minimal Clean)",
+    "Auto (Punchy Karaoke)",
   ]);
 
   await page.getByTitle("Override subtitles for Variant 1").click();

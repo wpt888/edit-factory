@@ -50,6 +50,17 @@ export interface UserSubtitlePreset {
   settingsA?: SubtitleSettings;
   settingsB?: SubtitleSettings;
   wordsPerSubtitle?: number;
+  /** Present when this flattened style belongs to a multi-style template. */
+  templateId?: string;
+  templateName?: string;
+}
+
+/** A reusable collection whose ordered styles can rotate across video variants. */
+export interface UserSubtitleTemplate {
+  id: string;
+  name: string;
+  created_at: string;
+  styles: UserSubtitlePreset[];
 }
 
 export interface SubtitleLine {

@@ -4095,11 +4095,19 @@ async def update_subtitle_rotation(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     profile_row = get_repository().get_profile(profile.profile_id) or {}
-    owned_ids = {
-        str(preset.get("id"))
-        for preset in (profile_row.get("user_subtitle_presets") or [])
-        if isinstance(preset, dict) and preset.get("id")
-    }
+    owned_ids = set()
+    for preset in (profile_row.get("user_subtitle_presets") or []):
+        if not isinstance(preset, dict):
+            continue
+        styles = preset.get("styles")
+        if isinstance(styles, list):
+            owned_ids.update(
+                str(style.get("id"))
+                for style in styles
+                if isinstance(style, dict) and style.get("id")
+            )
+        elif preset.get("id"):
+            owned_ids.add(str(preset["id"]))
     missing = [preset_id for preset_id in request.presetIds if preset_id not in owned_ids]
     if missing:
         raise HTTPException(status_code=400, detail="Subtitle rotation contains an unavailable template")

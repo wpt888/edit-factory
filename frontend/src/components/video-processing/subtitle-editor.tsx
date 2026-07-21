@@ -749,7 +749,7 @@ export function SubtitleEditor({
                   </span>
                 </div>
                 <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-0.5"><span className="text-[10px] text-white/80 font-medium">{preset.name}</span></div>
-                {userPreset && onDeleteUserPreset && <span role="button" tabIndex={0} aria-label={`Delete ${preset.name}`} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white hover:bg-destructive" onClick={(event) => { event.stopPropagation(); onDeleteUserPreset(userPreset); }}><X className="size-3" /></span>}
+                {userPreset && onDeleteUserPreset && (!userPreset.templateId || userPreset.templateId === userPreset.id) && <span role="button" tabIndex={0} aria-label={`Delete ${preset.name}`} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white hover:bg-destructive" onClick={(event) => { event.stopPropagation(); onDeleteUserPreset(userPreset); }}><X className="size-3" /></span>}
               </button>
             );
           })}

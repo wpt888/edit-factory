@@ -18,10 +18,13 @@ using an empty list preserves the previous single-style behavior.
 
 ## Template and pipeline state
 
-The existing profile-level `UserSubtitlePreset` remains the only caption
-template entity. It now has optional `wordsPerSubtitle` (`1..20`) alongside its
-full `SubtitleSettings`. Existing presets without the field use the pipeline's
-global word count.
+The render-facing `UserSubtitlePreset` is one caption **style**, with optional
+`wordsPerSubtitle` (`1..20`) alongside its full `SubtitleSettings`. Since the
+multi-style correction on 2026-07-21, the profile JSON stores template
+containers with ordered child styles. `GET /subtitle-presets` flattens those
+children back into stable style IDs for this rotation contract. Legacy presets
+are exposed as one-style templates and continue to use the pipeline's global
+word count when the field is absent.
 
 The pipeline stores:
 
@@ -82,7 +85,8 @@ The lazy Subtitle Style inspector contains a “Template rotation” section wit
 
 - on/off toggle;
 - ordered preset rows with add, remove, replace, move-up and move-down controls;
-- per-template word count and template editor;
+- a template-collection selector that loads all child styles in order;
+- per-style word count and style editor;
 - an assigned-template badge on every variant card;
 - card-local Override and Reset to template actions.
 

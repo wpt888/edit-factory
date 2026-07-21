@@ -31,21 +31,27 @@ drawer visibility/toggle assertions and viewport checks were rescoped to
 
 ## Subtitle Templates management page
 
-New page `frontend/src/app/subtitle-templates/page.tsx`, mirroring the
-Attention Templates page's shape:
+Page `frontend/src/app/subtitle-templates/page.tsx` uses the same workspace
+shape as Attention Templates. Its original one-preset-per-template model was
+corrected on 2026-07-21; the current shape is:
 
-- left column: template list with new / select / duplicate / delete
-  (confirm-gated);
+- left column: expandable template tree; every template owns one or more
+  ordered styles and exposes `Add style` in both its header and child list;
+- selecting a child edits that style without leaving the parent template;
+- new / select / duplicate / delete remain template-level actions
+  (delete is confirm-gated);
 - right column: live preview (`SubtitleEditor` in `renderMode="preview-only"`)
   stacked over a compact settings-only editor;
-- editable name and `wordsPerSubtitle`;
+- independent template name, style name, and per-style `wordsPerSubtitle`;
 - Shared / Meta A / Meta B tabs — A/B tabs only materialize `settingsA` /
   `settingsB` overrides once a field is actually edited on that tab.
 
-No new backend surface: it persists through the existing
-`GET/POST/PUT/DELETE /profiles/{id}/subtitle-presets` endpoints, reusing the
-`editai_profiles.user_subtitle_presets` JSON column — no new table, no
-migration.
+Template collections persist through `GET/POST /profiles/{id}/subtitle-templates`
+and `PUT /profiles/{id}/subtitle-templates/{templateId}`. The existing
+`GET /subtitle-presets` endpoint flattens child styles for Step 3 and render;
+legacy preset update/delete routes remain compatible. Storage still reuses the
+`editai_profiles.user_subtitle_presets` JSON column, so no table or migration is
+required.
 
 Sidebar entry "Subtitle Templates" (Captions icon) added in
 `frontend/src/components/navbar.tsx`, directly under Attention Templates.
