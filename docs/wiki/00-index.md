@@ -37,3 +37,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Unified timeline playhead — one cursor per timeline](38-unified-timeline-playhead.md)
 - [Multi-style subtitle templates](39-multi-style-subtitle-templates.md)
 - [Inspector grammar for dense editor panels](40-inspector-grammar.md)
+- [Attention Templates editor: off-screen layout + silently broken standalone build](41-attention-templates-layout-and-build-fix.md)

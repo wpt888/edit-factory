@@ -1,5 +1,23 @@
 # Engineering Change Log
 
+## 2026-07-21 - Attention Templates editor: off-screen layout + silently broken standalone build
+
+- Debugging session: "Add track" button missing and the Program monitor
+  fully black in the Attention Templates editor. Root cause 1: `<main>` in
+  `attention-templates/page.tsx` declared only `grid-rows-*`, no
+  `grid-cols-*`/`min-w-0`, so the implicit `auto` column grew to the
+  `MultiTrackTimeline` lane's ~6200px content width, pushing the whole
+  editor column (canvas, Add track button, monitor chip) off-screen. Fixed
+  by constraining the column (`min-w-0 grid-cols-[minmax(0,1fr)]`) — one
+  line, commit `4e825d5`.
+- Root cause 2 (independent, process-level): the desktop standalone build
+  was missing `.next/static`, and two build scripts masked it —
+  `postbuild.js` warned and exited 0 on missing static, and
+  `ensure-frontend.js` marked the bundle "ready" from a fingerprint without
+  checking `static/` existed. Fixed to fail loudly instead, commit
+  `71df4df`.
+- See wiki 41.
+
 ## 2026-07-21 - Unified inspector grammar for dense editor panels
 
 - Unified the Step 3 Subtitle Style and Render Settings panels onto one
