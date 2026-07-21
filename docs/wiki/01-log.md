@@ -21,6 +21,24 @@
   touched by this change). Details:
   [route ownership model + overlay SSRF fix](44-pipeline-ownership-and-overlay-ssrf-fix.md).
 
+## 2026-07-22 - EF-2: Captions → Smart Schedule chain fix
+
+- Caption autosave (`pipeline-caption-generator.tsx`) now uses the standard
+  `apiPost` client instead of a raw `fetch` to `window.location.origin`, and
+  surfaces non-2xx failures as a visible toast instead of a console warning.
+- Smart Schedule confirmation (`pipeline-schedule.tsx`) sends the real
+  per-variant caption for every clip instead of an empty `caption_template`;
+  a missing caption blocks confirmation with a visible inline warning.
+- `schedule_service.py`'s `_execute_v2` had an unimported `QueryFilters`
+  swallowed by a bare `except: pass`, so caption lookups always silently
+  fell through to an empty caption while still reporting success. Import
+  fixed, exception no longer swallowed, and a clip with no caption now
+  fails the schedule item instead of publishing blank.
+- New hermetic tests: `tests/test_schedule_service.py` (9 passed) and
+  `frontend/tests/features/pipeline/captions-smart-schedule.spec.ts` (1
+  passed). Ruff clean. Details:
+  [Captions → Smart Schedule chain fix](46-captions-smart-schedule-chain-fix.md).
+
 ## 2026-07-21 - Main synced with origin: July WIP committed, Studio fixes merged, pushed
 
 - Committed the WorkspacePanelHeader WIP from the parallel session (`1a2f2b0`)
