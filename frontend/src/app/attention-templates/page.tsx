@@ -308,7 +308,7 @@ export default function AttentionTemplatesPage() {
           {!isNew && !isSystem && <div className="p-4"><Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}><Trash2 className="mr-2 size-4" />Delete personal template</Button></div>}
         </aside>
 
-        <main className="grid min-h-0 grid-rows-[minmax(300px,1fr)_300px] bg-card">
+        <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(300px,1fr)_300px] bg-card">
           <section className="flex min-h-0 flex-col border-b border-border" aria-label="Program monitor">
             <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-4"><p className="flex items-center gap-2 text-xs font-semibold"><Film className="size-3.5" />Program monitor</p><div className="flex items-center gap-1"><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{canvasLabel} · {(previewMs / 1000).toFixed(2)}s</span><Button variant="ghost" size="icon" className="size-7 text-muted-foreground"><Maximize2 className="size-3.5" /></Button></div></div>
             {/* Program-monitor video stage stays dark in both themes — a preview canvas is theme-independent, like any video player. */}
