@@ -14,8 +14,16 @@ router = APIRouter(prefix="/attention-templates", tags=["Attention Hooks"])
 logger = logging.getLogger(__name__)
 
 
+class AttentionDefaultAsset(BaseModel):
+    """Optional content saved with a slot. Step 3 pre-populates from it; the
+    pipeline can override it without touching the template."""
+    url: str = Field(max_length=4096)
+    type: Literal["image", "video"] = "image"
+
+
 class AttentionTemplateImage(BaseModel):
     id: str = Field(default="", max_length=80)
+    defaultAsset: Optional[AttentionDefaultAsset] = None
     x: float = Field(default=0.1, ge=0.0, le=1.0)
     y: float = Field(default=0.1, ge=0.0, le=1.0)
     width: float = Field(default=0.8, gt=0.0, le=1.0)

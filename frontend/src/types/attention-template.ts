@@ -13,6 +13,9 @@ export type AttentionTemplateImage = {
   fit: "contain" | "cover";
   startMs: number;
   durationMs: number;
+  /** Optional content saved with the slot. Step 3 pre-populates from it; the
+   *  pipeline overrides it per-run without mutating the template. */
+  defaultAsset?: { url: string; type: "image" | "video" };
   /** Optional sound effect scheduled with this visual slot. */
   sfxAssetId?: string;
   sfxUrl?: string;
@@ -108,6 +111,7 @@ export function normalizeAttentionTemplate(
       ...image,
       opacity: image.opacity ?? 1,
       fit: image.fit === "cover" ? "cover" as const : "contain" as const,
+      defaultAsset: normalizeDefaultAsset(image.defaultAsset),
       sfxAssetId: image.sfxAssetId ?? template.sfx,
       sfxUrl: image.sfxUrl,
       sfxLabel: image.sfxLabel,
@@ -151,6 +155,15 @@ export function normalizeAttentionTemplate(
           })])
       : [[]],
   };
+}
+
+/** Keep only a well-formed {url, type}; drop anything else so old/garbled rows
+ *  degrade to "no default" rather than crashing the picker. */
+function normalizeDefaultAsset(
+  value: AttentionTemplateImage["defaultAsset"],
+): AttentionTemplateImage["defaultAsset"] {
+  if (!value || typeof value.url !== "string" || value.url.length === 0) return undefined;
+  return { url: value.url, type: value.type === "video" ? "video" : "image" };
 }
 
 function normalizeCanvasDimension(value: number | undefined, fallback: number): number {
