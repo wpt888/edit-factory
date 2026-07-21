@@ -1,5 +1,19 @@
 # Engineering Change Log
 
+## 2026-07-21 - Attention content moves to Step 3; optional per-slot defaults
+
+- The attention picker is gone from Step 1; Step 3 is the only place content is
+  assigned. Slots take images and videos (gallery/upload/URL + Ctrl+V paste),
+  carried as typed `assets: [{url, type}]`.
+- Templates can save optional default content per slot
+  (`tracks[].images[].defaultAsset {url,type}`): the Attention Templates editor
+  gains a per-slot "Set default content" action with an indicator and Clear, and
+  Step 3 pre-fills empty slots from it without mutating the template.
+- Backend restart needed for the modified attention service/routes; the desktop
+  app needs a standalone rebuild.
+
+See [Attention Images](30-attention-images-pipeline-integration.md).
+
 ## 2026-07-21 - Attention slots render video overlays end to end (Phase 3)
 
 - Closed the Phase 2 gap where video slots were dropped before the backend.

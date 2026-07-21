@@ -95,6 +95,36 @@ popped at the same second in every variant.
   files that churn wildly, preserving HEAD's per-line EOL and staging with
   `core.autocrlf=false`).
 
+## Update (2026-07-21): content is chosen in Step 3, not Step 1
+
+The Step 1 picker described above is gone. Content is now assigned entirely in
+Step 3 (`step3-preview.tsx` → `attention-template-picker.tsx`), and slots accept
+**images and videos** (gallery, upload, URL, and Ctrl+V paste), carried through
+as typed `assets: [{ url, type }]` (the legacy flat `assetUrls: string[]` is
+still read as images for old bundles). Fewer assets than slots repeat over the
+slots (`assets[i % len]`). `maxVariants` was dropped in favour of the Step 3
+Apply scope; `staggerSeconds` remains. The Step-1 auto-apply effect still runs,
+now triggered by assigning content in Step 3: it fills only empty variant
+timelines and never overwrites hand-edited ones.
+
+### Optional per-slot default content
+
+A template may save default content per slot:
+`tracks[].images[].defaultAsset { url, type: "image" | "video" }`, persisted by
+the pydantic model in `attention_routes.py` and round-tripped through the
+template config JSON (slots without it round-trip as absent — both authoring
+modes coexist; the cue-building service tolerates the extra field). The
+Attention Templates editor exposes a per-slot **"Set default content"** action
+(the shared `AttentionAssetPickerDialog`) with a visual indicator and Clear;
+presence of `defaultAsset` per slot is the only signal — there is no global
+toggle. When a template is picked in Step 3, empty slots pre-fill from
+`defaultAsset`; assigning content per pipeline never mutates the template, and
+switching back to a template the user already filled does not clobber their
+picks.
+
+Backend restart is required for the modified attention service/routes; the
+desktop app needs a standalone rebuild.
+
 ## Related
 
 - `goals/attention-images-details.md` — binding implementation spec for
