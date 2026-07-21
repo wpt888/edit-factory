@@ -16,12 +16,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   MultiTrackTimeline,
   TIMELINE_MAX_ZOOM,
   TIMELINE_MIN_ZOOM,
 } from "@/components/timeline/multi-track-timeline";
 import { TimelineClipShell } from "@/components/timeline/timeline-primitives";
-import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiDelete, apiGetWithRetry, apiPost, apiPut } from "@/lib/api";
 import type { AttentionAnimationPreset } from "@/types/attention-timeline";
 import {
   DEFAULT_ATTENTION_TEMPLATE, newTemplateImage, normalizeAttentionTemplate,
@@ -92,7 +99,7 @@ export default function AttentionTemplatesPage() {
   const loadTemplates = useCallback(async (preferredId?: string) => {
     setLoading(true);
     try {
-      const response = await apiGet("/attention-templates", { cache: "no-store" });
+      const response = await apiGetWithRetry("/attention-templates", { cache: "no-store" });
       const data = (await response.json()) as { templates?: AttentionTemplate[] };
       const next = data.templates ?? [];
       setTemplates(next);
@@ -259,15 +266,15 @@ export default function AttentionTemplatesPage() {
           <fieldset disabled={!editable || saving} className="disabled:opacity-55">
             <InspectorSection title="Template" open>
               <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-9" /></Field>
-              <Field label="Subtitle layer"><select value={draft.zone} onChange={event => setDraft(current => ({ ...current, zone: event.target.value as AttentionTemplatePayload["zone"] }))} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="behind">Captions over images</option><option value="front">Images over captions</option></select></Field>
-              <Field label="Animation"><select value={draft.animation} onChange={event => setDraft(current => ({ ...current, animation: event.target.value as AttentionAnimationPreset }))} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm capitalize">{ANIMATIONS.map(animation => <option key={animation}>{animation}</option>)}</select></Field>
+              <Field label="Subtitle layer"><Select value={draft.zone} onValueChange={value => setDraft(current => ({ ...current, zone: value as AttentionTemplatePayload["zone"] }))}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="behind">Captions over images</SelectItem><SelectItem value="front">Images over captions</SelectItem></SelectContent></Select></Field>
+              <Field label="Animation"><Select value={draft.animation} onValueChange={value => setDraft(current => ({ ...current, animation: value as AttentionAnimationPreset }))}><SelectTrigger size="sm" className="w-full text-xs capitalize"><SelectValue /></SelectTrigger><SelectContent>{ANIMATIONS.map(animation => <SelectItem key={animation} value={animation} className="capitalize">{animation}</SelectItem>)}</SelectContent></Select></Field>
               <NumberField label="Variant start gap" value={draft.variantGapMs / 1000} unit="s" step={.1} onChange={value => setDraft(current => ({ ...current, variantGapMs: clamp(Math.round(value * 1000), 0, 30000) }))} />
               <p className="text-[10px] leading-relaxed text-muted-foreground">Variant 1 uses the authored timing. Each following variant starts another {formatGap(draft.variantGapMs)} later.</p>
             </InspectorSection>
             <InspectorSection title="Image slot" value={selectedImage ? "Selected" : "No selection"} open>
               {selectedImage ? <>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Position X" value={selectedImage.x * 100} unit="%" onChange={value => updateImage(selectedImage.id, { x: clamp(value / 100, 0, 1) })} /><NumberField label="Position Y" value={selectedImage.y * 100} unit="%" onChange={value => updateImage(selectedImage.id, { y: clamp(value / 100, 0, 1) })} /><NumberField label="Width" value={selectedImage.width * 100} unit="%" onChange={value => updateImage(selectedImage.id, { width: clamp(value / 100, .01, 1) })} /><NumberField label="Height" value={selectedImage.height * 100} unit="%" onChange={value => updateImage(selectedImage.id, { height: clamp(value / 100, .01, 1) })} /></div>
-                <Field label="Media fit"><select value={selectedImage.fit} onChange={event => updateImage(selectedImage.id, { fit: event.target.value as AttentionTemplateImage["fit"] })} className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="contain">Contain · show the whole image</option><option value="cover">Cover · fill and crop</option></select></Field>
+                <Field label="Media fit"><Select value={selectedImage.fit} onValueChange={value => updateImage(selectedImage.id, { fit: value as AttentionTemplateImage["fit"] })}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="contain">Contain · show the whole image</SelectItem><SelectItem value="cover">Cover · fill and crop</SelectItem></SelectContent></Select></Field>
                 <p className="text-[10px] leading-relaxed text-muted-foreground">The pipeline supplies the real image. Contain safely handles portrait and landscape media; Cover fills the slot and may crop it.</p>
                 <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><input type="range" min="0" max="100" value={selectedImage.opacity * 100} onChange={event => updateImage(selectedImage.id, { opacity: Number(event.target.value) / 100 })} className="w-full accent-primary" /></Field>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Start" value={selectedImage.startMs / 1000} unit="s" step={.1} onChange={value => { const ms = Math.max(0, Math.round(value * 1000)); updateImage(selectedImage.id, { startMs: ms }); setPreviewMs(ms); }} /><NumberField label="Duration" value={selectedImage.durationMs / 1000} unit="s" step={.1} onChange={value => updateImage(selectedImage.id, { durationMs: Math.max(100, Math.round(value * 1000)) })} /></div>
@@ -276,18 +283,19 @@ export default function AttentionTemplatesPage() {
             </InspectorSection>
             <InspectorSection title="Canvas" value={canvasLabel} open>
               <Field label="Video format">
-                <select
+                <Select
                   value={canvasPreset ? `${canvasPreset.width}x${canvasPreset.height}` : "custom"}
-                  onChange={event => {
-                    const preset = CANVAS_PRESETS.find(option => `${option.width}x${option.height}` === event.target.value);
+                  onValueChange={value => {
+                    const preset = CANVAS_PRESETS.find(option => `${option.width}x${option.height}` === value);
                     if (preset) setDraft(current => ({ ...current, canvasWidth: preset.width, canvasHeight: preset.height }));
                   }}
-                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                  data-testid="attention-canvas-preset"
                 >
-                  {CANVAS_PRESETS.map(option => <option key={`${option.width}x${option.height}`} value={`${option.width}x${option.height}`}>{option.label} · {option.width}×{option.height}</option>)}
-                  <option value="custom">Custom dimensions</option>
-                </select>
+                  <SelectTrigger size="sm" className="w-full text-xs" data-testid="attention-canvas-preset"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {CANVAS_PRESETS.map(option => <SelectItem key={`${option.width}x${option.height}`} value={`${option.width}x${option.height}`}>{option.label} · {option.width}×{option.height}</SelectItem>)}
+                    <SelectItem value="custom">Custom dimensions</SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <NumberField label="Width" value={draft.canvasWidth} unit="px" onChange={value => setDraft(current => ({ ...current, canvasWidth: clampCanvasDimension(value) }))} />
@@ -370,13 +378,6 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
     window.addEventListener("pointercancel", up);
   };
 
-  const playhead = (
-    <span
-      className="pointer-events-none absolute inset-y-0 z-30 w-px bg-rose-400"
-      style={{ left: `${clamp(previewMs / endMs, 0, 1) * 100}%` }}
-    />
-  );
-
   return (
     <section className="flex min-h-0 flex-col bg-card" data-testid="attention-track-list">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
@@ -399,10 +400,10 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
         laneWidth={laneWidth}
         ruler={{
           duration: endMs / 1000,
-          currentTime: previewMs / 1000,
           className: "cursor-ew-resize",
           onPointerDown: seek,
         }}
+        playhead={{ style: { left: `${clamp(previewMs / endMs, 0, 1) * 100}%` } }}
         zoom={zoom}
         minZoom={TIMELINE_MIN_ZOOM}
         maxZoom={TIMELINE_MAX_ZOOM}
@@ -451,7 +452,6 @@ function Timeline({ tracks, endMs, previewMs, zoom, selectedImageId, editable, o
                   <span className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize border-l border-primary/50 bg-primary/25 opacity-80 hover:bg-primary/70" onPointerDown={event => beginDrag(event, image, "end")} />
                 </TimelineClipShell>
               ))}
-              {playhead}
             </>
           ),
         }))}
