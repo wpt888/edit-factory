@@ -30,7 +30,8 @@ if (fs.existsSync(staticSrc)) {
   copyDir(staticSrc, staticDest);
   console.log('Copied .next/static -> standalone/.next/static');
 } else {
-  console.warn('WARNING: .next/static/ not found — skipping');
+  console.error('ERROR: .next/static/ not found. Standalone bundle would be incomplete.');
+  process.exit(1);
 }
 
 // Copy public -> .next/standalone/public

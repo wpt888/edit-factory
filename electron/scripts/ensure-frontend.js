@@ -11,6 +11,7 @@ const { spawnSync } = require('child_process');
 
 const frontendDir = path.resolve(__dirname, '..', '..', 'frontend');
 const serverFile = path.join(frontendDir, '.next', 'standalone', 'server.js');
+const staticDir = path.join(frontendDir, '.next', 'standalone', '.next', 'static');
 const fingerprintFile = path.join(frontendDir, '.next', 'standalone', '.blipost-source-hash');
 
 function sourceFiles(target) {
@@ -49,8 +50,11 @@ const expectedFingerprint = sourceFingerprint();
 const builtFingerprint = fs.existsSync(fingerprintFile)
   ? fs.readFileSync(fingerprintFile, 'utf8').trim()
   : '';
+const staticAssetsReady = fs.existsSync(staticDir)
+  && fs.statSync(staticDir).isDirectory()
+  && fs.readdirSync(staticDir).length > 0;
 
-if (fs.existsSync(serverFile) && builtFingerprint === expectedFingerprint) {
+if (fs.existsSync(serverFile) && staticAssetsReady && builtFingerprint === expectedFingerprint) {
   console.log('[desktop] Frontend standalone bundle is ready.');
   process.exit(0);
 }
