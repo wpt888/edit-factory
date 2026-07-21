@@ -32,7 +32,9 @@ export function buildAttentionTemplateApplyPayload({
 }): AttentionTemplateApplyPayload {
   return {
     templateId: selection.templateId,
-    assetUrls: selection.assetUrls,
+    // Phase 2: backend still consumes a flat image-URL list. Video slots are
+    // wired end-to-end in Phase 3; until then only image assets are sent.
+    assetUrls: selection.assets.filter((asset) => asset.type === "image").map((asset) => asset.url),
     durationMs: Math.max(1, Math.round(preview.audio_duration * 1000)),
     subtitleBoundariesMs: Array.from(new Set(preview.matches.flatMap((match) => [
       Math.round(match.srt_start * 1000),

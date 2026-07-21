@@ -521,11 +521,13 @@ export function TimelineEditor({
     });
   }, [attentionCues, attentionTimeline, onAttentionTimelineChange]);
 
-  const selectAttentionAsset = useCallback((url: string) => {
+  const selectAttentionAsset = useCallback((asset: { url: string; type: "image" | "video" }) => {
     if (!attentionAssetTarget) return;
+    // Phase 3 carries the media type onto the cue layer; for now the timeline
+    // cue only needs the URL.
     updateCueLayer(attentionAssetTarget.cueId, attentionAssetTarget.layerId, {
-      assetId: url,
-      assetUrl: url,
+      assetId: asset.url,
+      assetUrl: asset.url,
     });
   }, [attentionAssetTarget, updateCueLayer]);
 

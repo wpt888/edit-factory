@@ -12,38 +12,55 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
+import type { AttentionAsset } from "@/components/dialogs/attention-asset-picker-dialog";
 import { InspectorField } from "@/components/ui/inspector";
 import { apiGet } from "@/lib/api";
 import type { AttentionTemplate } from "@/types/attention-template";
 import { normalizeAttentionTemplate } from "@/types/attention-template";
 
+export type { AttentionAsset } from "@/components/dialogs/attention-asset-picker-dialog";
+
 export type AttentionSelection = {
   templateId: string;
-  assetUrls: string[];
+  /** Slot content in order — images or videos. Fewer assets than slots repeat (index % length). */
+  assets: AttentionAsset[];
   /** Seconds added per variant so image bursts never land on the same second twice (0 = off). */
   staggerSeconds: number;
 };
 
 export const EMPTY_ATTENTION_SELECTION: AttentionSelection = {
   templateId: "",
-  assetUrls: [],
+  assets: [],
   staggerSeconds: 1,
 };
 
 /** Tolerant read of a persisted selection. Old pipeline-template bundles carry
- *  `maxVariants` (now dropped) — ignore unknown fields instead of crashing. */
+ *  `assetUrls: string[]` (now typed `assets`) and `maxVariants` (dropped) —
+ *  migrate strings to `{url, type:"image"}` and ignore unknown fields. */
 export function normalizeAttentionSelection(raw: unknown): AttentionSelection {
   const record = (raw ?? {}) as {
     templateId?: unknown;
+    assets?: unknown;
     assetUrls?: unknown;
     staggerSeconds?: unknown;
   };
-  const assetUrls = Array.isArray(record.assetUrls)
-    ? record.assetUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
-    : [];
+  let assets: AttentionAsset[] = [];
+  if (Array.isArray(record.assets)) {
+    assets = record.assets
+      .map((item) => {
+        const asset = (item ?? {}) as { url?: unknown; type?: unknown };
+        if (typeof asset.url !== "string" || asset.url.length === 0) return null;
+        return { url: asset.url, type: asset.type === "video" ? "video" : "image" } as AttentionAsset;
+      })
+      .filter((item): item is AttentionAsset => item !== null);
+  } else if (Array.isArray(record.assetUrls)) {
+    assets = record.assetUrls
+      .filter((url): url is string => typeof url === "string" && url.length > 0)
+      .map((url) => ({ url, type: "image" as const }));
+  }
   return {
     templateId: typeof record.templateId === "string" ? record.templateId : "",
-    assetUrls,
+    assets,
     staggerSeconds: typeof record.staggerSeconds === "number" ? record.staggerSeconds : 1,
   };
 }
@@ -90,7 +107,7 @@ export function AttentionTemplatePicker({
   const config = normalizeAttentionTemplate(selectedTemplate);
   const templateSlots = useMemo(() => config.tracks.flatMap((track, trackIndex) =>
     track.map((image) => ({ image, trackIndex }))), [config.tracks]);
-  const visibleSlotCount = Math.max(templateSlots.length, selection.assetUrls.length);
+  const visibleSlotCount = Math.max(templateSlots.length, selection.assets.length);
   const templateMatchesOutput = !selectedTemplate
     || config.canvasWidth * outputHeight === config.canvasHeight * outputWidth;
 
@@ -102,7 +119,7 @@ export function AttentionTemplatePicker({
   const removeAsset = (slotIndex: number) => {
     onSelectionChange({
       ...selection,
-      assetUrls: selection.assetUrls.filter((_, index) => index !== slotIndex),
+      assets: selection.assets.filter((_, index) => index !== slotIndex),
     });
   };
 
@@ -174,8 +191,8 @@ export function AttentionTemplatePicker({
             >
               <div className="absolute inset-x-2 top-2 text-center text-[7px] uppercase tracking-[0.18em] text-white/25">Video frame</div>
               {templateSlots.map(({ image }, index) => {
-                const assetUrl = selection.assetUrls.length > 0
-                  ? selection.assetUrls[index % selection.assetUrls.length]
+                const asset = selection.assets.length > 0
+                  ? selection.assets[index % selection.assets.length]
                   : undefined;
                 return (
                   <div
@@ -188,7 +205,7 @@ export function AttentionTemplatePicker({
                       zIndex: index + 1,
                     }}
                   >
-                    {assetUrl ? <img src={assetUrl} alt="" className="size-full object-cover" /> : index + 1}
+                    {asset ? <AssetThumb asset={asset} /> : index + 1}
                   </div>
                 );
               })}
@@ -219,8 +236,8 @@ export function AttentionTemplatePicker({
 
           <div className="space-y-2" data-testid="attention-content-slots">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-muted-foreground">Content images</p>
-              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => openAssetPicker(selection.assetUrls.length)}>
+              <p className="text-xs font-medium text-muted-foreground">Content</p>
+              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => openAssetPicker(selection.assets.length)}>
                 <Images className="size-3.5" />
                 Add
               </Button>
@@ -229,12 +246,12 @@ export function AttentionTemplatePicker({
             <div className="grid grid-cols-3 gap-2">
               {Array.from({ length: visibleSlotCount }, (_, index) => {
                 const slot = templateSlots[index];
-                const assetUrl = selection.assetUrls[index];
+                const asset = selection.assets[index];
                 return (
                   <div key={`${slot?.image.id ?? "extra"}-${index}`} className="group overflow-hidden rounded-lg border bg-background transition hover:border-primary/60">
                     <button type="button" className="relative block aspect-square w-full overflow-hidden bg-muted/40" onClick={() => openAssetPicker(index)}>
-                      {assetUrl ? (
-                        <img src={assetUrl} alt={`Attention content ${index + 1}`} className="size-full object-cover" />
+                      {asset ? (
+                        <AssetThumb asset={asset} label={`Attention content ${index + 1}`} />
                       ) : (
                         <span className="flex size-full flex-col items-center justify-center gap-1 text-muted-foreground">
                           <ImagePlus className="size-5 text-primary/80" />
@@ -242,16 +259,19 @@ export function AttentionTemplatePicker({
                         </span>
                       )}
                       <span className="absolute left-1.5 top-1.5 grid size-5 place-items-center rounded-full bg-black/75 text-[10px] font-semibold text-white">{index + 1}</span>
-                      {assetUrl && (
+                      {asset?.type === "video" && (
+                        <span className="absolute right-1.5 top-1.5 rounded bg-black/75 px-1 py-0.5 text-[8px] font-semibold uppercase text-white">Vid</span>
+                      )}
+                      {asset && (
                         <span className="absolute inset-0 grid place-items-center bg-black/50 text-white opacity-0 transition group-hover:opacity-100">
                           <Replace className="size-4" />
                         </span>
                       )}
                     </button>
-                    {assetUrl && (
+                    {asset && (
                       <div className="flex items-center justify-between gap-1 px-1.5 py-1">
                         <span className="truncate text-[9px] text-muted-foreground">{slot ? `Slot ${index + 1}` : `Extra ${index - templateSlots.length + 1}`}</span>
-                        <button type="button" onClick={() => removeAsset(index)} className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Remove content image ${index + 1}`}>
+                        <button type="button" onClick={() => removeAsset(index)} className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Remove content ${index + 1}`}>
                           <X className="size-3" />
                         </button>
                       </div>
@@ -262,7 +282,7 @@ export function AttentionTemplatePicker({
             </div>
 
             <p className="text-[11px] text-muted-foreground">
-              Images fill the numbered slots in order. With fewer images than slots, they repeat automatically.
+              Images and videos fill the numbered slots in order. With fewer assets than slots, they repeat automatically. Paste (Ctrl+V) adds an image to the next slot.
             </p>
           </div>
         </>
@@ -271,16 +291,23 @@ export function AttentionTemplatePicker({
       <AttentionAssetPickerDialog
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        onSelect={(url) => {
-          const slotIndex = activeSlot ?? selection.assetUrls.length;
-          const nextAssets = [...selection.assetUrls];
-          nextAssets[slotIndex] = url;
-          onSelectionChange({ ...selection, assetUrls: nextAssets.filter(Boolean) });
+        onSelect={(asset) => {
+          const slotIndex = activeSlot ?? selection.assets.length;
+          const nextAssets = [...selection.assets];
+          nextAssets[slotIndex] = asset;
+          onSelectionChange({ ...selection, assets: nextAssets.filter(Boolean) });
           setActiveSlot(null);
         }}
       />
     </div>
   );
+}
+
+function AssetThumb({ asset, label = "" }: { asset: AttentionAsset; label?: string }) {
+  if (asset.type === "video") {
+    return <video src={asset.url} muted playsInline preload="metadata" className="size-full object-cover" />;
+  }
+  return <img src={asset.url} alt={label} className="size-full object-cover" />;
 }
 
 function formatRatio(width: number, height: number): string {

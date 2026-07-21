@@ -61,6 +61,7 @@ import {
   EMPTY_ATTENTION_SELECTION,
   type AttentionSelection,
 } from "@/components/attention-template-picker";
+import { uploadPlatformMedia } from "@/components/dialogs/attention-asset-picker-dialog";
 import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
@@ -302,6 +303,36 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     focusSubtitleRotationPanel();
   };
   const attentionApplySelection = attentionSelection ?? EMPTY_ATTENTION_SELECTION;
+
+  // Ctrl+V anywhere in Step 3 (outside a text field) drops a clipboard image
+  // into the next attention slot. Browsers never expose video via clipboard,
+  // so this is images-only by design.
+  useEffect(() => {
+    if (!pipelineId || !attentionApplySelection.templateId) return;
+    const onPaste = (event: ClipboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
+      const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) => item.type.startsWith("image/"));
+      const file = imageItem?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      const toastId = toast.loading("Uploading pasted image...");
+      void (async () => {
+        try {
+          const asset = await uploadPlatformMedia(file);
+          handleAttentionSelectionChange({
+            ...attentionApplySelection,
+            assets: [...attentionApplySelection.assets, asset],
+          });
+          toast.success("Image added to the next attention slot", { id: toastId });
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Paste upload failed", { id: toastId });
+        }
+      })();
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [pipelineId, attentionApplySelection, handleAttentionSelectionChange]);
   const attentionApplyScope = attentionScopeOverride
     && attentionScopeOverride.pipelineId === pipelineId
     ? attentionScopeOverride.scope
@@ -826,7 +857,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     disabled={
                       attentionApplying
                       || !attentionApplySelection.templateId
-                      || attentionApplySelection.assetUrls.length === 0
+                      || attentionApplySelection.assets.length === 0
                       || !attentionApplyTimelinesReady
                     }
                     onClick={handleAttentionTemplateApply}
@@ -834,7 +865,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     {attentionApplying && <Loader2 className="size-3.5 animate-spin" />}
                     {!attentionApplying
                       && attentionApplySelection.templateId
-                      && attentionApplySelection.assetUrls.length > 0
+                      && attentionApplySelection.assets.length > 0
                       && !attentionApplyTimelinesReady
                       ? "Loading timelines..."
                       : "Apply template"}

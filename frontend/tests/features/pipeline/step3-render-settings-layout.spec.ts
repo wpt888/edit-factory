@@ -112,6 +112,21 @@ test("Step 2 inspector keeps the canvas background below its cards", async ({ pa
   const inspector = page.getByTestId("step2-inspector");
   await expect(inspector).toBeVisible();
   await expect(inspector).toHaveCSS("background-color", "rgb(24, 24, 24)");
+
+  const sourceHeader = page.getByTestId("source-videos-header");
+  const reviewHeader = page.getByTestId("step2-review-header");
+  await expect(sourceHeader).toBeVisible();
+  await expect(reviewHeader).toBeVisible();
+  const [sourceHeaderBox, reviewHeaderBox] = await Promise.all([
+    sourceHeader.boundingBox(),
+    reviewHeader.boundingBox(),
+  ]);
+  expect(sourceHeaderBox).not.toBeNull();
+  expect(reviewHeaderBox).not.toBeNull();
+  expect(Math.abs(sourceHeaderBox!.y - reviewHeaderBox!.y)).toBeLessThanOrEqual(1);
+  expect(sourceHeaderBox!.height).toBe(reviewHeaderBox!.height);
+
+  await page.screenshot({ path: "screenshots/step2-panel-header-alignment.png", fullPage: false });
 });
 
 test("Scripts exposes the assembly preset before preview generation", async ({ page }) => {

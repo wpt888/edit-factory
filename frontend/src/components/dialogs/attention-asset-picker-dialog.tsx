@@ -14,7 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { apiGet, apiUpload } from "@/lib/api";
 
-type CloudImage = {
+export type AttentionAssetType = "image" | "video";
+export type AttentionAsset = { url: string; type: AttentionAssetType };
+
+type CloudMedia = {
   id: string;
   displayName: string | null;
   mimeType: string;
@@ -24,14 +27,36 @@ type CloudImage = {
 
 type MediaResponse = {
   connected: boolean;
-  media: CloudImage[];
+  media: CloudMedia[];
 };
 
 type AttentionAssetPickerDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (url: string) => void;
+  onSelect: (asset: AttentionAsset) => void;
 };
+
+const VIDEO_EXTENSIONS = /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i;
+
+function typeFromMime(mimeType: string | undefined): AttentionAssetType {
+  return mimeType?.startsWith("video/") ? "video" : "image";
+}
+
+/** Upload an image or video to the shared media library and resolve its
+ *  preview URL. Reused by the dialog Upload tab and by Ctrl+V paste. */
+export async function uploadPlatformMedia(file: File): Promise<AttentionAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await apiUpload("/platform/media/upload", form, { timeout: 15 * 60_000 });
+  const { mediaId } = (await response.json()) as { mediaId: string };
+  const list = await apiGet("/platform/media?limit=100", { cache: "no-store" });
+  const data = (await list.json()) as { media?: CloudMedia[] };
+  const found = data.media?.find((item) => item.id === mediaId);
+  if (!found?.previewUrl) {
+    throw new Error("Upload succeeded but no preview URL was returned.");
+  }
+  return { url: found.previewUrl, type: typeFromMime(found.mimeType || file.type) };
+}
 
 export function AttentionAssetPickerDialog({
   open,
@@ -39,27 +64,24 @@ export function AttentionAssetPickerDialog({
   onSelect,
 }: AttentionAssetPickerDialogProps) {
   const [tab, setTab] = useState<"gallery" | "upload" | "url">("gallery");
-  const [images, setImages] = useState<CloudImage[]>([]);
+  const [media, setMedia] = useState<CloudMedia[]>([]);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [url, setUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const loadImages = useCallback(async () => {
+  const loadMedia = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await apiGet("/platform/media?kind=image&limit=100", {
-        cache: "no-store",
-      });
+      // No kind filter: attention slots take images and videos alike.
+      const response = await apiGet("/platform/media?limit=100", { cache: "no-store" });
       const data = (await response.json()) as MediaResponse;
       setConnected(data.connected);
-      setImages(data.media.filter((item) => item.previewUrl));
-      return data.media;
+      setMedia(data.media.filter((item) => item.previewUrl));
     } catch {
       setConnected(false);
-      setImages([]);
-      return [];
+      setMedia([]);
     } finally {
       setLoading(false);
     }
@@ -70,37 +92,25 @@ export function AttentionAssetPickerDialog({
       setUrl("");
       return;
     }
-    void loadImages();
-  }, [loadImages, open]);
+    void loadMedia();
+  }, [loadMedia, open]);
 
-  const choose = (value: string) => {
-    onSelect(value);
+  const choose = (asset: AttentionAsset) => {
+    onSelect(asset);
     onOpenChange(false);
   };
 
   const uploadFile = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Choose an image file");
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+      toast.error("Choose an image or video file");
       return;
     }
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const response = await apiUpload("/platform/media/upload", form, {
-        timeout: 15 * 60_000,
-      });
-      const { mediaId } = (await response.json()) as { mediaId: string };
-      const refreshed = await loadImages();
-      const uploaded = refreshed.find((item) => item.id === mediaId);
-      if (uploaded?.previewUrl) {
-        choose(uploaded.previewUrl);
-      } else {
-        setTab("gallery");
-        toast.success("Image uploaded. Select it from the gallery.");
-      }
+      const asset = await uploadPlatformMedia(file);
+      choose(asset);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Image upload failed");
+      toast.error(error instanceof Error ? error.message : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -110,10 +120,10 @@ export function AttentionAssetPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col">
         <DialogHeader>
-          <DialogTitle>Choose attention image</DialogTitle>
+          <DialogTitle>Choose attention media</DialogTitle>
         </DialogHeader>
 
-        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1" role="tablist" aria-label="Attention image source">
+        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1" role="tablist" aria-label="Attention media source">
           {([
             ["gallery", "Gallery", Cloud],
             ["upload", "Upload", Upload],
@@ -146,27 +156,37 @@ export function AttentionAssetPickerDialog({
                 <Cloud className="size-8" />
                 Connect Blipost to use the shared media gallery, or paste a URL.
               </div>
-            ) : images.length === 0 ? (
+            ) : media.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
                 <ImageIcon className="size-8" />
-                No uploaded images yet.
+                No uploaded media yet.
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-3 py-2 sm:grid-cols-4">
-                {images.map((image) => (
-                  <button
-                    key={image.id}
-                    type="button"
-                    className="group overflow-hidden rounded-lg border bg-black/20 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    onClick={() => image.previewUrl && choose(image.previewUrl)}
-                    title={image.displayName ?? "Uploaded image"}
-                  >
-                    <img src={image.previewUrl ?? ""} alt="" className="aspect-square w-full object-cover transition group-hover:scale-[1.03]" />
-                    <span className="block truncate px-2 py-1.5 text-[11px] text-muted-foreground">
-                      {image.displayName ?? "Uploaded image"}
-                    </span>
-                  </button>
-                ))}
+                {media.map((item) => {
+                  const type = typeFromMime(item.mimeType);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="group relative overflow-hidden rounded-lg border bg-black/20 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      onClick={() => item.previewUrl && choose({ url: item.previewUrl, type })}
+                      title={item.displayName ?? "Uploaded media"}
+                    >
+                      {type === "video" ? (
+                        <video src={item.previewUrl ?? ""} muted playsInline preload="metadata" className="aspect-square w-full object-cover" />
+                      ) : (
+                        <img src={item.previewUrl ?? ""} alt="" className="aspect-square w-full object-cover transition group-hover:scale-[1.03]" />
+                      )}
+                      {type === "video" && (
+                        <span className="absolute right-1.5 top-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-white">Video</span>
+                      )}
+                      <span className="block truncate px-2 py-1.5 text-[11px] text-muted-foreground">
+                        {item.displayName ?? "Uploaded media"}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -177,12 +197,12 @@ export function AttentionAssetPickerDialog({
             {uploading ? <Loader2 className="size-10 animate-spin text-primary" /> : <Upload className="size-10 text-primary" />}
             <div>
               <p className="font-medium">Upload to the shared media library</p>
-              <p className="mt-1 text-sm text-muted-foreground">PNG, JPEG, WebP, GIF, or another browser-supported image.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Images (PNG, JPEG, WebP, GIF) or videos (MP4, WebM, MOV).</p>
             </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -191,7 +211,7 @@ export function AttentionAssetPickerDialog({
               }}
             />
             <Button type="button" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-              {uploading ? "Uploading..." : "Choose image"}
+              {uploading ? "Uploading..." : "Choose file"}
             </Button>
           </div>
         )}
@@ -201,14 +221,15 @@ export function AttentionAssetPickerDialog({
             className="space-y-3 py-5"
             onSubmit={(event) => {
               event.preventDefault();
-              if (url.trim()) choose(url.trim());
+              const trimmed = url.trim();
+              if (trimmed) choose({ url: trimmed, type: VIDEO_EXTENSIONS.test(trimmed) ? "video" : "image" });
             }}
           >
             <label className="space-y-1 text-sm font-medium">
-              Image URL
+              Media URL
               <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." autoFocus />
             </label>
-            <Button type="submit" disabled={!url.trim()}>Use image URL</Button>
+            <Button type="submit" disabled={!url.trim()}>Use media URL</Button>
           </form>
         )}
       </DialogContent>

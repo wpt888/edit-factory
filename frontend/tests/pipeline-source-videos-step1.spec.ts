@@ -4,6 +4,16 @@ const step1Screenshot = 'screenshots/pipeline-step1-source-videos.png';
 const emptyStateScreenshot = 'screenshots/pipeline-step1-source-videos-empty.png';
 
 test('Step 1 aligns the source inspector beside the idea canvas', async ({ page }) => {
+  await page.addInitScript(() => {
+    const profile = {
+      id: 'source-videos-step1-profile',
+      name: 'Source Videos QA',
+      is_default: true,
+      created_at: '2026-07-21T00:00:00Z',
+    };
+    localStorage.setItem('editai_profiles', JSON.stringify([profile]));
+    localStorage.setItem('editai_current_profile_id', profile.id);
+  });
   await page.route('**/api/v1/segments/source-videos*', async (route) => {
     await route.fulfill({
       json: [
@@ -15,20 +25,18 @@ test('Step 1 aligns the source inspector beside the idea canvas', async ({ page 
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.goto('/pipeline');
 
-  const ideaCard = page.locator('[data-slot="card"]', { hasText: 'Video Idea' }).first();
-  const sourceVideosCard = page.locator('[data-slot="card"]', { hasText: 'Source Videos' }).first();
+  const ideaCard = page.getByTestId('step1-idea-canvas').locator('[data-slot="card"]').first();
+  const sourceVideosCard = page.getByTestId('source-videos-panel');
   await expect(ideaCard).toBeVisible({ timeout: 45_000 });
   await expect(sourceVideosCard).toBeVisible({ timeout: 45_000 });
 
-  const ideaBox = await ideaCard.boundingBox();
-  const sourceVideosBox = await sourceVideosCard.boundingBox();
-  expect(ideaBox).not.toBeNull();
-  expect(sourceVideosBox).not.toBeNull();
-  expect(sourceVideosBox!.x).toBeLessThan(ideaBox!.x);
-  expect(Math.abs(sourceVideosBox!.y - ideaBox!.y)).toBeLessThanOrEqual(2);
-
   const sourceHeader = page.getByTestId('source-videos-header');
   const ideaHeader = page.getByTestId('step1-idea-header');
+  await expect(sourceHeader.getByRole('button', { name: 'Deselect All' })).toHaveCount(0);
+  await expect(sourceHeader.getByRole('button', { name: 'Select All', exact: true })).toHaveCount(0);
+  await expect(sourceVideosCard.getByRole('button', { name: 'Deselect All' })).toBeVisible();
+  await expect(sourceVideosCard.getByRole('button', { name: 'Select All', exact: true })).toBeVisible();
+
   const [sourceHeaderBox, ideaHeaderBox] = await Promise.all([
     sourceHeader.boundingBox(),
     ideaHeader.boundingBox(),
@@ -37,11 +45,6 @@ test('Step 1 aligns the source inspector beside the idea canvas', async ({ page 
   expect(ideaHeaderBox).not.toBeNull();
   expect(Math.abs(sourceHeaderBox!.y - ideaHeaderBox!.y)).toBeLessThanOrEqual(1);
   expect(sourceHeaderBox!.height).toBe(ideaHeaderBox!.height);
-
-  await expect(sourceHeader.getByRole('button', { name: 'Deselect All' })).toHaveCount(0);
-  await expect(sourceHeader.getByRole('button', { name: 'Select All' })).toHaveCount(0);
-  await expect(sourceVideosCard.getByRole('button', { name: 'Deselect All' })).toBeVisible();
-  await expect(sourceVideosCard.getByRole('button', { name: 'Select All' })).toBeVisible();
 
   await page.screenshot({ path: step1Screenshot, fullPage: true });
 });

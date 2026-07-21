@@ -1525,7 +1525,7 @@ function PipelinePage() {
   // never overwritten because non-empty timelines are skipped.
   const attentionAutoApplied = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!pipelineId || !attentionSelection.templateId || attentionSelection.assetUrls.length === 0) return;
+    if (!pipelineId || !attentionSelection.templateId || attentionSelection.assets.length === 0) return;
     for (const card of previewCards) {
       const timeline = attentionTimelines[card.key];
       const preview = previews[card.key];

@@ -158,7 +158,14 @@ export interface PipelineScriptsResponse {
   codex_model?: string | null;
   variant_count?: number;
   meta_multiplication?: boolean;
-  attention_selection?: { templateId?: string; assetUrls?: string[]; staggerSeconds?: number; maxVariants?: number };
+  attention_selection?: {
+    templateId?: string;
+    assets?: { url: string; type: "image" | "video" }[];
+    // Legacy fields tolerated on load (migrated by normalizeAttentionSelection):
+    assetUrls?: string[];
+    staggerSeconds?: number;
+    maxVariants?: number;
+  };
   template_settings?: import("./pipeline-template").PipelineTemplateSettings | Record<string, never>;
   library_project_id?: string | null;
   generation_job?: Partial<AsyncJobState>;

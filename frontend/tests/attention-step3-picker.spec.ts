@@ -28,13 +28,22 @@ const previewFor = (offset: number) => ({
 
 // Shared route table for a Step 3 pipeline. `attentionSelection` seeds the
 // persisted selection so callers can start empty or pre-populated.
+type MediaRow = { id: string; displayName: string | null; mimeType: string; previewUrl: string; status: string };
+
 function routeStep3(page: import("@playwright/test").Page, opts: {
   attentionSelection: Record<string, unknown> | null;
   onApply?: (key: string, body: { startOffsetMs?: number }) => void;
+  media?: MediaRow[];
+  uploadMediaId?: string;
 }) {
   return page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+
+    if (path.endsWith("/platform/media/upload") && request.method() === "POST") {
+      await route.fulfill({ json: { mediaId: opts.uploadMediaId ?? "" } });
+      return;
+    }
 
     const applyMatch = path.match(/attention-timeline\/([^/]+)\/apply-template$/);
     if (applyMatch && request.method() === "POST") {
@@ -103,7 +112,7 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
       return;
     }
     if (path.includes("/platform/media")) {
-      await route.fulfill({ json: { connected: true, media: [] } });
+      await route.fulfill({ json: { connected: true, media: opts.media ?? [] } });
       return;
     }
     if (path.endsWith("/profiles/") || path.endsWith("/profiles")) {
@@ -156,8 +165,8 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
 
   await slots.getByText("Choose").first().click();
   await page.getByRole("tab", { name: "URL" }).click();
-  await page.getByLabel("Image URL").fill("https://assets.test/attention-one.png");
-  await page.getByRole("button", { name: "Use image URL" }).click();
+  await page.getByLabel("Media URL").fill("https://assets.test/attention-one.png");
+  await page.getByRole("button", { name: "Use media URL" }).click();
   await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
 
   await card.scrollIntoViewIfNeeded();
@@ -194,4 +203,47 @@ test("auto-apply staggers each variant by the configured offset", async ({ page 
   const byKey = Object.fromEntries(applyPosts.map(post => [post.key, post.body]));
   expect(byKey["0"].startOffsetMs).toBe(0);
   expect(byKey["1"].startOffsetMs).toBe(1000);
+});
+
+test("gallery lists video assets and a pasted image lands in a slot", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  await routeStep3(page, {
+    // Seed a selected template so the paste listener is active, no assets yet.
+    attentionSelection: { templateId: "system-tornado-stack", assets: [], staggerSeconds: 1 },
+    uploadMediaId: "pasted-1",
+    media: [
+      { id: "vid-1", displayName: "Clip", mimeType: "video/mp4", previewUrl: "https://assets.test/clip.mp4", status: "ready" },
+      { id: "pasted-1", displayName: "Pasted", mimeType: "image/png", previewUrl: "https://assets.test/pasted.png", status: "ready" },
+    ],
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
+
+  const card = page.getByTestId("step3-attention-apply");
+  await expect(card).toBeVisible();
+
+  // Gallery surfaces the video item with a "Video" badge.
+  await card.getByTestId("attention-content-slots").getByText("Choose").first().click();
+  await expect(page.getByRole("dialog").getByText("Video")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Synthesize a clipboard image paste; it uploads and fills the next slot.
+  await page.evaluate(() => {
+    const bytes = Uint8Array.from(atob("iVBORw0KGgo="), (c) => c.charCodeAt(0));
+    const file = new File([bytes], "pasted.png", { type: "image/png" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/pasted.png");
 });
