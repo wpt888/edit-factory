@@ -413,6 +413,43 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   const hasCompletedClips = completedClips.length > 0;
   const canUseSmartSchedule = !!projectId && allLibrarySaved !== false && selectedIntegrationIds.size > 0;
 
+  const captionByVariant = useMemo(() => {
+    const captions = new Map<number, string>();
+    for (const clip of completedClips) {
+      const caption = perVariantCaptions[clip.clip_id]?.trim();
+      if (caption && !captions.has(clip.variant_index)) {
+        captions.set(clip.variant_index, caption);
+      }
+    }
+    return captions;
+  }, [completedClips, perVariantCaptions]);
+
+  const previewCaptionPayload = useMemo(() => {
+    if (!preview) return {};
+
+    const captions: Record<string, string> = {};
+    for (const entry of preview.entries) {
+      const exactCaption = perVariantCaptions[entry.clip_id]?.trim();
+      const variantCaption = entry.variant_index !== undefined
+        ? captionByVariant.get(entry.variant_index)
+        : undefined;
+      const caption = exactCaption || variantCaption;
+      if (caption) captions[entry.clip_id] = caption;
+    }
+    return captions;
+  }, [captionByVariant, perVariantCaptions, preview]);
+
+  const missingCaptionVariants = useMemo(() => {
+    if (!preview) return [];
+
+    const missing = new Set<number>();
+    for (const entry of preview.entries) {
+      if (previewCaptionPayload[entry.clip_id]) continue;
+      if (entry.variant_index !== undefined) missing.add(entry.variant_index);
+    }
+    return [...missing].sort((a, b) => a - b);
+  }, [preview, previewCaptionPayload]);
+
   /* ---------- Handlers ---------- */
 
   const toggleIntegration = (id: string) => {
@@ -521,6 +558,11 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
 
   const handleConfirm = async () => {
     if (!preview || !projectId) return;
+    if (missingCaptionVariants.length > 0) {
+      const variants = missingCaptionVariants.map(index => index + 1).join(", ");
+      toast.error(`Add a caption for variant${missingCaptionVariants.length === 1 ? "" : "s"} ${variants} before confirming.`);
+      return;
+    }
 
     setConfirming(true);
     try {
@@ -536,7 +578,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
         integration_ids: [...selectedIntegrationIds],
         platform_times: platformTimes,
         jitter_minutes: jitterMinutes,
-        caption_template: "",
+        captions: previewCaptionPayload,
         clip_ids: [...selectedClipIds],
       });
       const data = await res.json();
@@ -985,6 +1027,19 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                     {/* Calendar grid */}
                     <ScheduleCalendarPreview entries={preview.entries} />
 
+                    {missingCaptionVariants.length > 0 && (
+                      <div
+                        role="alert"
+                        className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                      >
+                        <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                        <span>
+                          Add a caption for variant{missingCaptionVariants.length === 1 ? "" : "s"}{" "}
+                          {missingCaptionVariants.map(index => index + 1).join(", ")} before confirming this schedule.
+                        </span>
+                      </div>
+                    )}
+
                     {/* Confirm + Cancel */}
                     <div className="flex gap-3 justify-end">
                       <Button
@@ -996,7 +1051,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                       </Button>
                       <Button
                         onClick={handleConfirm}
-                        disabled={confirming || preview.total_clips === 0}
+                        disabled={confirming || preview.total_clips === 0 || missingCaptionVariants.length > 0}
                         className="bg-primary text-primary-foreground hover:bg-primary/90"
                       >
                         {confirming ? (
