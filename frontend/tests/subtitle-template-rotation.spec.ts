@@ -1,4 +1,4 @@
-﻿import { expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import {
   assignedSubtitlePreset,
   NO_SUBTITLES_PRESET_ID,
@@ -189,13 +189,14 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     if (path.endsWith(`/pipeline/scripts/${PIPELINE_ID}`)) {
       await route.fulfill({ json: {
         pipeline_id: PIPELINE_ID,
-        scripts: ["Variant one", "Variant two", "Variant three"],
-        script_names: ["Variant 1", "Variant 2", "Variant 3"],
+        scripts: ["Variant one", "Variant two", "Variant three", "Variant four"],
+        script_names: ["Variant 1", "Variant 2", "Variant 3", "Variant 4"],
         context_products: [],
         preview_info: {
           "0": { has_audio: true, audio_duration: 6, has_srt: true },
           "1": { has_audio: true, audio_duration: 6, has_srt: true },
           "2": { has_audio: true, audio_duration: 6, has_srt: true },
+          "3": { has_audio: true, audio_duration: 6, has_srt: true },
         },
         tts_info: {},
         captions: {},
@@ -203,7 +204,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
         name: "Rotation QA",
         idea: "Rotation QA",
         provider: "gemini",
-        variant_count: 3,
+        variant_count: 4,
         meta_multiplication: false,
         generation_job: {},
         tts_jobs: {},
@@ -212,14 +213,20 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/restore-previews`)) {
       await route.fulfill({ json: {
-        previews: { "0": preview(0), "1": preview(1), "2": preview(2) },
+        previews: { "0": preview(0), "1": preview(1), "2": preview(2), "3": preview(3) },
         available_segments: [],
       } });
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/subtitle-rotation`)) {
       if (request.method() !== "GET") subtitlePersistenceWrites.push(`${request.method()} ${path}`);
-      await route.fulfill({ json: { enabled: true, presetIds: ["punchy", "minimal", "editorial"] } });
+      await route.fulfill({
+        json: {
+          enabled: true,
+          presetIds: ["punchy", "minimal", "editorial", NO_SUBTITLES_PRESET_ID],
+          variantTemplates: {},
+        },
+      });
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/subtitle-overrides`)) {
@@ -234,8 +241,8 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       await route.fulfill({ json: {
         pipeline_id: PIPELINE_ID,
         provider: "gemini",
-        variant_count: 3,
-        variants: [0, 1, 2].map((variant_index) => ({ variant_index, status: "not_started", progress: 0, current_step: "" })),
+        variant_count: 4,
+        variants: [0, 1, 2, 3].map((variant_index) => ({ variant_index, status: "not_started", progress: 0, current_step: "" })),
         meta_variants: null,
         meta_multiplication: false,
         preview_info: {},
@@ -279,12 +286,17 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   const rotationPanel = page.getByTestId("subtitle-template-rotation");
   await expect(rotationPanel).toBeVisible();
   await expect(rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" })).toBeChecked();
-  await expect(rotationPanel.getByRole("combobox", { name: "Use subtitle template" })).toContainText("Launch captions");
   await expect(page.getByTestId("subtitle-template-select")).toHaveText([
     "Auto (Punchy Karaoke)",
     "Auto (Minimal Clean)",
     "Auto (Editorial Blue)",
+    "Auto (No subtitles)",
   ]);
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row").nth(3)).toContainText("None");
+
+  await page.getByTestId("subtitle-template-select").nth(3).click();
+  await expect(page.getByRole("option", { name: "No subtitles", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   const previewPanel = page.getByTestId("subtitle-style-preview-panel");
   const previewTarget = page.getByRole("combobox", { name: "Subtitle preview target" });
@@ -298,6 +310,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await expect(page.getByRole("option", { name: "Rotation 1 · Punchy Karaoke", exact: true })).toBeVisible();
   await expect(page.getByRole("option", { name: "Rotation 2 · Minimal Clean", exact: true })).toBeVisible();
   await expect(page.getByRole("option", { name: "Rotation 3 · Editorial Blue", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Rotation 4 · No subtitles", exact: true })).toBeVisible();
   await page.getByRole("option", { name: "A · Instagram", exact: true }).click();
   await expect(previewTarget).toContainText("A · Instagram");
   await expect(previewPanel).toContainText("Font: 48px | Outline: 3px | Y: 85%");

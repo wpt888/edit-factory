@@ -362,11 +362,10 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     const tabsInStyleCard = styleCard.getByRole('tab');
     await expect(tabsInStyleCard).toHaveCount(0, { timeout: 3000 });
 
-    // Meta OFF: NO per-version labels (no "Live Preview — A" or "— B"). This is
-    // the definitive signal that only the "default" preview panel is rendering.
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — A/i)).toHaveCount(0);
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — B/i)).toHaveCount(0);
-    await expect(page.locator('#subtitle-style-preview').getByText(/^Live Preview$/).first()).toBeVisible();
+    // Meta OFF: the preview panel follows the single "default" style — its
+    // target selector reads "Default", never a Meta version.
+    await expect(page.getByTestId('subtitle-style-preview-panel')).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('Default');
 
     // "Save as preset" button must still be present (global action)
     await expect(page.getByRole('button', { name: /save as preset/i })).toBeVisible();
@@ -406,9 +405,8 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await expect(styleCard.getByRole('tab', { name: 'A', exact: true })).toBeVisible();
     await expect(styleCard.getByRole('tab', { name: 'B', exact: true })).toBeVisible();
 
-    // Only the selected version gets a preview panel.
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — A/i)).toBeVisible();
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — B/i)).toHaveCount(0);
+    // The preview target follows the selected version (A by default).
+    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('A · Instagram');
 
     await page.screenshot({
       path: 'screenshots/subtitle-meta-on.png',
@@ -434,8 +432,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await tabA.click();
     await page.waitForTimeout(300);
     await expect(tabA).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — A/i)).toBeVisible();
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — B/i)).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('A · Instagram');
 
     await page.screenshot({
       path: 'screenshots/subtitle-editing-a-vs-b.png',
@@ -445,7 +442,6 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await tabB.click();
     await page.waitForTimeout(300);
     await expect(tabB).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — A/i)).toHaveCount(0);
-    await expect(page.locator('#subtitle-style-preview').getByText(/Live Preview — B/i)).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('B · Facebook');
   });
 });

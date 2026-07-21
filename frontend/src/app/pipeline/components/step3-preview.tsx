@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -914,9 +914,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                                 <button
                                   type="button"
                                   onClick={openThumbnailPicker}
-                                  className={`aspect-[9/16] w-full overflow-hidden rounded-sm border-2 transition-opacity hover:opacity-80 ${
-                                    thumb.isAutoSelected ? "border-border" : "border-primary"
-                                  }`}
+                                  className="aspect-[9/16] w-full overflow-hidden rounded-sm border-2 border-border transition-opacity hover:opacity-80"
                                   title="Click to change thumbnail"
                                 >
                                   <img src={thumbUrl} alt="Thumbnail" className="h-full w-full object-cover" />
