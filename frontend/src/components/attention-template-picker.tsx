@@ -4,6 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ImagePlus, Images, LayoutTemplate, Replace, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
 import { apiGet } from "@/lib/api";
 import type { AttentionTemplate } from "@/types/attention-template";
@@ -127,32 +134,35 @@ export function AttentionTemplatePicker({
           {onOutputSizeChange && (
             <label className="block space-y-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Output video format
-              <select
+              <Select
                 value={outputFormat ? `${outputFormat.width}x${outputFormat.height}` : "custom"}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   const format = PIPELINE_FORMATS.find(
-                    (item) => `${item.width}x${item.height}` === event.target.value,
+                    (item) => `${item.width}x${item.height}` === value,
                   );
                   if (format) onOutputSizeChange(format.width, format.height);
                 }}
-                className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium normal-case tracking-normal outline-none focus:border-primary"
-                data-testid="pipeline-output-format"
               >
-                {PIPELINE_FORMATS.map((format) => (
-                  <option key={`${format.width}x${format.height}`} value={`${format.width}x${format.height}`}>
-                    {format.label} · {format.width}x{format.height}
-                  </option>
-                ))}
-                {!outputFormat && <option value="custom">Custom · {outputWidth}x{outputHeight}</option>}
-              </select>
+                <SelectTrigger size="sm" className="w-full text-xs font-medium normal-case tracking-normal" data-testid="pipeline-output-format">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PIPELINE_FORMATS.map((format) => (
+                    <SelectItem key={`${format.width}x${format.height}`} value={`${format.width}x${format.height}`}>
+                      {format.label} · {format.width}x{format.height}
+                    </SelectItem>
+                  ))}
+                  {!outputFormat && <SelectItem value="custom">Custom · {outputWidth}x{outputHeight}</SelectItem>}
+                </SelectContent>
+              </Select>
             </label>
           )}
           <label className="block space-y-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Layout template
-            <select
-              value={selection.templateId}
-              onChange={(event) => {
-                const templateId = event.target.value;
+            <Select
+              value={selection.templateId || "__none__"}
+              onValueChange={(raw) => {
+                const templateId = raw === "__none__" ? "" : raw;
                 const template = templates.find(item => item.id === templateId);
                 const templateGapSeconds = template
                   ? normalizeAttentionTemplate(template).variantGapMs / 1000
@@ -160,15 +170,19 @@ export function AttentionTemplatePicker({
                 onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds });
               }}
               disabled={loading}
-              className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium normal-case tracking-normal outline-none focus:border-primary"
             >
-              <option value="">{loading ? "Loading templates..." : templates.length === 0 ? "No templates available" : "No attention template"}</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}{template.is_system ? " · System" : " · Personal"}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger size="sm" className="w-full text-xs font-medium normal-case tracking-normal">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">{loading ? "Loading templates..." : templates.length === 0 ? "No templates available" : "No attention template"}</SelectItem>
+                {templates.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>
+                    {template.name}{template.is_system ? " · System" : " · Personal"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
 
           {selectedTemplate && (
