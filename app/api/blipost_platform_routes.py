@@ -691,7 +691,7 @@ async def publish(
 @router.get("/publish/{job_id}/progress")
 async def publish_progress(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Poll a publish job's progress (same shape as the Postiz progress endpoint)."""
-    progress = get_publish_progress(job_id)
+    progress = get_publish_progress(job_id, profile.profile_id)
     if not progress:
         return {"status": "not_found", "percentage": 0}
     result = dict(progress)
@@ -734,7 +734,7 @@ async def _publish_task(
 ):
     """Background: upload media to R2 → create post via Platform API → track progress."""
     logger.info("[Profile %s] Blipost publish clip %s (job %s)", profile_id, clip_id, job_id)
-    update_publish_progress(job_id, "Initializing...", 0)
+    update_publish_progress(job_id, "Initializing...", 0, profile_id=profile_id)
 
     try:
         client = get_client_for_profile(profile_id)
@@ -744,14 +744,14 @@ async def _publish_task(
         content_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
 
         # 1. Request a presigned slot, then PUT the bytes.
-        update_publish_progress(job_id, "Requesting upload slot...", 15)
+        update_publish_progress(job_id, "Requesting upload slot...", 15, profile_id=profile_id)
         slot = await client.request_media_upload(path.name, content_type, len(data))
         media_id = slot.get("mediaId")
         upload_url = slot.get("uploadUrl")
         if not media_id or not upload_url:
             raise BlipostPlatformError("Server did not return an upload slot.")
 
-        update_publish_progress(job_id, "Uploading video...", 40)
+        update_publish_progress(job_id, "Uploading video...", 40, profile_id=profile_id)
         await client.upload_media_bytes(upload_url, data, content_type)
 
         # 2. Create the post. The Platform API requires scheduledAt ≥30s in the
@@ -763,7 +763,7 @@ async def _publish_task(
             when = schedule_dt or (datetime.now(timezone.utc) + timedelta(seconds=60))
             scheduled_at = when.isoformat()
 
-        update_publish_progress(job_id, "Creating post...", 75)
+        update_publish_progress(job_id, "Creating post...", 75, profile_id=profile_id)
         result = await client.create_post(
             text=caption,
             account_ids=account_ids,
@@ -792,16 +792,26 @@ async def _publish_task(
                 logger.warning("Failed to track Blipost publication: %s", e)
 
         msg = "Saved as draft!" if save_as_draft else f"Post {status_label} via Blipost!"
-        update_publish_progress(job_id, msg, 100, "completed")
+        update_publish_progress(job_id, msg, 100, "completed", profile_id=profile_id)
 
     except BlipostCreditsError as e:
         bal = f" (balance: {e.balance})" if e.balance is not None else ""
-        update_publish_progress(job_id, f"Failed: Insufficient credits{bal}", 100, "failed")
+        update_publish_progress(
+            job_id,
+            f"Failed: Insufficient credits{bal}",
+            100,
+            "failed",
+            profile_id=profile_id,
+        )
     except BlipostAuthError:
-        update_publish_progress(job_id, "Failed: Token invalid or revoked", 100, "failed")
+        update_publish_progress(
+            job_id, "Failed: Token invalid or revoked", 100, "failed", profile_id=profile_id
+        )
     except Exception as e:
         logger.error("Blipost publish job %s failed: %s", job_id, e)
-        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_publish_progress(
+            job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id
+        )
 
 
 # ============== AI VIDEO GENERATION (D2 — on platform credits) ==============

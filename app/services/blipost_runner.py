@@ -389,6 +389,10 @@ class BlipostRenderRunner:
                         "The render runner is already active under another profile — stop it there first."
                     )
                 return
+            if self.profile_id != profile_id:
+                self.processed = []
+                self.current_job = None
+                self.last_error = None
             self.profile_id = profile_id
             self.running = True
             self.state = "idle"

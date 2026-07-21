@@ -105,6 +105,7 @@ def _db_load_assembly_job(job_id: str) -> Optional[dict]:
 
         row = result
         job = {
+            "profile_id": row.get("profile_id"),
             "status": row.get("status", "processing"),
             "progress": row.get("progress", 0),
             "current_step": row.get("current_step", ""),
@@ -328,6 +329,7 @@ async def render_assembly(
     with _assembly_jobs_lock:
         _evict_old_entries(_assembly_jobs)
         _assembly_jobs[job_id] = {
+            "profile_id": profile.profile_id,
             "status": "processing",
             "progress": 0,
             "current_step": "Initializing assembly",
@@ -461,6 +463,8 @@ async def get_assembly_status(
     job_data = job_storage.get_job(job_id)
 
     if job_data and job_data.get("job_type") == "assembly":
+        if job_data.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Job not found")
         error_msg = None
         if job_data.get("error"):
             error_msg = "Processing failed. Check server logs for details."
@@ -480,6 +484,8 @@ async def get_assembly_status(
 
     job = _assembly_jobs.get(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Sanitize error details for public endpoint

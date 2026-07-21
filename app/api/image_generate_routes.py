@@ -1100,25 +1100,25 @@ async def _publish_image_task(
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Publishing image {image_id} (job {job_id})")
-    update_publish_progress(job_id, "Initializing...", 0)
+    update_publish_progress(job_id, "Initializing...", 0, profile_id=profile_id)
 
     try:
         publisher = get_postiz_publisher(profile_id)
 
         # Get integrations info
-        update_publish_progress(job_id, "Fetching platform info...", 25)
+        update_publish_progress(job_id, "Fetching platform info...", 25, profile_id=profile_id)
         integrations = await publisher.get_integrations(profile_id=profile_id)
         integrations_info = {i.id: i.type for i in integrations}
 
         # Upload image
-        update_publish_progress(job_id, "Uploading image to Postiz...", 50)
+        update_publish_progress(job_id, "Uploading image to Postiz...", 50, profile_id=profile_id)
         media = await publisher.upload_video(
             video_path=Path(file_path),
             profile_id=profile_id,
         )
 
         # Create post
-        update_publish_progress(job_id, "Creating post...", 75)
+        update_publish_progress(job_id, "Creating post...", 75, profile_id=profile_id)
         result = await publisher.create_post(
             media_id=media.id,
             media_path=media.path,
@@ -1135,13 +1135,18 @@ async def _publish_image_task(
                 "Published successfully!" if not schedule_date else f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}",
                 100,
                 "completed",
+                profile_id=profile_id,
             )
         else:
-            update_publish_progress(job_id, f"Failed: {result.error}", 100, "failed")
+            update_publish_progress(
+                job_id, f"Failed: {result.error}", 100, "failed", profile_id=profile_id
+            )
 
     except Exception as e:
         logger.error(f"Image publish job {job_id} failed: {e}")
-        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_publish_progress(
+            job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id
+        )
 
 
 async def _bulk_publish_images_task(
@@ -1157,12 +1162,14 @@ async def _bulk_publish_images_task(
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Bulk publishing {len(images)} images (job {job_id})")
-    update_publish_progress(job_id, "Initializing bulk image publish...", 0)
+    update_publish_progress(
+        job_id, "Initializing bulk image publish...", 0, profile_id=profile_id
+    )
 
     try:
         publisher = get_postiz_publisher(profile_id)
 
-        update_publish_progress(job_id, "Fetching platform info...", 10)
+        update_publish_progress(job_id, "Fetching platform info...", 10, profile_id=profile_id)
         integrations = await publisher.get_integrations(profile_id=profile_id)
         integrations_info = {i.id: i.type for i in integrations}
 
@@ -1175,6 +1182,7 @@ async def _bulk_publish_images_task(
                 job_id,
                 f"Uploading image {image_label}...",
                 progress_base + 15,
+                profile_id=profile_id,
             )
             media = await publisher.upload_video(
                 video_path=Path(image["file_path"]),
@@ -1189,6 +1197,7 @@ async def _bulk_publish_images_task(
                 job_id,
                 f"Creating post for image {image_label}...",
                 progress_base + 25,
+                profile_id=profile_id,
             )
             result = await publisher.create_post(
                 media_id=media.id,
@@ -1201,7 +1210,9 @@ async def _bulk_publish_images_task(
             )
 
             if not result.success:
-                update_publish_progress(job_id, f"Failed: {result.error}", 100, "failed")
+                update_publish_progress(
+                    job_id, f"Failed: {result.error}", 100, "failed", profile_id=profile_id
+                )
                 return
 
         final_step = (
@@ -1209,11 +1220,15 @@ async def _bulk_publish_images_task(
             if schedule_start
             else f"Published {len(images)} image(s) successfully!"
         )
-        update_publish_progress(job_id, final_step, 100, "completed")
+        update_publish_progress(
+            job_id, final_step, 100, "completed", profile_id=profile_id
+        )
 
     except Exception as e:
         logger.error(f"Bulk image publish job {job_id} failed: {e}")
-        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_publish_progress(
+            job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id
+        )
 
 
 @router.post("/publish-image")

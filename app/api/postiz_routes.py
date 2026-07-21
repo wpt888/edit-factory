@@ -138,7 +138,14 @@ def _evict_old_progress():
             _publish_progress.pop(key, None)
 
 
-def update_publish_progress(job_id: str, step: str, percentage: int, status: str = "in_progress"):
+def update_publish_progress(
+    job_id: str,
+    step: str,
+    percentage: int,
+    status: str = "in_progress",
+    *,
+    profile_id: str,
+):
     """Update progress for a publish job."""
     with _publish_progress_lock:
         _evict_old_progress()
@@ -146,14 +153,18 @@ def update_publish_progress(job_id: str, step: str, percentage: int, status: str
             "step": step,
             "percentage": percentage,
             "status": status,
+            "profile_id": profile_id,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
 
-def get_publish_progress(job_id: str) -> Optional[dict]:
+def get_publish_progress(job_id: str, profile_id: str) -> Optional[dict]:
     """Get progress for a publish job."""
     with _publish_progress_lock:
-        return _publish_progress.get(job_id)
+        progress = _publish_progress.get(job_id)
+        if not progress or progress.get("profile_id") != profile_id:
+            return None
+        return {key: value for key, value in progress.items() if key != "profile_id"}
 
 
 # ============== HELPER FUNCTIONS ==============
@@ -669,7 +680,7 @@ async def bulk_publish_clips(
 @router.get("/publish/{job_id}/progress")
 async def get_publish_job_progress(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Get progress of a publish job."""
-    progress = get_publish_progress(job_id)
+    progress = get_publish_progress(job_id, profile.profile_id)
     if not progress:
         return {"status": "not_found", "percentage": 0}
     result = dict(progress)
@@ -1012,21 +1023,21 @@ async def _publish_clip_task(
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Publishing clip {clip_id} (job {job_id})")
-    update_publish_progress(job_id, "Initializing...", 0)
+    update_publish_progress(job_id, "Initializing...", 0, profile_id=profile_id)
 
     try:
         publisher = get_postiz_publisher(profile_id)
 
         # Get integrations info for platform-specific settings
-        update_publish_progress(job_id, "Fetching platform info...", 10)
+        update_publish_progress(job_id, "Fetching platform info...", 10, profile_id=profile_id)
         integrations = await publisher.get_integrations(profile_id=profile_id)
         integrations_info = {i.id: i.type for i in integrations}
 
         # Upload video
-        update_publish_progress(job_id, "Uploading video to Postiz...", 20)
+        update_publish_progress(job_id, "Uploading video to Postiz...", 20, profile_id=profile_id)
         media = await publisher.upload_video(Path(video_path), profile_id=profile_id)
 
-        update_publish_progress(job_id, "Creating post...", 70)
+        update_publish_progress(job_id, "Creating post...", 70, profile_id=profile_id)
 
         # Create post
         result = await publisher.create_post(
@@ -1072,14 +1083,19 @@ async def _publish_clip_task(
                 job_id,
                 success_msg,
                 100,
-                "completed"
+                "completed",
+                profile_id=profile_id,
             )
         else:
-            update_publish_progress(job_id, f"Failed: {result.error}", 100, "failed")
+            update_publish_progress(
+                job_id, f"Failed: {result.error}", 100, "failed", profile_id=profile_id
+            )
 
     except Exception as e:
         logger.error(f"Publish job {job_id} failed: {e}")
-        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_publish_progress(
+            job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id
+        )
 
 
 async def _bulk_publish_task(
@@ -1100,7 +1116,7 @@ async def _bulk_publish_task(
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Bulk publishing {len(clips)} clips (job {job_id})")
-    update_publish_progress(job_id, "Starting bulk publish...", 0)
+    update_publish_progress(job_id, "Starting bulk publish...", 0, profile_id=profile_id)
     rng = _random.Random()
 
     try:
@@ -1119,7 +1135,8 @@ async def _bulk_publish_task(
             update_publish_progress(
                 job_id,
                 f"Publishing clip {idx + 1}/{total}...",
-                progress_pct
+                progress_pct,
+                profile_id=profile_id,
             )
 
             try:
@@ -1209,9 +1226,12 @@ async def _bulk_publish_task(
             job_id,
             f"Completed: {successful} published, {failed} failed",
             100,
-            status
+            status,
+            profile_id=profile_id,
         )
 
     except Exception as e:
         logger.error(f"Bulk publish job {job_id} failed: {e}")
-        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_publish_progress(
+            job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id
+        )

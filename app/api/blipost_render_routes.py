@@ -86,6 +86,17 @@ def _delete_render_token(profile_id: str) -> None:
                 pass
 
 
+def _require_runner_owner(profile_id: str):
+    """Prevent one profile from observing or controlling another's runner."""
+    from app.services.blipost_runner import get_render_runner
+
+    runner = get_render_runner()
+    owner_profile_id = getattr(runner, "profile_id", None)
+    if owner_profile_id is not None and owner_profile_id != profile_id:
+        raise HTTPException(status_code=403, detail="Render runner belongs to another profile")
+    return runner
+
+
 # ============== PAIRING ==============
 
 @router.post("/pair", response_model=PairResponse)
@@ -144,10 +155,9 @@ async def unpair(profile: ProfileContext = Depends(get_profile_context)):
     so the user can retry. This prevents Blipost from advertising a desktop
     runner that was only removed locally.
     """
-    from app.services.blipost_runner import get_render_runner
-
+    runner = _require_runner_owner(profile.profile_id)
     token = _get_render_token(profile.profile_id)
-    await get_render_runner().stop()
+    await runner.stop()
 
     if token:
         base_url = get_settings().blipost_platform_base_url.rstrip("/")
@@ -196,9 +206,8 @@ async def unpair(profile: ProfileContext = Depends(get_profile_context)):
 @router.get("/status", response_model=RenderStatusResponse)
 async def status(profile: ProfileContext = Depends(get_profile_context)):
     """Connection + runner state for the Settings card."""
-    from app.services.blipost_runner import get_render_runner
     connected = bool(_get_render_token(profile.profile_id))
-    snap = get_render_runner().status()
+    snap = _require_runner_owner(profile.profile_id).status()
     return RenderStatusResponse(connected=connected, **snap)
 
 
@@ -222,8 +231,8 @@ async def start(profile: ProfileContext = Depends(get_profile_context)):
 @router.post("/stop", response_model=RenderStatusResponse)
 async def stop(profile: ProfileContext = Depends(get_profile_context)):
     """Turn off "Accept render jobs" — finishes cleanly, leases nothing new."""
-    from app.services.blipost_runner import get_render_runner
-    await get_render_runner().stop()
+    runner = _require_runner_owner(profile.profile_id)
+    await runner.stop()
     connected = bool(_get_render_token(profile.profile_id))
-    snap = get_render_runner().status()
+    snap = runner.status()
     return RenderStatusResponse(connected=connected, **snap)

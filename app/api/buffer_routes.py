@@ -115,20 +115,31 @@ def _evict_old_progress():
             _publish_progress.pop(key, None)
 
 
-def update_progress(job_id: str, step: str, percentage: int, status: str = "in_progress"):
+def update_progress(
+    job_id: str,
+    step: str,
+    percentage: int,
+    status: str = "in_progress",
+    *,
+    profile_id: str,
+):
     with _publish_progress_lock:
         _evict_old_progress()
         _publish_progress[job_id] = {
             "step": step,
             "percentage": percentage,
             "status": status,
+            "profile_id": profile_id,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
 
-def get_progress(job_id: str) -> Optional[dict]:
+def get_progress(job_id: str, profile_id: str) -> Optional[dict]:
     with _publish_progress_lock:
-        return _publish_progress.get(job_id)
+        progress = _publish_progress.get(job_id)
+        if not progress or progress.get("profile_id") != profile_id:
+            return None
+        return {key: value for key, value in progress.items() if key != "profile_id"}
 
 
 # ============== ENDPOINTS ==============
@@ -368,7 +379,7 @@ async def get_publish_job_progress(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Get progress of a Buffer publish job."""
-    progress = get_progress(job_id)
+    progress = get_progress(job_id, profile.profile_id)
     if not progress:
         return {"status": "not_found", "percentage": 0}
     result = dict(progress)
@@ -411,21 +422,21 @@ async def _publish_clip_task(
     from app.services.buffer_service import get_buffer_publisher
 
     logger.info(f"[Profile {profile_id}] Buffer publish clip {clip_id} (job {job_id})")
-    update_progress(job_id, "Initializing...", 0)
+    update_progress(job_id, "Initializing...", 0, profile_id=profile_id)
     storage_path = None
 
     try:
         publisher = get_buffer_publisher(profile_id)
 
         # Step 1: Upload to Supabase Storage
-        update_progress(job_id, "Uploading video...", 10)
+        update_progress(job_id, "Uploading video...", 10, profile_id=profile_id)
         storage_path, public_url = await asyncio.to_thread(
             publisher.upload_to_storage, Path(video_path)
         )
 
         # Step 2: Create Buffer post (TikTok has 150 char limit)
         caption = smart_truncate(caption, 150)
-        update_progress(job_id, "Creating Buffer post...", 50)
+        update_progress(job_id, "Creating Buffer post...", 50, profile_id=profile_id)
         result = await publisher.create_post(
             video_url=public_url,
             channel_id=channel_id,
@@ -473,12 +484,12 @@ async def _publish_clip_task(
             # Buffer needs time to download the video asynchronously.
 
             msg = f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}" if schedule_date else "Published!"
-            update_progress(job_id, msg, 100, "completed")
+            update_progress(job_id, msg, 100, "completed", profile_id=profile_id)
         else:
             # Cleanup storage on failure
             if storage_path:
                 publisher.delete_from_storage(storage_path)
-            update_progress(job_id, f"Failed: {result.error}", 100, "failed")
+            update_progress(job_id, f"Failed: {result.error}", 100, "failed", profile_id=profile_id)
 
     except Exception as e:
         logger.error(f"Buffer publish job {job_id} failed: {e}")
@@ -490,7 +501,7 @@ async def _publish_clip_task(
                 pub.delete_from_storage(storage_path)
             except Exception:
                 pass
-        update_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_progress(job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id)
 
 
 async def _bulk_publish_task(
@@ -508,7 +519,7 @@ async def _bulk_publish_task(
     from app.services.buffer_service import get_buffer_publisher
 
     logger.info(f"[Profile {profile_id}] Buffer bulk publish {len(clips)} clips (job {job_id})")
-    update_progress(job_id, "Starting bulk publish...", 0)
+    update_progress(job_id, "Starting bulk publish...", 0, profile_id=profile_id)
 
     try:
         publisher = get_buffer_publisher(profile_id)
@@ -521,7 +532,12 @@ async def _bulk_publish_task(
         for idx, clip in enumerate(clips):
             storage_path = None
             progress_pct = int(((idx + 0.5) / total) * 100)
-            update_progress(job_id, f"Publishing clip {idx + 1}/{total}...", progress_pct)
+            update_progress(
+                job_id,
+                f"Publishing clip {idx + 1}/{total}...",
+                progress_pct,
+                profile_id=profile_id,
+            )
 
             try:
                 # Upload to storage
@@ -623,8 +639,9 @@ async def _bulk_publish_task(
             f"Done: {successful} published, {failed} failed",
             100,
             status,
+            profile_id=profile_id,
         )
 
     except Exception as e:
         logger.error(f"Buffer bulk publish job {job_id} failed: {e}")
-        update_progress(job_id, f"Error: {str(e)}", 100, "failed")
+        update_progress(job_id, f"Error: {str(e)}", 100, "failed", profile_id=profile_id)
