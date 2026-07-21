@@ -123,6 +123,28 @@ for (const contract of ["--surface-canvas: #181818", "--surface-panel: #202020"]
   }
 }
 
+const workspacePanelHeaderPath = join(root, "src/components/workspace-panel-header.tsx");
+const workspacePanelHeader = await readFile(workspacePanelHeaderPath, "utf8");
+for (const contract of [
+  'data-slot="workspace-panel-header"',
+  "h-12 shrink-0 items-center gap-2 border-b border-border px-3",
+  'data-slot="workspace-panel-grip"',
+  'data-slot="workspace-panel-title"',
+]) {
+  if (!workspacePanelHeader.includes(contract)) {
+    report(workspacePanelHeaderPath, `missing canonical workspace panel-header contract: ${contract}`);
+  }
+}
+
+for (const file of files) {
+  const path = relative(root, file).replaceAll("\\", "/");
+  if (path === "src/components/workspace-panel-header.tsx") continue;
+  const source = await readFile(file, "utf8");
+  if (/(?<!\[)data-slot="workspace-panel-header"/.test(source)) {
+    report(file, "workspace pane headers must come from components/workspace-panel-header");
+  }
+}
+
 if (violations.length > 0) {
   console.error("Design-system contract violations:\n");
   for (const violation of violations) console.error(`- ${violation}`);

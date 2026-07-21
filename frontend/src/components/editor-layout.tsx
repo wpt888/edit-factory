@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { usePanelRef } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
+import { WorkspacePanelHeader } from "@/components/workspace-panel-header";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -88,7 +89,8 @@ export function EditorLayout({
       ? resolveEditorPanelOrder(readWorkspaceStorage(workspaceId, PANEL_ORDER_STORAGE_KEY))
       : [...DEFAULT_EDITOR_PANEL_ORDER];
     panelOrderRef.current = nextOrder;
-    setPanelOrder(nextOrder);
+    const frame = requestAnimationFrame(() => setPanelOrder(nextOrder));
+    return () => cancelAnimationFrame(frame);
   }, [workspaceId]);
 
   const toggleLeftPanel = useCallback(() => {
@@ -257,8 +259,10 @@ export function EditorLayout({
   ) => {
     const collapsed = options?.collapsed ?? false;
     return (
-      <div
-        title={!collapsed ? "Drag to move panel" : undefined}
+      <WorkspacePanelHeader
+        title={title}
+        tooltip={!collapsed ? "Drag to move panel" : undefined}
+        collapsed={collapsed}
         onPointerDown={!collapsed
           ? (event) => beginPanelDrag(
               panelId,
@@ -268,30 +272,21 @@ export function EditorLayout({
           : undefined
         }
         className={cn(
-          "flex h-12 shrink-0 items-center gap-2 border-b border-border px-3",
           !collapsed && "touch-none cursor-grab active:cursor-grabbing",
         )}
-      >
-        {!collapsed && (
-          <>
-            <span className="min-w-0 shrink truncate text-sm font-semibold">
-              {title}
-            </span>
-            {options?.extra}
-          </>
-        )}
-        {options?.onToggle && (
+        titleAccessory={options?.extra}
+        actions={options?.onToggle && (
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto size-7 shrink-0"
+            className="size-7 shrink-0"
             onClick={options.onToggle}
             title={collapsed ? "Expand panel" : "Collapse panel"}
           >
             {collapseIcon(panelId, collapsed)}
           </Button>
         )}
-      </div>
+      />
     );
   };
 

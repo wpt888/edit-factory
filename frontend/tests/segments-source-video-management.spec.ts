@@ -132,6 +132,17 @@ test("browser upload polls until ready and the source video can be deleted", asy
 
   await page.goto("/segments?desktopAuth=confirmed");
   await expect(page.getByRole("button", { name: "Upload Video" })).toBeVisible({ timeout: 30_000 });
+  const panelHeaders = page.locator('[data-slot="workspace-panel-header"]');
+  await expect(panelHeaders).toHaveCount(3);
+  const headerRects = await panelHeaders.evaluateAll((headers) => headers.map((header) => {
+    const rect = header.getBoundingClientRect();
+    return { y: rect.y, height: rect.height };
+  }));
+  expect(headerRects.map(({ height }) => height)).toEqual([48, 48, 48]);
+  expect(new Set(headerRects.map(({ y }) => y)).size).toBe(1);
+  for (const header of await panelHeaders.all()) {
+    await expect(header.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();
+  }
   await expect(page.getByText("Add Local", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Upload Video" }).click();
 

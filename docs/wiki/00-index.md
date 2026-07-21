@@ -1,5 +1,7 @@
 # Blipost Engineering Wiki
 
+- [Contract unic pentru capetele de panou din workspace-uri](43-workspace-panel-header-contract.md)
+
 Version-controlled operational notes for the Blipost desktop application.
 
 - [Change log](01-log.md)

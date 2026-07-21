@@ -10,12 +10,13 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, CopyPlus, GripVertical, Loader2, Plus, Save, Trash2, Type } from "lucide-react";
+import { ChevronDown, CopyPlus, Loader2, Plus, Save, Trash2, Type } from "lucide-react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { EditorHeader } from "@/components/editor-header";
+import { WorkspacePanelHeader } from "@/components/workspace-panel-header";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -457,16 +458,14 @@ export default function SubtitleTemplatesPage() {
   };
 
   const panelHeader = (panelId: PanelId, title: string, actions?: ReactNode) => (
-    <div
+    <WorkspacePanelHeader
+      title={title}
       onPointerDown={(event) => beginPanelDrag(panelId, event)}
-      title="Drag to move panel"
-      className="flex h-12 shrink-0 touch-none cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
+      tooltip="Drag to move panel"
+      className="touch-none cursor-grab active:cursor-grabbing"
       data-testid={`subtitle-panel-header-${panelId}`}
-    >
-      <GripVertical className="size-4 shrink-0 text-muted-foreground/60" aria-hidden="true" />
-      <p className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</p>
-      {actions}
-    </div>
+      actions={actions}
+    />
   );
 
   const dropIndicator = (panelId: PanelId) => {

@@ -192,6 +192,15 @@ test('orders, reorders, and resizes all subtitle workspace panels', async ({ pag
   expect(settingsBox.x).toBeLessThan(previewBox.x);
   await expect(page.locator('[data-slot="resizable-handle"]')).toHaveCount(2);
 
+  const panelHeaders = page.locator('[data-slot="workspace-panel-header"]');
+  await expect(panelHeaders).toHaveCount(3);
+  const headerRects = await panelHeaders.evaluateAll((headers) => headers.map((header) => {
+    const rect = header.getBoundingClientRect();
+    return { y: rect.y, height: rect.height };
+  }));
+  expect(headerRects.map(({ height }) => height)).toEqual([48, 48, 48]);
+  expect(new Set(headerRects.map(({ y }) => y)).size).toBe(1);
+
   // Every header is a drag surface, including Preview.
   const previewHeader = page.getByTestId('subtitle-panel-header-preview');
   const previewHeaderBox = await elementRect(previewHeader);

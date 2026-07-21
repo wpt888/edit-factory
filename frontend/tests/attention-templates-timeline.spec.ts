@@ -49,6 +49,22 @@ test("attention templates uses the shared timeline chrome and clip shell", async
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/attention-templates");
 
+  const settingsHeader = page.getByTestId("attention-panel-header-settings");
+  const monitorHeader = page.getByTestId("attention-panel-header-monitor");
+  const timelineHeader = page.getByTestId("attention-panel-header-timeline");
+  for (const header of [settingsHeader, monitorHeader, timelineHeader]) {
+    await expect(header).toHaveCSS("height", "48px");
+    await expect(header).toHaveCSS("border-bottom-style", "solid");
+    await expect(header.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();
+  }
+  const [settingsHeaderBox, monitorHeaderBox] = await Promise.all([
+    settingsHeader.boundingBox(),
+    monitorHeader.boundingBox(),
+  ]);
+  expect(settingsHeaderBox).not.toBeNull();
+  expect(monitorHeaderBox).not.toBeNull();
+  expect(settingsHeaderBox!.y).toBe(monitorHeaderBox!.y);
+
   const timeline = page.getByTestId("attention-timeline-scroll");
   await expect(timeline).toBeVisible();
   await expect(timeline.getByLabel("Zoom timeline out")).toBeVisible();

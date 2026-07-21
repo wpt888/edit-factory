@@ -45,6 +45,11 @@ Templates, Segments.
 - Panes use `surface-canvas` and one-pixel dividers.
 - Use `<Card variant="workspace">` for sections that must be cards on narrow
   layouts and flush inspector sections from 1280 px upward.
+- Every pane begins with the shared `WorkspacePanelHeader`. Its geometry is
+  invariant: `h-12` (48 px), `px-3`, one-pixel bottom divider, vertically
+  centered `text-sm font-semibold` title, and the same leading grip. Adjacent
+  pane headers must share the exact top edge, bottom edge, and title baseline;
+  page-local `h-10`/`h-14` headers are forbidden.
 - Do not neutralize a default Card with page-local combinations of
   `rounded-none`, `border-0`, and `bg-background`.
 - Dense editor controls may use smaller heights, but the choice belongs to a
@@ -58,6 +63,7 @@ Never mix document Card composition and workspace composition in the same pane.
 - Generator container: `GeneratorShell`.
 - Document header: `PageHeader`.
 - Full-bleed editor header: `EditorHeader`.
+- Workspace pane/tab header: `WorkspacePanelHeader`.
 - Content surface: `Card`; use its `workspace` variant inside workspaces.
 - Buttons, inputs, selects, textareas, switches, tabs, dialogs, badges, and
   accordions come from `components/ui/`.

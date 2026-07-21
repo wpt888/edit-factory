@@ -16,7 +16,6 @@ import { cn } from "@/lib/utils";
 
 const STORAGE_PREFIX = "blipost.pipeline-split.";
 const DRAG_THRESHOLD = 5;
-const HEADER_DRAG_HEIGHT = 104;
 const INTERACTIVE_HEADER_SELECTOR = "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
 
 type SplitPanelSide = "left" | "right";
@@ -81,11 +80,14 @@ export function WorkspaceSplit({
     armed: boolean;
   } | null>(null);
   useEffect(() => {
+    let nextSwapped = false;
     try {
-      setSwapped(localStorage.getItem(swapKey) === "1");
+      nextSwapped = localStorage.getItem(swapKey) === "1";
     } catch {
       // Layout preference just won't persist.
     }
+    const frame = requestAnimationFrame(() => setSwapped(nextSwapped));
+    return () => cancelAnimationFrame(frame);
   }, [swapKey]);
 
   const toggleSwap = useCallback(() => {
@@ -191,9 +193,7 @@ export function WorkspaceSplit({
     const target = event.target as HTMLElement;
     if (target.closest(INTERACTIVE_HEADER_SELECTOR)) return;
 
-    const panel = event.currentTarget;
-    const bounds = panel.getBoundingClientRect();
-    if (event.clientY > bounds.top + HEADER_DRAG_HEIGHT) return;
+    if (!target.closest('[data-slot="workspace-panel-header"]')) return;
 
     // Nested workspace panels own their own header drag gesture.
     event.stopPropagation();
@@ -284,7 +284,7 @@ export function WorkspaceSplit({
         aria-label={`Resize ${splitId} panels`}
         data-workspace-split-resize-handle={splitId}
         onPointerDown={(event) => event.stopPropagation()}
-        className="relative z-30 w-px shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+        className="relative z-30 w-px shrink-0 cursor-col-resize bg-border/70 transition-colors hover:bg-primary/50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
       />
       {panels[1]}
     </ResizablePanelGroup>

@@ -40,9 +40,29 @@ test('workspace panel headers share one height, separator, and vertical alignmen
     await expect(headers.first()).toBeVisible();
     expect(await headers.count()).toBeGreaterThanOrEqual(step === 3 ? 3 : 2);
 
+    const splitSeparator = page.locator(`[data-workspace-split-resize-handle="step${step}"]`);
+    await expect(splitSeparator).toBeVisible();
+    await expect(splitSeparator).toHaveCSS('width', '1px');
+    const separatorColor = await splitSeparator.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    );
+    expect(separatorColor).not.toBe('rgba(0, 0, 0, 0)');
+
+    const [firstHeaderBox, separatorBox] = await Promise.all([
+      headers.first().boundingBox(),
+      splitSeparator.boundingBox(),
+    ]);
+    expect(firstHeaderBox).not.toBeNull();
+    expect(separatorBox).not.toBeNull();
+    expect(separatorBox!.y).toBeLessThanOrEqual(firstHeaderBox!.y);
+    expect(separatorBox!.y + separatorBox!.height).toBeGreaterThanOrEqual(
+      firstHeaderBox!.y + firstHeaderBox!.height,
+    );
+
     for (const header of await headers.all()) {
-      await expect(header).toHaveCSS('height', '56px');
+      await expect(header).toHaveCSS('height', '48px');
       await expect(header).toHaveCSS('border-bottom-style', 'solid');
+      await expect(header.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();
 
       const title = header.locator('[data-slot="workspace-panel-title"]');
       await expect(title).toBeVisible();

@@ -13,6 +13,7 @@ import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { MusicAssetPickerDialog } from "@/components/dialogs/music-asset-picker-dialog";
 import { EditorHeader } from "@/components/editor-header";
+import { WorkspacePanelHeader } from "@/components/workspace-panel-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -291,11 +292,15 @@ export default function AttentionTemplatesPage() {
       </EditorHeader>
 
       <div className="grid min-h-0 flex-1 grid-cols-[clamp(280px,22vw,320px)_minmax(0,1fr)] gap-px bg-border">
-        <aside className="min-h-0 min-w-0 overflow-y-auto bg-card" data-testid="attention-template-inspector">
-          <div className="border-b border-border p-4">
-            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Template settings</p><p className="mt-0.5 text-[11px] text-muted-foreground">Reusable layout and timing</p></div>{isSystem && <Badge variant="outline" className="border-primary/30 text-primary"><ShieldCheck className="mr-1 size-3" />System</Badge>}</div>
-          </div>
-          <fieldset disabled={!editable || saving} className="min-w-0 divide-y divide-border/70 disabled:opacity-55">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface-canvas" data-testid="attention-template-inspector">
+          <WorkspacePanelHeader
+            title="Template settings"
+            data-testid="attention-panel-header-settings"
+            actions={isSystem ? <Badge variant="outline" className="border-primary/30 text-primary"><ShieldCheck className="mr-1 size-3" />System</Badge> : undefined}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <p className="border-b border-border px-4 py-2 text-[11px] text-muted-foreground">Reusable layout and timing</p>
+            <fieldset disabled={!editable || saving} className="min-w-0 divide-y divide-border/70 disabled:opacity-55">
             <InspectorSection title="Template" defaultOpen>
               <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-8 px-2 text-xs" /></Field>
               <Field label="Subtitle layer"><Select value={draft.zone} onValueChange={value => setDraft(current => ({ ...current, zone: value as AttentionTemplatePayload["zone"] }))}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="behind">Captions over images</SelectItem><SelectItem value="front">Images over captions</SelectItem></SelectContent></Select></Field>
@@ -374,13 +379,18 @@ export default function AttentionTemplatesPage() {
               <p className="text-xs leading-relaxed text-muted-foreground">The monitor uses a neutral canvas until you load a reference video. Reference media is only for preview and is not saved in the template.</p>
               <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => videoInputRef.current?.click()}><Upload className="mr-2 size-3.5" />Load reference video</Button>
             </InspectorSection>
-          </fieldset>
-          {!isNew && !isSystem && <div className="p-4"><Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}><Trash2 className="mr-2 size-4" />Delete personal template</Button></div>}
+            </fieldset>
+            {!isNew && !isSystem && <div className="p-4"><Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}><Trash2 className="mr-2 size-4" />Delete personal template</Button></div>}
+          </div>
         </aside>
 
-        <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(300px,1fr)_300px] bg-card">
+        <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(300px,1fr)_300px] bg-surface-canvas">
           <section className="flex min-h-0 flex-col border-b border-border" aria-label="Program monitor">
-            <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-4"><p className="flex items-center gap-2 text-xs font-semibold"><Film className="size-3.5" />Program monitor</p><div className="flex items-center gap-1"><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{canvasLabel} · {(previewMs / 1000).toFixed(2)}s</span><Button variant="ghost" size="icon" className="size-7 text-muted-foreground"><Maximize2 className="size-3.5" /></Button></div></div>
+            <WorkspacePanelHeader
+              title="Program monitor"
+              data-testid="attention-panel-header-monitor"
+              actions={<><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{canvasLabel} · {(previewMs / 1000).toFixed(2)}s</span><Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Expand program monitor"><Maximize2 className="size-3.5" /></Button></>}
+            />
             {/* Program-monitor video stage stays dark in both themes — a preview canvas is theme-independent, like any video player. */}
             <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#060706] p-4" style={{ containerType: "size" }}>
               <div ref={previewCanvasRef} className="relative isolate overflow-hidden border border-white/15 bg-[#171a17] shadow-2xl" style={{ aspectRatio: `${draft.canvasWidth} / ${draft.canvasHeight}`, width: `min(100cqw, calc(100cqh * ${draft.canvasWidth / draft.canvasHeight}))`, height: `min(100cqh, calc(100cqw * ${draft.canvasHeight / draft.canvasWidth}))` }} data-testid="attention-template-preview" onPointerDown={event => { if (event.target === event.currentTarget || !(event.target as HTMLElement).closest("[data-preview-image]")) setSelectedImageId(""); }}>
@@ -680,14 +690,12 @@ function Timeline({
   });
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-col bg-card" data-testid="attention-track-list">
-      <div className="flex h-10 shrink-0 items-center border-b border-border px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Layers3 className="size-3.5 shrink-0 text-primary" />
-          <span className="text-xs font-semibold">Timeline</span>
-          <span className="truncate text-[10px] text-muted-foreground">Add image slots from V tracks; add optional sound effects separately on A tracks</span>
-        </div>
-      </div>
+    <section className="flex min-h-0 min-w-0 flex-col bg-surface-canvas" data-testid="attention-track-list">
+      <WorkspacePanelHeader
+        title="Timeline"
+        titleAccessory={<span className="truncate text-[11px] font-normal text-muted-foreground">Add image slots from V tracks; add optional sound effects separately on A tracks</span>}
+        data-testid="attention-panel-header-timeline"
+      />
       <MultiTrackTimeline
         scrollRef={scrollRef}
         className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"

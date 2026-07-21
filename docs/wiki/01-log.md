@@ -1,5 +1,15 @@
 # Engineering Change Log
 
+## 2026-07-21 - Workspace panel headers aligned to the Subtitle Templates contract
+
+- Adopted Subtitle Templates as the canonical pane-header reference across
+  Video Pipeline, Attention Templates, and Footage & Segments.
+- Centralized the 48 px height, padding, divider, grip, title typography, and
+  action alignment in `WorkspacePanelHeader`; removed the 40/48/56 px drift.
+- Added static design-contract protection plus rendered checks for exact height
+  and sibling alignment. Full specification: [workspace panel-header
+  contract](43-workspace-panel-header-contract.md).
+
 ## 2026-07-21 - Attention content moves to Step 3; optional per-slot defaults
 
 - The attention picker is gone from Step 1; Step 3 is the only place content is
