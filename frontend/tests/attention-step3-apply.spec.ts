@@ -177,7 +177,7 @@ test("Step 3 picks and applies an attention template to all variants with overwr
   const byKey = Object.fromEntries(applyPosts.map((post) => [post.key, post.body]));
   expect(byKey["0"]).toMatchObject({
     templateId: TEMPLATE.id,
-    assetUrls: ["https://assets.test/step3-attention.png"],
+    assets: [{ url: "https://assets.test/step3-attention.png", type: "image" }],
     durationMs: 12000,
     subtitleBoundariesMs: [0, 6000, 12000],
     revision: 3,

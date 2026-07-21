@@ -11,6 +11,8 @@ export type AttentionLayer = {
   assetId: string;
   /** Browser-safe URL. Persisted for legacy/remote assets until imported. */
   assetUrl?: string;
+  /** image (default) or video — a video layer composites as a muted overlay clip. */
+  mediaType?: "image" | "video";
   x: number;
   y: number;
   width: number;

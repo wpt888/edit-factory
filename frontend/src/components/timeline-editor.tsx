@@ -523,11 +523,12 @@ export function TimelineEditor({
 
   const selectAttentionAsset = useCallback((asset: { url: string; type: "image" | "video" }) => {
     if (!attentionAssetTarget) return;
-    // Phase 3 carries the media type onto the cue layer; for now the timeline
-    // cue only needs the URL.
+    // Carry the media type onto the cue layer so the renderer composites a
+    // video slot as a muted overlay clip (not a broken still).
     updateCueLayer(attentionAssetTarget.cueId, attentionAssetTarget.layerId, {
       assetId: asset.url,
       assetUrl: asset.url,
+      mediaType: asset.type,
     });
   }, [attentionAssetTarget, updateCueLayer]);
 
@@ -3602,25 +3603,24 @@ export function TimelineEditor({
         const localMs = nowMs - cue.startMs - layer.animation.delayMs;
         if (!url || localMs < 0) return null;
         const duration = Math.max(1, cue.durationMs - layer.animation.delayMs);
-        return (
-          <img
-            key={`${cue.id}:${layer.id}`}
-            src={url}
-            alt=""
-            className={`pointer-events-none absolute attention-${layer.animation.preset}`}
-            style={{
-              left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
-              width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
-              objectFit: layer.fit,
-              opacity: layer.opacity ?? 1,
-              // Front zone always sits above subtitles (60+); behind-zone cues
-              // stack by track so a higher image track composites in front.
-              zIndex: (cue.zone === "front" ? 60 : 10 + ((cue.track ?? 2) - 2) * 20) + layer.zIndex,
-              animationDuration: `${duration}ms`,
-              ["--attention-intensity" as string]: layer.animation.intensity,
-            }}
-          />
-        );
+        const style: React.CSSProperties = {
+          left: `${layer.x * 100}%`, top: `${layer.y * 100}%`,
+          width: `${layer.width * 100}%`, height: `${layer.height * 100}%`,
+          objectFit: layer.fit,
+          opacity: layer.opacity ?? 1,
+          // Front zone always sits above subtitles (60+); behind-zone cues
+          // stack by track so a higher image track composites in front.
+          zIndex: (cue.zone === "front" ? 60 : 10 + ((cue.track ?? 2) - 2) * 20) + layer.zIndex,
+          animationDuration: `${duration}ms`,
+          ["--attention-intensity" as string]: layer.animation.intensity,
+        };
+        const className = `pointer-events-none absolute attention-${layer.animation.preset}`;
+        // Video slots preview as a muted, looping clip; the render mutes overlay
+        // audio too so only the voiceover + template SFX are heard.
+        if (layer.mediaType === "video") {
+          return <video key={`${cue.id}:${layer.id}`} src={url} muted loop autoPlay playsInline className={className} style={style} />;
+        }
+        return <img key={`${cue.id}:${layer.id}`} src={url} alt="" className={className} style={style} />;
       });
     });
   };
@@ -4957,7 +4957,9 @@ export function TimelineEditor({
                             title="Choose from Gallery or Upload"
                           >
                             {layerUrl && !layerUrl.startsWith("pending:")
-                              ? <img src={layerUrl} alt="" className="h-full w-full object-cover" />
+                              ? (layer.mediaType === "video"
+                                  ? <video src={layerUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                                  : <img src={layerUrl} alt="" className="h-full w-full object-cover" />)
                               : <ImageIcon className="size-5 text-muted-foreground" />}
                           </button>
                           <div className="min-w-0 flex-1">

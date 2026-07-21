@@ -5,7 +5,7 @@ import type { PreviewData } from "./pipeline-types";
 
 export type AttentionTemplateApplyPayload = {
   templateId: string;
-  assetUrls: string[];
+  assets: { url: string; type: "image" | "video" }[];
   durationMs: number;
   subtitleBoundariesMs: number[];
   revision: number;
@@ -32,9 +32,9 @@ export function buildAttentionTemplateApplyPayload({
 }): AttentionTemplateApplyPayload {
   return {
     templateId: selection.templateId,
-    // Phase 2: backend still consumes a flat image-URL list. Video slots are
-    // wired end-to-end in Phase 3; until then only image assets are sent.
-    assetUrls: selection.assets.filter((asset) => asset.type === "image").map((asset) => asset.url),
+    // Typed slot content — images composite as stills, videos as muted overlay
+    // clips. Backend still accepts the legacy flat assetUrls for old clients.
+    assets: selection.assets.map((asset) => ({ url: asset.url, type: asset.type })),
     durationMs: Math.max(1, Math.round(preview.audio_duration * 1000)),
     subtitleBoundariesMs: Array.from(new Set(preview.matches.flatMap((match) => [
       Math.round(match.srt_start * 1000),
