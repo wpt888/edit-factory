@@ -23,7 +23,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import type { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
-import type { SubtitleTemplateRotation } from "../subtitle-template-rotation";
+import {
+  NO_SUBTITLES_PRESET_ID,
+  type SubtitleTemplateRotation,
+} from "../subtitle-template-rotation";
 
 type Props = {
   rotation: SubtitleTemplateRotation;
@@ -41,6 +44,7 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
     () => presets.filter((preset) => !rotation.presetIds.includes(preset.id)),
     [presets, rotation.presetIds],
   );
+  const canAddNoSubtitles = !rotation.presetIds.includes(NO_SUBTITLES_PRESET_ID);
   const templateGroups = useMemo(() => {
     const groups = new Map<string, { id: string; name: string; presets: UserSubtitlePreset[] }>();
     for (const preset of presets) {
@@ -128,6 +132,12 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
                     <SelectValue placeholder="Choose template" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem
+                      value={NO_SUBTITLES_PRESET_ID}
+                      disabled={presetId !== NO_SUBTITLES_PRESET_ID && !canAddNoSubtitles}
+                    >
+                      None
+                    </SelectItem>
                     {presets.map((candidate) => (
                       <SelectItem
                         key={candidate.id}
@@ -139,7 +149,9 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="w-8 text-center text-[11px] text-muted-foreground">{preset?.wordsPerSubtitle ?? 2}w</span>
+                <span className="w-8 text-center text-[11px] text-muted-foreground">
+                  {presetId === NO_SUBTITLES_PRESET_ID ? "Off" : `${preset?.wordsPerSubtitle ?? 2}w`}
+                </span>
                 {preset && (
                   <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`Edit ${preset.name}`} onClick={() => openEditor(preset)}>
                     <Pencil className="size-3.5" />
@@ -168,7 +180,7 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
             );
           })}
 
-          {unusedPresets.length > 0 && (
+          {(unusedPresets.length > 0 || canAddNoSubtitles) && (
             <Select
               value=""
               onValueChange={(presetId) => onChange({
@@ -181,6 +193,9 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
                 <SelectValue placeholder="Add style" />
               </SelectTrigger>
               <SelectContent>
+                {canAddNoSubtitles && (
+                  <SelectItem value={NO_SUBTITLES_PRESET_ID}>None</SelectItem>
+                )}
                 {unusedPresets.map((preset) => (
                   <SelectItem key={preset.id} value={preset.id}>
                     {preset.templateName ? `${preset.templateName} / ${preset.name}` : preset.name}
@@ -189,8 +204,8 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
               </SelectContent>
             </Select>
           )}
-          {presets.length === 0 && (
-            <p className="text-xs text-amber-500">Save at least one subtitle template to build a rotation.</p>
+          {presets.length === 0 && rotation.presetIds.length === 0 && (
+            <p className="text-xs text-muted-foreground">Add None to rotate a caption-free variant.</p>
           )}
         </div>
       )}

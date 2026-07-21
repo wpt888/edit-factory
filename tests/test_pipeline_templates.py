@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 
 from app.services.pipeline_template_bundle import build_pipeline_template_document
+from app.services.subtitle_rotation import NO_SUBTITLES_PRESET_ID
 
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
@@ -76,8 +77,13 @@ def _complete_settings() -> dict:
             "overrides": {"A": {"fontSize": 60, "textColor": "#FF0000"}},
             "rotation": {
                 "enabled": True,
-                "presetIds": ["subtitle-template-one", "subtitle-template-two"],
+                "presetIds": [
+                    "subtitle-template-one",
+                    "subtitle-template-two",
+                    NO_SUBTITLES_PRESET_ID,
+                ],
             },
+            "variantTemplates": {"1": NO_SUBTITLES_PRESET_ID},
         },
         "render": {
             "presetName": "Instagram Reels",
@@ -166,7 +172,11 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     assert imported_row["template_settings"]["subtitles"]["rotation"]["presetIds"] == [
         "subtitle-template-one",
         "subtitle-template-two",
+        NO_SUBTITLES_PRESET_ID,
     ]
+    assert imported_row["template_settings"]["subtitles"]["variantTemplates"] == {
+        "1": NO_SUBTITLES_PRESET_ID,
+    }
 
 
 def test_pipeline_template_export_backfills_legacy_pipeline_contract(sqlite_backend):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.subtitle_rotation import NO_SUBTITLES_PRESET_ID
+
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
 
@@ -145,12 +147,15 @@ def test_rotation_persists_order_in_pipeline_template_state(sqlite_backend):
     saved = client.put(
         f"/api/v1/pipeline/{pipeline_id}/subtitle-rotation",
         headers=HEADERS,
-        json={"enabled": True, "presetIds": ["preset-two", "preset-one"]},
+        json={
+            "enabled": True,
+            "presetIds": ["preset-two", "preset-one", NO_SUBTITLES_PRESET_ID],
+        },
     )
     assert saved.status_code == 200, saved.text
     assert saved.json() == {
         "enabled": True,
-        "presetIds": ["preset-two", "preset-one"],
+        "presetIds": ["preset-two", "preset-one", NO_SUBTITLES_PRESET_ID],
         "variantTemplates": {},
     }
 
@@ -161,7 +166,10 @@ def test_rotation_persists_order_in_pipeline_template_state(sqlite_backend):
     assert restored.status_code == 200, restored.text
     assert restored.json() == saved.json()
     stored_rotation = repo.get_pipeline(pipeline_id)["template_settings"]["subtitles"]["rotation"]
-    assert stored_rotation == {"enabled": True, "presetIds": ["preset-two", "preset-one"]}
+    assert stored_rotation == {
+        "enabled": True,
+        "presetIds": ["preset-two", "preset-one", NO_SUBTITLES_PRESET_ID],
+    }
 
 
 def test_rotation_accepts_style_ids_inside_subtitle_template(sqlite_backend):
@@ -211,14 +219,24 @@ def test_variant_template_selections_persist_and_drop_unknown(sqlite_backend):
         json={
             "enabled": False,
             "presetIds": [],
-            "variantTemplates": {"0": "preset-two", "1": "ghost-preset"},
+            "variantTemplates": {
+                "0": "preset-two",
+                "1": "ghost-preset",
+                "2": NO_SUBTITLES_PRESET_ID,
+            },
         },
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["variantTemplates"] == {"0": "preset-two"}
+    assert saved.json()["variantTemplates"] == {
+        "0": "preset-two",
+        "2": NO_SUBTITLES_PRESET_ID,
+    }
 
     restored = client.get(
         f"/api/v1/pipeline/{pipeline_id}/subtitle-rotation",
         headers=HEADERS,
     )
-    assert restored.json()["variantTemplates"] == {"0": "preset-two"}
+    assert restored.json()["variantTemplates"] == {
+        "0": "preset-two",
+        "2": NO_SUBTITLES_PRESET_ID,
+    }

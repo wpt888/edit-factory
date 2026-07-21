@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 from app.services import assembly_service as assembly_module
 from app.services.assembly_service import AssemblyService
 from app.services.subtitle_rotation import (
+    NO_SUBTITLES_PRESET_ID,
     assigned_preset_id,
     regroup_srt_for_variant,
     words_per_subtitle_for_key,
@@ -35,6 +36,11 @@ def test_rotation_assignment_is_ordered_round_robin_and_ignores_leftovers():
     ]
     assert [assigned_preset_id(index, preset_ids) for index in range(2)] == ["one", "two"]
     assert assigned_preset_id(0, []) is None
+
+
+def test_rotation_assignment_preserves_none_slot_as_a_portable_sentinel():
+    preset_ids = ["one", "two", NO_SUBTITLES_PRESET_ID]
+    assert [assigned_preset_id(index, preset_ids) for index in range(3)] == preset_ids
 
 
 def test_per_variant_words_regroup_uses_preview_key_then_base_variant():

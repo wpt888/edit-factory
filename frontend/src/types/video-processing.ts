@@ -1,6 +1,8 @@
 // Shared types for video processing across Home and Library pages
 
 export interface SubtitleSettings {
+  /** False omits caption burn-in while leaving narration/TTS audio untouched. */
+  enabled?: boolean;
   fontSize: number;
   fontFamily: string;
   textColor: string;

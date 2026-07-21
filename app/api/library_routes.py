@@ -5120,7 +5120,12 @@ async def _render_with_preset(
             logger.info(f"Applying color correction: {', '.join(color_params)}")
 
     # Add subtitles if available (Phase 11: uses subtitle_styler service for shadow/glow/adaptive)
-    if srt_path and srt_path.exists() and subtitle_settings:
+    if (
+        srt_path
+        and srt_path.exists()
+        and subtitle_settings
+        and subtitle_settings.get("enabled", True) is not False
+    ):
         subtitles_filter = build_subtitle_filter(
             srt_path=srt_path,
             subtitle_settings=subtitle_settings,
@@ -5129,6 +5134,8 @@ async def _render_with_preset(
         )
         filters.append(subtitles_filter)
         logger.info(f"Added subtitle filter with enhancement settings")
+    elif subtitle_settings and subtitle_settings.get("enabled", True) is False:
+        logger.info("Subtitle burn-in disabled for this render; narration audio is unchanged")
 
     # Apply filters
     if filters:

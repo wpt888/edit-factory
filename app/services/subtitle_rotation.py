@@ -7,6 +7,11 @@ from typing import Any, Mapping, Optional, Sequence
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
 
+# Must match frontend/src/app/pipeline/subtitle-template-rotation.ts. This value
+# is persisted in portable pipeline templates and is never a profile preset ID.
+NO_SUBTITLES_PRESET_ID = "__none__"
+
+
 def assigned_preset_id(variant_index: int, preset_ids: Sequence[str]) -> Optional[str]:
     """Return the ordered round-robin preset for a zero-based script variant."""
     ordered = [str(value).strip() for value in preset_ids if str(value).strip()]

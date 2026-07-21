@@ -241,6 +241,22 @@ def test_resolver_layers_meta_then_direct_variant_delta():
     assert settings["textColor"] == "#A3E635"
 
 
+def test_direct_variant_can_disable_subtitle_burn_in_without_changing_other_settings():
+    request = _make_request(subtitle_settings_by_key={
+        "2": {"enabled": False},
+    })
+
+    settings, has_user_override = _get_subtitle_settings_for_key(
+        request,
+        "2",
+        _default_settings(),
+    )
+
+    assert has_user_override is True
+    assert settings["enabled"] is False
+    assert settings["fontFamily"] == "Montserrat"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _normalize_overrides
 # ─────────────────────────────────────────────────────────────────────────────

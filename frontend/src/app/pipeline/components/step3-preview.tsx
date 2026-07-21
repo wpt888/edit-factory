@@ -72,7 +72,10 @@ import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
 import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
-import type { SubtitleTemplateRotation } from "../subtitle-template-rotation";
+import {
+  NO_SUBTITLES_PRESET_ID,
+  type SubtitleTemplateRotation,
+} from "../subtitle-template-rotation";
 import type { SafeZoneType } from "@/components/safe-zone-overlay";
 import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
@@ -726,6 +729,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 const assignedTemplate = getAssignedSubtitlePreset(card);
                 const hasVariantSubtitleOverride = Boolean(variantSubtitleOverrides[card.key]);
                 const selectedTemplateValue = variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE;
+                const effectiveSubtitleSettings = getPreviewSubtitleSettingsFor(card);
+                const subtitlesDisabled = effectiveSubtitleSettings.enabled === false;
 
                 return (
                   <Card key={card.key} variant="workspace" className="overflow-hidden min-[1280px]:pt-3 min-[1280px]:pb-0">
@@ -739,36 +744,37 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           <CardTitle className="text-lg">
                             {card.label}
                           </CardTitle>
-                          {userSubtitlePresets.length > 0 && (
-                            <Select
-                              value={selectedTemplateValue}
-                              onValueChange={(value) =>
-                                handleVariantTemplateSelectionChange(
-                                  card.key,
-                                  value === AUTO_TEMPLATE_VALUE ? "" : value,
-                                )
-                              }
+                          <Select
+                            value={selectedTemplateValue}
+                            onValueChange={(value) =>
+                              handleVariantTemplateSelectionChange(
+                                card.key,
+                                value === AUTO_TEMPLATE_VALUE ? "" : value,
+                              )
+                            }
+                          >
+                            <SelectTrigger
+                              size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary"
+                              data-testid="subtitle-template-select"
                             >
-                              <SelectTrigger
-                                size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary"
-                                data-testid="subtitle-template-select"
-                              >
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={AUTO_TEMPLATE_VALUE}>
-                                  Auto{assignedTemplate && !variantTemplateSelections[card.key]
-                                    ? ` (${assignedTemplate.name})`
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={AUTO_TEMPLATE_VALUE}>
+                                Auto{assignedTemplate && !variantTemplateSelections[card.key]
+                                  ? ` (${assignedTemplate.name})`
+                                  : subtitlesDisabled && !variantTemplateSelections[card.key]
+                                    ? " (No subtitles)"
                                     : " (rotation)"}
+                              </SelectItem>
+                              <SelectItem value={NO_SUBTITLES_PRESET_ID}>No subtitles</SelectItem>
+                              {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
+                                <SelectItem key={preset.id} value={preset.id}>
+                                  {preset.name}
                                 </SelectItem>
-                                {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
-                                  <SelectItem key={preset.id} value={preset.id}>
-                                    {preset.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          )}
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="flex items-center gap-2">
                           {assignedTemplate && (
@@ -859,7 +865,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
-                        subtitleSettings={getPreviewSubtitleSettingsFor(card)}
+                        subtitleSettings={effectiveSubtitleSettings}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                         attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
@@ -1171,32 +1177,31 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           </TabsList>
                           <div className="min-h-0 flex-1 overflow-y-auto p-3">
                             <TabsContent value="subtitles" className="mt-0 space-y-3">
-                              {userSubtitlePresets.length > 0 && (
-                                <div className="flex items-center justify-between gap-2 rounded-md border border-primary/25 px-3 py-2">
-                                  <span className="text-xs font-medium text-muted-foreground">Template</span>
-                                  <Select
-                                    value={variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE}
-                                    onValueChange={(value) =>
-                                      handleVariantTemplateSelectionChange(
-                                        card.key,
-                                        value === AUTO_TEMPLATE_VALUE ? "" : value,
-                                      )
-                                    }
-                                  >
-                                    <SelectTrigger size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value={AUTO_TEMPLATE_VALUE}>Auto (rotation)</SelectItem>
-                                      {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
+                              <div className="flex items-center justify-between gap-2 rounded-md border border-primary/25 px-3 py-2">
+                                <span className="text-xs font-medium text-muted-foreground">Template</span>
+                                <Select
+                                  value={variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE}
+                                  onValueChange={(value) =>
+                                    handleVariantTemplateSelectionChange(
+                                      card.key,
+                                      value === AUTO_TEMPLATE_VALUE ? "" : value,
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value={AUTO_TEMPLATE_VALUE}>Auto (rotation)</SelectItem>
+                                    <SelectItem value={NO_SUBTITLES_PRESET_ID}>No subtitles</SelectItem>
+                                    {userSubtitlePresets.map((preset: UserSubtitlePreset) => (
                                         <SelectItem key={preset.id} value={preset.id}>
                                           {preset.name}
                                         </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                              )}
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
                               {subtitleStyleCard}
                             </TabsContent>
                             <TabsContent value="timing" className="mt-0 space-y-3">

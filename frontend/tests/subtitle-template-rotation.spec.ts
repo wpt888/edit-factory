@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
   assignedSubtitlePreset,
+  NO_SUBTITLES_PRESET_ID,
   resolveRotatedSubtitleSettings,
+  subtitlesDisabledForCard,
   subtitleSettingsDiff,
   wordsPerSubtitleForVariant,
 } from "../src/app/pipeline/subtitle-template-rotation";
@@ -267,4 +269,21 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     path: "screenshots/subtitle-template-rotation-step3.png",
     fullPage: false,
   });
+});
+
+test("a None rotation slot disables only its assigned variant", () => {
+  const rotation = { enabled: true, presetIds: ["one", "two", NO_SUBTITLES_PRESET_ID] };
+  const cards = [0, 1, 2].map((baseIndex) => ({ key: String(baseIndex), baseIndex }));
+
+  expect(cards.map((card) => subtitlesDisabledForCard(rotation, {}, presets, card))).toEqual([
+    false, false, true,
+  ]);
+  expect(resolveRotatedSubtitleSettings({
+    card: { ...cards[2], visualVersion: undefined },
+    rotation,
+    presets,
+    defaultSettings: settings,
+    metaOverrides: {},
+    variantOverrides: {},
+  }).enabled).toBe(false);
 });

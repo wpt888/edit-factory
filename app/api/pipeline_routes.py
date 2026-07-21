@@ -50,7 +50,7 @@ from app.services.pipeline_template_bundle import (
     normalize_pipeline_template_settings,
     validate_pipeline_template_document,
 )
-from app.services.subtitle_rotation import words_per_subtitle_for_key
+from app.services.subtitle_rotation import NO_SUBTITLES_PRESET_ID, words_per_subtitle_for_key
 from app.config import APP_VERSION, get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -4108,7 +4108,11 @@ async def update_subtitle_rotation(
             )
         elif preset.get("id"):
             owned_ids.add(str(preset["id"]))
-    missing = [preset_id for preset_id in request.presetIds if preset_id not in owned_ids]
+    missing = [
+        preset_id
+        for preset_id in request.presetIds
+        if preset_id != NO_SUBTITLES_PRESET_ID and preset_id not in owned_ids
+    ]
     if missing:
         raise HTTPException(status_code=400, detail="Subtitle rotation contains an unavailable template")
 
@@ -4117,7 +4121,7 @@ async def update_subtitle_rotation(
     variant_templates = {
         str(key): str(preset_id)
         for key, preset_id in (request.variantTemplates or {}).items()
-        if str(preset_id) in owned_ids
+        if str(preset_id) == NO_SUBTITLES_PRESET_ID or str(preset_id) in owned_ids
     }
 
     rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
@@ -8771,17 +8775,24 @@ async def sync_pipeline_to_library(
         Returns None when no defaults are available at all (preserves whatever
         is already in editai_clip_content via the upsert merge semantics).
 
-        Lookup key is the StyleKey ("A" / "B" / "default"), not the per-script
-        PreviewKey — subtitle style is now shared across all scripts under
-        the same Meta version.
+        The shared StyleKey layer is followed by a direct PreviewKey layer,
+        matching the resolver used by the real render path.
         """
         _sync_key = _ver_label or "default"
-        _override = _sync_overrides_by_key.get(_sync_key)
-        if isinstance(_override, dict) and _override:
-            # User override wins completely; Meta overlay suppressed.
-            if not _sync_default_subtitle:
-                return dict(_override)
-            return {**_sync_default_subtitle, **_override}
+        _preview_key = f"{_vid}_{_ver_label}" if _ver_label else str(_vid)
+        _style_override = _sync_overrides_by_key.get(_sync_key)
+        _direct_override = _sync_overrides_by_key.get(_preview_key)
+        _has_override = any(
+            isinstance(candidate, dict) and candidate
+            for candidate in (_style_override, _direct_override)
+        )
+        if _has_override:
+            # User layers win completely; Meta overlay is suppressed.
+            _resolved_override = dict(_sync_default_subtitle)
+            for candidate in (_style_override, _direct_override):
+                if isinstance(candidate, dict) and candidate:
+                    _resolved_override.update(candidate)
+            return _resolved_override
         if not _sync_default_subtitle:
             return None
         # No override → start from profile default and apply Meta overlay if applicable.
@@ -10588,7 +10599,10 @@ async def subtitle_frame_preview(
     preview_dir.mkdir(parents=True, exist_ok=True)
 
     sample_text = (request.sample_text or "").strip() or "Sample subtitle text"
-    include_subtitles = bool(request.include_subtitles)
+    include_subtitles = (
+        bool(request.include_subtitles)
+        and effective_subtitle_settings.get("enabled", True) is not False
+    )
 
     # --- Build SRT content directly from the editor sample text ---
     # `-ss ts` is placed BEFORE `-i` (fast input seek), which resets output

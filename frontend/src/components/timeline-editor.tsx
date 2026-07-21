@@ -3367,6 +3367,7 @@ export function TimelineEditor({
   const monitorSubtitleTrack = monitorHighestVideoTrack + 1;
 
   const renderPreviewSubtitleOverlay = (minimumFontSize: number, containerHeight: number) => {
+    if (subtitleSettings?.enabled === false) return null;
     if (hiddenVideoTracks.has(monitorSubtitleTrack)) return null;
     const activeMatch = matches.find(
       (match) => match.srt_start <= previewCurrentTime && previewCurrentTime < match.srt_end,

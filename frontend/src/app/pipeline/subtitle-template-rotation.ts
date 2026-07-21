@@ -6,6 +6,11 @@ export interface SubtitleTemplateRotation {
   presetIds: string[];
 }
 
+// Portable sentinel persisted in rotation slots and explicit per-card picks.
+// It is deliberately not a real preset ID: resolving it produces
+// SubtitleSettings.enabled=false at the render boundary.
+export const NO_SUBTITLES_PRESET_ID = "__none__";
+
 export const EMPTY_SUBTITLE_TEMPLATE_ROTATION: SubtitleTemplateRotation = {
   enabled: false,
   presetIds: [],
@@ -24,6 +29,31 @@ export function assignedSubtitlePreset(
   return presets.find((preset) => preset.id === presetId);
 }
 
+function resolvedSubtitlePresetIdForCard(
+  rotation: SubtitleTemplateRotation,
+  selections: VariantTemplateSelections,
+  presets: UserSubtitlePreset[],
+  card: Pick<PreviewCard, "key" | "baseIndex">,
+): string | undefined {
+  const explicitId = selections?.[card.key];
+  if (explicitId === NO_SUBTITLES_PRESET_ID) return explicitId;
+  if (explicitId && presets.some((preset) => preset.id === explicitId)) return explicitId;
+
+  if (!rotation.enabled || rotation.presetIds.length === 0 || card.baseIndex < 0) return undefined;
+  const rotatedId = rotation.presetIds[card.baseIndex % rotation.presetIds.length];
+  if (rotatedId === NO_SUBTITLES_PRESET_ID) return rotatedId;
+  return presets.some((preset) => preset.id === rotatedId) ? rotatedId : undefined;
+}
+
+export function subtitlesDisabledForCard(
+  rotation: SubtitleTemplateRotation,
+  selections: VariantTemplateSelections,
+  presets: UserSubtitlePreset[],
+  card: Pick<PreviewCard, "key" | "baseIndex">,
+): boolean {
+  return resolvedSubtitlePresetIdForCard(rotation, selections, presets, card) === NO_SUBTITLES_PRESET_ID;
+}
+
 // Precedence: explicit per-variant selection > rotation round-robin > none.
 // Unknown/deleted preset ids fall through gracefully.
 export function resolveSubtitlePresetForCard(
@@ -32,12 +62,9 @@ export function resolveSubtitlePresetForCard(
   presets: UserSubtitlePreset[],
   card: Pick<PreviewCard, "key" | "baseIndex">,
 ): UserSubtitlePreset | undefined {
-  const explicitId = selections?.[card.key];
-  if (explicitId) {
-    const found = presets.find((preset) => preset.id === explicitId);
-    if (found) return found;
-  }
-  return assignedSubtitlePreset(rotation, presets, card.baseIndex);
+  const presetId = resolvedSubtitlePresetIdForCard(rotation, selections, presets, card);
+  if (!presetId || presetId === NO_SUBTITLES_PRESET_ID) return undefined;
+  return presets.find((preset) => preset.id === presetId);
 }
 
 export function wordsPerSubtitleForVariant(
@@ -84,6 +111,10 @@ export function resolveRotatedSubtitleSettings({
   variantOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
   metaFallback?: Partial<Record<string, Partial<SubtitleSettings>>>;
 }): SubtitleSettings {
+  if (subtitlesDisabledForCard(rotation, selections ?? {}, presets, card)) {
+    return { ...defaultSettings, enabled: false };
+  }
+
   const preset = resolveSubtitlePresetForCard(rotation, selections ?? {}, presets, card);
   const styleKey: StyleKey = card.visualVersion === "A" || card.visualVersion === "B"
     ? card.visualVersion
@@ -93,7 +124,7 @@ export function resolveRotatedSubtitleSettings({
 
   // Rotation chooses the base. Meta A/B stays orthogonal and layers on top;
   // a card-local edit is last and never mutates the reusable template.
-  let effective = { ...defaultSettings, ...(preset?.settings ?? {}) };
+  let effective = { ...defaultSettings, ...(preset?.settings ?? {}), enabled: true };
   if (metaOverride && Object.keys(metaOverride).length > 0) {
     effective = { ...effective, ...metaOverride };
   } else if (card.visualVersion && metaFallback?.[card.visualVersion]) {
