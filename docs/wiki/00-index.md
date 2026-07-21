@@ -34,3 +34,6 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Video-on-video overlay compositor — Phase C](35-video-overlay-compositor.md)
 - [Subtitle-template rotation](36-subtitle-template-rotation.md)
 - [Subtitle Templates page + Step 3 preview drawer](37-subtitle-templates-page-and-preview-drawer.md)
+- [Unified timeline playhead — one cursor per timeline](38-unified-timeline-playhead.md)
+- [Multi-style subtitle templates](39-multi-style-subtitle-templates.md)
+- [Inspector grammar for dense editor panels](40-inspector-grammar.md)

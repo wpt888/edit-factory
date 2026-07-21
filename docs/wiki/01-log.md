@@ -1,5 +1,53 @@
 # Engineering Change Log
 
+## 2026-07-21 - Unified inspector grammar for dense editor panels
+
+- Unified the Step 3 Subtitle Style and Render Settings panels onto one
+  canonical inspector grammar: muted field labels, one `h-8` select height,
+  flush divider-separated collapsible sections (no boxed `surface-panel`/`muted`
+  panels), inline slider rows, and mono muted numeric readouts.
+- Extracted the shared primitives to `components/ui/inspector.tsx`
+  (`InspectorField`, `InspectorSectionHeader`, `InspectorSection`,
+  `InspectorSwitchRow`) as the single source of the recipe.
+- Replaced every raw native `<select>` in application UI (attention-template
+  editor + picker, clipping page) with the shadcn `Select`, killing the
+  OS-native white popup / broken dark-mode contrast. Timeline and video-player
+  media controls stay allowlisted.
+- Codified the grammar as DESIGN_SYSTEM §6 + an AGENTS pointer and enforced it in
+  `design:check` (no native `<select>`; no `h-7`/`h-9`/muted-box in inspector
+  files). Rewrote the Step 3 layout spec and added mocked screenshot specs. See
+  wiki 40.
+
+## 2026-07-21 - Subtitle templates become multi-style collections
+
+- Corrected the data model that treated one subtitle style as an entire
+  template. A template now owns an ordered list of caption styles, each with
+  independent visual settings, Meta A/B overrides, and words-per-subtitle.
+- Rebuilt the Subtitle Templates browser as an expandable template -> styles
+  tree with an Add style action at both the template header and child list.
+- Kept old profile presets compatible by exposing each as a one-style
+  template; the existing pipeline/render contract still receives a flat list
+  of stable style IDs.
+- Step 3 can select a template collection in one action, which fills the
+  existing modulo rotation with all of its child styles in order.
+- Added backend compatibility/rotation tests and Playwright coverage plus a
+  visual snapshot of a three-style template. See wiki 39.
+
+## 2026-07-21 - Unified timeline playhead: one cursor per timeline
+
+- `MultiTrackTimeline` now owns the playback cursor: a single
+  `data-timeline-lane-playhead` line spanning every lane, positioned by the
+  consumer via a `playhead` prop (static `left:%`, CSS-var transform, or an
+  imperative `lineRef`). `TimelineRuler` no longer draws its own tick.
+- Removes the duplicated per-lane cursors in the pipeline editor, the
+  desynced rose ruler tick vs. white 60fps line in the Segments player (the
+  visible "two cursors while playing" bug), and the duplicate rose cursor on
+  Attention Templates. Cursor color unified to `bg-primary`.
+- `pipeline-composition-timeline.spec.ts` now asserts exactly one cursor;
+  the overlay stays out of the a11y tree only when it has no drag handle so
+  the Segments "Move playhead" button remains reachable. Verified with
+  `tsc --noEmit`, both affected Playwright specs, and a screenshot. See wiki 38.
+
 ## 2026-07-20 - Consolidation: subtitle rotation + inspector + parallel WIP into main
 
 - Triaged and committed the parallel WIP that was blocking goal 08: track-based
