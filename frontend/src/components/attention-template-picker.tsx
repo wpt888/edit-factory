@@ -126,10 +126,16 @@ export function AttentionTemplatePicker({
   const handleTemplateChange = (raw: string) => {
     const templateId = raw === "__none__" ? "" : raw;
     const template = templates.find((item) => item.id === templateId);
-    const templateGapSeconds = template
-      ? normalizeAttentionTemplate(template).variantGapMs / 1000
-      : selection.staggerSeconds;
-    onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds });
+    const normalized = template ? normalizeAttentionTemplate(template) : null;
+    const templateGapSeconds = normalized ? normalized.variantGapMs / 1000 : selection.staggerSeconds;
+    // Pre-fill from the template's saved default content, but only when this
+    // pipeline has no assets yet — never clobber content the user already picked
+    // (including when switching back to the same template).
+    const defaults = (normalized?.tracks ?? [])
+      .flatMap((track) => track.map((image) => image.defaultAsset))
+      .filter((asset): asset is AttentionAsset => Boolean(asset));
+    const assets = selection.assets.length === 0 && defaults.length > 0 ? defaults : selection.assets;
+    onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds, assets });
   };
 
   return (
