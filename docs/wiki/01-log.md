@@ -1,5 +1,31 @@
 # Engineering Change Log
 
+## 2026-07-21 - Attention content chosen in Step 3; slots take video + paste
+
+- Moved the attention-template content picker out of Pipeline **Step 1**
+  (where images were chosen blind, before script/TTS/timeline existed) into
+  **Step 3**. Step 1 keeps only a standalone `OutputFormatSelect`
+  (`output-format-select.tsx`) — the "Output video format" control that had
+  been buried inside the picker. The Step 3 "Attention images" inspector card
+  now hosts the full picker (layout preview + numbered slot grid + per-variant
+  stagger), collapsed to a single embeddable variant, writing straight to the
+  persisted pipeline selection. Dropped the redundant `maxVariants` field
+  (Apply scope already targets variants). Commit `bb6f3e4`.
+- Attention slots now take **images and videos**: the asset picker
+  gallery/upload handle both and return a typed `{ url, type }`;
+  `AttentionSelection.assetUrls: string[]` → `assets: { url, type }[]`, with old
+  string bundles migrated to `type:"image"` on load via
+  `normalizeAttentionSelection`. Video slots render muted `<video>` thumbnails.
+  **Ctrl+V** anywhere in Step 3 (outside a text field) uploads the clipboard
+  image and appends it to the next slot. Modulo repeat (`assets[i % len]`) is
+  preserved and documented in the slot helper text. Commit `7251da7`.
+- Backend contract unchanged for now: the apply payload still sends a flat
+  list of **image URLs only** (video assets filtered out). End-to-end video
+  overlay in slots is Phase 3.
+- Verification: tsc + design:check green, no new lint errors, Playwright spec
+  `attention-step3-picker.spec.ts` 3/3 (template/slots/URL, stagger auto-apply,
+  video-gallery + paste). Old `attention-step1-picker.spec.ts` removed.
+
 ## 2026-07-21 - Subtitle & attention templates applicable from Step 3
 
 - Verified and finished the previous session's unfinished work: per-variant
