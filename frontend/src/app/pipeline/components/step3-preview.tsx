@@ -79,12 +79,18 @@ import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
 import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
 import {
+  findMatchingSubtitleTemplateGroup,
+  formatSubtitleStyleCount,
+  getAssignedSubtitleStyleCount,
+  getSubtitleTemplateGroups,
+} from "../subtitle-template-collections";
+import {
   NO_SUBTITLES_PRESET_ID,
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 import type { SafeZoneType } from "@/components/safe-zone-overlay";
 import type { AttentionTemplateApplyResult } from "../attention-template-apply";
-import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 // Radix Select forbids empty-string values, so "Auto (rotation)" uses a sentinel.
 const AUTO_TEMPLATE_VALUE = "__auto__";
@@ -273,6 +279,29 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     pipelineId: string | null;
     note: string;
   } | null>(null);
+  const subtitleRotationPanelRef = useRef<HTMLDivElement>(null);
+  const subtitleTemplateGroups = useMemo(
+    () => getSubtitleTemplateGroups(userSubtitlePresets),
+    [userSubtitlePresets],
+  );
+  const activeSubtitleTemplateGroup = useMemo(
+    () => findMatchingSubtitleTemplateGroup(subtitleTemplateGroups, subtitleRotation.presetIds),
+    [subtitleRotation.presetIds, subtitleTemplateGroups],
+  );
+  const assignedSubtitleStyleCount = useMemo(
+    () => getAssignedSubtitleStyleCount(subtitleRotation.presetIds, userSubtitlePresets),
+    [subtitleRotation.presetIds, userSubtitlePresets],
+  );
+  const focusSubtitleRotationPanel = () => {
+    window.requestAnimationFrame(() => {
+      subtitleRotationPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      subtitleRotationPanelRef.current?.focus({ preventScroll: true });
+    });
+  };
+  const enableSubtitleRotation = () => {
+    handleSubtitleRotationChange({ ...subtitleRotation, enabled: true });
+    focusSubtitleRotationPanel();
+  };
   const attentionApplySelection = attentionSelectionOverride
     && attentionSelectionOverride.pipelineId === pipelineId
     ? attentionSelectionOverride.selection
@@ -630,6 +659,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             presets={userSubtitlePresets}
             onChange={handleSubtitleRotationChange}
             onUpdatePreset={handleUpdateSubtitlePreset}
+            panelRef={subtitleRotationPanelRef}
           />
 
         <div className="flex flex-wrap items-center gap-2">
@@ -825,12 +855,59 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   <Type className="size-4 text-primary" />
                   <div>
                     <p className="text-sm font-medium">Subtitle templates</p>
-                    <p className="text-xs text-muted-foreground">Create and manage reusable caption styles for variants.</p>
+                    <p className="text-xs text-muted-foreground">Apply reusable caption styles to variants.</p>
                   </div>
                 </div>
-                <Button asChild variant="outline" size="sm" className="h-8 w-full text-xs">
-                  <Link href="/subtitle-templates">Open subtitle templates</Link>
-                </Button>
+                {subtitleRotation.enabled ? (
+                  <>
+                    <p className="text-xs text-muted-foreground" data-testid="subtitle-template-state">
+                      {activeSubtitleTemplateGroup?.name ?? "Custom rotation"} · {formatSubtitleStyleCount(assignedSubtitleStyleCount)}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 text-xs"
+                        aria-controls="subtitle-template-rotation-panel"
+                        onClick={focusSubtitleRotationPanel}
+                      >
+                        Edit rotation
+                      </Button>
+                      <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+                        <Link href="/subtitle-templates">Open template space</Link>
+                      </Button>
+                    </div>
+                  </>
+                ) : userSubtitlePresets.length > 0 ? (
+                  <>
+                    <p className="text-xs text-muted-foreground" data-testid="subtitle-template-state">
+                      No template applied
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 text-xs"
+                        aria-controls="subtitle-template-rotation-panel"
+                        onClick={enableSubtitleRotation}
+                      >
+                        Enable rotation
+                      </Button>
+                      <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+                        <Link href="/subtitle-templates">Open template space</Link>
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground" data-testid="subtitle-template-state">
+                      No saved templates yet
+                    </p>
+                    <Button asChild variant="outline" size="sm" className="h-8 w-full text-xs">
+                      <Link href="/subtitle-templates">Open subtitle templates</Link>
+                    </Button>
+                  </>
+                )}
               </CardContent>
             </Card>
 

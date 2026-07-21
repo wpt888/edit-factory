@@ -116,6 +116,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     },
   ];
   const subtitlePersistenceWrites: string[] = [];
+  const rotationWrites: Array<Record<string, unknown>> = [];
   const preview = (index: number) => ({
     audio_duration: 6,
     srt_content: "1\n00:00:00,000 --> 00:00:03,000\nOne two three four\n\n2\n00:00:03,000 --> 00:00:06,000\nFive six seven eight",
@@ -218,12 +219,22 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       } });
       return;
     }
+    if (path.includes(`/pipeline/preview/${PIPELINE_ID}/`)) {
+      const variantIndex = Number(path.split("/").at(-1));
+      await route.fulfill({ json: preview(variantIndex) });
+      return;
+    }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/subtitle-rotation`)) {
-      if (request.method() !== "GET") subtitlePersistenceWrites.push(`${request.method()} ${path}`);
+      if (request.method() === "PUT") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        rotationWrites.push(body);
+        await route.fulfill({ json: body });
+        return;
+      }
       await route.fulfill({
         json: {
           enabled: true,
-          presetIds: ["punchy", "minimal", "editorial", NO_SUBTITLES_PRESET_ID],
+          presetIds: ["punchy", "minimal", "editorial"],
           variantTemplates: {},
         },
       });
@@ -284,14 +295,23 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
 
   const rotationPanel = page.getByTestId("subtitle-template-rotation");
+  const inspectorCard = page.getByTestId("step3-attention-apply");
   await expect(rotationPanel).toBeVisible();
   await expect(rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" })).toBeChecked();
+  await expect(inspectorCard.getByTestId("subtitle-template-state")).toHaveText("Launch captions · 3 styles");
+  await inspectorCard.screenshot({
+    path: "screenshots/subtitle-template-discovery-on.png",
+    animations: "disabled",
+  });
   await expect(page.getByTestId("subtitle-template-select")).toHaveText([
     "Auto (Punchy Karaoke)",
     "Auto (Minimal Clean)",
     "Auto (Editorial Blue)",
-    "Auto (No subtitles)",
+    "Auto (Punchy Karaoke)",
   ]);
+
+  await rotationPanel.getByRole("combobox", { name: "Add subtitle template to rotation" }).click();
+  await page.getByRole("option", { name: "None", exact: true }).click();
   await expect(rotationPanel.getByTestId("subtitle-rotation-row").nth(3)).toContainText("None");
 
   await page.getByTestId("subtitle-template-select").nth(3).click();
@@ -332,6 +352,27 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await expect(overrideDialog).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(overrideDialog).not.toBeVisible();
+
+  const rotationSwitch = rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" });
+  await rotationSwitch.click();
+  await expect(rotationSwitch).not.toBeChecked();
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(0);
+  await expect(rotationPanel.getByTestId("subtitle-rotation-summary")).toHaveText("3 styles ready · off");
+  await expect(inspectorCard.getByTestId("subtitle-template-state")).toHaveText("No template applied");
+  await inspectorCard.screenshot({
+    path: "screenshots/subtitle-template-discovery-off.png",
+    animations: "disabled",
+  });
+
+  const writeCountBeforeShortcut = rotationWrites.length;
+  await inspectorCard.getByRole("button", { name: "Enable rotation" }).click();
+  await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeShortcut + 1);
+  expect(rotationWrites.at(-1)).toMatchObject({
+    enabled: true,
+    presetIds: ["punchy", "minimal", "editorial", NO_SUBTITLES_PRESET_ID],
+  });
+  await expect(rotationSwitch).toBeChecked();
+  await expect(rotationPanel).toBeFocused();
   await page.screenshot({
     path: "screenshots/subtitle-live-preview-variant-2.png",
     fullPage: false,

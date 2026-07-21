@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type Ref } from "react";
 import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,15 +27,28 @@ import {
   NO_SUBTITLES_PRESET_ID,
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
+import {
+  findMatchingSubtitleTemplateGroup,
+  formatSubtitleStyleCount,
+  getAssignedSubtitleStyleCount,
+  getSubtitleTemplateGroups,
+} from "../subtitle-template-collections";
 
 type Props = {
   rotation: SubtitleTemplateRotation;
   presets: UserSubtitlePreset[];
   onChange: (rotation: SubtitleTemplateRotation) => void;
   onUpdatePreset: (presetId: string, settings: SubtitleSettings, wordsPerSubtitle: number) => void;
+  panelRef?: Ref<HTMLDivElement>;
 };
 
-export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onUpdatePreset }: Props) {
+export function SubtitleTemplateRotationPanel({
+  rotation,
+  presets,
+  onChange,
+  onUpdatePreset,
+  panelRef,
+}: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingPreset = presets.find((preset) => preset.id === editingId);
   const [draftSettings, setDraftSettings] = useState<SubtitleSettings | null>(null);
@@ -45,24 +58,15 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
     [presets, rotation.presetIds],
   );
   const canAddNoSubtitles = !rotation.presetIds.includes(NO_SUBTITLES_PRESET_ID);
-  const templateGroups = useMemo(() => {
-    const groups = new Map<string, { id: string; name: string; presets: UserSubtitlePreset[] }>();
-    for (const preset of presets) {
-      const id = preset.templateId ?? preset.id;
-      const group = groups.get(id) ?? {
-        id,
-        name: preset.templateName ?? preset.name,
-        presets: [],
-      };
-      group.presets.push(preset);
-      groups.set(id, group);
-    }
-    return [...groups.values()];
-  }, [presets]);
-  const selectedTemplateId = templateGroups.find((template) => (
-    template.presets.length === rotation.presetIds.length
-    && template.presets.every((preset, index) => preset.id === rotation.presetIds[index])
-  ))?.id;
+  const templateGroups = useMemo(() => getSubtitleTemplateGroups(presets), [presets]);
+  const selectedTemplateId = useMemo(
+    () => findMatchingSubtitleTemplateGroup(templateGroups, rotation.presetIds)?.id,
+    [rotation.presetIds, templateGroups],
+  );
+  const assignedStyleCount = useMemo(
+    () => getAssignedSubtitleStyleCount(rotation.presetIds, presets),
+    [presets, rotation.presetIds],
+  );
 
   const replaceAt = (index: number, presetId: string) => {
     const presetIds = [...rotation.presetIds];
@@ -85,11 +89,21 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
   };
 
   return (
-    <div className="space-y-3 rounded-md border border-border/70 bg-background/45 p-3" data-testid="subtitle-template-rotation">
+    <div
+      id="subtitle-template-rotation-panel"
+      ref={panelRef}
+      tabIndex={-1}
+      className="space-y-3 rounded-md border border-border/70 bg-background/45 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      data-testid="subtitle-template-rotation"
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium">Template rotation</p>
-          <p className="text-xs text-muted-foreground">Assign these caption looks to variants in order, then repeat.</p>
+          <p className="text-xs text-muted-foreground" data-testid="subtitle-rotation-summary">
+            {rotation.enabled
+              ? "Assign these caption looks to variants in order, then repeat."
+              : `${formatSubtitleStyleCount(assignedStyleCount)} ready · off`}
+          </p>
         </div>
         <Switch
           aria-label="Enable subtitle template rotation"
