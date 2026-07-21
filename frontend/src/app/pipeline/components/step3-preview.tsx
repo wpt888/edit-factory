@@ -50,7 +50,6 @@ import {
   LayoutTemplate,
   Pencil,
   ScanLine,
-  GripVertical,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -69,7 +68,7 @@ import {
   StyleKey,
   PreviewCard,
 } from "../pipeline-types";
-import { formatDuration, WORKSPACE_CARD_BG } from "../pipeline-utils";
+import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
 import { WorkspaceSplit } from "./workspace-split";
 import { SubtitleTemplateRotationPanel } from "./subtitle-template-rotation-panel";
@@ -313,17 +312,18 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   // editor's settings column — no divergent copies of the settings UI.
   const previewTimingCard = (
     <Card
-      className={`order-2 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
+      variant="workspace"
+      className="order-2"
       data-testid="step3-preview-timing"
     >
-      <CardHeader className="min-[1280px]:px-4">
-        <CardTitle className="text-lg">Preview Timing</CardTitle>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">Preview Timing</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 min-[1280px]:px-4">
         <div className="space-y-3">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-1">
-            <Label htmlFor="pacing">Pacing</Label>
+            <Label htmlFor="pacing" className="text-xs font-medium text-muted-foreground">Pacing</Label>
             <InlineInfo label="About pacing">
               Choose how quickly the visual cuts change.
             </InlineInfo>
@@ -335,7 +335,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               scheduleReassemblePreviews();
             }}
           >
-            <SelectTrigger id="pacing" className="w-32">
+            <SelectTrigger id="pacing" size="sm" className="w-32 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -348,7 +348,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-1">
-            <Label htmlFor="segment-proximity">Segment proximity</Label>
+            <Label htmlFor="segment-proximity" className="text-xs font-medium text-muted-foreground">Segment proximity</Label>
             <InlineInfo label="About segment proximity">
               Separate: keep clips cut from nearby moments of the same source apart. Merge: fuse them into one continuous shot to avoid a jump-cut.
             </InlineInfo>
@@ -360,7 +360,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               scheduleReassemblePreviews();
             }}
           >
-            <SelectTrigger id="segment-proximity" className="w-32">
+            <SelectTrigger id="segment-proximity" size="sm" className="w-32 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -372,7 +372,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-1">
-            <Label htmlFor="rapid-intro">Rapid intro (2s)</Label>
+            <Label htmlFor="rapid-intro" className="text-xs font-medium text-muted-foreground">Rapid intro (2s)</Label>
             <InlineInfo label="About rapid intro">
               Force the first shot to a snappy 2-second cut regardless of min shot length.
             </InlineInfo>
@@ -394,10 +394,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
   const safeZoneCard = (
     <Card
-      className={`order-3 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}
+      variant="workspace"
+      className="order-3"
       data-testid="step3-safe-zone-settings"
     >
-      <CardHeader className="min-[1280px]:px-4">
+      <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
           <ScanLine className="size-4" />
           Safe Zone
@@ -406,8 +407,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       <CardContent className="space-y-3 min-[1280px]:px-4">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <Label className="text-sm">Show over preview</Label>
-            <p className="text-xs text-muted-foreground">Guide only; it is never included in the render.</p>
+            <Label className="text-xs font-medium text-muted-foreground">Show over preview</Label>
+            <p className="text-[11px] text-muted-foreground">Guide only; it is never included in the render.</p>
           </div>
           <Switch
             checked={safeZoneEnabled}
@@ -416,9 +417,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           />
         </div>
         <div className="flex items-center justify-between gap-4">
-          <Label className="text-sm">Format</Label>
+          <Label className="text-xs font-medium text-muted-foreground">Format</Label>
           <Select value={safeZoneType} onValueChange={(value) => setSafeZoneType(value as SafeZoneType)} disabled={!safeZoneEnabled}>
-            <SelectTrigger className="w-36" aria-label="Safe zone format">
+            <SelectTrigger size="sm" className="w-36 text-xs" aria-label="Safe zone format">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -433,8 +434,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   );
 
   const subtitleStyleCard = (
-    <Card className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents ${WORKSPACE_CARD_BG}`}>
-      <CardHeader className="pb-1 min-[1280px]:bg-background min-[1280px]:px-4 min-[1280px]:py-3">
+    <Card variant="workspace" className={`${!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""} order-1 min-[1280px]:contents`}>
+      <CardHeader className="pb-1 min-[1280px]:bg-surface-canvas min-[1280px]:py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-1">
             <CardTitle className="flex items-center gap-2 text-sm">
@@ -474,7 +475,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
         {/* Keep the preview and controls in one continuous scroll surface.
             A nested sticky region made the preview and settings move in
             separate stages inside the already-scrollable inspector. */}
-        <div className="space-y-2 pb-2 min-[1280px]:bg-background min-[1280px]:px-2">
+        <div className="space-y-2 pb-2 min-[1280px]:bg-surface-canvas min-[1280px]:px-2">
           {metaMultiplication && (
             <div
               role="tablist"
@@ -505,7 +506,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
         </div>
 
-        <div className="space-y-2 min-[1280px]:bg-background min-[1280px]:px-2 min-[1280px]:pb-2">
+        <div className="space-y-2 min-[1280px]:bg-surface-canvas min-[1280px]:px-2 min-[1280px]:pb-2">
           {/* Auxiliary controls — below the preview so they don't push it down */}
           <SubtitleTemplateRotationPanel
             rotation={subtitleRotation}
@@ -630,8 +631,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:divide-y min-[1280px]:divide-border min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
                 data-testid="step3-inspector"
               >
-            <Card className={`order-3 min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:py-3 ${WORKSPACE_CARD_BG}`}>
-              <CardContent className="space-y-2 min-[1280px]:px-4">
+            <Card variant="workspace" className="order-3">
+              <CardContent className="space-y-2">
                 <div className="flex items-center gap-2">
                   <LayoutTemplate className="size-4 text-primary" />
                   <div>
@@ -665,7 +666,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
               </aside>
 
-              <div className="min-w-0 bg-background min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0">
+              <WorkspaceSplit
+                splitId="step3-preview-canvas"
+                reorderable={false}
+                fallbackClassName="min-w-0 bg-background min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0"
+                groupClassName="h-full min-h-0 flex-1 bg-background"
+                leftSizing={{ defaultSize: "30%", minSize: "18rem" }}
+                rightSizing={{ minSize: "30%" }}
+              >
                 {/* Keep the live subtitle preview permanently between the
                     settings inspector and the variant canvas. Each column
                     scrolls independently, so the preview remains available
@@ -674,7 +682,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   id="subtitle-style-preview"
                   role="tabpanel"
                   data-testid="subtitle-sticky-preview"
-                  className="border-b bg-background p-3 min-[1280px]:h-full min-[1280px]:w-[min(24rem,32vw)] min-[1280px]:shrink-0 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-r min-[1280px]:border-b-0"
+                  className="min-w-0 border-b bg-background p-3 min-[1280px]:h-full min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-b-0"
                   aria-label="Live subtitle preview"
                 >
                   <SubtitleStylePreviewPanel
@@ -720,8 +728,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 const selectedTemplateValue = variantTemplateSelections[card.key] || AUTO_TEMPLATE_VALUE;
 
                 return (
-                  <Card key={card.key} className={`overflow-hidden min-[1280px]:gap-3 min-[1280px]:rounded-none min-[1280px]:border-0 min-[1280px]:pt-3 min-[1280px]:pb-0 ${WORKSPACE_CARD_BG}`}>
-                    <CardHeader className="min-[1280px]:px-4">
+                  <Card key={card.key} variant="workspace" className="overflow-hidden min-[1280px]:pt-3 min-[1280px]:pb-0">
+                    <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Checkbox
@@ -742,7 +750,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               }
                             >
                               <SelectTrigger
-                                className="h-7 w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary"
+                                size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary"
                                 data-testid="subtitle-template-select"
                               >
                                 <SelectValue />
@@ -877,15 +885,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                             >
                               <div
                                 data-preview-accessory-drag-handle
-                                className="flex touch-none select-none items-center justify-between gap-1 cursor-grab active:cursor-grabbing"
+                                className="flex min-w-0 touch-none select-none items-center justify-between gap-1 overflow-hidden cursor-grab active:cursor-grabbing"
                                 title="Drag thumbnail panel"
                               >
-                                <span className="flex items-center gap-0.5 text-[11px] font-semibold leading-none">
-                                  <GripVertical className="size-3 text-muted-foreground" aria-hidden="true" />
+                                <span className="min-w-0 text-[11px] font-semibold leading-none">
                                   Thumbnail
                                 </span>
                                 <span
-                                  className="text-[9px] leading-none text-muted-foreground"
+                                  className="shrink-0 text-[9px] leading-none text-muted-foreground"
                                   title={thumb ? (thumb.isAutoSelected ? "auto-selected" : "manual") : "none"}
                                 >
                                   {thumb ? (thumb.isAutoSelected ? "Auto" : "Manual") : "None"}
@@ -915,7 +922,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-7 w-full rounded-sm px-1 text-[11px]"
+                                className="w-full rounded-sm px-1 text-[11px]"
                                 onClick={openThumbnailPicker}
                               >
                                 Change
@@ -1092,7 +1099,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     showOverlay={false}
                     onInteractOutside={(event) => event.preventDefault()}
                     style={editorStyle}
-                    className="flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
+                    className="z-[70] flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
                     data-testid="step3-full-editor"
                   >
                     <DialogHeader className="shrink-0 border-b px-4 py-3 text-left">
@@ -1176,7 +1183,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                                       )
                                     }
                                   >
-                                    <SelectTrigger className="h-7 w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary">
+                                    <SelectTrigger size="sm" className="w-auto min-w-[9rem] gap-1 border-primary/40 text-xs text-primary">
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1377,7 +1384,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               />
             )}
                 </section>
-              </div>
+              </WorkspaceSplit>
             </WorkspaceSplit>
           </div>
   );
