@@ -1,7 +1,20 @@
+import asyncio
 from datetime import date, time
-from unittest.mock import patch
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from app.api.schedule_routes import _fetch_collection_clips
+from fastapi import BackgroundTasks
+
+from app.api.auth import ProfileContext
+from app.api.schedule_routes import (
+    CreateSchedulePlanRequest,
+    _schedule_progress,
+    _fetch_collection_clips,
+    create_schedule_plan,
+)
+from app.repositories.models import QueryResult
+from app.services.postiz_service import PostizIntegration, PostizMedia, PublishResult
 from app.services.schedule_service import build_schedule_plan
 
 
@@ -274,3 +287,191 @@ def test_fetch_collection_clips_expands_selected_variant_to_meta_renders():
 
     assert collection_names == {"project-1": "Project 1"}
     assert returned_ids == {"base-0", "meta-a-0", "meta-b-0"}
+
+
+class _HermeticScheduleRepo:
+    def __init__(self, clips):
+        self.projects = [{"id": "project-1", "name": "Project 1", "profile_id": "profile-1"}]
+        self.clips = clips
+        self.plans = {}
+        self.items = {}
+        self.clip_content = {}
+        self.fail_caption_reads = False
+
+    def table_query(self, table, action, filters=None, data=None):
+        if table == "editai_projects" and action == "select":
+            return QueryResult(data=self.projects)
+        if table == "editai_clips" and action == "select":
+            return QueryResult(data=self.clips)
+        if table == "editai_schedule_items" and action == "insert":
+            inserted = []
+            for item in data:
+                item_id = f"item-{len(self.items) + 1}"
+                stored = {"id": item_id, **item}
+                self.items[item_id] = stored
+                inserted.append(stored)
+            return QueryResult(data=inserted)
+        if table == "editai_clip_content" and action == "upsert":
+            self.clip_content[data["clip_id"]] = data["caption"]
+            return QueryResult(data=[data])
+        if table == "editai_clip_content" and action == "select":
+            if self.fail_caption_reads:
+                raise RuntimeError("caption storage unavailable")
+            clip_id = filters.eq["clip_id"]
+            caption = self.clip_content.get(clip_id)
+            return QueryResult(data=[{"caption": caption}] if caption is not None else [])
+        raise AssertionError(f"Unexpected table query: {table} {action}")
+
+    def create_schedule_plan(self, data):
+        self.plans[data["id"]] = dict(data)
+        return self.plans[data["id"]]
+
+    def get_schedule_plan(self, plan_id):
+        return self.plans.get(plan_id)
+
+    def update_schedule_plan(self, plan_id, data):
+        self.plans[plan_id].update(data)
+        return self.plans[plan_id]
+
+    def list_schedule_items(self, plan_id, filters=None):
+        clip_by_id = {clip["id"]: clip for clip in self.clips}
+        rows = []
+        for item in self.items.values():
+            if item["plan_id"] != plan_id or item["status"] != "pending":
+                continue
+            clip = clip_by_id[item["clip_id"]]
+            rows.append({
+                **item,
+                "editai_clips": {
+                    "final_video_path": clip["final_video_path"],
+                    "variant_name": clip["variant_name"],
+                    "project_id": clip["project_id"],
+                },
+            })
+        return QueryResult(data=rows)
+
+    def update_schedule_item(self, item_id, data):
+        self.items[item_id].update(data)
+        return self.items[item_id]
+
+    def update_clip(self, clip_id, data):
+        clip = next(clip for clip in self.clips if clip["id"] == clip_id)
+        clip.update(data)
+        return clip
+
+    def get_project(self, project_id):
+        return next((project for project in self.projects if project["id"] == project_id), None)
+
+
+class _PublisherMock:
+    def __init__(self):
+        self.posts = []
+
+    async def get_integrations(self):
+        return [PostizIntegration(id="tiktok-1", name="TikTok", type="tiktok")]
+
+    async def upload_video(self, video_path: Path, profile_id=None):
+        return PostizMedia(id=video_path.stem, path=str(video_path))
+
+    async def create_post(self, **kwargs):
+        self.posts.append(kwargs)
+        return PublishResult(success=True, post_id=f"post-{len(self.posts)}")
+
+
+def test_caption_generation_to_smart_schedule_publishes_correct_variant_caption(tmp_path):
+    """Hermetic caption -> confirmation -> V2 publisher chain (no real Postiz)."""
+    clips = [
+        _clip("clip-v0", 0),
+        _clip("clip-v1", 1),
+    ]
+    for clip in clips:
+        clip["final_video_path"] = f"{clip['id']}.mp4"
+        (tmp_path / clip["final_video_path"]).write_bytes(b"hermetic-video")
+
+    generated_captions = {
+        "clip-v0": "Generated caption for variant one",
+        "clip-v1": "Generated caption for variant two",
+    }
+    repo = _HermeticScheduleRepo(clips)
+    publisher = _PublisherMock()
+    settings = SimpleNamespace(output_dir=tmp_path, base_dir=tmp_path)
+
+    async def run_confirmation():
+        background_tasks = BackgroundTasks()
+        response = await create_schedule_plan(
+            request=CreateSchedulePlanRequest(
+                collection_ids=["project-1"],
+                start_date="2026-07-23",
+                timezone="UTC",
+                integration_ids=["tiktok-1"],
+                platform_times={"tiktok-1": "09:00"},
+                jitter_minutes=0,
+                clip_ids=list(generated_captions),
+                captions=generated_captions,
+            ),
+            background_tasks=background_tasks,
+            profile=ProfileContext(profile_id="profile-1", user_id="user-1"),
+        )
+        await background_tasks()
+        return response
+
+    with (
+        patch("app.api.schedule_routes.get_repository", return_value=repo),
+        patch("app.repositories.factory.get_repository", return_value=repo),
+        patch("app.services.postiz_service.get_postiz_publisher", return_value=publisher),
+        patch("app.config.get_settings", return_value=settings),
+        patch("app.services.schedule_service.asyncio.sleep", new=AsyncMock()),
+    ):
+        response = asyncio.run(run_confirmation())
+
+    captions_by_media = {post["media_id"]: post["caption"] for post in publisher.posts}
+    assert captions_by_media == {
+        "clip-v0": generated_captions["clip-v0"],
+        "clip-v1": generated_captions["clip-v1"],
+    }
+    assert repo.plans[response.plan_id]["status"] == "completed"
+    assert repo.plans[response.plan_id]["failed_count"] == 0
+
+
+def test_caption_query_failure_marks_smart_schedule_failed(tmp_path):
+    clip = _clip("clip-v0", 0)
+    clip["final_video_path"] = "clip-v0.mp4"
+    (tmp_path / clip["final_video_path"]).write_bytes(b"hermetic-video")
+
+    repo = _HermeticScheduleRepo([clip])
+    publisher = _PublisherMock()
+    settings = SimpleNamespace(output_dir=tmp_path, base_dir=tmp_path)
+
+    async def run_confirmation():
+        background_tasks = BackgroundTasks()
+        response = await create_schedule_plan(
+            request=CreateSchedulePlanRequest(
+                collection_ids=["project-1"],
+                start_date="2026-07-23",
+                timezone="UTC",
+                integration_ids=["tiktok-1"],
+                platform_times={"tiktok-1": "09:00"},
+                jitter_minutes=0,
+                clip_ids=["clip-v0"],
+                captions={"clip-v0": "Generated caption"},
+            ),
+            background_tasks=background_tasks,
+            profile=ProfileContext(profile_id="profile-1", user_id="user-1"),
+        )
+        repo.fail_caption_reads = True
+        await background_tasks()
+        return response
+
+    with (
+        patch("app.api.schedule_routes.get_repository", return_value=repo),
+        patch("app.repositories.factory.get_repository", return_value=repo),
+        patch("app.services.postiz_service.get_postiz_publisher", return_value=publisher),
+        patch("app.config.get_settings", return_value=settings),
+        patch("app.services.schedule_service.asyncio.sleep", new=AsyncMock()),
+    ):
+        response = asyncio.run(run_confirmation())
+
+    assert publisher.posts == []
+    assert repo.plans[response.plan_id]["status"] == "failed"
+    assert repo.plans[response.plan_id]["failed_count"] == 1
+    assert _schedule_progress[response.job_id]["status"] == "failed"
