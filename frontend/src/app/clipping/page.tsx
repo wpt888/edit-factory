@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost, apiUpload } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 type CloudMedia = {
@@ -201,26 +209,18 @@ export default function ClippingPage() {
 
   return (
     <PageShell className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="rounded-lg border border-border bg-card p-2.5">
-            <Scissors className="size-6" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-heading text-3xl font-bold tracking-tight">
-                Clipping
-              </h1>
+      <PageHeader
+        icon={<Scissors className="size-7 text-primary" />}
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+              Clipping
               <Badge variant="outline" className="gap-1">
                 <Cloud className="size-3" /> Shared with web
               </Badge>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Turn one cloud video into reviewed short-form clips with one
-              centralized credit charge.
-            </p>
-          </div>
-        </div>
+          </span>
+        }
+        description="Turn one cloud video into reviewed short-form clips with one centralized credit charge."
+        actions={
         <Button
           variant="outline"
           onClick={() => void load()}
@@ -229,7 +229,8 @@ export default function ClippingPage() {
           <RefreshCw className={cn("size-4", loading && "animate-spin")} />{" "}
           Refresh
         </Button>
-      </div>
+        }
+      />
 
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
@@ -284,18 +285,19 @@ export default function ClippingPage() {
             <CardContent className="space-y-5">
               <label className="block space-y-1.5 text-sm font-medium">
                 Source video
-                <select
-                  value={sourceMediaId}
-                  onChange={(event) => setSourceMediaId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 font-normal"
-                >
-                  {media.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.displayName ?? item.id} · {item.origin} ·{" "}
-                      {formatBytes(item.sizeBytes)}
-                    </option>
-                  ))}
-                </select>
+                <Select value={sourceMediaId} onValueChange={setSourceMediaId}>
+                  <SelectTrigger className="w-full font-normal">
+                    <SelectValue placeholder="Select a source video" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {media.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.displayName ?? item.id} · {item.origin} ·{" "}
+                        {formatBytes(item.sizeBytes)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               {media.length === 0 && (
                 <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -306,48 +308,45 @@ export default function ClippingPage() {
               <div className="grid gap-4 md:grid-cols-3">
                 <label className="space-y-1.5 text-sm font-medium">
                   Maximum clips
-                  <select
-                    value={maxClips}
-                    onChange={(event) =>
-                      setMaxClips(Number(event.target.value))
-                    }
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 font-normal"
-                  >
-                    {[3, 5, 10, 20].map((value) => (
-                      <option key={value} value={value}>
-                        Up to {value}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={String(maxClips)} onValueChange={(value) => setMaxClips(Number(value))}>
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[3, 5, 10, 20].map((value) => (
+                        <SelectItem key={value} value={String(value)}>
+                          Up to {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </label>
                 <label className="space-y-1.5 text-sm font-medium">
                   Clip duration
-                  <select
-                    value={duration}
-                    onChange={(event) =>
-                      setDuration(event.target.value as typeof duration)
-                    }
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 font-normal"
-                  >
-                    <option value="ai">AI decides</option>
-                    <option value="10">Exactly 10 seconds</option>
-                    <option value="15">Exactly 15 seconds</option>
-                    <option value="20">Exactly 20 seconds</option>
-                    <option value="30">Exactly 30 seconds</option>
-                  </select>
+                  <Select value={duration} onValueChange={(value) => setDuration(value as typeof duration)}>
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ai">AI decides</SelectItem>
+                      <SelectItem value="10">Exactly 10 seconds</SelectItem>
+                      <SelectItem value="15">Exactly 15 seconds</SelectItem>
+                      <SelectItem value="20">Exactly 20 seconds</SelectItem>
+                      <SelectItem value="30">Exactly 30 seconds</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </label>
                 <label className="space-y-1.5 text-sm font-medium">
                   Render on
-                  <select
-                    value={renderTarget}
-                    onChange={(event) =>
-                      setRenderTarget(event.target.value as "desktop" | "cloud")
-                    }
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 font-normal"
-                  >
-                    <option value="desktop">This desktop · free render</option>
-                    <option value="cloud">Cloud · 4 credits/output</option>
-                  </select>
+                  <Select value={renderTarget} onValueChange={(value) => setRenderTarget(value as "desktop" | "cloud")}>
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="desktop">This desktop · free render</SelectItem>
+                      <SelectItem value="cloud">Cloud · 4 credits/output</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </label>
               </div>
 
