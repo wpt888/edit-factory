@@ -41,6 +41,24 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
     () => presets.filter((preset) => !rotation.presetIds.includes(preset.id)),
     [presets, rotation.presetIds],
   );
+  const templateGroups = useMemo(() => {
+    const groups = new Map<string, { id: string; name: string; presets: UserSubtitlePreset[] }>();
+    for (const preset of presets) {
+      const id = preset.templateId ?? preset.id;
+      const group = groups.get(id) ?? {
+        id,
+        name: preset.templateName ?? preset.name,
+        presets: [],
+      };
+      group.presets.push(preset);
+      groups.set(id, group);
+    }
+    return [...groups.values()];
+  }, [presets]);
+  const selectedTemplateId = templateGroups.find((template) => (
+    template.presets.length === rotation.presetIds.length
+    && template.presets.every((preset, index) => preset.id === rotation.presetIds[index])
+  ))?.id;
 
   const replaceAt = (index: number, presetId: string) => {
     const presetIds = [...rotation.presetIds];
@@ -78,13 +96,35 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
 
       {rotation.enabled && (
         <div className="space-y-2">
+          {templateGroups.length > 0 && (
+            <Select
+              value={selectedTemplateId}
+              onValueChange={(templateId) => {
+                const template = templateGroups.find((candidate) => candidate.id === templateId);
+                if (!template) return;
+                onChange({ ...rotation, presetIds: template.presets.map((preset) => preset.id) });
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full text-xs" aria-label="Use subtitle template">
+                <SelectValue placeholder="Use a subtitle template" />
+              </SelectTrigger>
+              <SelectContent>
+                {templateGroups.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>
+                    {template.name} · {template.presets.length} {template.presets.length === 1 ? "style" : "styles"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
           {rotation.presetIds.map((presetId, index) => {
             const preset = presets.find((candidate) => candidate.id === presetId);
             return (
               <div key={`${presetId}-${index}`} className="flex items-center gap-1.5" data-testid="subtitle-rotation-row">
                 <span className="w-6 shrink-0 text-center text-xs font-semibold text-primary">{index + 1}</span>
                 <Select value={presetId} onValueChange={(value) => replaceAt(index, value)}>
-                  <SelectTrigger className="h-8 min-w-0 flex-1 text-xs" aria-label={`Rotation template ${index + 1}`}>
+                  <SelectTrigger size="sm" className="min-w-0 flex-1 text-xs" aria-label={`Rotation template ${index + 1}`}>
                     <SelectValue placeholder="Choose template" />
                   </SelectTrigger>
                   <SelectContent>
@@ -94,7 +134,7 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
                         value={candidate.id}
                         disabled={candidate.id !== presetId && rotation.presetIds.includes(candidate.id)}
                       >
-                        {candidate.name}
+                        {candidate.templateName ? `${candidate.templateName} / ${candidate.name}` : candidate.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -136,19 +176,21 @@ export function SubtitleTemplateRotationPanel({ rotation, presets, onChange, onU
                 presetIds: [...rotation.presetIds, presetId],
               })}
             >
-              <SelectTrigger className="h-8 w-full border-dashed text-xs" aria-label="Add subtitle template to rotation">
+              <SelectTrigger size="sm" className="w-full border-dashed text-xs" aria-label="Add subtitle template to rotation">
                 <Plus className="mr-1 size-3.5" />
-                <SelectValue placeholder="Add template" />
+                <SelectValue placeholder="Add style" />
               </SelectTrigger>
               <SelectContent>
                 {unusedPresets.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>
+                  <SelectItem key={preset.id} value={preset.id}>
+                    {preset.templateName ? `${preset.templateName} / ${preset.name}` : preset.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           )}
           {presets.length === 0 && (
-            <p className="text-xs text-amber-500">Save at least one subtitle preset to build a rotation.</p>
+            <p className="text-xs text-amber-500">Save at least one subtitle template to build a rotation.</p>
           )}
         </div>
       )}
