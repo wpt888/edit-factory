@@ -1,5 +1,28 @@
 # Engineering Change Log
 
+## 2026-07-21 - Attention slots render video overlays end to end (Phase 3)
+
+- Closed the Phase 2 gap where video slots were dropped before the backend.
+  The apply payload now sends typed `assets: [{url, type}]` instead of a flat
+  image-only `assetUrls`; both the apply-template and attention-selection
+  endpoints accept the typed form and still read the legacy flat list as
+  images (backward compatible for old clients/bundles).
+- Cue layers carry `mediaType` end to end: `template_track_cues` /
+  `distribute_attention_cues` stamp it from the typed asset, `AttentionLayer`
+  (pydantic + TS type) persists it, and `selectAttentionAsset` sets it on
+  manual per-layer edits.
+- Render: `_attention_cues_to_items` pre-trims a video layer to its cue window
+  with `ffmpeg -ss 0 -t <dur> -an` (audio dropped) and flags `is_video: True`;
+  `apply_overlay_timeline` already composites video items. Overlay video audio
+  is intentionally **muted** — the base voiceover plus the template's own SFX
+  stay the only sound sources.
+- Preview: the Step 3 live overlay and inspector thumbnail render
+  `<video muted loop>` for video layers instead of a broken `<img>`.
+- Verification: backend `test_attention_templates` + `test_video_overlay_ffmpeg`
+  green (video item pre-trim path + mediaType threading covered); tsc +
+  design:check clean; new `attention-step3-video-slot.spec.ts` screenshots a
+  video assigned to a slot. Commits `43e03b3`, `32d57be`, `a69e8c5`.
+
 ## 2026-07-21 - Attention content chosen in Step 3; slots take video + paste
 
 - Moved the attention-template content picker out of Pipeline **Step 1**
