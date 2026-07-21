@@ -36,6 +36,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { InspectorSectionHeader } from "@/components/ui/inspector";
 import { Loader2, CheckCircle2, Maximize2, ScanLine, X } from "lucide-react";
 import {
   SubtitleSettings,
@@ -58,15 +59,6 @@ import { stripAssTags } from "@/lib/karaoke-word-timing";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
 const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: SUBTITLE_REFERENCE_HEIGHT, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
-
-function InspectorSectionHeader({ title, summary }: { title: string; summary: string }) {
-  return (
-    <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-      <span className="font-medium text-foreground">{title}</span>
-      <span className="truncate text-xs font-normal text-muted-foreground">{summary}</span>
-    </span>
-  );
-}
 
 interface SubtitleEditorProps {
   /** Current subtitle settings */
@@ -771,9 +763,9 @@ export function SubtitleEditor({
         </AccordionTrigger>
         <AccordionContent className="space-y-1.5 px-1.5 pb-2 pt-0.5">
           <div className="flex min-h-7 items-center justify-between gap-2">
-            <Label>Font</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Font</Label>
             <Select value={settings.fontFamily} onValueChange={(value) => updateSetting("fontFamily", value)}>
-              <SelectTrigger className="h-7 w-44 bg-muted/50" style={{ fontFamily: settings.fontFamily }}>
+              <SelectTrigger size="sm" className="w-44 text-xs" style={{ fontFamily: settings.fontFamily }}>
                 {/* children override: always show the stored font, even when its SelectItem isn't mounted (system fonts load on demand). Legacy settings may store a full CSS stack — display the first real family name. */}
                 <SelectValue placeholder="Montserrat">{displayFontName}</SelectValue>
               </SelectTrigger>
@@ -827,17 +819,17 @@ export function SubtitleEditor({
             )}
 
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Font Size</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Font Size</Label>
             <Slider value={[settings.fontSize]} onValueChange={([value]) => updateSetting("fontSize", value)} min={12} max={200} step={1} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.fontSize}px</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.fontSize}px</span>
           </div>
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Letter Spacing</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Letter Spacing</Label>
             <Slider value={[settings.letterSpacing ?? 0]} onValueChange={([value]) => updateSetting("letterSpacing", value)} min={-2} max={10} step={0.5} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.letterSpacing ?? 0}px</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.letterSpacing ?? 0}px</span>
           </div>
           <div className="flex min-h-7 items-center justify-between gap-2">
-            <div className="flex min-w-0 items-baseline gap-2"><Label>Adaptive Sizing</Label><p className="truncate text-[11px] text-muted-foreground">Auto-reduce for long text</p></div>
+            <div className="flex min-w-0 items-baseline gap-2"><Label className="text-xs font-medium text-muted-foreground">Adaptive Sizing</Label><p className="truncate text-[11px] text-muted-foreground">Auto-reduce for long text</p></div>
             <Switch checked={settings.adaptiveSizing ?? false} onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)} />
           </div>
         </AccordionContent>
@@ -850,15 +842,15 @@ export function SubtitleEditor({
         <AccordionContent className="space-y-1.5 px-1.5 pb-2 pt-0.5">
           <ColorPicker label="Text Color" value={settings.textColor} onChange={(value) => updateSetting("textColor", value)} />
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Opacity</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Opacity</Label>
             <Slider value={[settings.opacity ?? 100]} onValueChange={([value]) => updateSetting("opacity", value)} min={0} max={100} step={5} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.opacity ?? 100}%</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.opacity ?? 100}%</span>
           </div>
           <ColorPicker label="Outline Color" value={settings.outlineColor} onChange={(value) => updateSetting("outlineColor", value)} />
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Outline Width</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Outline Width</Label>
             <Slider value={[settings.outlineWidth]} onValueChange={([value]) => updateSetting("outlineWidth", value)} min={0} max={10} step={1} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.outlineWidth}px</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.outlineWidth}px</span>
           </div>
         </AccordionContent>
       </AccordionItem>
@@ -869,17 +861,17 @@ export function SubtitleEditor({
         </AccordionTrigger>
         <AccordionContent className="space-y-1.5 px-1.5 pb-2 pt-0.5">
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Vertical Position (Y)</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Vertical Position (Y)</Label>
             <Slider value={[settings.positionY]} onValueChange={([value]) => updateSetting("positionY", value)} min={5} max={95} step={1} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.positionY}%</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.positionY}%</span>
           </div>
           <div className="flex min-h-7 items-center justify-between gap-2">
-            <Label>Horizontal Alignment</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Horizontal Alignment</Label>
             <Select
               value={settings.horizontalAlignment ?? "center"}
               onValueChange={(value) => updateSetting("horizontalAlignment", value as "left" | "center" | "right")}
             >
-              <SelectTrigger className="h-7 w-40 bg-muted/50"><SelectValue /></SelectTrigger>
+              <SelectTrigger size="sm" className="w-40 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="left">Left</SelectItem>
                 <SelectItem value="center">Center</SelectItem>
@@ -899,12 +891,12 @@ export function SubtitleEditor({
         </AccordionTrigger>
         <AccordionContent className="space-y-1.5 px-1.5 pb-2 pt-0.5">
           <div className="flex min-h-7 items-center justify-between gap-2">
-            <Label>Border Style</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Border Style</Label>
             <Select
               value={String(settings.borderStyle ?? 1)}
               onValueChange={(value) => updateSetting("borderStyle", Number(value))}
             >
-              <SelectTrigger className="h-7 w-44 bg-muted/50"><SelectValue /></SelectTrigger>
+              <SelectTrigger size="sm" className="w-44 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="1">Outline + Shadow</SelectItem>
                 <SelectItem value="3">Box Background</SelectItem>
@@ -912,9 +904,9 @@ export function SubtitleEditor({
             </Select>
           </div>
           <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-            <Label>Shadow Depth</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Shadow Depth</Label>
             <Slider value={[settings.shadowDepth ?? 0]} onValueChange={([value]) => updateSetting("shadowDepth", value)} min={0} max={4} step={1} />
-            <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.shadowDepth ?? 0}px</span>
+            <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.shadowDepth ?? 0}px</span>
           </div>
           {(settings.shadowDepth ?? 0) > 0 && (
             <ColorPicker
@@ -924,14 +916,14 @@ export function SubtitleEditor({
             />
           )}
           <div className="flex min-h-7 items-center justify-between gap-2">
-            <Label>Glow Effect</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Glow Effect</Label>
             <Switch checked={settings.enableGlow ?? false} onCheckedChange={(checked) => updateSetting("enableGlow", checked)} />
           </div>
           {settings.enableGlow && (
             <div className="grid min-h-6 grid-cols-[7rem_1fr_auto] items-center gap-2">
-              <Label>Glow Blur</Label>
+              <Label className="text-xs font-medium text-muted-foreground">Glow Blur</Label>
               <Slider value={[settings.glowBlur ?? 0]} onValueChange={([value]) => updateSetting("glowBlur", value)} min={0} max={10} step={1} />
-              <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{settings.glowBlur ?? 0}px</span>
+              <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{settings.glowBlur ?? 0}px</span>
             </div>
           )}
         </AccordionContent>
@@ -947,7 +939,7 @@ export function SubtitleEditor({
         <AccordionContent className="space-y-1.5 px-1.5 pb-2 pt-0.5">
           <div className="flex min-h-7 items-center justify-between gap-2">
             <div className="flex min-w-0 items-baseline gap-2">
-              <Label>Karaoke Highlight</Label>
+              <Label className="text-xs font-medium text-muted-foreground">Karaoke Highlight</Label>
               <p className="truncate text-[11px] text-muted-foreground">Synced word highlight</p>
             </div>
             <Switch checked={settings.karaoke ?? false} onCheckedChange={(checked) => updateSetting("karaoke", checked)} />
@@ -955,12 +947,12 @@ export function SubtitleEditor({
           {settings.karaoke && (
             <>
               <div className="flex min-h-7 items-center justify-between gap-2">
-                <Label>Highlight Style</Label>
+                <Label className="text-xs font-medium text-muted-foreground">Highlight Style</Label>
                 <Select
                   value={settings.karaokeStyle ?? "color"}
                   onValueChange={(value) => updateSetting("karaokeStyle", value as "color" | "box")}
                 >
-                  <SelectTrigger className="h-7 w-44 bg-muted/50"><SelectValue /></SelectTrigger>
+                  <SelectTrigger size="sm" className="w-44 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="color">Color sweep</SelectItem>
                     <SelectItem value="box">Background box</SelectItem>
@@ -1162,10 +1154,10 @@ interface ColorPickerProps {
 function ColorPicker({ label, value, onChange }: ColorPickerProps) {
   return (
     <div className="flex min-h-7 items-center justify-between gap-2">
-      <Label>{label}</Label>
+      <Label className="text-xs font-medium text-muted-foreground">{label}</Label>
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="outline" className="h-7 w-40 justify-start gap-2 px-2 font-mono text-xs">
+          <Button variant="outline" className="h-8 w-40 justify-start gap-2 px-2 font-mono text-xs">
             <div
               className="size-4 rounded-sm border"
               style={{ backgroundColor: value }}
