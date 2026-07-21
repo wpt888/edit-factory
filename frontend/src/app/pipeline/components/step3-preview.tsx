@@ -51,7 +51,6 @@ import {
   LayoutTemplate,
   Pencil,
   ScanLine,
-  Crosshair,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -134,6 +133,7 @@ type Step3Ctx = {
   attentionTimelines: Record<PreviewKey, AttentionTimeline>;
   getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
   attentionSelection: AttentionSelection;
+  handleAttentionSelectionChange: (selection: AttentionSelection) => void;
   applyAttentionTemplateToVariants: (
     selection: AttentionSelection,
     cardKeys: string[],
@@ -215,6 +215,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     interstitialSlides,
     attentionTimelines,
     attentionSelection,
+    handleAttentionSelectionChange,
     applyAttentionTemplateToVariants,
     setConfirmDialog,
     EMPTY_SLIDES,
@@ -268,10 +269,6 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   const [variantSubtitleDraft, setVariantSubtitleDraft] = useState<SubtitleSettings | null>(null);
   const [safeZoneEnabled, setSafeZoneEnabled] = useState(false);
   const [safeZoneType, setSafeZoneType] = useState<SafeZoneType>("reel");
-  const [attentionSelectionOverride, setAttentionSelectionOverride] = useState<{
-    pipelineId: string | null;
-    selection: AttentionSelection;
-  } | null>(null);
   const [attentionScopeOverride, setAttentionScopeOverride] = useState<{
     pipelineId: string | null;
     scope: string;
@@ -304,10 +301,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     handleSubtitleRotationChange({ ...subtitleRotation, enabled: true });
     focusSubtitleRotationPanel();
   };
-  const attentionApplySelection = attentionSelectionOverride
-    && attentionSelectionOverride.pipelineId === pipelineId
-    ? attentionSelectionOverride.selection
-    : attentionSelection ?? EMPTY_ATTENTION_SELECTION;
+  const attentionApplySelection = attentionSelection ?? EMPTY_ATTENTION_SELECTION;
   const attentionApplyScope = attentionScopeOverride
     && attentionScopeOverride.pipelineId === pipelineId
     ? attentionScopeOverride.scope
@@ -792,12 +786,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   Apply a saved image layout to previews without leaving Step 3.
                 </p>
                 <AttentionTemplatePicker
-                  variant="inspector"
                   selection={attentionApplySelection}
                   onSelectionChange={(selection) => {
-                    setAttentionSelectionOverride({ pipelineId, selection });
+                    handleAttentionSelectionChange(selection);
                     setAttentionApplyResult(null);
                   }}
+                  outputWidth={renderSettings.output_width || 1080}
+                  outputHeight={renderSettings.output_height || 1920}
                 />
                 <InspectorField label="Apply scope" htmlFor="step3-attention-scope">
                   <Select
@@ -942,9 +937,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   className="min-w-0 border-b bg-background min-[1280px]:h-full min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:border-b-0"
                   aria-label="Live subtitle preview"
                 >
-                  <Card variant="workspace" className="min-h-full gap-0 py-0" data-testid="step3-preview-target-panel">
+                  <Card variant="workspace" className="min-h-full gap-0 py-0 min-[1280px]:py-0" data-testid="step3-preview-target-panel">
                     <WorkspacePanelHeader
-                      icon={Crosshair}
                       title="Preview Target"
                       sticky
                       data-testid="step3-preview-target-header"

@@ -347,7 +347,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
 
             {/* ElevenLabs model selector */}
-            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 overflow-hidden py-0">
+            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 overflow-hidden py-0 min-[1280px]:py-0">
               <WorkspacePanelHeader
                 icon={Settings2}
                 title="TTS"

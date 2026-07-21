@@ -5,7 +5,7 @@ import { CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 type WorkspacePanelHeaderProps = Omit<ComponentProps<"div">, "title"> & {
-  icon: LucideIcon;
+  icon?: LucideIcon;
   title: string;
   titleAccessory?: ReactNode;
   actions?: ReactNode;
@@ -33,7 +33,7 @@ export function WorkspacePanelHeader({
     >
       <div className="flex min-w-0 items-center gap-1">
         <CardTitle data-slot="workspace-panel-title" className="flex min-w-0 items-center gap-2 text-sm">
-          <Icon className="size-4 shrink-0" />
+          {Icon && <Icon className="size-4 shrink-0" />}
           <span className="truncate">{title}</span>
           {titleAccessory}
         </CardTitle>

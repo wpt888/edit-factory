@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-const PIPELINE_ID = "attention-step1-pipeline";
+const PIPELINE_ID = "attention-step3-pipeline";
 const PROFILE = {
-  id: "attention-step1-profile",
+  id: "attention-step3-profile",
   name: "Attention QA",
   is_default: true,
   created_at: "2026-07-19T00:00:00Z",
@@ -26,72 +26,20 @@ const previewFor = (offset: number) => ({
   available_segments: [],
 });
 
-test("step 1 exposes template layout and numbered content slots", async ({ page }) => {
-  await page.addInitScript(({ profile }) => {
-    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
-    localStorage.setItem("editai_current_profile_id", profile.id);
-  }, { profile: PROFILE });
-
-  await page.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/attention-templates")) {
-      await route.fulfill({ json: { templates: TEMPLATES } });
-      return;
-    }
-    if (path.endsWith("/profiles/") || path.endsWith("/profiles")) {
-      await route.fulfill({ json: [PROFILE] });
-      return;
-    }
-    if (path.endsWith("/segments/source-videos")) {
-      await route.fulfill({ json: [] });
-      return;
-    }
-    await route.fulfill({ json: {} });
-  });
-
-  await page.setViewportSize({ width: 1600, height: 900 });
-  await page.goto("/pipeline?desktopAuth=confirmed");
-
-  const picker = page.getByTestId("attention-template-picker");
-  await expect(picker).toBeVisible();
-  await picker.getByRole("combobox", { name: "Layout template" }).click();
-  await page.getByRole("option", { name: "Tornado Stack · System" }).click();
-  await expect(page.getByTestId("attention-stagger-seconds")).toBeVisible();
-  await expect(page.getByTestId("attention-max-variants")).toBeVisible();
-  await expect(picker.getByText("3 slots")).toBeVisible();
-  await expect(page.getByTestId("attention-layout-preview")).toBeVisible();
-  await expect(page.getByTestId("attention-content-slots").getByText("Slot 1")).toBeVisible();
-  await expect(page.getByTestId("attention-content-slots").getByText("Slot 3")).toBeVisible();
-
-  await page.getByTestId("attention-content-slots").getByText("Choose image").first().click();
-  await page.getByRole("tab", { name: "URL" }).click();
-  await page.getByLabel("Image URL").fill("https://assets.test/attention-one.png");
-  await page.getByRole("button", { name: "Use image URL" }).click();
-  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
-
-  await picker.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "screenshots/attention-step1-picker.png", fullPage: true });
-});
-
-test("auto-apply staggers each variant by the configured offset", async ({ page }) => {
-  await page.addInitScript(({ profile, pipelineId }) => {
-    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
-    localStorage.setItem("editai_current_profile_id", profile.id);
-    localStorage.setItem(
-      `blipost.workspace.${profile.id}.pipeline.session`,
-      JSON.stringify({ pipelineId, step: 3 }),
-    );
-  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
-
-  const applyPosts: Array<{ key: string; body: { startOffsetMs?: number } }> = [];
-  await page.route("**/api/v1/**", async (route) => {
+// Shared route table for a Step 3 pipeline. `attentionSelection` seeds the
+// persisted selection so callers can start empty or pre-populated.
+function routeStep3(page: import("@playwright/test").Page, opts: {
+  attentionSelection: Record<string, unknown> | null;
+  onApply?: (key: string, body: { startOffsetMs?: number }) => void;
+}) {
+  return page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
 
     const applyMatch = path.match(/attention-timeline\/([^/]+)\/apply-template$/);
     if (applyMatch && request.method() === "POST") {
       const body = JSON.parse(request.postData() || "{}");
-      applyPosts.push({ key: applyMatch[1], body });
+      opts.onApply?.(applyMatch[1], body);
       await route.fulfill({ json: { revision: 1, cues: [{ id: "cue", startMs: 3000 + (body.startOffsetMs || 0), durationMs: 1200, layers: [], zone: "behind" }] } });
       return;
     }
@@ -119,17 +67,12 @@ test("auto-apply staggers each variant by the configured offset", async ({ page 
         },
         captions: {},
         selected_captions: {},
-        name: "Attention stagger",
+        name: "Attention QA",
         idea: "Attention QA",
         provider: "gemini",
         variant_count: 2,
         meta_multiplication: false,
-        attention_selection: {
-          templateId: "system-quick-pulse",
-          assetUrls: ["https://assets.test/one.png"],
-          staggerSeconds: 1,
-          maxVariants: 0,
-        },
+        attention_selection: opts.attentionSelection,
         generation_job: {},
         tts_jobs: {},
       } });
@@ -159,6 +102,10 @@ test("auto-apply staggers each variant by the configured offset", async ({ page 
       } });
       return;
     }
+    if (path.includes("/platform/media")) {
+      await route.fulfill({ json: { connected: true, media: [] } });
+      return;
+    }
     if (path.endsWith("/profiles/") || path.endsWith("/profiles")) {
       await route.fulfill({ json: [PROFILE] });
       return;
@@ -172,6 +119,72 @@ test("auto-apply staggers each variant by the configured offset", async ({ page 
       return;
     }
     await route.fulfill({ json: {} });
+  });
+}
+
+test("step 3 attention card exposes template layout, numbered slots, and image assignment", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  await routeStep3(page, { attentionSelection: null });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
+
+  const card = page.getByTestId("step3-attention-apply");
+  await expect(card).toBeVisible();
+
+  const picker = card.getByTestId("attention-template-picker");
+  await expect(picker).toBeVisible();
+  await picker.getByRole("combobox", { name: "Layout template" }).click();
+  await page.getByRole("option", { name: "Tornado Stack · System" }).click();
+
+  await expect(card.getByTestId("attention-layout-preview")).toBeVisible();
+  await expect(card.getByTestId("attention-stagger-seconds")).toBeVisible();
+  await expect(card.getByText("3 slots")).toBeVisible();
+  // maxVariants was removed — Apply scope covers per-variant targeting now.
+  await expect(card.getByTestId("attention-max-variants")).toHaveCount(0);
+
+  const slots = card.getByTestId("attention-content-slots");
+  await expect(slots.getByText("Choose")).toHaveCount(3);
+
+  await slots.getByText("Choose").first().click();
+  await page.getByRole("tab", { name: "URL" }).click();
+  await page.getByLabel("Image URL").fill("https://assets.test/attention-one.png");
+  await page.getByRole("button", { name: "Use image URL" }).click();
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
+
+  await card.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "screenshots/attention-step3-picker.png", fullPage: true });
+});
+
+test("auto-apply staggers each variant by the configured offset", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  const applyPosts: Array<{ key: string; body: { startOffsetMs?: number } }> = [];
+  // Old bundle shape: assetUrls + maxVariants. Loading must not crash and the
+  // stagger must still drive per-variant offsets.
+  await routeStep3(page, {
+    attentionSelection: {
+      templateId: "system-quick-pulse",
+      assetUrls: ["https://assets.test/one.png"],
+      staggerSeconds: 1,
+      maxVariants: 0,
+    },
+    onApply: (key, body) => applyPosts.push({ key, body }),
   });
 
   await page.setViewportSize({ width: 1600, height: 900 });

@@ -58,7 +58,7 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import type { CatalogProduct, ContextProduct } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
 import { WorkspaceSplit } from "./workspace-split";
-import { AttentionTemplatePicker } from "@/components/attention-template-picker";
+import { OutputFormatSelect } from "@/app/pipeline/components/output-format-select";
 import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
@@ -129,8 +129,6 @@ export function Step1Script({ ctx }: { ctx: any }) {
     pipelineLayout,
     sourceVideos,
     selectedSourceIds,
-    attentionSelection,
-    handleAttentionSelectionChange,
     renderSettings,
     setRenderSettings,
   }: Step1Ctx = ctx;
@@ -174,7 +172,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
               aria-label="Video idea editor"
               data-testid="step1-idea-canvas"
             >
-            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 py-0">
+            <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 py-0 min-[1280px]:py-0">
               <WorkspacePanelHeader
                 icon={Lightbulb}
                 title="Video Idea"
@@ -196,12 +194,10 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   />
                 </div>
 
-                <AttentionTemplatePicker
-                  selection={attentionSelection}
-                  onSelectionChange={handleAttentionSelectionChange}
-                  outputWidth={renderSettings.output_width || 1080}
-                  outputHeight={renderSettings.output_height || 1920}
-                  onOutputSizeChange={(width, height) => setRenderSettings({
+                <OutputFormatSelect
+                  width={renderSettings.output_width || 1080}
+                  height={renderSettings.output_height || 1920}
+                  onChange={(width, height) => setRenderSettings({
                     ...renderSettings,
                     output_width: width,
                     output_height: height,

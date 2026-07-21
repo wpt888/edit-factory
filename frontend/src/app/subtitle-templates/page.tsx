@@ -56,6 +56,7 @@ type Draft = {
 type Tab = "shared" | "A" | "B";
 type PanelId = "templates" | "settings" | "preview";
 type DropTarget = { panelId: PanelId; side: "before" | "after" };
+type StyleNameEdit = { templateId: string; styleIndex: number; value: string };
 
 const DEFAULT_PANEL_ORDER: PanelId[] = ["templates", "settings", "preview"];
 const PANEL_ORDER_STORAGE_KEY = "blipost.subtitle-templates.panel-order.v1";
@@ -138,6 +139,7 @@ export default function SubtitleTemplatesPage() {
   const [savedAt, setSavedAt] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [styleNameEdit, setStyleNameEdit] = useState<StyleNameEdit | null>(null);
   const [panelOrder, setPanelOrder] = useState<PanelId[]>(DEFAULT_PANEL_ORDER);
   const [draggedPanel, setDraggedPanel] = useState<PanelId | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
@@ -319,6 +321,38 @@ export default function SubtitleTemplatesPage() {
     setSavedAt(false);
   };
 
+  const beginStyleNameEdit = (style: StyleDraft | UserSubtitlePreset, styleIndex: number, template?: UserSubtitleTemplate) => {
+    const templateId = template?.id ?? "new";
+    if (template) {
+      if (selectedTemplateId === template.id) {
+        setSelectedStyleIndex(styleIndex);
+        setTab("shared");
+      } else {
+        select(template, styleIndex);
+      }
+    } else {
+      setSelectedStyleIndex(styleIndex);
+      setTab("shared");
+    }
+    setStyleNameEdit({ templateId, styleIndex, value: style.name });
+  };
+
+  const commitStyleNameEdit = () => {
+    if (!styleNameEdit || styleNameEdit.templateId !== selectedTemplateId) {
+      setStyleNameEdit(null);
+      return;
+    }
+    const name = styleNameEdit.value.trim();
+    if (name) {
+      setDraft((current) => ({
+        ...current,
+        styles: current.styles.map((style, index) => index === styleNameEdit.styleIndex ? { ...style, name } : style),
+      }));
+      setSavedAt(false);
+    }
+    setStyleNameEdit(null);
+  };
+
   const duplicate = () => {
     setSelectedTemplateId("new");
     setDraft((current) => ({
@@ -465,16 +499,51 @@ export default function SubtitleTemplatesPage() {
             {isNew && (
               <div className="ml-5 space-y-1 border-l border-border pl-2" data-testid="subtitle-template-draft-styles">
                 {draft.styles.map((style, index) => (
-                  <button
-                    key={`${style.name}-${index}`}
-                    type="button"
-                    onClick={() => { setSelectedStyleIndex(index); setTab("shared"); }}
-                    data-testid="subtitle-style-row"
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
-                  >
-                    <span className="truncate">{style.name}</span>
-                    <span className="shrink-0 text-[10px]">{style.wordsPerSubtitle}w</span>
-                  </button>
+                  styleNameEdit?.templateId === "new" && styleNameEdit.styleIndex === index ? (
+                    <div
+                      key={style.id ?? index}
+                      data-testid="subtitle-style-row"
+                      className="flex w-full items-center gap-2 rounded-md bg-primary/10 px-2 py-1 text-foreground"
+                    >
+                      <Input
+                        autoFocus
+                        value={styleNameEdit.value}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onChange={(event) => setStyleNameEdit((current) => current ? { ...current, value: event.target.value } : current)}
+                        onBlur={commitStyleNameEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitStyleNameEdit();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            setStyleNameEdit(null);
+                          }
+                        }}
+                        className="h-8 px-2 text-xs"
+                        aria-label={`Rename ${style.name}`}
+                        data-testid="subtitle-style-name-input"
+                      />
+                      <span className="shrink-0 text-[11px] text-muted-foreground">{style.wordsPerSubtitle}w</span>
+                    </div>
+                  ) : (
+                    <button
+                      key={style.id ?? index}
+                      type="button"
+                      onClick={() => { setSelectedStyleIndex(index); setTab("shared"); }}
+                      data-testid="subtitle-style-row"
+                      className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
+                    >
+                      <span
+                        className="truncate"
+                        title="Double-click to rename"
+                        onDoubleClick={() => beginStyleNameEdit(style, index)}
+                      >
+                        {style.name}
+                      </span>
+                      <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle}w</span>
+                    </button>
+                  )
                 ))}
                 <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle()}>
                   <Plus className="size-3.5" />Add style
@@ -525,23 +594,58 @@ export default function SubtitleTemplatesPage() {
                     <CollapsibleContent>
                       <div className="mb-1 ml-5 space-y-1 border-l border-border pl-2 pr-1">
                         {visibleStyles.map((style, index) => (
-                          <button
-                            key={style.id ?? `${style.name}-${index}`}
-                            type="button"
-                            onClick={() => {
-                              if (selectedTemplateId === template.id) {
-                                setSelectedStyleIndex(index);
-                                setTab("shared");
-                                return;
-                              }
-                              select(template, index);
-                            }}
-                            data-testid="subtitle-style-row"
-                            className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedTemplateId === template.id && selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
-                          >
-                            <span className="truncate">{style.name}</span>
-                            <span className="shrink-0 text-[10px]">{style.wordsPerSubtitle ?? 2}w</span>
-                          </button>
+                          styleNameEdit?.templateId === template.id && styleNameEdit.styleIndex === index ? (
+                            <div
+                              key={style.id ?? index}
+                              data-testid="subtitle-style-row"
+                              className="flex w-full items-center gap-2 rounded-md bg-primary/10 px-2 py-1 text-foreground"
+                            >
+                              <Input
+                                autoFocus
+                                value={styleNameEdit.value}
+                                onFocus={(event) => event.currentTarget.select()}
+                                onChange={(event) => setStyleNameEdit((current) => current ? { ...current, value: event.target.value } : current)}
+                                onBlur={commitStyleNameEdit}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    commitStyleNameEdit();
+                                  } else if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    setStyleNameEdit(null);
+                                  }
+                                }}
+                                className="h-8 px-2 text-xs"
+                                aria-label={`Rename ${style.name}`}
+                                data-testid="subtitle-style-name-input"
+                              />
+                              <span className="shrink-0 text-[11px] text-muted-foreground">{style.wordsPerSubtitle ?? 2}w</span>
+                            </div>
+                          ) : (
+                            <button
+                              key={style.id ?? index}
+                              type="button"
+                              onClick={() => {
+                                if (selectedTemplateId === template.id) {
+                                  setSelectedStyleIndex(index);
+                                  setTab("shared");
+                                  return;
+                                }
+                                select(template, index);
+                              }}
+                              data-testid="subtitle-style-row"
+                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedTemplateId === template.id && selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
+                            >
+                              <span
+                                className="truncate"
+                                title="Double-click to rename"
+                                onDoubleClick={() => beginStyleNameEdit(style, index, template)}
+                              >
+                                {style.name}
+                              </span>
+                              <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle ?? 2}w</span>
+                            </button>
+                          )
                         ))}
                         <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle(template)}>
                           <Plus className="size-3.5" />Add style

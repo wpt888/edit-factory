@@ -88,7 +88,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
             data-testid="pipeline-history-sidebar"
           >
             <Card variant={isEditingWorkspace ? "workspace" : "default"} className={isEditingWorkspace
-              ? "gap-0 py-0 min-[1280px]:h-full min-[1280px]:min-h-0"
+              ? "gap-0 py-0 min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:py-0"
               : "gap-0 py-0 min-[1280px]:sticky min-[1280px]:top-16"
             }>
               <WorkspacePanelHeader

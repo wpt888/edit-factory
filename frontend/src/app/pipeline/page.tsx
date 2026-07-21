@@ -35,7 +35,7 @@ import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderAdjustments, RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import { EMPTY_ATTENTION_SELECTION, type AttentionSelection } from "@/components/attention-template-picker";
+import { EMPTY_ATTENTION_SELECTION, normalizeAttentionSelection, type AttentionSelection } from "@/components/attention-template-picker";
 import type { CompositionClip, MusicSettings, TransitionSpec } from "@/types/composition-timeline";
 import { resolveCompositionTransitions } from "@/types/composition-timeline";
 import {
@@ -576,7 +576,9 @@ function PipelinePage() {
     importedTemplateTimelineRef.current = timeline;
     setSelectedVariants(new Set(timeline.selectedVariantIndices || []));
     setInterstitialSlides(timeline.interstitialSlides || {});
-    const selection = timeline.attentionSelection || EMPTY_ATTENTION_SELECTION;
+    const selection = timeline.attentionSelection
+      ? normalizeAttentionSelection(timeline.attentionSelection)
+      : EMPTY_ATTENTION_SELECTION;
     setAttentionSelection(selection);
     attentionSelectionRef.current = selection;
     setAttentionTimelines(timeline.attentionTimelines || {});
@@ -1098,12 +1100,7 @@ function PipelinePage() {
           applyPipelineTemplateSettings(data.template_settings, data.pipeline_id);
         }
         if (data.attention_selection?.templateId) {
-          const restoredSelection: AttentionSelection = {
-            templateId: data.attention_selection.templateId,
-            assetUrls: data.attention_selection.assetUrls || [],
-            staggerSeconds: data.attention_selection.staggerSeconds ?? 1,
-            maxVariants: data.attention_selection.maxVariants ?? 0,
-          };
+          const restoredSelection = normalizeAttentionSelection(data.attention_selection);
           setAttentionSelection(restoredSelection);
           attentionSelectionRef.current = restoredSelection;
         }
@@ -1535,9 +1532,8 @@ function PipelinePage() {
       if (!timeline || timeline.cues.length > 0) continue;
       if (!preview?.matches?.length || !(preview.audio_duration > 0)) continue;
       // card.key is "<variantIndex>" or "<variantIndex>_<style>"; the variant
-      // index drives the stagger and the apply-to-first-N-variants cutoff.
+      // index drives the per-variant stagger offset.
       const variantIndex = parseInt(card.key, 10) || 0;
-      if (attentionSelection.maxVariants > 0 && variantIndex >= attentionSelection.maxVariants) continue;
       const applyKey = `${pipelineId}:${card.key}`;
       if (attentionAutoApplied.current.has(applyKey)) continue;
       attentionAutoApplied.current.add(applyKey);
@@ -3077,12 +3073,7 @@ function PipelinePage() {
       setHistoryContextProducts(data.context_products || []);
       setHistoryAttentionSelection(
         data.attention_selection?.templateId
-          ? {
-              templateId: data.attention_selection.templateId,
-              assetUrls: data.attention_selection.assetUrls || [],
-              staggerSeconds: data.attention_selection.staggerSeconds ?? 1,
-              maxVariants: data.attention_selection.maxVariants ?? 0,
-            }
+          ? normalizeAttentionSelection(data.attention_selection)
           : null,
       );
       setHistoryTemplateSettings(

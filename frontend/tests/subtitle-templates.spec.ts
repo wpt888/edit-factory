@@ -140,10 +140,16 @@ test('lists a template with child styles, adds a style, saves, and deletes', asy
   await expect(page.getByTestId('subtitle-style-row')).toHaveCount(2);
   await expect(page.getByTestId('subtitle-style-row')).toHaveText([/Bold Yellow/, /Clean White/]);
 
-  // Add a third style from the template row and edit its name and font size.
+  // Add a third style and rename it inline by double-clicking its current name.
   await page.getByRole('button', { name: 'Add style to Launch captions' }).click();
   await expect(page.getByTestId('subtitle-style-row')).toHaveCount(3);
-  await page.getByTestId('subtitle-style-name').fill('Karaoke Green');
+  await page.getByTestId('subtitle-style-row').nth(2).getByText('Style 3').dblclick();
+  const inlineName = page.getByTestId('subtitle-style-name-input');
+  await expect(inlineName).toBeFocused();
+  await inlineName.fill('Karaoke Green');
+  await inlineName.press('Enter');
+  await expect(page.getByTestId('subtitle-style-row').nth(2)).toContainText('Karaoke Green');
+  await expect(page.getByTestId('subtitle-style-name')).toHaveValue('Karaoke Green');
   await expect(editor).toHaveScreenshot('subtitle-template-with-three-styles.png', {
     animations: 'disabled',
     maxDiffPixelRatio: 0.02,

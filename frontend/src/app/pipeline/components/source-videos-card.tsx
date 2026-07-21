@@ -49,7 +49,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
     <Card
       variant={workspace ? "workspace" : "default"}
       className={workspace
-        ? "gap-0 py-0"
+        ? "gap-0 py-0 min-[1280px]:py-0"
         : "order-[-1] gap-0 py-0 min-[1100px]:col-start-1 min-[1100px]:row-start-2"
       }
       data-testid="source-videos-panel"
@@ -58,11 +58,20 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
         icon={Film}
         title="Source Videos"
         data-testid="source-videos-header"
-        actions={sourceVideos.length > 1 ? (
-          <div className="flex gap-2">
+      />
+      <CardContent className={workspace ? "space-y-3 min-[1280px]:py-4" : "space-y-3 pt-4"}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardDescription>
+            {sourceVideos.length <= 1
+              ? "Source video for segment matching"
+              : `Select which videos to match segments from (${selectedSourceIds.size} of ${sourceVideos.length} selected)`}
+          </CardDescription>
+          {sourceVideos.length > 1 && (
+            <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs"
                 onClick={handleDeselectAllSources}
                 disabled={selectedSourceIds.size === 0}
               >
@@ -71,20 +80,15 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               <Button
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs"
                 onClick={handleSelectAllSources}
                 disabled={selectedSourceIds.size === sourceVideos.length}
               >
                 Select All
               </Button>
-          </div>
-        ) : undefined}
-      />
-      <CardContent className={workspace ? "space-y-3 min-[1280px]:py-4" : "space-y-3 pt-4"}>
-        <CardDescription>
-          {sourceVideos.length <= 1
-            ? "Source video for segment matching"
-            : `Select which videos to match segments from (${selectedSourceIds.size} of ${sourceVideos.length} selected)`}
-        </CardDescription>
+            </div>
+          )}
+        </div>
         {sourceVideosLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />

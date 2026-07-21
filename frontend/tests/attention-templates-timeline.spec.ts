@@ -72,10 +72,15 @@ test("attention templates uses the shared timeline chrome and clip shell", async
   await expect(imageSlot).toHaveCount(1);
   await expect(imageSlot).toBeVisible();
   await expect(imageSlot).toContainText("Slot 1");
-  await expect(audioSlot).toHaveCount(1);
-  await expect(audioSlot).toBeVisible();
-  await expect(audioSlot).toContainText("Choose SFX · Slot 1");
+  await expect(audioSlot).toHaveCount(0);
   expect((await imageSlot.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(30);
+
+  const inspector = page.getByTestId("attention-template-inspector");
+  const inspectorBox = await inspector.boundingBox();
+  const durationInputBox = await inspector.getByText("Duration", { exact: true }).locator("..").locator("input").boundingBox();
+  expect(inspectorBox).not.toBeNull();
+  expect(durationInputBox).not.toBeNull();
+  expect(durationInputBox!.x + durationInputBox!.width).toBeLessThanOrEqual(inspectorBox!.x + inspectorBox!.width);
 
   await timeline.getByRole("button", { name: "Open V2 track settings" }).click();
   await page.getByRole("menuitem", { name: "Add video track" }).click();
@@ -89,11 +94,18 @@ test("attention templates uses the shared timeline chrome and clip shell", async
     animations: "disabled",
   });
 
-  await audioSlot.click();
-  await expect(page.getByRole("dialog", { name: "Choose sound effect" })).toBeVisible();
+  await timeline.getByLabel("Add media to A1").click();
+  const soundEffectDialog = page.getByRole("dialog", { name: "Choose sound effect" });
+  await expect(soundEffectDialog).toBeVisible();
+  await expect(page.getByTestId("attention-template-preview")).toHaveCSS("isolation", "isolate");
+  await expect(page).toHaveScreenshot("attention-template-sound-effect-dialog.png", {
+    animations: "disabled",
+  });
   await page.getByRole("tab", { name: "URL" }).click();
   await page.getByLabel("Sound effect URL").fill("https://example.com/whoosh.mp3");
   await page.getByRole("button", { name: "Use sound effect URL" }).click();
+  await expect(audioSlot).toHaveCount(1);
+  await expect(audioSlot).toBeVisible();
   await expect(audioSlot).toContainText("Sound effect");
 
   await page.getByRole("button", { name: "Save template" }).click();

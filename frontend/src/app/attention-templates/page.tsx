@@ -288,12 +288,12 @@ export default function AttentionTemplatesPage() {
         {libraryOpen && <TemplateLibrary templates={templates} selectedId={selectedId} loading={loading} onSelect={selectTemplate} onCreate={beginCreate} />}
       </EditorHeader>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-px bg-border">
-        <aside className="min-h-0 overflow-y-auto bg-card" data-testid="attention-template-inspector">
+      <div className="grid min-h-0 flex-1 grid-cols-[clamp(280px,22vw,320px)_minmax(0,1fr)] gap-px bg-border">
+        <aside className="min-h-0 min-w-0 overflow-y-auto bg-card" data-testid="attention-template-inspector">
           <div className="border-b border-border p-4">
             <div className="flex items-center justify-between"><div><p className="text-sm font-semibold">Template settings</p><p className="mt-0.5 text-[11px] text-muted-foreground">Reusable layout and timing</p></div>{isSystem && <Badge variant="outline" className="border-primary/30 text-primary"><ShieldCheck className="mr-1 size-3" />System</Badge>}</div>
           </div>
-          <fieldset disabled={!editable || saving} className="divide-y divide-border/70 px-3 disabled:opacity-55">
+          <fieldset disabled={!editable || saving} className="min-w-0 divide-y divide-border/70 disabled:opacity-55">
             <InspectorSection title="Template" defaultOpen>
               <Field label="Name"><Input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="h-8 px-2 text-xs" /></Field>
               <Field label="Subtitle layer"><Select value={draft.zone} onValueChange={value => setDraft(current => ({ ...current, zone: value as AttentionTemplatePayload["zone"] }))}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="behind">Captions over images</SelectItem><SelectItem value="front">Images over captions</SelectItem></SelectContent></Select></Field>
@@ -309,7 +309,7 @@ export default function AttentionTemplatesPage() {
                 <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><Slider min={0} max={100} step={1} value={[Math.round(selectedImage.opacity * 100)]} onValueChange={([value]) => updateImage(selectedImage.id, { opacity: value / 100 })} /></Field>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Start" value={selectedImage.startMs / 1000} unit="s" step={.1} onChange={value => { const ms = Math.max(0, Math.round(value * 1000)); updateImage(selectedImage.id, { startMs: ms }); setPreviewMs(ms); }} /><NumberField label="Duration" value={selectedImage.durationMs / 1000} unit="s" step={.1} onChange={value => updateImage(selectedImage.id, { durationMs: Math.max(100, Math.round(value * 1000)) })} /></div>
                 <div className="border-t border-border/70 pt-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Waves className="size-3.5 text-amber-300" />Paired sound effect</div>
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Waves className="size-3.5 text-amber-300" />Optional sound effect</div>
                   <div className="space-y-3">
                     <Field label="Audio track">
                       <Select value={String(selectedImage.sfxTrack)} onValueChange={value => updateImage(selectedImage.id, { sfxTrack: Number(value) })}>
@@ -321,7 +321,7 @@ export default function AttentionTemplatesPage() {
                       <Button type="button" variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => chooseSoundEffect(selectedImage.id, selectedImage.sfxTrack)}><Music className="mr-1.5 size-3.5" />{selectedImage.sfxUrl || selectedImage.sfxAssetId ? "Change effect" : "Choose effect"}</Button>
                       {(selectedImage.sfxUrl || selectedImage.sfxAssetId) && <Button type="button" variant="ghost" size="sm" className="h-8 text-xs text-destructive" onClick={() => updateImage(selectedImage.id, { sfxUrl: undefined, sfxAssetId: undefined, sfxLabel: undefined })}>Clear</Button>}
                     </div>
-                    <p className="truncate text-[11px] text-muted-foreground">{selectedImage.sfxLabel || selectedImage.sfxUrl || selectedImage.sfxAssetId || "The audio slot is ready; choose the effect that should play with this image."}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">{selectedImage.sfxLabel || selectedImage.sfxUrl || selectedImage.sfxAssetId || "No sound effect assigned. Choose one to add it to the audio track."}</p>
                     <Field label={`Effect volume · ${selectedImage.sfxVolumeDb > 0 ? "+" : ""}${selectedImage.sfxVolumeDb.toFixed(0)} dB`}><Slider min={-60} max={12} step={1} value={[selectedImage.sfxVolumeDb]} onValueChange={([value]) => updateImage(selectedImage.id, { sfxVolumeDb: value })} /></Field>
                   </div>
                 </div>
@@ -360,7 +360,7 @@ export default function AttentionTemplatesPage() {
             <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-4"><p className="flex items-center gap-2 text-xs font-semibold"><Film className="size-3.5" />Program monitor</p><div className="flex items-center gap-1"><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{canvasLabel} · {(previewMs / 1000).toFixed(2)}s</span><Button variant="ghost" size="icon" className="size-7 text-muted-foreground"><Maximize2 className="size-3.5" /></Button></div></div>
             {/* Program-monitor video stage stays dark in both themes — a preview canvas is theme-independent, like any video player. */}
             <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#060706] p-4" style={{ containerType: "size" }}>
-              <div ref={previewCanvasRef} className="relative overflow-hidden border border-white/15 bg-[#171a17] shadow-2xl" style={{ aspectRatio: `${draft.canvasWidth} / ${draft.canvasHeight}`, width: `min(100cqw, calc(100cqh * ${draft.canvasWidth / draft.canvasHeight}))`, height: `min(100cqh, calc(100cqw * ${draft.canvasHeight / draft.canvasWidth}))` }} data-testid="attention-template-preview" onPointerDown={event => { if (event.target === event.currentTarget || !(event.target as HTMLElement).closest("[data-preview-image]")) setSelectedImageId(""); }}>
+              <div ref={previewCanvasRef} className="relative isolate overflow-hidden border border-white/15 bg-[#171a17] shadow-2xl" style={{ aspectRatio: `${draft.canvasWidth} / ${draft.canvasHeight}`, width: `min(100cqw, calc(100cqh * ${draft.canvasWidth / draft.canvasHeight}))`, height: `min(100cqh, calc(100cqw * ${draft.canvasHeight / draft.canvasWidth}))` }} data-testid="attention-template-preview" onPointerDown={event => { if (event.target === event.currentTarget || !(event.target as HTMLElement).closest("[data-preview-image]")) setSelectedImageId(""); }}>
                 {videoUrl ? <video src={videoUrl} muted loop autoPlay className="pointer-events-none absolute inset-0 size-full object-cover" /> : <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(45deg,#171a17_25%,#121412_25%,#121412_50%,#171a17_50%,#171a17_75%,#121412_75%)] bg-[length:18px_18px]"><div className="absolute inset-0 flex flex-col items-center justify-center text-white/25"><Film className="mb-2 size-7" /><span className="text-[10px] uppercase tracking-[.18em]">Reference video</span></div></div>}
                 {previewImages.map(({ image, trackIndex, active }) => <div key={image.id} data-preview-image data-active={active ? "true" : "false"} className={`group absolute cursor-move touch-none ${selectedImageId === image.id ? "z-50" : ""}`} style={{ left: `${image.x * 100}%`, top: `${image.y * 100}%`, width: `${image.width * 100}%`, height: `${image.height * 100}%`, zIndex: selectedImageId === image.id ? 70 : (active ? (draft.zone === "front" ? 40 : 10) : 2) + trackIndex }} onPointerDown={event => beginCanvasInteraction(event, image, "move")}><div className={`absolute inset-0 overflow-hidden ${active ? "bg-[#252b25] shadow-xl" : "border border-dashed border-white/25 bg-transparent"} ${selectedImageId === image.id ? "ring-2 ring-primary" : active ? "ring-1 ring-white/35 group-hover:ring-primary/80" : "group-hover:border-primary/70"}`} style={{ opacity: active ? image.opacity : selectedImageId === image.id ? .45 : .18 }}>{active ? <div className="flex size-full flex-col items-center justify-center gap-1 bg-[linear-gradient(135deg,#333a33,#1b201b)] text-white/35"><ImagePlus className="size-7" /><span className="text-[9px] font-medium uppercase tracking-wider">Pipeline image slot</span><span className="absolute bottom-2 right-2 bg-black/60 px-1.5 py-0.5 text-[9px]">V{trackIndex + 2} · {image.fit}</span></div> : <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[8px] text-white/70">V{trackIndex + 2} · inactive</span>}</div>{(["nw", "ne", "sw", "se"] as const).map(corner => <button key={corner} type="button" aria-label={`Resize image slot from ${corner} corner`} className={`absolute size-3 rounded-full border-2 border-[#0b0d0b] bg-primary shadow transition-opacity ${selectedImageId === image.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"} ${corner === "nw" ? "-left-1.5 -top-1.5 cursor-nwse-resize" : corner === "ne" ? "-right-1.5 -top-1.5 cursor-nesw-resize" : corner === "sw" ? "-bottom-1.5 -left-1.5 cursor-nesw-resize" : "-bottom-1.5 -right-1.5 cursor-nwse-resize"}`} onPointerDown={event => beginCanvasInteraction(event, image, corner)} />)}</div>)}
                 {slotCount > 0 && activeImages.length === 0 && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-[90] rounded bg-black/70 px-2 py-1.5 text-center text-[9px] text-white/65">No slots active at {(previewMs / 1000).toFixed(2)}s · inactive positions are outlined</div>}
@@ -599,7 +599,8 @@ function Timeline({
   const audioLanes = Array.from({ length: audioTrackCount }, (_, offset) => {
     const trackNumber = offset + 1;
     const trackId = `A${trackNumber}`;
-    const assignedImages = allImages.filter(image => image.sfxTrack === trackNumber);
+    const assignedImages = allImages.filter(image =>
+      image.sfxTrack === trackNumber && Boolean(image.sfxUrl || image.sfxAssetId));
     const muted = mutedAudioTracks.has(trackNumber);
     const canDelete = audioTrackCount > 1 && trackNumber === audioTrackCount && assignedImages.length === 0;
     return {
@@ -628,20 +629,19 @@ function Timeline({
       showEndLine: true,
       content: assignedImages.map(image => {
         const slotNumber = slotNumberById.get(image.id) ?? 1;
-        const hasEffect = Boolean(image.sfxUrl || image.sfxAssetId);
         return (
           <TimelineClipShell
             key={`audio-${image.id}`}
             testId={`attention-audio-slot-${image.id}`}
-            className={`z-10 flex min-w-8 cursor-grab select-none items-center border-amber-300/55 px-1.5 text-[9px] text-amber-100 ${hasEffect ? "bg-amber-400/15" : "border-dashed bg-amber-400/5"} ${selectedImageId === image.id ? "ring-1 ring-amber-300" : ""}`}
+            className={`z-10 flex min-w-8 cursor-grab select-none items-center border-amber-300/55 bg-amber-400/15 px-1.5 text-[9px] text-amber-100 ${selectedImageId === image.id ? "ring-1 ring-amber-300" : ""}`}
             style={{ left: `${image.startMs / endMs * 100}%`, width: `${image.durationMs / endMs * 100}%` }}
             onPointerDown={event => beginDrag(event, image, "move")}
             onClick={() => { onSelect(image.id); onSeek(image.startMs); onChooseSoundEffect(image.id, trackNumber); }}
-            title={hasEffect ? image.sfxLabel || "Sound effect" : `Choose sound effect for Slot ${slotNumber}`}
+            title={image.sfxLabel || `Sound effect for Slot ${slotNumber}`}
           >
             <TimelineWaveform peaks={[]} colorClassName="bg-amber-300/70" className="inset-y-2 opacity-35" />
             <Volume2 className="relative z-10 mr-1 size-3 shrink-0 text-amber-300" />
-            <span className="relative z-10 truncate">{hasEffect ? image.sfxLabel || `SFX · Slot ${slotNumber}` : `Choose SFX · Slot ${slotNumber}`}</span>
+            <span className="relative z-10 truncate">{image.sfxLabel || `SFX · Slot ${slotNumber}`}</span>
           </TimelineClipShell>
         );
       }),
@@ -654,7 +654,7 @@ function Timeline({
         <div className="flex min-w-0 items-center gap-2">
           <Layers3 className="size-3.5 shrink-0 text-primary" />
           <span className="text-xs font-semibold">Timeline</span>
-          <span className="truncate text-[10px] text-muted-foreground">Add image slots from V tracks; every slot gets a paired SFX block on an A track</span>
+          <span className="truncate text-[10px] text-muted-foreground">Add image slots from V tracks; add optional sound effects separately on A tracks</span>
         </div>
       </div>
       <MultiTrackTimeline

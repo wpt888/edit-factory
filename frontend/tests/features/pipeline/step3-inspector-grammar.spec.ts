@@ -134,6 +134,19 @@ test("Step 3 renders both inspectors on the unified grammar", async ({ page }) =
   await expect(variantPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Variant Previews");
   await expect(previewTargetPanel.locator(':scope > [data-slot="workspace-panel-header"]')).toHaveCount(1);
 
+  const previewTargetHeader = page.getByTestId("step3-preview-target-header");
+  const variantHeader = page.getByTestId("step3-variant-header");
+  const [previewTargetHeaderBox, variantHeaderBox] = await Promise.all([
+    previewTargetHeader.boundingBox(),
+    variantHeader.boundingBox(),
+  ]);
+  expect(previewTargetHeaderBox).not.toBeNull();
+  expect(variantHeaderBox).not.toBeNull();
+  expect(Math.abs(previewTargetHeaderBox!.y - variantHeaderBox!.y)).toBeLessThanOrEqual(1);
+  expect(previewTargetHeaderBox!.height).toBe(variantHeaderBox!.height);
+  await expect(previewTargetPanel).toHaveCSS("padding-top", "0px");
+  await expect(previewTargetHeader.locator("svg")).toHaveCount(0);
+
   // Open the flush collapsible sections so the grammar (dividers, no boxes) shows.
   await renderSettings.getByRole("button", { name: /Video adjustments/ }).click();
   await renderSettings.getByRole("button", { name: /Audio adjustments/ }).click();
