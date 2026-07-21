@@ -17,6 +17,25 @@ SYSTEM_TEMPLATES: List[Dict[str, Any]] = [
 ]
 
 
+def _normalize_assets(asset_ids: Optional[List[Any]]) -> List[tuple[str, str]]:
+    """Coerce the incoming asset list into (id/url, media_type) pairs.
+
+    Accepts both the legacy flat form (``["url", ...]`` = all images) and the
+    typed form (``[{"url"|"assetId", "type": "image"|"video"}, ...]``). Anything
+    else falls back to the pending sentinel so slots stay resolvable.
+    """
+    entries = asset_ids or ["pending:choose-asset"]
+    pairs: List[tuple[str, str]] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            url = str(entry.get("url") or entry.get("assetId") or "pending:choose-asset")
+            media_type = "video" if entry.get("type") == "video" else "image"
+        else:
+            url, media_type = str(entry), "image"
+        pairs.append((url, media_type))
+    return pairs or [("pending:choose-asset", "image")]
+
+
 def layout_positions(layer_count: int, size: float) -> List[tuple[float, float]]:
     """Where each stacked image sits — the template's visual signature.
 
@@ -54,7 +73,7 @@ def template_track_cues(
     tracks = template.get("tracks") or []
     zone = template.get("zone", "behind")
     animation = template.get("animation", "pop")
-    assets = asset_ids or ["pending:choose-asset"]
+    assets = _normalize_assets(asset_ids)
     cues: List[Dict[str, Any]] = []
     asset_cursor = 0
     for track_index, images in enumerate(tracks):
@@ -62,7 +81,7 @@ def template_track_cues(
             start = max(0, int(image.get("startMs", 0)))
             if duration_ms and start >= duration_ms:
                 continue
-            asset = assets[asset_cursor % len(assets)]
+            asset, media_type = assets[asset_cursor % len(assets)]
             asset_cursor += 1
             sfx_asset_id = image.get("sfxAssetId") or template.get("sfx")
             sfx_url = image.get("sfxUrl")
@@ -83,6 +102,7 @@ def template_track_cues(
                 "layers": [{
                     "id": f"cue-t{track_index}-{image_index}-layer-0",
                     "assetId": asset,
+                    "mediaType": media_type,
                     "x": float(image.get("x", 0.1)), "y": float(image.get("y", 0.1)),
                     "width": float(image.get("width", 0.8)), "height": float(image.get("height", 0.8)),
                     "opacity": float(image.get("opacity", 1.0)),
@@ -136,7 +156,7 @@ def distribute_attention_cues(
             continue
         placed.append(candidate)
 
-    assets = asset_ids or ["pending:choose-asset"]
+    assets = _normalize_assets(asset_ids)
     layer_count = max(1, min(10, int(template.get("layers", 1))))
     size = float(template.get("size", 0.8))
     zone = template.get("zone", "behind")
@@ -146,10 +166,11 @@ def distribute_attention_cues(
     for cue_index, start in enumerate(placed):
         cue_layers = []
         for layer_index in range(layer_count):
-            asset = assets[asset_cursor % len(assets)]
+            asset, media_type = assets[asset_cursor % len(assets)]
             asset_cursor += 1
             cue_layers.append({
                 "id": f"cue-{cue_index}-layer-{layer_index}", "assetId": asset,
+                "mediaType": media_type,
                 "x": positions[layer_index][0], "y": positions[layer_index][1],
                 "width": size, "height": size, "zIndex": layer_index + 1, "fit": "contain",
                 "animation": {"preset": template.get("animation", "static"), "enterMs": 250,

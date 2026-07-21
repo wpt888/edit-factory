@@ -268,15 +268,31 @@ def _fade_filter(start: float, end: float, animation: dict) -> str:
     return ("," + ",".join(parts)) if parts else ""
 
 
+def _pretrim_overlay_video(src: str, dst: str, duration_s: float):
+    """Trim a video overlay to its cue window and DROP its audio (``-an``).
+
+    Overlay video is intentionally MUTED: the base voiceover plus the template's
+    own SFX stay the only sound sources, so an overlay clip never leaks its audio
+    into the mix. Cues are short (<~2s), so a plain fast re-encode is fine.
+    """
+    cmd = [
+        "ffmpeg", "-y", "-ss", "0", "-i", src, "-t", f"{max(0.1, duration_s):.3f}",
+        "-an", *get_prep_codec_params(include_audio=False), "-pix_fmt", "yuv420p", dst,
+    ]
+    return safe_ffmpeg_run(cmd, 120, "attention video pretrim")
+
+
 async def _attention_cues_to_items(
     timeline: dict, width: int, height: int, duration: float, tmp_dir: str
 ) -> list:
-    """Resolve attention cues into apply_overlay_timeline items (image overlays).
+    """Resolve attention cues into apply_overlay_timeline items (image or video).
 
-    Downloads each layer image into ``tmp_dir`` and computes its pixel box from
-    the fractional layer coords. ``z`` is the collection order (cue order, then
-    layer order) so the composite stacking is byte-for-byte what the pre-refactor
-    apply_attention_timeline produced.
+    Downloads each layer asset into ``tmp_dir`` and computes its pixel box from
+    the fractional layer coords. Video layers (``mediaType == "video"``) are
+    pre-trimmed to the cue window and flagged ``is_video`` so
+    apply_overlay_timeline composites them as clips (no loop, no fade); image
+    layers keep the byte-for-byte behaviour of the pre-refactor renderer. ``z``
+    is the collection order (cue order, then layer order).
     """
     items = []
     z = 0
@@ -290,12 +306,20 @@ async def _attention_cues_to_items(
                 continue
             start = (float(cue.get("startMs", 0)) + float(layer.get("animation", {}).get("delayMs", 0))) / 1000
             end = min(duration, (float(cue.get("startMs", 0)) + float(cue.get("durationMs", 0))) / 1000)
+            is_video = layer.get("mediaType") == "video"
+            if is_video:
+                trimmed = os.path.join(tmp_dir, f"overlay_vid_{z}.mp4")
+                result = await asyncio.to_thread(_pretrim_overlay_video, local, trimmed, end - start)
+                if result.returncode != 0:
+                    logger.warning("[overlay_renderer] video overlay pre-trim failed: %s", result.stderr[-500:])
+                    continue
+                local = trimmed
             w = max(1, round(float(layer.get("width", .8)) * width))
             h = max(1, round(float(layer.get("height", .8)) * height))
             x = max(0, round(float(layer.get("x", .1)) * width))
             y = max(0, round(float(layer.get("y", .1)) * height))
             items.append({
-                "source_path": local, "is_video": False,
+                "source_path": local, "is_video": is_video,
                 "start": start, "end": end,
                 "box_px": (x, y, w, h), "fit": layer.get("fit", "contain"),
                 "opacity": max(0.0, min(1.0, float(layer.get("opacity", 1.0)))),

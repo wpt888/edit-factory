@@ -9,6 +9,7 @@ duration invariant + measurable pixel diff inside the overlay window and none
 outside it; xfade-on-V1 + a video overlay coexist without error.
 """
 import asyncio
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -91,6 +92,61 @@ def test_fit_contain_vs_cover_sizing_at_both_resolutions():
     fc = _fc(_run_overlay([half], width=540, height=960))
     assert "scale=270:240:force_original_aspect_ratio=increase,crop=270:240" in fc
     assert "overlay=54:192" in fc
+
+
+def test_attention_cues_video_layer_pretrimmed_and_flagged(tmp_path):
+    # A mediaType="video" layer must download, pre-trim (mocked), and emit an
+    # is_video item; an image layer stays is_video False in the same pass.
+    timeline = {"cues": [{
+        "startMs": 2000, "durationMs": 1500,
+        "layers": [
+            {"id": "l0", "assetUrl": "http://x/clip.mp4", "mediaType": "video",
+             "x": 0.1, "y": 0.2, "width": 0.5, "height": 0.4, "fit": "cover",
+             "animation": {"delayMs": 0}},
+            {"id": "l1", "assetUrl": "http://x/pic.jpg", "mediaType": "image",
+             "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+             "animation": {"delayMs": 0}},
+        ],
+    }]}
+
+    async def fake_download(src, _tmp):
+        return str(tmp_path / os.path.basename(src))
+
+    def fake_trim(src, dst, dur):
+        assert 0.1 <= dur <= 2.0  # cue window, short
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    with patch.object(overlay_renderer, "_download_image", side_effect=fake_download), \
+         patch.object(overlay_renderer, "_pretrim_overlay_video", side_effect=fake_trim):
+        items = asyncio.run(
+            overlay_renderer._attention_cues_to_items(timeline, 1080, 1920, 6.0, str(tmp_path))
+        )
+
+    assert len(items) == 2
+    assert items[0]["is_video"] is True and items[0]["source_path"].endswith("overlay_vid_0.mp4")
+    assert items[1]["is_video"] is False
+    # Video box math still comes from fractional coords.
+    assert items[0]["box_px"] == (108, 384, 540, 768)
+
+
+def test_attention_cues_drop_video_when_pretrim_fails(tmp_path):
+    timeline = {"cues": [{"startMs": 0, "durationMs": 1000, "layers": [
+        {"id": "l0", "assetUrl": "http://x/clip.mp4", "mediaType": "video",
+         "x": 0, "y": 0, "width": 1, "height": 1, "animation": {"delayMs": 0}},
+    ]}]}
+
+    async def fake_download(src, _tmp):
+        return str(tmp_path / "clip.mp4")
+
+    def fail_trim(src, dst, dur):
+        return subprocess.CompletedProcess([], 1, "", "boom")
+
+    with patch.object(overlay_renderer, "_download_image", side_effect=fake_download), \
+         patch.object(overlay_renderer, "_pretrim_overlay_video", side_effect=fail_trim):
+        items = asyncio.run(
+            overlay_renderer._attention_cues_to_items(timeline, 1080, 1920, 6.0, str(tmp_path))
+        )
+    assert items == []
 
 
 def test_empty_items_returns_base_untouched():

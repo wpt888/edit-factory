@@ -3780,6 +3780,9 @@ class AttentionLayer(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     assetId: str = Field(min_length=1, max_length=500)
     assetUrl: Optional[str] = Field(default=None, max_length=4096)
+    # image (default) or video: a video layer is composited as a muted, pre-
+    # trimmed overlay clip at render time (see _attention_cues_to_items).
+    mediaType: Optional[Literal["image", "video"]] = None
     x: float = Field(default=0.1, ge=0.0, le=1.0)
     y: float = Field(default=0.1, ge=0.0, le=1.0)
     width: float = Field(default=0.8, gt=0.0, le=1.0)
@@ -3808,9 +3811,31 @@ class AttentionTimelineRequest(BaseModel):
     cues: List[AttentionCue] = Field(default_factory=list, max_length=500)
 
 
+class AttentionAssetRef(BaseModel):
+    """A typed slot asset: image or video overlay content."""
+    url: str = Field(min_length=1, max_length=4096)
+    type: Literal["image", "video"] = "image"
+
+
+def _resolve_attention_assets(
+    assets: Optional[List["AttentionAssetRef"]],
+    asset_urls: Optional[List[str]],
+) -> List[dict]:
+    """Merge the typed ``assets`` list with the legacy flat ``assetUrls``.
+
+    New clients send ``assets: [{url, type}]``; old clients/bundles send
+    ``assetUrls: [str]`` (all images). Typed assets win when both are present.
+    """
+    if assets:
+        return [{"url": a.url, "type": a.type} for a in assets]
+    return [{"url": url, "type": "image"} for url in (asset_urls or [])]
+
+
 class ApplyAttentionTemplateRequest(BaseModel):
     templateId: str = Field(min_length=1, max_length=100)
-    assetUrls: List[str] = Field(min_length=1, max_length=100)
+    # New typed form; assetUrls kept for backward compatibility (flat = images).
+    assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
+    assetUrls: List[str] = Field(default_factory=list, max_length=100)
     durationMs: int = Field(gt=0)
     subtitleBoundariesMs: List[int] = Field(default_factory=list)
     revision: int = Field(ge=0)
@@ -3819,14 +3844,22 @@ class ApplyAttentionTemplateRequest(BaseModel):
     # images never land on the same second as variant N-1's.
     startOffsetMs: int = Field(default=0, ge=0, le=60_000)
 
+    @model_validator(mode="after")
+    def _require_some_asset(self) -> "ApplyAttentionTemplateRequest":
+        if not self.assets and not self.assetUrls:
+            raise ValueError("Provide at least one asset")
+        return self
+
 
 class AttentionSelectionRequest(BaseModel):
-    """Step 1 template pick, stored until previews exist to apply it to."""
+    """Step 3 template pick, stored until previews exist to apply it to."""
     templateId: str = Field(default="", max_length=100)
+    # New typed form; assetUrls kept for backward compatibility (flat = images).
+    assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
     assetUrls: List[str] = Field(default_factory=list, max_length=100)
     # Seconds of stagger between consecutive variants (0 = same placement).
     staggerSeconds: float = Field(default=1.0, ge=0.0, le=30.0)
-    # Apply to the first N variants only; 0 = all variants.
+    # Legacy field from the Step 1 era; ignored now that Step 3 owns apply scope.
     maxVariants: int = Field(default=0, ge=0, le=100)
 
 
@@ -3927,10 +3960,11 @@ async def apply_attention_template(
             "name": row["name"],
         }
 
+    resolved_assets = _resolve_attention_assets(request.assets, request.assetUrls)
     if resolved.get("tracks"):
         new_cues = template_track_cues(
             template=resolved,
-            asset_ids=request.assetUrls,
+            asset_ids=resolved_assets,
             duration_ms=request.durationMs,
         )
     else:
@@ -3939,7 +3973,7 @@ async def apply_attention_template(
             duration_ms=request.durationMs,
             subtitle_boundaries_ms=request.subtitleBoundariesMs,
             template=resolved,
-            asset_ids=request.assetUrls,
+            asset_ids=resolved_assets,
         )
     if request.startOffsetMs:
         new_cues = [
@@ -3985,9 +4019,9 @@ async def update_attention_selection(
 
     selection = {
         "templateId": request.templateId,
-        "assetUrls": request.assetUrls,
+        # Store typed assets; the frontend migrates legacy assetUrls on load.
+        "assets": _resolve_attention_assets(request.assets, request.assetUrls),
         "staggerSeconds": request.staggerSeconds,
-        "maxVariants": request.maxVariants,
     }
     with _get_pipeline_state_lock(pipeline_id):
         timelines = dict(pipeline.get("attention_timeline") or {})

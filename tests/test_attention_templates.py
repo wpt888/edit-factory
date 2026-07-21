@@ -72,6 +72,28 @@ def test_track_template_threads_slot_rendering_into_layer():
     assert cues[0]["layers"][0]["fit"] == "cover"
 
 
+def test_typed_assets_thread_media_type_onto_layers():
+    # Typed asset dicts (image/video) rotate into slots and stamp mediaType;
+    # legacy flat strings still default to image.
+    cues = template_track_cues(
+        template={"tracks": [[
+            {"id": "s1", "startMs": 0, "durationMs": 1000},
+            {"id": "s2", "startMs": 1200, "durationMs": 1000},
+        ]]},
+        asset_ids=[{"url": "http://x/a.mp4", "type": "video"}, {"url": "http://x/b.jpg", "type": "image"}],
+        duration_ms=5000,
+    )
+    assert cues[0]["layers"][0]["mediaType"] == "video"
+    assert cues[0]["layers"][0]["assetId"] == "http://x/a.mp4"
+    assert cues[1]["layers"][0]["mediaType"] == "image"
+
+    legacy = distribute_attention_cues(
+        duration_ms=15000, subtitle_boundaries_ms=[3000, 6000, 9000],
+        template=SYSTEM_TEMPLATES[0], asset_ids=["a", "b"],
+    )
+    assert all(layer["mediaType"] == "image" for cue in legacy for layer in cue["layers"])
+
+
 def test_track_template_defaults_invalid_slot_fit_to_contain():
     cues = template_track_cues(
         template={"tracks": [[{"startMs": 0, "durationMs": 1000, "fit": "stretch"}]]},
