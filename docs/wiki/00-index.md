@@ -38,3 +38,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Multi-style subtitle templates](39-multi-style-subtitle-templates.md)
 - [Inspector grammar for dense editor panels](40-inspector-grammar.md)
 - [Attention Templates editor: off-screen layout + silently broken standalone build](41-attention-templates-layout-and-build-fix.md)
+- [Subtitle & attention template goals — Step 3 application surface](42-subtitle-attention-template-goals.md)

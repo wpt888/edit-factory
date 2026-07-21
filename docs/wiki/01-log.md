@@ -1,5 +1,23 @@
 # Engineering Change Log
 
+## 2026-07-21 - Subtitle & attention templates applicable from Step 3
+
+- Verified and finished the previous session's unfinished work: per-variant
+  subtitle live preview (`a977a08` — "Preview target" select covering
+  Default/A/B, rotation slots and variant cards) and subtitle-free rotation
+  slots (`d95b8c8` — `__none__` sentinel → `enabled=false` at render).
+  Stale Playwright assertions aligned in `37002c1`.
+- Step 3 "Attention images" card now applies attention templates inline
+  (picker + scope + confirm-gated replace over the existing
+  `apply-template` endpoint), sharing its payload builder with the Step 1
+  auto-apply. Commit `0d85eda`.
+- Step 3 inspector surfaces subtitle-template state even with rotation off
+  (collection name + style count / "No template applied" + Enable-rotation
+  shortcut; "N styles ready · off" summary on the collapsed panel).
+  Helpers in `subtitle-template-collections.ts`. Commit `fc4a53c`.
+- Verification: pytest 39/39, typecheck + design:check green, Playwright
+  12/12. Backend restart + desktop standalone rebuild required. See wiki 42.
+
 ## 2026-07-21 - Attention Templates editor: off-screen layout + silently broken standalone build
 
 - Debugging session: "Add track" button missing and the Program monitor
