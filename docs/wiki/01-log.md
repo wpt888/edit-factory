@@ -1,5 +1,21 @@
 # Engineering Change Log
 
+## 2026-07-21 - Main synced with origin: July WIP committed, Studio fixes merged, pushed
+
+- Committed the WorkspacePanelHeader WIP from the parallel session (`1a2f2b0`)
+  and, earlier the same day, a checkpoint of all pre-existing uncommitted July
+  work (`a478e14` — Editor Chrome unification, API SWR cache, and friends).
+- `origin/main` had 3 commits missing locally (hosted Studio media-preview
+  auth, configurable Studio backend port, Studio preview/routing restore —
+  pushed from another machine). Integrated via merge, not rebase, to avoid
+  rewriting ~154 local commits. The only conflict (`segments/page.tsx`) was 6
+  regions with identical content on both sides — CRLF vs LF only; resolved by
+  keeping the local side. Nothing was reverted on either side.
+- Verified before pushing: `tsc --noEmit` clean (including the auto-merged
+  `api.ts` over the SWR cache changes) and `media_session.py` parses.
+- Pushed `main` (`0aae609..d0f7c56`): the entire July backlog that lived only
+  on local disk is now on GitHub. Working tree clean, local == origin.
+
 ## 2026-07-21 - Workspace panel headers aligned to the Subtitle Templates contract
 
 - Adopted Subtitle Templates as the canonical pane-header reference across
