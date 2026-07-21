@@ -12,11 +12,11 @@ from app.api.auth import ProfileContext
 TEST_KEY = b"source-media-test-key-32-bytes!!"
 
 
-def _request(client_host: str = "127.0.0.1") -> Request:
+def _request(client_host: str = "127.0.0.1", scheme: str = "http") -> Request:
     return Request({
         "type": "http",
         "method": "GET",
-        "scheme": "http",
+        "scheme": scheme,
         "path": "/api/v1/segments/source-videos/video-id/stream",
         "query_string": b"",
         "headers": [],
@@ -87,6 +87,48 @@ def test_desktop_media_cookie_authenticates_matching_profile(tmp_path, monkeypat
             x_profile_id=None,
         ))
     assert mismatch.value.status_code == 403
+
+    with pytest.raises(HTTPException) as remote:
+        asyncio.run(media_session.get_source_media_profile_context(
+            request=_request(client_host="10.0.0.10"),
+            profile_id="profile-id",
+            media_session=token,
+            credentials=None,
+            authorization=None,
+            x_profile_id=None,
+        ))
+    assert remote.value.status_code == 403
+
+
+def test_hosted_media_cookie_is_secure_and_authenticates_remote_request(tmp_path, monkeypatch):
+    settings = SimpleNamespace(desktop_mode=False, base_dir=tmp_path, auth_disabled=False)
+    monkeypatch.setattr(media_session, "get_settings", lambda: settings)
+    monkeypatch.setattr(media_session, "_signing_key", TEST_KEY)
+
+    expected = ProfileContext(profile_id="profile-id", user_id="user-id")
+    response = Response()
+    issued = asyncio.run(media_session.get_profile_context_with_media_session(
+        _request(client_host="10.0.0.10", scheme="https"), response, expected
+    ))
+    assert issued == expected
+
+    cookies = SimpleCookie()
+    cookies.load(response.headers["set-cookie"])
+    cookie = cookies[media_session.SOURCE_MEDIA_COOKIE]
+    assert cookie["secure"]
+    assert cookie["httponly"]
+    assert cookie["samesite"].lower() == "lax"
+    assert cookie["path"] == "/api/v1/segments/source-videos"
+
+    resolved = asyncio.run(media_session.get_source_media_profile_context(
+        request=_request(client_host="10.0.0.10", scheme="https"),
+        profile_id="profile-id",
+        media_session=cookie.value,
+        credentials=None,
+        authorization=None,
+        x_profile_id=None,
+    ))
+    assert resolved == expected
 
 
 def test_desktop_signing_key_is_reused(tmp_path, monkeypatch):

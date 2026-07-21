@@ -9,13 +9,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_PORT: "8001"
     restart: unless-stopped
     init: true
     expose:
-      - "8000"
+      - "8001"
     environment:
       HOST: 0.0.0.0
-      PORT: "8000"
+      PORT: "8001"
       DEBUG: "false"
       AUTH_DISABLED: "false"
       DESKTOP_MODE: "false"
@@ -56,7 +58,7 @@ services:
         - --fail
         - --silent
         - --show-error
-        - http://127.0.0.1:8000/api/v1/health/live
+        - http://127.0.0.1:8001/api/v1/health/live
       interval: 15s
       timeout: 5s
       retries: 5
