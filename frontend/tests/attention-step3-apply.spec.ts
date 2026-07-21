@@ -65,9 +65,12 @@ test("Step 3 picks and applies an attention template to all variants with overwr
     if (timelineMatch && request.method() === "GET") {
       const key = timelineMatch[1];
       timelineGets.add(key);
+      // Both variants start with existing attention images so the auto-apply
+      // effect (empty timelines only) skips them and the manual overwrite
+      // confirmation is what drives the apply.
       await route.fulfill({ json: key === "0"
-        ? { revision: 3, cues: [{ id: "existing", startMs: 1000, durationMs: 1200, layers: [], zone: "behind" }] }
-        : { revision: 0, cues: [] }
+        ? { revision: 3, cues: [{ id: "existing-0", startMs: 1000, durationMs: 1200, layers: [], zone: "behind" }] }
+        : { revision: 5, cues: [{ id: "existing-1", startMs: 2000, durationMs: 1200, layers: [], zone: "behind" }] }
       });
       return;
     }
@@ -155,12 +158,12 @@ test("Step 3 picks and applies an attention template to all variants with overwr
   await expect(applyCard.getByRole("link", { name: "Open template space" })).toBeVisible();
   await expect.poll(() => timelineGets.size, { timeout: 20_000 }).toBe(2);
 
-  await applyCard.getByRole("combobox", { name: "Attention template", exact: true }).click();
+  await applyCard.getByRole("combobox", { name: "Layout template", exact: true }).click();
   await page.getByRole("option", { name: /Quick Pulse/ }).click();
-  await applyCard.getByRole("button", { name: "Choose image" }).click();
+  await applyCard.getByTestId("attention-content-slots").getByText("Choose").first().click();
   await page.getByRole("tab", { name: "URL" }).click();
-  await page.getByLabel("Image URL").fill("https://assets.test/step3-attention.png");
-  await page.getByRole("button", { name: "Use image URL" }).click();
+  await page.getByLabel("Media URL").fill("https://assets.test/step3-attention.png");
+  await page.getByRole("button", { name: "Use media URL" }).click();
 
   await expect(applyCard.getByRole("combobox", { name: "Attention template apply scope", exact: true })).toHaveText(/All variants/);
   await applyCard.scrollIntoViewIfNeeded();
@@ -168,7 +171,7 @@ test("Step 3 picks and applies an attention template to all variants with overwr
 
   await applyCard.getByRole("button", { name: "Apply template" }).click();
   const confirm = page.getByRole("alertdialog");
-  await expect(confirm).toContainText("1 targeted variant already has attention images");
+  await expect(confirm).toContainText("2 targeted variants already have attention images");
   expect(applyPosts).toHaveLength(0);
   await confirm.getByRole("button", { name: "Replace attention images" }).click();
 
@@ -184,6 +187,6 @@ test("Step 3 picks and applies an attention template to all variants with overwr
     mode: "replace",
     startOffsetMs: 0,
   });
-  expect(byKey["1"]).toMatchObject({ revision: 0, mode: "replace" });
+  expect(byKey["1"]).toMatchObject({ revision: 5, mode: "replace" });
   await expect(applyCard.getByTestId("attention-apply-result")).toHaveText("Applied to 2 variants.");
 });

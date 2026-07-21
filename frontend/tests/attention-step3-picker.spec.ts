@@ -35,6 +35,7 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
   onApply?: (key: string, body: { startOffsetMs?: number }) => void;
   media?: MediaRow[];
   uploadMediaId?: string;
+  templates?: unknown[];
 }) {
   return page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -57,7 +58,7 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
       return;
     }
     if (path.endsWith("/attention-templates")) {
-      await route.fulfill({ json: { templates: TEMPLATES } });
+      await route.fulfill({ json: { templates: opts.templates ?? TEMPLATES } });
       return;
     }
     if (path.endsWith(`/pipeline/scripts/${PIPELINE_ID}`)) {
@@ -171,6 +172,51 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
 
   await card.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "screenshots/attention-step3-picker.png", fullPage: true });
+});
+
+test("selecting a template with saved default content pre-populates the slots", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  const slot = (id: string, startMs: number, defaultAsset: { url: string; type: string }) => ({
+    id, x: 0.1, y: 0.1, width: 0.4, height: 0.4, opacity: 1, fit: "contain",
+    startMs, durationMs: 1200, defaultAsset, sfxVolumeDb: 0, sfxTrack: 1,
+  });
+  const templateWithDefaults = {
+    id: "tmpl-defaults", name: "Prefilled", is_system: false,
+    canvasWidth: 1080, canvasHeight: 1920, zone: "behind", animation: "pop",
+    variantGapMs: 1000, audioTrackCount: 1,
+    tracks: [[
+      slot("s1", 0, { url: "https://assets.test/default-a.png", type: "image" }),
+      slot("s2", 1500, { url: "https://assets.test/default-b.mp4", type: "video" }),
+    ]],
+  };
+
+  await routeStep3(page, { attentionSelection: null, templates: [templateWithDefaults] });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
+
+  const card = page.getByTestId("step3-attention-apply");
+  await expect(card).toBeVisible();
+
+  await card.getByRole("combobox", { name: "Layout template" }).click();
+  await page.getByRole("option", { name: "Prefilled · Personal" }).click();
+
+  // Both slots fill from the template defaults — no empty "Choose" tiles remain.
+  const slots = card.getByTestId("attention-content-slots");
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/default-a.png");
+  await expect(slots.getByText("Choose")).toHaveCount(0);
+  await expect(slots.getByText("Vid", { exact: true })).toBeVisible();
+
+  await card.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "screenshots/attention-step3-prefill.png", fullPage: true });
 });
 
 test("auto-apply staggers each variant by the configured offset", async ({ page }) => {
