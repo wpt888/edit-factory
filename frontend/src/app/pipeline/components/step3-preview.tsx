@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -689,13 +689,19 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   aria-label="Live subtitle preview"
                 >
                   <SubtitleStylePreviewPanel
-                    key={activeSubtitleStyleKey}
-                    styleKey={activeSubtitleStyleKey}
-                    settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-                    hasOverride={activeSubtitleStyleHasOverride}
+                    activeStyleKey={activeSubtitleStyleKey}
+                    getSubtitleSettingsFor={getSubtitleSettingsFor}
+                    getPreviewSubtitleSettingsFor={getPreviewSubtitleSettingsFor}
+                    hasStyleOverride={(styleKey) => Boolean(
+                      subtitleOverrides[styleKey]
+                        && Object.keys(subtitleOverrides[styleKey] ?? {}).length > 0
+                    )}
+                    getStylePreviewText={getStylePreviewText}
                     pipelineId={pipelineId ?? undefined}
                     previewCards={previewCards}
-                    previewText={getStylePreviewText(activeSubtitleStyleKey)}
+                    subtitleRotation={subtitleRotation}
+                    userSubtitlePresets={userSubtitlePresets}
+                    variantTemplateSelections={variantTemplateSelections}
                   />
                 </aside>
 

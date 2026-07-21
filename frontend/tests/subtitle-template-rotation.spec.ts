@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+﻿import { expect, test } from "@playwright/test";
 import {
   assignedSubtitlePreset,
   NO_SUBTITLES_PRESET_ID,
@@ -85,7 +85,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       templateId: "launch-captions",
       templateName: "Launch captions",
       created_at: "",
-      settings: { ...settings, textColor: "#ffffff", karaoke: true, highlightColor: "#a3e635" },
+      settings: { ...settings, fontSize: 56, textColor: "#ffffff", karaoke: true, highlightColor: "#a3e635" },
       wordsPerSubtitle: 2,
     },
     {
@@ -94,10 +94,28 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       templateId: "launch-captions",
       templateName: "Launch captions",
       created_at: "",
-      settings: { ...settings, fontSize: 42, textColor: "#f8fafc", karaoke: false },
+      settings: {
+        ...settings,
+        fontSize: 72,
+        textColor: "#f59e0b",
+        outlineColor: "#111827",
+        outlineWidth: 6,
+        positionY: 68,
+        karaoke: false,
+      },
       wordsPerSubtitle: 4,
     },
+    {
+      id: "editorial",
+      name: "Editorial Blue",
+      templateId: "launch-captions",
+      templateName: "Launch captions",
+      created_at: "",
+      settings: { ...settings, fontSize: 88, textColor: "#60a5fa", karaoke: false },
+      wordsPerSubtitle: 3,
+    },
   ];
+  const subtitlePersistenceWrites: string[] = [];
   const preview = (index: number) => ({
     audio_duration: 6,
     srt_content: "1\n00:00:00,000 --> 00:00:03,000\nOne two three four\n\n2\n00:00:03,000 --> 00:00:06,000\nFive six seven eight",
@@ -156,6 +174,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       return;
     }
     if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-settings`)) {
+      if (request.method() !== "GET") subtitlePersistenceWrites.push(`${request.method()} ${path}`);
       await route.fulfill({ json: settings });
       return;
     }
@@ -199,7 +218,8 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/subtitle-rotation`)) {
-      await route.fulfill({ json: { enabled: true, presetIds: ["punchy", "minimal"] } });
+      if (request.method() !== "GET") subtitlePersistenceWrites.push(`${request.method()} ${path}`);
+      await route.fulfill({ json: { enabled: true, presetIds: ["punchy", "minimal", "editorial"] } });
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/subtitle-overrides`)) {
@@ -226,6 +246,12 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/source-selection`)) {
       await route.fulfill({ json: { source_video_ids: ["source-a"] } });
+      return;
+    }
+    if (path.includes(`/pipeline/subtitle-frame-preview/${PIPELINE_ID}/`)) {
+      // Exercise the browser-rendered fallback so the visual snapshot proves
+      // the resolved settings without depending on FFmpeg in this UI test.
+      await route.fulfill({ status: 503, body: "Preview renderer unavailable in test" });
       return;
     }
     if (path.endsWith("/segments/source-videos")) {
@@ -257,8 +283,36 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await expect(page.getByTestId("subtitle-template-select")).toHaveText([
     "Auto (Punchy Karaoke)",
     "Auto (Minimal Clean)",
-    "Auto (Punchy Karaoke)",
+    "Auto (Editorial Blue)",
   ]);
+
+  const previewPanel = page.getByTestId("subtitle-style-preview-panel");
+  const previewTarget = page.getByRole("combobox", { name: "Subtitle preview target" });
+  await expect(previewTarget).toContainText("Default");
+  await expect(previewPanel).toContainText("Font: 48px | Outline: 3px | Y: 85%");
+
+  await previewTarget.click();
+  await expect(page.getByRole("option", { name: "Default", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "A · Instagram", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "B · Facebook", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Rotation 1 · Punchy Karaoke", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Rotation 2 · Minimal Clean", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Rotation 3 · Editorial Blue", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "A · Instagram", exact: true }).click();
+  await expect(previewTarget).toContainText("A · Instagram");
+  await expect(previewPanel).toContainText("Font: 48px | Outline: 3px | Y: 85%");
+
+  await previewTarget.click();
+  await page.getByRole("option", { name: "Variant 2 · Minimal Clean", exact: true }).click();
+
+  await expect(previewTarget).toContainText("Variant 2 · Minimal Clean");
+  await expect(previewPanel).toContainText("Font: 72px | Outline: 6px | Y: 68%");
+  expect(subtitlePersistenceWrites).toEqual([]);
+
+  await expect(previewPanel).toHaveScreenshot("subtitle-live-preview-variant-2.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: 0.001,
+  });
 
   await page.getByTitle("Override subtitles for Variant 1").click();
   const overrideDialog = page.getByTestId("variant-subtitle-override-dialog");
@@ -266,7 +320,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(overrideDialog).not.toBeVisible();
   await page.screenshot({
-    path: "screenshots/subtitle-template-rotation-step3.png",
+    path: "screenshots/subtitle-live-preview-variant-2.png",
     fullPage: false,
   });
 });
