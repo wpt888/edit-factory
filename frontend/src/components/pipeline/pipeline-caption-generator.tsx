@@ -44,7 +44,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import {
   readWorkspaceStorage,
@@ -308,23 +308,17 @@ export function PipelineCaptionGenerator({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<Record<string, string> | null>(null);
 
-  // Send save request that survives page unload (keepalive: true)
+  // Send save request through the standard API client so desktop/API base URLs,
+  // authentication, and non-2xx handling stay consistent with the rest of the app.
   const sendSave = useCallback((data: Record<string, string>, keepalive = false) => {
-    // Map the frontend dev/desktop port to the backend (8000). 3947 = desktop shell.
-    const url = `${window.location.origin.replace(/:3947|:3001|:3000/, ':8000')}/api/v1/pipeline/selected-captions`;
-    const body = JSON.stringify({ pipeline_id: pipelineId, selected_captions: data });
-    if (keepalive && navigator.sendBeacon) {
-      // sendBeacon is the most reliable for page unload
-      navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
-    } else {
-      // Normal async save (or keepalive fetch fallback)
-      fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body,
-        keepalive,
-      }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
-    }
+    void apiPost("/pipeline/selected-captions", {
+      pipeline_id: pipelineId,
+      selected_captions: data,
+    }, { keepalive }).catch((err: unknown) => {
+      console.warn("[CaptionGenerator] Auto-save failed:", err);
+      const detail = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to save captions: ${detail}`);
+    });
   }, [pipelineId]);
 
   const flushSave = useCallback((keepalive = false) => {
