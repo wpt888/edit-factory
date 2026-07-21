@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { InspectorField } from "@/components/ui/inspector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -55,6 +56,11 @@ import { toast } from "sonner";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
 import type { AttentionTimeline } from "@/types/attention-timeline";
+import {
+  AttentionTemplatePicker,
+  EMPTY_ATTENTION_SELECTION,
+  type AttentionSelection,
+} from "@/components/attention-template-picker";
 import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
@@ -77,10 +83,22 @@ import {
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 import type { SafeZoneType } from "@/components/safe-zone-overlay";
+import type { AttentionTemplateApplyResult } from "../attention-template-apply";
 import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 // Radix Select forbids empty-string values, so "Auto (rotation)" uses a sentinel.
 const AUTO_TEMPLATE_VALUE = "__auto__";
+const ALL_ATTENTION_VARIANTS = "__all__";
+
+type ConfirmDialogState = {
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  variant: "destructive" | "default";
+  onConfirm: () => void;
+  loading?: boolean;
+};
 
 /**
  * Timeline state contract consumed by the future CompositePreviewPlayer (F5).
@@ -107,6 +125,12 @@ type Step3Ctx = {
   getInterstitialSlidesChangeHandler: (previewKey: string) => (slides: InterstitialSlide[]) => void;
   attentionTimelines: Record<PreviewKey, AttentionTimeline>;
   getAttentionTimelineChangeHandler: (previewKey: string) => (timeline: AttentionTimeline) => void;
+  attentionSelection: AttentionSelection;
+  applyAttentionTemplateToVariants: (
+    selection: AttentionSelection,
+    cardKeys: string[],
+  ) => Promise<AttentionTemplateApplyResult>;
+  setConfirmDialog: Dispatch<SetStateAction<ConfirmDialogState>>;
   getPreviewSubtitleSettingsFor: (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">) => SubtitleSettings;
   getPreviewSubtitleTemplateSettingsFor: (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">) => SubtitleSettings;
   getSubtitleSettingsFor: (styleKey: StyleKey) => SubtitleSettings;
@@ -182,6 +206,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     getPreviewSubtitleTemplateSettingsFor,
     interstitialSlides,
     attentionTimelines,
+    attentionSelection,
+    applyAttentionTemplateToVariants,
+    setConfirmDialog,
     EMPTY_SLIDES,
     getInterstitialSlidesChangeHandler,
     getAttentionTimelineChangeHandler,
@@ -233,11 +260,98 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   const [variantSubtitleDraft, setVariantSubtitleDraft] = useState<SubtitleSettings | null>(null);
   const [safeZoneEnabled, setSafeZoneEnabled] = useState(false);
   const [safeZoneType, setSafeZoneType] = useState<SafeZoneType>("reel");
+  const [attentionSelectionOverride, setAttentionSelectionOverride] = useState<{
+    pipelineId: string | null;
+    selection: AttentionSelection;
+  } | null>(null);
+  const [attentionScopeOverride, setAttentionScopeOverride] = useState<{
+    pipelineId: string | null;
+    scope: string;
+  } | null>(null);
+  const [attentionApplying, setAttentionApplying] = useState(false);
+  const [attentionApplyResult, setAttentionApplyResult] = useState<{
+    pipelineId: string | null;
+    note: string;
+  } | null>(null);
+  const attentionApplySelection = attentionSelectionOverride
+    && attentionSelectionOverride.pipelineId === pipelineId
+    ? attentionSelectionOverride.selection
+    : attentionSelection ?? EMPTY_ATTENTION_SELECTION;
+  const attentionApplyScope = attentionScopeOverride
+    && attentionScopeOverride.pipelineId === pipelineId
+    ? attentionScopeOverride.scope
+    : ALL_ATTENTION_VARIANTS;
+  const attentionApplyNote = attentionApplyResult
+    && attentionApplyResult.pipelineId === pipelineId
+    ? attentionApplyResult.note
+    : null;
+  const attentionApplyTargetCards = attentionApplyScope === ALL_ATTENTION_VARIANTS
+    ? previewCards
+    : previewCards.filter((card) => card.key === attentionApplyScope);
+  const attentionApplyTimelinesReady = attentionApplyTargetCards.length > 0
+    && attentionApplyTargetCards.every((card) => attentionTimelines[card.key] !== undefined);
   const activeSafeZone = safeZoneEnabled ? safeZoneType : null;
   const editingVariantCard = useMemo(
     () => previewCards.find((card) => card.key === editingVariantKey),
     [editingVariantKey, previewCards],
   );
+
+  const runAttentionTemplateApply = async (cardKeys: string[]) => {
+    setAttentionApplying(true);
+    setAttentionApplyResult(null);
+    try {
+      const result = await applyAttentionTemplateToVariants(attentionApplySelection, cardKeys);
+      const messages: string[] = [];
+      if (result.appliedKeys.length > 0) {
+        const message = `Applied to ${result.appliedKeys.length} variant${result.appliedKeys.length === 1 ? "" : "s"}.`;
+        messages.push(message);
+        toast.success(message);
+      }
+      if (result.skippedKeys.length > 0) {
+        const message = `Skipped ${result.skippedKeys.length} variant${result.skippedKeys.length === 1 ? "" : "s"} without a preview and matches.`;
+        messages.push(message);
+        toast.warning(message);
+      }
+      if (result.failedKeys.length > 0) {
+        const message = `Could not apply to ${result.failedKeys.length} variant${result.failedKeys.length === 1 ? "" : "s"}.`;
+        messages.push(message);
+        toast.error(message);
+      }
+      setAttentionApplyResult({
+        pipelineId,
+        note: messages.join(" ") || "No variants were targeted.",
+      });
+    } finally {
+      setAttentionApplying(false);
+    }
+  };
+
+  const handleAttentionTemplateApply = () => {
+    const targetKeys = attentionApplyTargetCards.map((card) => card.key);
+    const overwriteCards = attentionApplyTargetCards.filter(
+      (card) => (attentionTimelines[card.key]?.cues.length ?? 0) > 0,
+    );
+    const apply = () => runAttentionTemplateApply(targetKeys);
+
+    if (overwriteCards.length === 0) {
+      void apply();
+      return;
+    }
+
+    setConfirmDialog({
+      open: true,
+      title: "Replace attention images?",
+      description: `${overwriteCards.length} targeted variant${overwriteCards.length === 1 ? " already has" : "s already have"} attention images. Applying this template will replace the existing timeline${overwriteCards.length === 1 ? "" : "s"}.`,
+      confirmLabel: "Replace attention images",
+      variant: "default",
+      onConfirm: () => {
+        setConfirmDialog((current) => ({ ...current, loading: true }));
+        void apply().finally(() => {
+          setConfirmDialog((current) => ({ ...current, open: false, loading: false }));
+        });
+      },
+    });
+  };
 
   // Confine the maximized editor to the app work area (below the workspace
   // titlebar, right of the settings sidebar) instead of the whole screen.
@@ -634,26 +748,87 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 className="flex min-w-0 flex-col gap-3 bg-background min-[1180px]:sticky min-[1180px]:top-4 min-[1280px]:static min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:gap-0 min-[1280px]:divide-y min-[1280px]:divide-border min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain"
                 data-testid="step3-inspector"
               >
-            <Card variant="workspace" className="order-3">
-              <CardContent className="space-y-2">
-                <div className="flex items-center gap-2">
+            <Card variant="workspace" className="order-3" data-testid="step3-attention-apply">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-sm">
                   <LayoutTemplate className="size-4 text-primary" />
-                  <div>
-                    <p className="text-sm font-medium">Attention images</p>
-                    <p className="text-xs text-muted-foreground">Design reusable size, stack, timing, and subtitle-zone presets.</p>
-                  </div>
+                  Attention images
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-[11px] text-muted-foreground">
+                  Apply a saved image layout to previews without leaving Step 3.
+                </p>
+                <AttentionTemplatePicker
+                  variant="inspector"
+                  selection={attentionApplySelection}
+                  onSelectionChange={(selection) => {
+                    setAttentionSelectionOverride({ pipelineId, selection });
+                    setAttentionApplyResult(null);
+                  }}
+                />
+                <InspectorField label="Apply scope" htmlFor="step3-attention-scope">
+                  <Select
+                    value={attentionApplyScope}
+                    onValueChange={(scope) => {
+                      setAttentionScopeOverride({ pipelineId, scope });
+                      setAttentionApplyResult(null);
+                    }}
+                  >
+                    <SelectTrigger
+                      id="step3-attention-scope"
+                      size="sm"
+                      className="w-full text-xs"
+                      aria-label="Attention template apply scope"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_ATTENTION_VARIANTS}>All variants</SelectItem>
+                      {previewCards.map((card) => (
+                        <SelectItem key={card.key} value={card.key}>{card.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </InspectorField>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={
+                      attentionApplying
+                      || !attentionApplySelection.templateId
+                      || attentionApplySelection.assetUrls.length === 0
+                      || !attentionApplyTimelinesReady
+                    }
+                    onClick={handleAttentionTemplateApply}
+                  >
+                    {attentionApplying && <Loader2 className="size-3.5 animate-spin" />}
+                    {!attentionApplying
+                      && attentionApplySelection.templateId
+                      && attentionApplySelection.assetUrls.length > 0
+                      && !attentionApplyTimelinesReady
+                      ? "Loading timelines..."
+                      : "Apply template"}
+                  </Button>
+                  <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+                    <Link href="/attention-templates">Open template space</Link>
+                  </Button>
                 </div>
-                <Button asChild variant="outline" size="sm" className="w-full border-primary/35 text-primary">
-                  <Link href="/attention-templates">Open template space</Link>
-                </Button>
-                <div className="flex items-center gap-2 pt-1">
+                {attentionApplyNote && (
+                  <p className="text-[11px] text-muted-foreground" role="status" data-testid="attention-apply-result">
+                    {attentionApplyNote}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 border-t pt-3">
                   <Type className="size-4 text-primary" />
                   <div>
                     <p className="text-sm font-medium">Subtitle templates</p>
                     <p className="text-xs text-muted-foreground">Create and manage reusable caption styles for variants.</p>
                   </div>
                 </div>
-                <Button asChild variant="outline" size="sm" className="w-full border-primary/35 text-primary">
+                <Button asChild variant="outline" size="sm" className="h-8 w-full text-xs">
                   <Link href="/subtitle-templates">Open subtitle templates</Link>
                 </Button>
               </CardContent>

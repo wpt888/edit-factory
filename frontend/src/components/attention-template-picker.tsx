@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
+import { InspectorField } from "@/components/ui/inspector";
 import { apiGet } from "@/lib/api";
 import type { AttentionTemplate } from "@/types/attention-template";
 import { normalizeAttentionTemplate } from "@/types/attention-template";
@@ -38,6 +39,7 @@ type AttentionTemplatePickerProps = {
   outputWidth?: number;
   outputHeight?: number;
   onOutputSizeChange?: (width: number, height: number) => void;
+  variant?: "default" | "inspector";
 };
 
 const PIPELINE_FORMATS = [
@@ -58,6 +60,7 @@ export function AttentionTemplatePicker({
   outputWidth = 1080,
   outputHeight = 1920,
   onOutputSizeChange,
+  variant = "default",
 }: AttentionTemplatePickerProps) {
   const [templates, setTemplates] = useState<AttentionTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,6 +105,113 @@ export function AttentionTemplatePicker({
       assetUrls: selection.assetUrls.filter((_, index) => index !== slotIndex),
     });
   };
+
+  const handleTemplateChange = (raw: string) => {
+    const templateId = raw === "__none__" ? "" : raw;
+    const template = templates.find((item) => item.id === templateId);
+    const templateGapSeconds = template
+      ? normalizeAttentionTemplate(template).variantGapMs / 1000
+      : selection.staggerSeconds;
+    onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds });
+  };
+
+  if (variant === "inspector") {
+    return (
+      <div className="space-y-3" data-testid="attention-template-picker" data-variant="inspector">
+        <InspectorField
+          label="Template"
+          htmlFor="step3-attention-template"
+          helper={templates.length === 0 && !loading ? "Create a template in the template space first." : undefined}
+        >
+          <Select
+            value={selection.templateId || "__none__"}
+            onValueChange={handleTemplateChange}
+            disabled={loading}
+          >
+            <SelectTrigger
+              id="step3-attention-template"
+              size="sm"
+              className="w-full text-xs"
+              aria-label="Attention template"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">
+                {loading ? "Loading templates..." : templates.length === 0 ? "No templates available" : "Choose a template"}
+              </SelectItem>
+              {templates.map((template) => (
+                <SelectItem key={template.id} value={template.id}>
+                  {template.name}{template.is_system ? " · System" : " · Personal"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </InspectorField>
+
+        {selectedTemplate && (
+          <InspectorField
+            label="Content images"
+            helper={selection.assetUrls.length === 0
+              ? "Choose at least one image. Selected images repeat across extra template slots."
+              : `${selection.assetUrls.length} image${selection.assetUrls.length === 1 ? "" : "s"} selected for ${templateSlots.length} slot${templateSlots.length === 1 ? "" : "s"}.`}
+          >
+            {selection.assetUrls.length > 0 && (
+              <div className="flex flex-wrap gap-2" data-testid="attention-inspector-assets">
+                {selection.assetUrls.map((assetUrl, index) => (
+                  <Button
+                    key={`${assetUrl}-${index}`}
+                    type="button"
+                    variant="outline"
+                    className="size-12 overflow-hidden p-0"
+                    onClick={() => openAssetPicker(index)}
+                    aria-label={`Replace attention image ${index + 1}`}
+                  >
+                    <img src={assetUrl} alt={`Attention content ${index + 1}`} className="size-full object-cover" />
+                  </Button>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                onClick={() => openAssetPicker(selection.assetUrls.length)}
+              >
+                <ImagePlus className="size-3.5" />
+                {selection.assetUrls.length === 0 ? "Choose image" : "Add image"}
+              </Button>
+              {selection.assetUrls.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => removeAsset(selection.assetUrls.length - 1)}
+                >
+                  Remove last
+                </Button>
+              )}
+            </div>
+          </InspectorField>
+        )}
+
+        <AttentionAssetPickerDialog
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          onSelect={(url) => {
+            const slotIndex = activeSlot ?? selection.assetUrls.length;
+            const nextAssets = [...selection.assetUrls];
+            nextAssets[slotIndex] = url;
+            onSelectionChange({ ...selection, assetUrls: nextAssets.filter(Boolean) });
+            setActiveSlot(null);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-xl border bg-card/40" data-testid="attention-template-picker">
@@ -161,14 +271,7 @@ export function AttentionTemplatePicker({
             Layout template
             <Select
               value={selection.templateId || "__none__"}
-              onValueChange={(raw) => {
-                const templateId = raw === "__none__" ? "" : raw;
-                const template = templates.find(item => item.id === templateId);
-                const templateGapSeconds = template
-                  ? normalizeAttentionTemplate(template).variantGapMs / 1000
-                  : selection.staggerSeconds;
-                onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds });
-              }}
+              onValueChange={handleTemplateChange}
               disabled={loading}
             >
               <SelectTrigger size="sm" className="w-full text-xs font-medium normal-case tracking-normal">

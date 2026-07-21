@@ -80,6 +80,10 @@ import { Step4Render } from "./components/step4-render";
 import { PipelineStepper } from "./components/pipeline-stepper";
 import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
 import {
+  buildAttentionTemplateApplyPayload,
+  type AttentionTemplateApplyResult,
+} from "./attention-template-apply";
+import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_SCRIPT_AI_PROVIDER,
   DESKTOP_CODEX_AVAILABLE,
@@ -1537,18 +1541,15 @@ function PipelinePage() {
       const applyKey = `${pipelineId}:${card.key}`;
       if (attentionAutoApplied.current.has(applyKey)) continue;
       attentionAutoApplied.current.add(applyKey);
-      apiPost(`/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`, {
-        templateId: attentionSelection.templateId,
-        assetUrls: attentionSelection.assetUrls,
-        durationMs: Math.max(1, Math.round(preview.audio_duration * 1000)),
-        subtitleBoundariesMs: Array.from(new Set(preview.matches.flatMap(match => [
-          Math.round(match.srt_start * 1000),
-          Math.round(match.srt_end * 1000),
-        ]))).sort((a, b) => a - b),
-        revision: timeline.revision,
-        mode: "replace",
-        startOffsetMs: Math.round(variantIndex * (attentionSelection.staggerSeconds || 0) * 1000),
-      })
+      apiPost(
+        `/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`,
+        buildAttentionTemplateApplyPayload({
+          selection: attentionSelection,
+          preview,
+          timeline,
+          variantIndex,
+        }),
+      )
         .then(async response => {
           const document = await response.json() as AttentionTimeline;
           setAttentionTimelines(prev => ({ ...prev, [card.key]: document }));
@@ -1559,6 +1560,53 @@ function PipelinePage() {
         });
     }
   }, [pipelineId, attentionSelection, previewCards, attentionTimelines, previews]);
+
+  const applyAttentionTemplateToVariants = useCallback(async (
+    selection: AttentionSelection,
+    cardKeys: string[],
+  ): Promise<AttentionTemplateApplyResult> => {
+    if (!pipelineId) {
+      return { appliedKeys: [], skippedKeys: [], failedKeys: cardKeys };
+    }
+
+    const requestedKeys = new Set(cardKeys);
+    const targetCards = previewCards.filter((card) => requestedKeys.has(card.key));
+    const outcomes = await Promise.all(targetCards.map(async (card) => {
+      const preview = previews[card.key];
+      if (!preview?.matches?.length || !(preview.audio_duration > 0)) {
+        return { key: card.key, status: "skipped" as const };
+      }
+
+      const timeline = attentionTimelines[card.key] ?? { revision: 0, cues: [] };
+      const variantIndex = parseInt(card.key, 10) || 0;
+      try {
+        const response = await apiPost(
+          `/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`,
+          buildAttentionTemplateApplyPayload({
+            selection,
+            preview,
+            timeline,
+            variantIndex,
+          }),
+        );
+        const document = await response.json() as AttentionTimeline;
+        setAttentionTimelines((current) => ({ ...current, [card.key]: document }));
+        return { key: card.key, status: "applied" as const };
+      } catch {
+        return { key: card.key, status: "failed" as const };
+      }
+    }));
+
+    const missingKeys = cardKeys.filter((key) => !targetCards.some((card) => card.key === key));
+    return {
+      appliedKeys: outcomes.filter((outcome) => outcome.status === "applied").map((outcome) => outcome.key),
+      skippedKeys: outcomes.filter((outcome) => outcome.status === "skipped").map((outcome) => outcome.key),
+      failedKeys: [
+        ...outcomes.filter((outcome) => outcome.status === "failed").map((outcome) => outcome.key),
+        ...missingKeys,
+      ],
+    };
+  }, [attentionTimelines, pipelineId, previewCards, previews]);
 
   // Keep activeStyleKey consistent with metaMultiplication. When Meta is ON
   // the user picks between A and B; when OFF, there's only "default". This
@@ -5044,6 +5092,7 @@ function PipelinePage() {
     attentionTimelines,
     attentionSelection,
     handleAttentionSelectionChange,
+    applyAttentionTemplateToVariants,
     EMPTY_SLIDES,
     getInterstitialSlidesChangeHandler,
     getAttentionTimelineChangeHandler,
