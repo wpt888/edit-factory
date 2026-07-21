@@ -1,5 +1,26 @@
 # Engineering Change Log
 
+## 2026-07-22 - EF-1: pipeline/progress/runner ownership checks + overlay SSRF fix
+
+- Every `pipeline_routes.py` route touching a `pipeline_id` now goes through
+  `_require_owned_pipeline()` — 403/404 instead of leaking or letting another
+  profile mutate the pipeline (status, scripts, previews, rename, captions,
+  delete, including the in-memory delete fallback).
+- Assembly/Buffer/Postiz/Blipost-Platform/image-gen progress stores are now
+  scoped by `profile_id`; Assembly no longer returns `final_video_path` to a
+  non-owner. The local render runner gained a `_require_runner_owner()` guard
+  on pair/unpair/start/stop/status.
+- `overlay_renderer._download_image()` (PiP/interstitial/attention overlays)
+  rejects `file://`, paths outside app-managed directories, and non-Supabase
+  hosts; disables redirects; caps downloads at 25 MiB; and raises instead of
+  silently skipping the effect on failure.
+- New tests: `tests/test_pipeline_idor.py`,
+  `tests/test_progress_route_ownership.py`,
+  `tests/test_overlay_renderer_security.py`. Full suite: 803 passed, 1
+  pre-existing unrelated failure (`test_source_media_session.py`, not
+  touched by this change). Details:
+  [route ownership model + overlay SSRF fix](44-pipeline-ownership-and-overlay-ssrf-fix.md).
+
 ## 2026-07-21 - Main synced with origin: July WIP committed, Studio fixes merged, pushed
 
 - Committed the WorkspacePanelHeader WIP from the parallel session (`1a2f2b0`)

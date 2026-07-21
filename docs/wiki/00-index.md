@@ -41,3 +41,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Inspector grammar for dense editor panels](40-inspector-grammar.md)
 - [Attention Templates editor: off-screen layout + silently broken standalone build](41-attention-templates-layout-and-build-fix.md)
 - [Subtitle & attention template goals — Step 3 application surface](42-subtitle-attention-template-goals.md)
+- [Route ownership model + overlay-downloader SSRF fix (EF-1)](44-pipeline-ownership-and-overlay-ssrf-fix.md)
