@@ -49,6 +49,11 @@ def test_profile_cannot_access_or_mutate_another_profiles_pipeline(monkeypatch):
             "/pipeline/selected-captions",
             {"pipeline_id": PIPELINE_ID, "selected_captions": {"0": "stolen"}},
         ),
+        (
+            "put",
+            f"/pipeline/{PIPELINE_ID}/scripts",
+            {"scripts": ["stolen script"]},
+        ),
         ("delete", f"/pipeline/{PIPELINE_ID}", None),
     ]
 

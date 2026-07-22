@@ -4375,9 +4375,7 @@ async def update_pipeline_scripts(
         if any(not name.strip() or len(name.strip()) > 80 for name in request.script_names):
             raise HTTPException(status_code=400, detail="Script names must contain 1 to 80 characters")
 
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
-        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+    pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     # M1: Acquire pipeline state lock to prevent races with concurrent preview/render tasks
     state_lock = _get_pipeline_state_lock(pipeline_id)
