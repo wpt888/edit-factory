@@ -44,3 +44,4 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Route ownership model + overlay-downloader SSRF fix (EF-1)](44-pipeline-ownership-and-overlay-ssrf-fix.md)
 - [Captions → Smart Schedule chain fix (EF-2)](46-captions-smart-schedule-chain-fix.md)
 - [Stale render invalidation + Step 1 failure handling (EF-3)](47-stale-outputs-invalidation-and-step1-retry.md)
+- [Step 4 UX (navigation, Retry, Stop confirm) + accessibility (EF-4)](48-step4-ux-a11y.md)

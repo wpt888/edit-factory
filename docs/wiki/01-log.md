@@ -1,5 +1,25 @@
 # Engineering Change Log
 
+## 2026-07-22 - EF-4: Step 4 UX (navigation, Retry, Stop confirm) + accessibility
+
+- `pipeline-stepper.tsx` hid the step indicator below `min-[1950px]`, so it
+  was invisible at plain 1920x1080; breakpoint lowered to `min-[1800px]` and
+  the stepper compacted to fit.
+- Step 4 gained a "Back to Preview" button and a Retry action on
+  `failed`/`cancelled` variants, reusing the existing single-variant remake
+  flow (`handleRemakeVariant`) instead of a new render path — previously the
+  only recovery option was restarting the entire pipeline.
+- Stop Render (global and per-variant) now opens the same confirm dialog
+  already used for "Start New Pipeline" instead of firing immediately.
+- `pipeline-history-sidebar.tsx`: `span role="button"` controls replaced
+  with real `<button>` elements (native Enter/Space, focus-visible,
+  `aria-label`, `aria-expanded`/`aria-controls`).
+- `source-videos-card.tsx`: selectable cards get `role="checkbox"` +
+  keyboard activation, icon-only buttons get `aria-label`, and "Edit
+  segments" links stop propagation so they no longer also toggle card
+  selection. Details:
+  [Step 4 UX + accessibility](48-step4-ux-a11y.md).
+
 ## 2026-07-22 - EF-3: stale render invalidation + Step 1 failure handling
 
 - Every route that can change a variant's rendered output (scripts, source
