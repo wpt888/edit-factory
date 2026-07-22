@@ -107,13 +107,14 @@ export interface PipelineListItem {
   variant_count: number;
   keyword_count: number;
   created_at: string;
+  expires_at?: string | null;
   target_script_duration?: number | null;
   generation_job?: Partial<AsyncJobState>;
 }
 
 export interface VariantStatus {
   variant_index: number;
-  status: "not_started" | "queued" | "processing" | "completed" | "failed" | "cancelled";
+  status: "not_started" | "queued" | "processing" | "completed" | "failed" | "cancelled" | "stale";
   progress: number;
   current_step: string;
   final_video_path?: string;

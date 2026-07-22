@@ -162,6 +162,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             variant={
                               status.status === "completed"
                                 ? "outline"
+                                : status.status === "stale"
+                                ? "outline"
                                 : status.status === "queued"
                                 ? "outline"
                                 : status.status === "failed" || status.status === "cancelled"
@@ -171,6 +173,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             className={
                               status.status === "completed"
                                 ? "border-primary/70 bg-transparent text-primary"
+                                : status.status === "stale"
+                                ? "border-amber-500/60 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                                 : status.status === "queued"
                                 ? "border-amber-500/60 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                                 : undefined
@@ -180,6 +184,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
                               ? "Queued"
                               : status.status === "processing"
                               ? "Rendering"
+                              : status.status === "stale"
+                              ? "Needs re-render"
                               : status.status}
                           </Badge>
                         )}
@@ -224,7 +230,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                                     : v;
                                 });
                                 const allDone = updatedStatuses.every(
-                                  v => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
+                                  v => v.status === "completed" || v.status === "failed" || v.status === "cancelled" || v.status === "stale"
                                 );
                                 if (allDone) {
                                   setIsRendering(false);
@@ -249,7 +255,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             <RefreshCw className="size-4" />
                           </Button>
                         )}
-                        {(status.status === "completed" || status.status === "failed" || status.status === "cancelled") && (
+                        {(status.status === "completed" || status.status === "failed" || status.status === "cancelled" || status.status === "stale") && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -332,6 +338,18 @@ export function Step4Render({ ctx }: { ctx: any }) {
 
                     {/* Current step */}
                     <p className="text-sm text-muted-foreground">{status.current_step}</p>
+
+                    {status.status === "stale" && (
+                      <Alert
+                        className="border-amber-500/50 bg-amber-500/10"
+                        data-testid={`render-stale-status-${renderStatusKey(status)}`}
+                      >
+                        <AlertTriangle className="size-4 text-amber-500" />
+                        <AlertDescription className="text-amber-800 dark:text-amber-200">
+                          Needs re-render. This output changed after rendering, so download and publishing are unavailable.
+                        </AlertDescription>
+                      </Alert>
+                    )}
 
                     {/* Render fingerprint (debug: unique per render parameters) */}
                     {status.render_fingerprint && (
@@ -431,7 +449,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
             {pipelineId && variantStatuses.length > 0 && (
               <PipelineCaptionGenerator
                 pipelineId={pipelineId}
-                completedClips={variantStatuses.map(v => ({
+                completedClips={variantStatuses.filter(v => v.status === "completed").map(v => ({
                   clip_id: v.clip_id || `pending-${v.variant_index}${v.visual_version ? `_${v.visual_version}` : ""}`,
                   variant_index: v.variant_index,
                   final_video_path: v.final_video_path || "",

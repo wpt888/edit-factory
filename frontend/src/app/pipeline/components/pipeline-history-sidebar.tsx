@@ -14,9 +14,10 @@ import {
   Trash2,
   Volume2,
   Pause,
+  AlertTriangle,
 } from "lucide-react";
 import type { PipelineListItem } from "../pipeline-types";
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { WorkspacePanelHeader } from "./workspace-panel-header";
 
 // Loose ctx-bag type: only fields needing contextual typing for inline
@@ -29,6 +30,25 @@ type PipelineHistorySidebarCtx = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
+
+function ExpirationWarning({ expiresAt }: { expiresAt?: string | null }) {
+  const [renderedAt] = useState(() => Date.now());
+  if (!expiresAt) return null;
+  const remainingMs = new Date(expiresAt).getTime() - renderedAt;
+  if (!Number.isFinite(remainingMs)) return null;
+  const days = Math.max(0, Math.ceil(remainingMs / 86_400_000));
+  if (days > 3) return null;
+  const label = days === 0 ? "Expires soon" : days === 1 ? "Expires in 1 day" : `Expires in ${days} days`;
+  return (
+    <div
+      className="mt-2 flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300"
+      data-testid={`pipeline-expiration-warning-${days}`}
+    >
+      <AlertTriangle className="size-3.5 shrink-0" />
+      <span>{label}. Edit this pipeline to extend retention.</span>
+    </div>
+  );
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
@@ -220,6 +240,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                             {new Date(item.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                           </span>
                         </div>
+                        <ExpirationWarning expiresAt={item.expires_at} />
                       </div>
 
                       {/* Expanded: show scripts with checkboxes */}

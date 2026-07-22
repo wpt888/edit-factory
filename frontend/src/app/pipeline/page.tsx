@@ -1900,7 +1900,7 @@ function PipelinePage() {
       const allComplete =
         renderedVariants.length > 0 &&
         renderedVariants.every(
-          (v) => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
+          (v) => v.status === "completed" || v.status === "failed" || v.status === "cancelled" || v.status === "stale"
         );
       const librarySavesPending = renderedVariants.some(
         (v) => v.status === "completed" && v.library_saved === false && !v.library_error
@@ -1970,7 +1970,7 @@ function PipelinePage() {
           const allDone =
             rendered.length > 0 &&
             rendered.every(
-              (v: { status: string }) => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
+              (v: { status: string }) => v.status === "completed" || v.status === "failed" || v.status === "cancelled" || v.status === "stale"
             );
           if (allDone) {
             setIsRendering(false);
