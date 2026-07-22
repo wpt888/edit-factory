@@ -1,5 +1,20 @@
 # Engineering Change Log
 
+## 2026-07-22 - Audit remediation închisă: 9/9 livrate, push pe ambele repo-uri
+
+- Remedierea auditului NO-GO de producție (vezi
+  [49-audit-remediation-orchestration-2026-07-22.md](49-audit-remediation-orchestration-2026-07-22.md))
+  este COMPLETĂ: toate cele 9 goal-uri (EF-1..EF-5, SS-1..SS-4) + fixurile de
+  verificare post-audit (IDOR pipeline scripts, PiP overlay silent-fail,
+  billing mock gate, deep-link schedule) sunt livrate.
+- Push efectuat azi pe `origin/main` în ambele repo-uri: edit_factory
+  `7ba07c8..1213cbd` (28 commituri), social-scheduler `5695d7e..8ddadb9`
+  (79 commituri).
+- Rămase deschise (minore): hunk necomis `overlay_renderer.py` (base-dir
+  attention assets) + WIP attention/media-session/RLS; social-scheduler
+  `deploy.yml` 2/4 domain checks + `npm audit` 7 vulnerabilități (3 high);
+  verificare browser SS-2/SS-4 restantă. Detalii complete în pagina 49.
+
 ## 2026-07-22 - EF-5: CI green — Ruff + ESLint (pipeline surface)
 
 - `ruff check app tests`: 175 -> 0 errors.

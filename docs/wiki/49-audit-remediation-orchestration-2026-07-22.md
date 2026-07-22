@@ -162,3 +162,41 @@ au fost lăsate neatinse.
 
 Detalii commit-uri: vezi `01-log.md`, intrarea „Audit remediation
 follow-up: pipeline scripts IDOR + PiP overlay silent failure".
+
+## Închidere (2026-07-22)
+
+**Status final: 9/9 goal-uri livrate + fixurile de verificare aplicate;
+ambele repo-uri pushed pe `origin/main` 2026-07-22** —
+edit_factory `7ba07c8..1213cbd` (28 commituri), social-scheduler
+`5695d7e..8ddadb9` (79 commituri).
+
+Fixurile de verificare din sesiunea finală:
+- **edit_factory** — IDOR pe `update_pipeline_scripts` închis via
+  `_require_owned_pipeline` (`30e84e4`, + test de execuție cross-profil, nu
+  doar prezență dependency); `apply_pip_overlay` propagă erori în loc de
+  silent-skip (`da96112`); wiki `c1f462a`.
+- **social-scheduler** — billing transcripție gate-uit pe `isMock`
+  (`23e3e54`); deep-link schedule cu `compose=1` (`3439718`); wiki
+  `8ddadb9`.
+
+**EF-5**: resturile rulării avortate REVERTATE complet (54 fișiere ruff, 3
+`eslint-disable` la nivel de fișier, 3 dependency array modificate), apoi
+re-rulat curat pe agent Sonnet: ruff 175→0, ESLint pipeline 48→0 (4 reguli
+"React Compiler readiness" dezactivate la nivel de config în
+`frontend/eslint.config.mjs`, cu rațiune documentată; `rules-of-hooks`/
+`exhaustive-deps` rămân active). Build + `design:check` + 97 teste pytest
+verzi (`cb12c2d`, `5225e29`, `1ac1454`, `1213cbd`).
+
+**Gotcha nou documentat**: `pipeline_routes.py`/`assembly_service.py` au
+line-ending mixt LF/CRLF în HEAD sub `autocrlf=true` — un edit naiv
+rescrie tot fișierul în CRLF (diff umflat, review imposibil). Patch-urile
+s-au aplicat byte-exact printr-un script Python, nu prin Edit direct.
+
+**Rămase deschise (minore, sub pragul de goal)**:
+- hunk legit necomis în `overlay_renderer.py` (base-dir pentru attention
+  assets) + WIP attention/media-session/RLS, inclusiv fixuri de lint
+  necomise în 4 fișiere frontend din suprafața pipeline;
+- social-scheduler: `deploy.yml` — 2/4 domain checks; `npm audit` — 7
+  vulnerabilități (3 high);
+- verificare browser SS-2/SS-4 restantă (necesită infra web pornită
+  local).
