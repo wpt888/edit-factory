@@ -545,6 +545,9 @@ async def publish_clip(
     if clip["editai_projects"]["profile_id"] != profile.profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
 
+    if clip.get("final_status") != "completed":
+        raise HTTPException(status_code=409, detail="Clip needs re-render before publishing")
+
     if not clip.get("final_video_path"):
         raise HTTPException(
             status_code=400,
@@ -617,7 +620,7 @@ async def bulk_publish_clips(
     # Fetch all clips at once instead of one-by-one (N+1 fix)
     valid_clips = []
     try:
-        result = repo.table_query("editai_clips", "select", filters=QueryFilters(select="id, final_video_path, editai_projects!inner(profile_id)", in_={"id": request.clip_ids}))
+        result = repo.table_query("editai_clips", "select", filters=QueryFilters(select="id, final_video_path, final_status, editai_projects!inner(profile_id)", in_={"id": request.clip_ids}))
         clips_by_id = {c["id"]: c for c in (result.data or [])}
     except Exception as e:
         logger.error(f"Failed to fetch clips for bulk publish: {e}")
@@ -630,6 +633,8 @@ async def bulk_publish_clips(
         # Verify ownership
         if clip_data["editai_projects"]["profile_id"] != profile.profile_id:
             continue
+        if clip_data.get("final_status") != "completed":
+            raise HTTPException(status_code=409, detail="Clip needs re-render before publishing")
         video_path = Path(clip_data["final_video_path"])
         if not video_path.exists():
             video_path = settings.output_dir / clip_data["final_video_path"]

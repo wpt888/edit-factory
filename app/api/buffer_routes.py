@@ -12,14 +12,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
-from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/buffer", tags=["buffer"])
@@ -262,6 +261,9 @@ async def publish_clip(
     if clip["editai_projects"]["profile_id"] != profile.profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
 
+    if clip.get("final_status") != "completed":
+        raise HTTPException(status_code=409, detail="Clip needs re-render before publishing")
+
     if not clip.get("final_video_path"):
         raise HTTPException(status_code=400, detail="Clip must be rendered before publishing")
 
@@ -320,7 +322,7 @@ async def bulk_publish_clips(
         result = repo.table_query(
             "editai_clips", "select",
             filters=QueryFilters(
-                select="id, final_video_path, editai_projects!inner(profile_id)",
+                select="id, final_video_path, final_status, editai_projects!inner(profile_id)",
                 in_={"id": request.clip_ids},
             )
         )
@@ -335,6 +337,8 @@ async def bulk_publish_clips(
             continue
         if clip_data["editai_projects"]["profile_id"] != profile.profile_id:
             continue
+        if clip_data.get("final_status") != "completed":
+            raise HTTPException(status_code=409, detail="Clip needs re-render before publishing")
         video_path = Path(clip_data["final_video_path"])
         if not video_path.exists():
             video_path = settings.output_dir / clip_data["final_video_path"]

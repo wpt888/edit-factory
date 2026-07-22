@@ -633,6 +633,8 @@ def _resolve_clip_video(clip_id: str, profile_id: str) -> Path:
     clip = result.data[0]
     if clip["editai_projects"]["profile_id"] != profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("final_status") != "completed":
+        raise HTTPException(status_code=409, detail="Clip needs re-render before publishing")
     if not clip.get("final_video_path"):
         raise HTTPException(status_code=400, detail="Clip must be rendered before publishing.")
 

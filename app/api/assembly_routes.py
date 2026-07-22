@@ -9,8 +9,7 @@ Endpoints for Script-to-Video Assembly pipeline:
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
@@ -31,6 +30,11 @@ router = APIRouter(prefix="/assembly", tags=["assembly"])
 _assembly_jobs = {}
 _assembly_jobs_lock = threading.Lock()
 _MAX_MEMORY_ENTRIES = 1000
+_ASSEMBLY_RETENTION_DAYS = 7
+
+
+def _assembly_expiry_timestamp() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=_ASSEMBLY_RETENTION_DAYS)).isoformat()
 
 
 def _evict_old_entries(store: dict, max_entries: int = _MAX_MEMORY_ENTRIES):
@@ -62,6 +66,7 @@ def _db_create_assembly_job(job_id: str, profile_id: str, job: dict):
             "final_video_path": job.get("final_video_path"),
             "error": job.get("error"),
             "started_at": job.get("started_at"),
+            "expires_at": _assembly_expiry_timestamp(),
         }
         repo.create_assembly_job(row)
         logger.debug(f"Assembly job {job_id} created in DB")
@@ -81,6 +86,7 @@ def _db_update_assembly_job(job_id: str, job: dict):
             "current_step": job.get("current_step"),
             "final_video_path": job.get("final_video_path"),
             "error": job.get("error"),
+            "expires_at": _assembly_expiry_timestamp(),
         }
         if job.get("completed_at"):
             update["completed_at"] = job["completed_at"]
