@@ -45,7 +45,7 @@ Prompturile de goal (cu clauzele standard commit/wiki/return) sunt în
 SS-3 a adăugat migrarea Drizzle `0049_swift_gressill.sql` (coloane
 `publish_attempted_at`/`publish_attempt_id` + status `needs_review`).
 
-**edit_factory: 4/5 livrate, EF-5 neterminat.**
+**edit_factory: 5/5 livrate.**
 
 | Goal | Commituri (main, nepush) | Wiki |
 |------|--------------------------|------|
@@ -53,7 +53,20 @@ SS-3 a adăugat migrarea Drizzle `0049_swift_gressill.sql` (coloane
 | EF-2 | `86ec08b` `75977a4` `71f0254` `27eaf86` `4d0bcbe` | `46-captions-smart-schedule-chain-fix.md` |
 | EF-3 | `cdbce8f` `024cb7d` `ade008f` `3ee49ff` `1cac027` `78dee70` | `47-stale-outputs-invalidation-and-step1-retry.md` |
 | EF-4 | `5ba0dc9` `e74396c` `af191cf` `e518df7` `e7389a1` | `48-step4-ux-a11y.md` |
-| EF-5 | — NETERMINAT — | — |
+| EF-5 | `cb12c2d` `5225e29` `1ac1454` | `01-log.md` (2026-07-22 EF-5) |
+
+EF-5 re-rulare curată (Sonnet, fără Codex): ruff 175→0 erori (F821 reale +
+E402/F401/F541/F841/E741/E731 mecanice), ESLint pipeline 48→0 erori. Root
+cause al celor 48 erori ESLint: `eslint-config-next`'s `core-web-vitals`
+adaugă de la eslint-plugin-react-hooks v7 4 reguli "React Compiler
+readiness" (`refs`, `set-state-in-effect`, `immutability`,
+`preserve-manual-memoization`) ca eroare necondiționat, chiar dacă proiectul
+nu a adoptat React Compiler — flagau pattern-uri pre-compiler intenționate
+(ref mirrors în timpul render-ului, setState în efecte pentru fetch).
+Dezactivate în `frontend/eslint.config.mjs` la nivel de regulă (nu
+`eslint-disable` per fișier — asta e exact ce a fost respins la tentativa
+Codex anterioară); `rules-of-hooks`/`exhaustive-deps` rămân active.
+`npm run build` + `design:check` + pytest scoped (34+63 teste) trec.
 
 EF-3: invalidarea acoperă 15 rute de editare (nu doar cele 2 numite în goal).
 
@@ -93,21 +106,20 @@ EF-4 a rulat curat în 16 min.
 
 ## Rămas de făcut
 
-1. **EF-5 CI verde** — re-rulare curată cu guardrail rg. Ținte:
-   `ruff check app/ tests/` = 0 erori (EF-1…EF-4 au rezolvat deja
-   `deduplicate`/`QueryFilters`/`timedelta`); ESLint pipeline = 0 erori prin
-   **fix la deps reale de hooks**, NU eslint-disable la nivel de fișier.
-   Prompt: `goals/05-ci-green.md`.
-2. **Push** — toate cele 43 de commituri (23 EF + 24 SS... vezi tabelele)
-   sunt pe `main` local, **nepush** în ambele repo-uri.
-3. **Reconciliere `01-log.md`** — un hunk WIP pre-existent conținea o
-   ștergere a unei intrări de log EF-2; de verificat că nu s-a pierdut.
-4. **Verificare browser restantă** — SS-2/SS-3/SS-4 n-au putut fi verificate
+1. **Push** — toate commiturile (EF + SS) sunt pe `main` local,
+   **nepush** în ambele repo-uri.
+2. **Reconciliere `01-log.md`** — un hunk WIP pre-existent conținea o
+   ștergere a unei intrări de log EF-2; verificat la EF-5: intrarea EF-2 a
+   supraviețuit (`01-log.md` linia ~150 după inserția EF-5).
+3. **Verificare browser restantă** — SS-2/SS-3/SS-4 n-au putut fi verificate
    în browser (DB local `:5436` + Docker indisponibile în sesiune); de rulat
    când infra web e pornită.
-5. **Rămase din audit, neabordate** (sub pragul de goal): render runner
+4. **Rămase din audit, neabordate** (sub pragul de goal): render runner
    heartbeat/stale, retenție cleanup UI warning, TTS Step 2 race-uri,
-   `format:check` (261 fișiere) + `npm audit` (3 moderate) în social-scheduler.
+   `format:check` (261 fișiere) + `npm audit` (3 moderate) în social-scheduler,
+   ~15 avertismente ESLint reziduale pe suprafața pipeline (destructurări
+   dead-code în `page.tsx`/`pipeline-schedule.tsx`, `<img>` vs
+   `next/image`) — documentate ca skip în `01-log.md`.
 
 ## Note de proces
 
