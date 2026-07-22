@@ -2599,20 +2599,17 @@ class AssemblyService:
                         seg_file = results[i]
                         if seg_file and seg_file.exists():
                             pip_output = temp_dir / f"segment_{i:03d}_pip.mp4"
-                            try:
-                                result_path = await apply_pip_overlay(
-                                    video_path=seg_file,
-                                    image_url_or_path=pip["image_url"],
-                                    output_path=pip_output,
-                                    position=pip.get("position", "bottom-right"),
-                                    size=pip.get("size", "medium"),
-                                    animation=pip.get("animation", "static"),
-                                )
-                                if result_path != seg_file:
-                                    results[i] = result_path
-                                    logger.info(f"PiP overlay applied to segment {i} (segment_id={seg_id})")
-                            except Exception as e:
-                                logger.warning(f"PiP overlay failed for segment {i} (segment_id={seg_id}): {e}")
+                            result_path = await apply_pip_overlay(
+                                video_path=seg_file,
+                                image_url_or_path=pip["image_url"],
+                                output_path=pip_output,
+                                position=pip.get("position", "bottom-right"),
+                                size=pip.get("size", "medium"),
+                                animation=pip.get("animation", "static"),
+                            )
+                            if result_path != seg_file:
+                                results[i] = result_path
+                                logger.info(f"PiP overlay applied to segment {i} (segment_id={seg_id})")
 
         # Cross-dissolve merge pass: runs of segments joined by "fade" boundaries
         # are combined with tpad+xfade into one file each. The outgoing clip's
