@@ -123,7 +123,7 @@ class CoquiTTSService(TTSService):
 
             # Cache for future use
             CoquiTTSService._model_cache[self.model_name] = model
-            logger.info(f"Coqui TTS model loaded successfully")
+            logger.info("Coqui TTS model loaded successfully")
 
             return model
 

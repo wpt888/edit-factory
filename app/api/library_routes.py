@@ -8,7 +8,6 @@ import time as _time_mod
 import uuid
 import shutil
 import shlex
-import subprocess
 import json
 import mimetypes
 import threading
@@ -34,9 +33,8 @@ from app.api.validators import (
     validate_file_mime_type, ALLOWED_VIDEO_MIMES,
 )
 from app.core.rate_limit import limiter
-from app.services.encoding_presets import get_preset, EncodingPreset, apply_quality_mode, get_default_quality_mode
+from app.services.encoding_presets import get_preset, apply_quality_mode, get_default_quality_mode
 from app.services.audio.normalizer import measure_loudness, build_loudnorm_filter
-from app.services.video_effects.filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.video_effects.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full, SRTValidator
@@ -49,7 +47,7 @@ from app.services.studio_metering import (
     reserve_metering_record,
     settle_metering_record,
 )
-from app.utils import sanitize_filename as _sanitize_filename, normalize_path
+from app.utils import normalize_path
 from app.services.ffmpeg_semaphore import (
     acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
     is_nvenc_available, get_prep_codec_params, safe_ffmpeg_run_with_progress,
@@ -157,7 +155,7 @@ def _cleanup_stale_locks():
             lock.release()
             _project_locks.pop(pid, None)
     if stale_keys:
-        logger.debug(f"[locks] Cleaned up stale project lock(s)")
+        logger.debug("[locks] Cleaned up stale project lock(s)")
 
 
 def get_project_lock(project_id: str) -> threading.Lock:
@@ -878,8 +876,6 @@ async def generate_raw_clips(
     if video_path and not (video and video.filename):
         require_desktop_local_filesystem()
 
-    repo = get_repository()
-
     settings = get_settings()
     settings.ensure_dirs()
 
@@ -1228,7 +1224,7 @@ async def generate_from_segments(
     repo = get_repository()
 
     # Verify the project exists and belongs to the profile
-    project_data = verify_project_ownership(project_id, profile.profile_id)
+    verify_project_ownership(project_id, profile.profile_id)
 
     # Acquire lock atomically in the endpoint to prevent TOCTOU race (like generate_raw_clips)
     lock = get_project_lock(project_id)
@@ -1602,7 +1598,7 @@ async def _generate_from_segments_task(
                             total_voice_duration = sum(v.duration for v in voice_segs)
                             logger.info(f"  Found {len(voice_segs)} voice segments ({total_voice_duration:.1f}s total)")
                         else:
-                            logger.info(f"  No voice detected")
+                            logger.info("  No voice detected")
                     except Exception as e:
                         logger.warning(f"Voice detection failed for {file_path}: {e}")
 
@@ -4151,7 +4147,6 @@ async def _render_final_clip_task(
                 logger.warning(f"Failed to save TTS to library: {e}")
 
             # Persist TTS audio to permanent location for later download
-            tts_persist_failed = False
             try:
                 tts_persist_path = media_manager.tts_path(project_id, clip_id)
                 shutil.copy2(str(audio_path), str(tts_persist_path))
@@ -4169,7 +4164,6 @@ async def _render_final_clip_task(
                 )
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
-                tts_persist_failed = True
                 logger.warning(f"TTS PERSIST FAILED for clip {clip_id}: audio was generated but could not be saved for download: {e}")
 
         # 2. SYNC: Adjust video to audio duration
@@ -4214,7 +4208,7 @@ async def _render_final_clip_task(
                     final_video_path = adjusted_video_path
                 else:
                     # Fallback: loop video to fill the gap
-                    logger.warning(f"Could not extend with segments, using loop fallback")
+                    logger.warning("Could not extend with segments, using loop fallback")
                     async with await acquire_prep_slot():
                         await asyncio.to_thread(_loop_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                     if adjusted_video_path.exists():
@@ -4289,7 +4283,7 @@ async def _render_final_clip_task(
                 "glowBlur": glow_blur,
                 "adaptiveSizing": adaptive_sizing
             }
-            logger.info(f"Applied default subtitle styling for auto-generated SRT")
+            logger.info("Applied default subtitle styling for auto-generated SRT")
 
         # 4. Render with FFmpeg using the preset (limited by global concurrency semaphore)
         output_path = media_manager.render_path(project_id, clip_id, preset_data['name'])
@@ -4899,7 +4893,6 @@ def cleanup_orphaned_temp_files(max_age_hours: int = 24, profile_id: Optional[st
         if not temp_base_dir.exists():
             return 0
 
-        from datetime import timedelta
         import time
 
         cutoff_time = time.time() - (max_age_hours * 3600)
@@ -5131,7 +5124,7 @@ async def _render_with_preset(
             video_height=preset.get('subtitle_ref_height', preset.get('height', 1920))
         )
         filters.append(subtitles_filter)
-        logger.info(f"Added subtitle filter with enhancement settings")
+        logger.info("Added subtitle filter with enhancement settings")
     elif subtitle_settings and subtitle_settings.get("enabled", True) is False:
         logger.info("Subtitle burn-in disabled for this render; narration audio is unchanged")
 
@@ -5326,7 +5319,6 @@ async def _render_with_preset(
     # ── 2-Pass VBR Rendering ──
     if not _preview_mode and encoding_preset and encoding_preset.needs_two_pass():
         import os
-        import tempfile
         _passlog_prefix = str(output_path.parent / f"ffmpeg2pass_{uuid.uuid4().hex[:8]}")
         _fps = str(preset.get("fps", 30))
 
@@ -5374,16 +5366,14 @@ async def _render_with_preset(
                 raise RuntimeError(f"FFmpeg 2-pass (pass 1) failed: {result1.stderr}")
 
             # ── PASS 2: Final encode (full filters + audio) ──
-            logger.info(f"VBR 2-pass: Starting pass 2 (encoding)")
+            logger.info("VBR 2-pass: Starting pass 2 (encoding)")
             pass2_cmd = ["ffmpeg", "-y", "-i", str(video_path)]
 
             # Audio begins together with the ultra-rapid visual montage.
             if audio_path and audio_path.exists():
                 pass2_cmd.extend(["-i", str(audio_path)])
-                has_audio_pass2 = True
             else:
                 pass2_cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
-                has_audio_pass2 = False
 
             # Background music input index 2 (same contract as single-pass).
             if use_music:

@@ -10,7 +10,6 @@ Reuses Phase 86 LD-12 pattern: httpx.ASGITransport + asyncio.run() + monkeypatch
 """
 import asyncio
 import io
-import json
 
 import httpx
 import pytest

@@ -4,7 +4,6 @@ TTS Service Factory.
 Returns appropriate TTS service based on provider string.
 Supports: elevenlabs, edge, coqui, kokoro.
 """
-from pathlib import Path
 from typing import Optional
 from .base import TTSService
 from app.config import get_settings

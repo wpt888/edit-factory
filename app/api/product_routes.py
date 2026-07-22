@@ -15,7 +15,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 

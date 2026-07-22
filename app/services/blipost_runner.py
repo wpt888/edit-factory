@@ -292,7 +292,7 @@ def _probe_dimensions(path: str) -> Optional[tuple[int, int]]:
     except Exception:
         return None
     stderr = proc.stderr or ""
-    video_line = next((l for l in stderr.split("\n") if re.search(r"Stream #.*Video:", l)), None)
+    video_line = next((line for line in stderr.split("\n") if re.search(r"Stream #.*Video:", line)), None)
     if not video_line:
         return None
     m = re.search(r"\b(\d{2,5})x(\d{2,5})\b", video_line)

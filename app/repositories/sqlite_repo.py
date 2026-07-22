@@ -8,7 +8,6 @@ Thread-safe: WAL mode for concurrent reads, threading.Lock for writes.
 
 import json
 import logging
-import os
 import sqlite3
 import threading
 import uuid
@@ -960,7 +959,7 @@ class SQLiteRepository(DataRepository):
         ps_table = self._t("editai_project_segments")
         seg_table = self._t("editai_segments")
 
-        where_parts: List[str] = [f'ps."project_id" = ?']
+        where_parts: List[str] = ['ps."project_id" = ?']
         params: List[Any] = [project_id]
 
         # Apply filters to ps columns
@@ -1942,7 +1941,7 @@ class SQLiteRepository(DataRepository):
         spa_table = self._t("editai_segment_products")
         prod_table = self._t("editai_products")
 
-        where_parts: List[str] = [f'spa."segment_id" = ?']
+        where_parts: List[str] = ['spa."segment_id" = ?']
         params: List[Any] = [segment_id]
 
         sql = f"""

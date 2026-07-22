@@ -343,7 +343,7 @@ def test_normalize_multiline_text_joined():
     assert "Hello world" in result
     # Should NOT have Hello and world on separate lines
     lines = result.split('\n')
-    text_lines = [l for l in lines if l.strip() and not l.strip().isdigit() and '-->' not in l]
+    text_lines = [line for line in lines if line.strip() and not line.strip().isdigit() and '-->' not in line]
     assert len(text_lines) == 1
     assert text_lines[0] == "Hello world"
 
@@ -385,5 +385,5 @@ def test_sanitize_srt_full_includes_normalization():
     assert "Hello world" in result
     # Should be single line, not two separate lines
     lines = result.split('\n')
-    text_lines = [l for l in lines if l.strip() and not l.strip().isdigit() and '-->' not in l]
+    text_lines = [line for line in lines if line.strip() and not line.strip().isdigit() and '-->' not in line]
     assert len(text_lines) == 1

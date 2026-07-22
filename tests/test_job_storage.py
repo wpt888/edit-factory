@@ -4,7 +4,7 @@ Unit tests for JobStorage in-memory fallback path.
 All tests force _supabase=None so they never attempt a real Supabase connection.
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 def make_storage(mock_settings):

@@ -5,7 +5,7 @@ Suportă fuzzy matching pentru variații ale cuvintelor.
 """
 import re
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 

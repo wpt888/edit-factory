@@ -7,7 +7,6 @@ that follows the current DataRepository contract.
 """
 import json
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock
 from app.services.cost_tracker import (
     CostTracker,

@@ -2,11 +2,10 @@
 Shared pytest fixtures for Edit Factory backend tests.
 """
 import os
-import sys
 import uuid
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 
 class MockSettings:

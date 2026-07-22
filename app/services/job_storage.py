@@ -5,8 +5,7 @@ Replaces in-memory job_store from routes.py with persistent storage.
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
-from pathlib import Path
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 

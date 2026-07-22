@@ -22,8 +22,6 @@ import logging
 import math
 import random
 import re
-import subprocess
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -942,8 +940,6 @@ class AssemblyService:
         Returns:
             Tuple of (audio_path, duration, timestamps_dict)
         """
-        from app.services.tts.elevenlabs import ElevenLabsTTSService
-        from app.services.audio.silence_remover import SilenceRemover
 
         # Use provided temp_dir or create a new one
         _owns_temp_dir = temp_dir is None
@@ -1389,7 +1385,6 @@ class AssemblyService:
             srt_text = entry["text"]
             srt_start = entry["start_time"]
             srt_end = entry["end_time"]
-            effective_cooldown = cooldown_seconds
 
             # --- F6: pinned assignment short-circuits scoring ---
             pin_id = pinned_assignments.get(idx)
@@ -1488,7 +1483,6 @@ class AssemblyService:
             best_kw = None
             best_conf = 0.0
             best_score = None
-            tie_pool: list = []  # (segment, kw, conf) within epsilon of best (shuffle only)
 
             eligible = []
             for relaxation in (cooldown_seconds, cooldown_seconds / 2.0, 0.0):
@@ -1498,7 +1492,6 @@ class AssemblyService:
                             and (group_constraint is None or seg.get("product_group") == group_constraint)
                             and not (n > 1 and seg["id"] == prev_segment_id)]
                 if eligible:
-                    effective_cooldown = relaxation
                     if relaxation < cooldown_seconds:
                         cooldown_relaxed = True
                     break
@@ -1777,7 +1770,6 @@ class AssemblyService:
             for seg in intro_segments:
                 seg_start = seg.get("start_time", 0.0)
                 seg_end = seg.get("end_time", seg_start + MICRO_DURATION)
-                seg_duration = seg_end - seg_start
                 # Extract from the middle of the segment for best content
                 seg_mid = (seg_start + seg_end) / 2
                 micro_start = max(seg_start, seg_mid - MICRO_DURATION / 2)
@@ -1956,7 +1948,7 @@ class AssemblyService:
                             timeline_duration=gap,
                             transforms=alt.get("transforms"),
                         ))
-                        logger.info(f"Gap fill: added diverse segment instead of extending last entry")
+                        logger.info("Gap fill: added diverse segment instead of extending last entry")
                     else:
                         # No alternative — extend last entry (clamped to EOF, F3)
                         timeline[-1] = TimelineEntry(
@@ -2185,7 +2177,6 @@ class AssemblyService:
                 if e.timeline_duration <= 0.001:
                     continue
                 key = e.source_video_path
-                clip_key = (e.source_video_path, round(e.start_time, 2))
                 if key not in _clips_by_source:
                     _clips_by_source[key] = []
                 # Avoid duplicate clip entries in the pool

@@ -259,7 +259,7 @@ class EdgeTTSService:
                         offset = chunk.get("offset")
                         duration = chunk.get("duration")
                         if offset is None or duration is None:
-                            logger.debug(f"Skipping WordBoundary chunk with missing offset/duration")
+                            logger.debug("Skipping WordBoundary chunk with missing offset/duration")
                             continue
                         start_ms = offset / 10000  # Convert to ms
                         duration_ms = duration / 10000
@@ -282,7 +282,7 @@ class EdgeTTSService:
 
         # Warn if no word boundaries were received
         if not srt_content:
-            logger.warning(f"No WordBoundary chunks received from Edge TTS - SRT file will be empty")
+            logger.warning("No WordBoundary chunks received from Edge TTS - SRT file will be empty")
 
         # Verify audio output is valid
         if not audio_path.exists() or audio_path.stat().st_size == 0:
@@ -321,7 +321,7 @@ class EdgeTTSService:
             return future.result(timeout=120)
         except (concurrent.futures.TimeoutError, TimeoutError) as e:
             logger.error(f"TTS subtitle generation timed out: {e}")
-            raise RuntimeError(f"TTS subtitle generation timed out after 120s") from e
+            raise RuntimeError("TTS subtitle generation timed out after 120s") from e
 
     def _ms_to_srt_time(self, ms: float) -> str:
         """Convert milliseconds to SRT format (HH:MM:SS,mmm)."""

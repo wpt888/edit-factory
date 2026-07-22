@@ -5,7 +5,6 @@ Videos are uploaded to MinIO via HTTP PUT through the Kong API gateway,
 which provides a public URL that Buffer can download from.
 After Buffer ingests the video, it is deleted from MinIO.
 """
-import os
 import logging
 import threading
 import time
@@ -14,10 +13,9 @@ import asyncio
 import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
-from app.db import get_supabase
 from app.config import get_settings
 from app.repositories.factory import get_repository
 

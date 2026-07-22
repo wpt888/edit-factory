@@ -11,7 +11,7 @@ Exports:
 import logging
 from typing import Callable, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.config import get_base_dir, get_settings

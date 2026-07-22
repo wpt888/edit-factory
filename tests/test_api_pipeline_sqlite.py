@@ -20,11 +20,9 @@ on 2026-05-23.
 """
 import uuid
 
-import pytest
 
 from tests.conftest import (
     _seed_clip,
-    _seed_clip_content,
     _seed_export_preset,
     _seed_project,
 )

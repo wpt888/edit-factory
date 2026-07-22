@@ -185,7 +185,8 @@ class ScriptGenerator:
         words_per_sec: float = 2.3
     ) -> str:
         """Build AI prompt for script generation."""
-        _strip_ctrl = lambda s: ''.join(c for c in s if c.isprintable() or c == '\n')
+        def _strip_ctrl(s):
+            return ''.join(c for c in s if c.isprintable() or c == '\n')
         idea = _strip_ctrl(idea[:500])
         context = _strip_ctrl((context or "")[:1000])
         ai_instructions = _strip_ctrl((ai_instructions or "")[:2000])
@@ -200,7 +201,7 @@ class ScriptGenerator:
             limited_groups = dict(list(product_groups.items())[:20])
             for group_label, group_keywords in limited_groups.items():
                 groups_text.append(f"  - {group_label}: {', '.join(group_keywords)}")
-            product_groups_section = f"\n**Product Groups (video segments organized by product):**\n" + "\n".join(groups_text) + "\n"
+            product_groups_section = "\n**Product Groups (video segments organized by product):**\n" + "\n".join(groups_text) + "\n"
 
         # Build creator rules section if ai_instructions provided
         ai_rules_section = ""
@@ -408,7 +409,7 @@ Begin generation now:"""
     def _format_sentences(self, text: str) -> str:
         """Format script so each sentence starts on a new line."""
         # If already has multiple lines, assume it's formatted
-        lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         if len(lines) >= 3:
             return '\n\n'.join(lines)
 

@@ -9,7 +9,6 @@ endpoint which requires real video files), then verified via the HTTP API.
 
 No live Supabase, FFmpeg, or ElevenLabs required.
 """
-import pytest
 from datetime import datetime, timezone
 
 

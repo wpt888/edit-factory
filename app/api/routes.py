@@ -502,7 +502,7 @@ async def create_job(
     if subtitle_settings:
         try:
             parsed_subtitle_settings = json.loads(subtitle_settings)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid JSON in subtitle_settings"
@@ -1156,8 +1156,6 @@ async def add_tts_to_videos(
     require_desktop_legacy_ai_workflow()
     import json as json_lib
 
-    settings = get_settings()
-
     try:
         paths = json_lib.loads(video_paths)
         if not isinstance(paths, list) or len(paths) == 0:
@@ -1400,7 +1398,6 @@ async def serve_file(file_path: str, download: bool = False, profile: ProfileCon
 
     # Decode the file path
     from urllib.parse import unquote
-    import os
     decoded_path = unquote(file_path)
     decoded_path = decoded_path.replace("\\", "/")
 

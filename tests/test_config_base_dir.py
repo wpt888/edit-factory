@@ -6,7 +6,6 @@ the function directly (NOT via _BASE_DIR which is import-time-evaluated).
 import os
 import sys
 from pathlib import Path
-import pytest
 
 from app.config import _get_app_base_dir
 

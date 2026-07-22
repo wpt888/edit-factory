@@ -19,13 +19,12 @@ migrated persistence paths (`_save_clip_to_library`, `sync_pipeline_to_library`,
 references. Full mp4 emergence under combined BackgroundTasks + multi-service
 mock orchestration is the Phase 85 deliverable.
 """
-import uuid
 from pathlib import Path
 from subprocess import CompletedProcess
 
 import pytest
 
-from tests.conftest import _seed_export_preset, _seed_project
+from tests.conftest import _seed_export_preset
 
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}

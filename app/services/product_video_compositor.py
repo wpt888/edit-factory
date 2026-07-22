@@ -22,8 +22,6 @@ Usage:
     )
 """
 import logging
-import os
-import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -31,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
-from app.services.textfile_helper import build_drawtext_filter, build_multi_drawtext, cleanup_textfiles
+from app.services.textfile_helper import build_multi_drawtext, cleanup_textfiles
 
 logger = logging.getLogger(__name__)
 

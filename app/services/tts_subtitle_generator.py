@@ -360,7 +360,7 @@ def generate_srt_from_timestamps(
         lines = srt_entries[-1].split("\n")
         lines[2] = lines[2] + " " + pending_merge_text
         srt_entries[-1] = "\n".join(lines)
-        logger.info(f"Flushed remaining buffered text into last subtitle entry")
+        logger.info("Flushed remaining buffered text into last subtitle entry")
     elif pending_merge_text:
         logger.warning(f"Could not place buffered text (no SRT entries): '{pending_merge_text}'")
 

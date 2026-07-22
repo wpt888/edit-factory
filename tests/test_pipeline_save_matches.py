@@ -6,7 +6,6 @@ not the original auto-match.
 """
 import uuid
 
-import pytest
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
 

@@ -14,7 +14,7 @@ User-controlled typography attributes like fontFamily and fontSize are never
 overridden by profiles.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 

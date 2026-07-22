@@ -146,7 +146,7 @@ class EncodingPreset(BaseModel):
         # 2-pass flags
         if pass_number in (1, 2) and passlogfile:
             params.extend([
-                f"-pass", str(pass_number),
+                "-pass", str(pass_number),
                 "-passlogfile", passlogfile,
             ])
 

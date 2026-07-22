@@ -283,7 +283,6 @@ def safe_ffmpeg_run_with_progress(
         unregister_process,
         was_killed_by_cancel,
     )
-    import time
     import tempfile
     import threading
 

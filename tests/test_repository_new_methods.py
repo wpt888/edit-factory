@@ -9,10 +9,8 @@ These tests verify the contract from PLAN 80-01 must_haves.truths:
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

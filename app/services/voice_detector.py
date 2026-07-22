@@ -4,8 +4,6 @@ Detects human voice segments in audio for muting/removal.
 Uses Silero VAD - free, fast, and accurate model.
 """
 import logging
-import subprocess
-import json
 import tempfile
 import threading
 from pathlib import Path

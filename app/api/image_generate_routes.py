@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, UploadFile, File, Form, Depends, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, UploadFile, File, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ from app.api.validators import ALLOWED_IMAGE_MIMES, validate_file_mime_type, val
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.postiz_routes import update_publish_progress, get_publish_progress
+from app.api.postiz_routes import update_publish_progress
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/image-gen", tags=["AI Image Generation"])
@@ -343,7 +343,7 @@ async def generate_image(
                     except (KeyError, IndexError):
                         pass  # Template doesn't use placeholders, that's fine
                     # Always append product description at the end
-                    product_desc = f"\n\n--- PRODUCT INFORMATION ---\n"
+                    product_desc = "\n\n--- PRODUCT INFORMATION ---\n"
                     product_desc += f"Product: {p.get('title', 'N/A')}\n"
                     if p.get("brand"):
                         product_desc += f"Brand: {p['brand']}\n"

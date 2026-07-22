@@ -7,17 +7,14 @@ real network request goes out. base_dir is patched to tmp_path for filesystem
 isolation. Each test completes in < 5 seconds.
 """
 import asyncio
-import gzip
 import hashlib
 import io
 import json
 import os
 import sys
 import tarfile as _tarfile
-import time
 import types
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -321,11 +318,11 @@ class TestDownloadSHA256Mismatch:
         assert error_data.get("stage") == "verify", f"error.stage != 'verify': {error_data}"
 
         installed_path = tmp_path / "ml" / ".installed"
-        assert not installed_path.exists(), f".installed should not exist after sha256 mismatch"
+        assert not installed_path.exists(), ".installed should not exist after sha256 mismatch"
 
         filename = _expected_filename()
         partial_path = tmp_path / "ml" / ".partial" / filename
-        assert not partial_path.exists(), f".partial should be deleted after sha256 mismatch"
+        assert not partial_path.exists(), ".partial should be deleted after sha256 mismatch"
 
 
 class TestDownloadRangeResume:

@@ -4,7 +4,6 @@ See .planning/phases/86-ml-bundle-download-endpoint-ui/86-01-PLAN.md for design.
 """
 import asyncio
 import hashlib
-import io
 import json
 import logging
 import os

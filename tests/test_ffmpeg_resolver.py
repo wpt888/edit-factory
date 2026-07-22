@@ -9,7 +9,6 @@ rather than app.main to allow testing on Python 3.14 where scipy has no wheel.
 app/main.py re-exports _resolve_ffmpeg_path via a def-stub that delegates to
 app.ffmpeg_setup — the resolver logic is identical.
 """
-import os
 import sys
 import shutil
 import stat

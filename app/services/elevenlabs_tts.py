@@ -5,7 +5,6 @@ Generates high-quality voice-over using ElevenLabs API.
 import asyncio
 import os
 import logging
-import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -158,7 +157,7 @@ class ElevenLabsTTS:
         cache_key = {"text": text, "voice_id": self.voice_id, "model_id": self.model_id, "provider": "legacy"}
         cached = cache_lookup(cache_key, "legacy", output_path)
         if cached:
-            logger.info(f"Using cached TTS audio (cost: $0.00)")
+            logger.info("Using cached TTS audio (cost: $0.00)")
             return output_path
 
         # Prepare voice settings
@@ -383,7 +382,7 @@ class ElevenLabsTTS:
         }
         cached = cache_lookup(trimmed_cache_key, "legacy_trimmed", output_path)
         if cached:
-            logger.info(f"Using cached trimmed TTS audio (cost: $0.00)")
+            logger.info("Using cached trimmed TTS audio (cost: $0.00)")
             return output_path, {"silence_removed": remove_silence, "cached": True}
 
         with tempfile.TemporaryDirectory() as temp_dir:

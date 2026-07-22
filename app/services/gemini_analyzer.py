@@ -6,7 +6,6 @@ import os
 import logging
 import base64
 import json
-import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -394,7 +393,6 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         # Select segments until we reach target duration
         selected = []
         total_duration = 0
-        used_times = set()
 
         for seg in all_segments:
             # BUG-3.2: Use float comparison instead of integer set arithmetic

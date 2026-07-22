@@ -16,9 +16,8 @@ Endpoints covered:
   GET  /api/v1/costs
 """
 import io
-import pytest
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------

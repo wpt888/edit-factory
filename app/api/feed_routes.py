@@ -15,11 +15,9 @@ Endpoints:
 Note: Product listing endpoints (GET /feeds/{feed_id}/products and
 GET /feeds/{feed_id}/products/filters) are in product_routes.py.
 """
-import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -29,7 +27,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
-from app.services.feed_parser import parse_feed_xml, upsert_products
+from app.services.feed_parser import parse_feed_xml
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,6 @@ Uses Silero VAD for precise speech detection.
 from __future__ import annotations
 
 import logging
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -351,7 +350,6 @@ class SilenceRemover:
         Detect voice directly in audio file (not video).
         Silero VAD works on any audio, not just from video.
         """
-        import torch
 
         if detector.model is None:
             return []
