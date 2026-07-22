@@ -202,27 +202,37 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                             )}
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
-                            <span
-                              role="button"
-                              tabIndex={0}
+                            <button
+                              type="button"
                               onClick={(e) => handleDeletePipeline(item.pipeline_id, e)}
-                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleDeletePipeline(item.pipeline_id, e); } }}
-                              className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
+                              className="rounded p-1 transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               title="Delete pipeline"
+                              aria-label={`Delete ${item.name || "pipeline"}`}
                             >
                               <Trash2 className="size-3.5" />
-                            </span>
-                            <ChevronRight
-                              className={`size-4 transition-transform cursor-pointer ${
-                                selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
-                              }`}
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded p-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               onClick={() => fetchHistoryScripts(item.pipeline_id)}
-                            />
+                              aria-label={`${selectedHistoryId === item.pipeline_id ? "Collapse" : "Expand"} ${item.name || "pipeline"}`}
+                              aria-expanded={selectedHistoryId === item.pipeline_id}
+                              aria-controls={`history-scripts-${item.pipeline_id}`}
+                            >
+                              <ChevronRight
+                                className={`size-4 transition-transform ${
+                                  selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
+                                }`}
+                              />
+                            </button>
                           </div>
                         </div>
-                        <div
-                          className="flex items-center gap-2 mt-1 cursor-pointer"
+                        <button
+                          type="button"
+                          className="mt-1 flex w-full items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => fetchHistoryScripts(item.pipeline_id)}
+                          aria-expanded={selectedHistoryId === item.pipeline_id}
+                          aria-controls={`history-scripts-${item.pipeline_id}`}
                         >
                           <Badge variant="outline" className="text-xs">{item.provider}</Badge>
                           {(item.generation_job?.status === "queued" || item.generation_job?.status === "processing") && (
@@ -239,13 +249,13 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                           <span className="text-xs text-muted-foreground">
                             {new Date(item.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                           </span>
-                        </div>
+                        </button>
                         <ExpirationWarning expiresAt={item.expires_at} />
                       </div>
 
                       {/* Expanded: show scripts with checkboxes */}
                       {selectedHistoryId === item.pipeline_id && (
-                        <div className="ml-2 pl-3 border-l border-border space-y-2">
+                        <div id={`history-scripts-${item.pipeline_id}`} className="ml-2 pl-3 border-l border-border space-y-2">
                           {historyScriptsLoading ? (
                             <div className="flex items-center justify-center py-4">
                               <Loader2 className="size-4 animate-spin text-muted-foreground" />
