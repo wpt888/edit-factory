@@ -108,7 +108,6 @@ export const ScriptCard = memo(function ScriptCard({
   ttsSeekingRef,
   srtPreviewOpen,
   libraryMatch,
-  pipelineId,
   onScriptChange,
   onDelete,
   onRegenerate,
