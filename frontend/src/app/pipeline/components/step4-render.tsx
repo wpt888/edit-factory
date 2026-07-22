@@ -87,7 +87,89 @@ export function Step4Render({ ctx }: { ctx: any }) {
     generatedYoutubeTitles,
     libraryProjectId,
     pipelineLayout,
+    setStep,
   }: Step4Ctx = ctx;
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+  };
+
+  const requestStopRender = () => {
+    setConfirmDialog({
+      open: true,
+      title: "Stop render?",
+      description: "Are you sure you want to stop all variants that are still rendering or queued?",
+      confirmLabel: "Stop render",
+      variant: "destructive",
+      onConfirm: () => {
+        closeConfirmDialog();
+        handleCancelRender();
+      },
+    });
+  };
+
+  const stopVariant = async (status: VariantStatus) => {
+    // Build job_key matching the backend render_jobs dict key:
+    //   - "N_A" / "N_B" when this card is a Meta visual version
+    //   - "N" for standard (non-Meta) renders
+    // Sending the full job_key ensures Stop targets THIS card only, not the
+    // paired A/B version of the same script.
+    const jobKey = status.visual_version
+      ? `${status.variant_index}_${status.visual_version}`
+      : `${status.variant_index}`;
+    try {
+      await apiPost(`/pipeline/${pipelineId}/cancel/${encodeURIComponent(jobKey)}`, {});
+      setVariantStatuses(prev =>
+        prev.map(v => {
+          const matches = status.visual_version
+            ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
+            : v.variant_index === status.variant_index && !v.visual_version;
+          return matches
+            ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0, queue_position: undefined, eta_seconds: undefined }
+            : v;
+        })
+      );
+      toast.success(
+        status.visual_version
+          ? `Variant ${status.variant_index + 1} (${status.visual_version}) cancelled`
+          : `Variant ${status.variant_index + 1} cancelled`
+      );
+      // If all variants are now done, stop polling.
+      const updatedStatuses = variantStatuses.map(v => {
+        const matches = status.visual_version
+          ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
+          : v.variant_index === status.variant_index && !v.visual_version;
+        return matches
+          ? { ...v, status: "cancelled" as const }
+          : v;
+      });
+      const allDone = updatedStatuses.every(
+        v => v.status === "completed" || v.status === "failed" || v.status === "cancelled" || v.status === "stale"
+      );
+      if (allDone) {
+        setIsRendering(false);
+      }
+    } catch (err) {
+      handleApiError(err, "Failed to cancel variant");
+    }
+  };
+
+  const requestStopVariant = (status: VariantStatus) => {
+    const variantLabel = status.visual_version
+      ? `Variant ${status.variant_index + 1} (${status.visual_version})`
+      : `Variant ${status.variant_index + 1}`;
+    setConfirmDialog({
+      open: true,
+      title: `Stop ${variantLabel}?`,
+      description: "This variant will be cancelled. You can retry it from this screen afterward.",
+      confirmLabel: "Stop variant",
+      variant: "destructive",
+      onConfirm: () => {
+        closeConfirmDialog();
+        void stopVariant(status);
+      },
+    });
+  };
   // Step 4 deliberately stays a plain stacked-card layout (no workspace
   // split/bg-background treatment like steps 1-3) — render progress is a
   // simple list, not an editing surface. Out of scope for the S1 fix pack.
@@ -96,8 +178,11 @@ export function Step4Render({ ctx }: { ctx: any }) {
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Render Progress</h2>
               <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setStep(3)}>
+                  Back to Preview
+                </Button>
                 {isRendering && (
-                  <Button variant="destructive" onClick={handleCancelRender}>
+                  <Button variant="destructive" onClick={requestStopRender}>
                     <X className="size-4 mr-2" />
                     Stop Render
                   </Button>
@@ -194,54 +279,21 @@ export function Step4Render({ ctx }: { ctx: any }) {
                             variant="destructive"
                             size="sm"
                             className="h-7 px-2 text-xs"
-                            onClick={async () => {
-                              // Build job_key matching the backend render_jobs dict key:
-                              //   - "N_A" / "N_B" when this card is a Meta visual version
-                              //   - "N" for standard (non-Meta) renders
-                              // Sending the full job_key ensures Stop targets THIS card
-                              // only, not the paired A/B version of the same script.
-                              const jobKey = status.visual_version
-                                ? `${status.variant_index}_${status.visual_version}`
-                                : `${status.variant_index}`;
-                              try {
-                                await apiPost(`/pipeline/${pipelineId}/cancel/${encodeURIComponent(jobKey)}`, {});
-                                setVariantStatuses(prev =>
-                                  prev.map(v => {
-                                    const matches = status.visual_version
-                                      ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
-                                      : v.variant_index === status.variant_index && !v.visual_version;
-                                    return matches
-                                      ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0, queue_position: undefined, eta_seconds: undefined }
-                                      : v;
-                                  })
-                                );
-                                toast.success(
-                                  status.visual_version
-                                    ? `Variant ${status.variant_index + 1} (${status.visual_version}) cancelled`
-                                    : `Variant ${status.variant_index + 1} cancelled`
-                                );
-                                // If all variants are now done, stop polling
-                                const updatedStatuses = variantStatuses.map(v => {
-                                  const matches = status.visual_version
-                                    ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
-                                    : v.variant_index === status.variant_index && !v.visual_version;
-                                  return matches
-                                    ? { ...v, status: "cancelled" as const }
-                                    : v;
-                                });
-                                const allDone = updatedStatuses.every(
-                                  v => v.status === "completed" || v.status === "failed" || v.status === "cancelled" || v.status === "stale"
-                                );
-                                if (allDone) {
-                                  setIsRendering(false);
-                                }
-                              } catch (err) {
-                                handleApiError(err, "Failed to cancel variant");
-                              }
-                            }}
+                            onClick={() => requestStopVariant(status)}
                           >
                             <X className="size-3 mr-1" />
                             Stop
+                          </Button>
+                        )}
+                        {(status.status === "failed" || status.status === "cancelled") && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => handleRemakeVariant(status.variant_index, status.visual_version)}
+                          >
+                            <RefreshCw className="size-3 mr-1" />
+                            Retry
                           </Button>
                         )}
                         {status.status === "completed" && (
