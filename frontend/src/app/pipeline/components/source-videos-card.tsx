@@ -137,8 +137,19 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               selectedSourceIds.has(sourceVideos[0].id)
                 ? "border-primary/30 bg-primary/5"
                 : "hover:bg-muted/50"
-            }`}
+            } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
             onClick={() => handleSourceToggle(sourceVideos[0].id)}
+            onKeyDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleSourceToggle(sourceVideos[0].id);
+              }
+            }}
+            role="checkbox"
+            aria-checked={selectedSourceIds.has(sourceVideos[0].id)}
+            aria-label={`Select ${sourceVideos[0].name}`}
+            tabIndex={0}
           >
             <Checkbox
               checked={selectedSourceIds.has(sourceVideos[0].id)}
@@ -175,6 +186,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               href={`/segments?video=${encodeURIComponent(sourceVideos[0].id)}`}
               className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
               title={`Edit segments for ${sourceVideos[0].name}`}
+              onClick={(event) => event.stopPropagation()}
             >
               <Scissors className="size-3.5" />
               Edit segments
@@ -194,8 +206,10 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                   />
                   {sourceVideoSearch && (
                     <button
+                      type="button"
                       onClick={() => setSourceVideoSearch("")}
                       className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                      aria-label="Clear source video search"
                     >
                       <X className="size-4" />
                     </button>
@@ -204,16 +218,22 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
               )}
               <div className="flex items-center border rounded-md">
                 <button
+                  type="button"
                   onClick={() => setSourceVideoViewMode("list")}
                   className={`p-2 transition-colors ${sourceVideoViewMode === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   title="List view"
+                  aria-label="Show source videos as a list"
+                  aria-pressed={sourceVideoViewMode === "list"}
                 >
                   <List className="size-4" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => setSourceVideoViewMode("grid")}
                   className={`p-2 transition-colors ${sourceVideoViewMode === "grid" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   title="Grid view"
+                  aria-label="Show source videos as a grid"
+                  aria-pressed={sourceVideoViewMode === "grid"}
                 >
                   <LayoutGrid className="size-4" />
                 </button>
@@ -227,17 +247,29 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                     .map((video: { id: string; name: string; thumbnail_path: string | null; duration: number | null; segments_count: number }) => (
                     <div
                       key={video.id}
-                      className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors ${
+                      className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
                         selectedSourceIds.has(video.id)
                           ? "bg-primary/5 border-primary/30"
                           : "hover:bg-muted/50"
                       }`}
                       onClick={() => handleSourceToggle(video.id)}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleSourceToggle(video.id);
+                        }
+                      }}
+                      role="checkbox"
+                      aria-checked={selectedSourceIds.has(video.id)}
+                      aria-label={`Select ${video.name}`}
+                      tabIndex={0}
                     >
                       <Checkbox
                         checked={selectedSourceIds.has(video.id)}
                         onCheckedChange={() => handleSourceToggle(video.id)}
                         onClick={(e) => e.stopPropagation()}
+                        aria-label={`Select ${video.name}`}
                       />
                       {video.thumbnail_path ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -283,12 +315,23 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                     .map((video: { id: string; name: string; thumbnail_path: string | null; duration: number | null; segments_count: number }) => (
                     <div
                       key={video.id}
-                      className={`relative p-2 rounded-lg border cursor-pointer transition-colors ${
+                      className={`relative p-2 rounded-lg border cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
                         selectedSourceIds.has(video.id)
                           ? "bg-primary/5 border-primary/30"
                           : "hover:bg-muted/50"
                       }`}
                       onClick={() => handleSourceToggle(video.id)}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleSourceToggle(video.id);
+                        }
+                      }}
+                      role="checkbox"
+                      aria-checked={selectedSourceIds.has(video.id)}
+                      aria-label={`Select ${video.name}`}
+                      tabIndex={0}
                     >
                       <div className="absolute top-1 left-1 z-10">
                         <Checkbox
@@ -296,6 +339,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                           onCheckedChange={() => handleSourceToggle(video.id)}
                           onClick={(e) => e.stopPropagation()}
                           className="bg-background/80"
+                          aria-label={`Select ${video.name}`}
                         />
                       </div>
                       <div className="aspect-video rounded overflow-hidden bg-muted mb-1.5">
