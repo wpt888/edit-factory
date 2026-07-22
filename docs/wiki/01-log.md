@@ -44,6 +44,24 @@
   clean. Details:
   [Stale render invalidation + Step 1 failure handling](47-stale-outputs-invalidation-and-step1-retry.md).
 
+## 2026-07-22 - Attention Template Save storage recovery
+
+- Fixed the migration typo that referenced the nonexistent `editai_profiles`
+  relation instead of `public.profiles`; added idempotent migration `057` for
+  deployments where the Attention Templates table was still missing.
+- Attention template repository failures now return a readable 503 instead of
+  escaping CORS as `Failed to fetch`.
+- When the backend has only the public Supabase key, Attention Template CRUD
+  uses the caller's verified access token in a request-scoped repository, so
+  RLS remains enabled without shipping a service-role credential.
+- PostgREST had cached the schema before the new table existed: GET worked, but
+  POST returned an empty 404. Reloading the PostgREST schema with `SIGUSR1`
+  activated the mutation route; future migrations also emit
+  `NOTIFY pgrst, 'reload schema'`.
+- Verification: 21 related Attention tests passed, focused route suite 7/7,
+  Ruff clean, and no diagnostic row persisted. Details:
+  [Attention Templates Save recovery](45-attention-template-save-storage-recovery.md).
+
 ## 2026-07-22 - EF-1: pipeline/progress/runner ownership checks + overlay SSRF fix
 
 - Every `pipeline_routes.py` route touching a `pipeline_id` now goes through
@@ -82,6 +100,25 @@
   `frontend/tests/features/pipeline/captions-smart-schedule.spec.ts` (1
   passed). Ruff clean. Details:
   [Captions → Smart Schedule chain fix](46-captions-smart-schedule-chain-fix.md).
+
+## 2026-07-22 - Audit remediation follow-up: pipeline scripts IDOR + PiP overlay silent failure
+
+- `PUT /pipeline/{pipeline_id}/scripts` loaded the pipeline via
+  `_get_pipeline_or_load()` without an ownership check — any authenticated
+  profile could overwrite another profile's scripts with a 200. Switched to
+  `_require_owned_pipeline()`, matching the other 54 ownership-checked
+  routes from EF-1. `tests/test_pipeline_idor.py` now executes the route
+  (profile A owns the pipeline, profile B calls it) instead of only
+  asserting the auth dependency is present, so this class of regression
+  fails the test instead of shipping quietly again.
+- `assembly_service.assemble_video()` wrapped `apply_pip_overlay()` in a
+  bare `except Exception: logger.warning(...)`, so an `OverlaySourceError`
+  (or any other overlay failure) produced a render marked successful with
+  the PiP image silently missing. The `try/except` is removed; the error
+  now propagates to the caller, matching how `apply_attention_timeline()`
+  and `mix_attention_sfx()` already behave in the same file.
+- Verification: `tests/test_pipeline_idor.py` (3 passed),
+  `tests/test_assembly_service.py` (31 passed).
 
 ## 2026-07-21 - Main synced with origin: July WIP committed, Studio fixes merged, pushed
 

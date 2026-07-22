@@ -119,3 +119,34 @@ EF-4 a rulat curat în 16 min.
   commit.
 - Fantoma `task-mrv8zet2` (EF-3 mort) rămâne „running" în bookkeeping-ul
   companion — cosmetic, munca e comisă.
+
+## Addendum — fixe de verificare post-audit (2026-07-22, aceeași zi)
+
+O trecere de verificare pe edit_factory, separată de goal-urile EF-1…EF-5, a
+găsit și reparat două probleme rămase:
+
+1. **IDOR rezidual pe `PUT /pipeline/{pipeline_id}/scripts`** — EF-1 a
+   convertit 54 de rute la `_require_owned_pipeline()`, dar ruta de update
+   scripts a rămas pe `_get_pipeline_or_load()` fără verificare de
+   `profile_id`, deci un profil putea suprascrie scripturile altui profil cu
+   200. Corectat cu același helper; `tests/test_pipeline_idor.py` acum
+   execută ruta (nu doar verifică prezența dependency-ului de auth) și
+   confirmă respingerea cross-profil.
+2. **PiP overlay eșuat silențios** — `assembly_service.assemble_video()`
+   înghițea `OverlaySourceError` (și orice altă eroare) dintr-un
+   `except Exception: logger.warning(...)`, deci render-ul raporta succes cu
+   imaginea PiP absentă. Eroarea propagă acum, la fel ca
+   `apply_attention_timeline()`/`mix_attention_sfx()` din același fișier.
+
+De asemenea a fost finalizată curățarea reziduului EF-5 abandonat (menționat
+la punctul „Rămas de făcut" de mai sus): sweep-ul ruff-autofix pe ~35 fișiere
+`app/*.py` + ~15 `tests/*.py` a fost revertat (fișiere pur mecanice), cele 3
+`eslint-disable` la nivel de fișier au fost eliminate din
+`pipeline/page.tsx` / `pipeline-caption-generator.tsx` / `pipeline-schedule.tsx`,
+și cele 3 dependency array modificate au fost restaurate la valorile din
+HEAD. Fișierele cu hunk-uri substanțiale (attention templates RLS-scoped
+repo access, attention-media upload/serve, overlay_renderer base-dir fix)
+au fost lăsate neatinse.
+
+Detalii commit-uri: vezi `01-log.md`, intrarea „Audit remediation
+follow-up: pipeline scripts IDOR + PiP overlay silent failure".
