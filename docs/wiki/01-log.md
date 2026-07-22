@@ -1,5 +1,29 @@
 # Engineering Change Log
 
+## 2026-07-22 - EF-3: stale render invalidation + Step 1 failure handling
+
+- Every route that can change a variant's rendered output (scripts, source
+  selection, composition/matches, attention timeline/template/selection, meta
+  multiplication, subtitle rotation/overrides, voice-over regeneration) now
+  flips a completed render job to `stale` ("Needs re-render") and the linked
+  library clip's `final_status` to match, reusing the existing preview
+  fingerprint keying instead of a new tracking mechanism.
+- `buffer_routes.py`, `postiz_routes.py`, and `blipost_platform_routes.py`
+  reject publishing a clip whose `final_status` isn't `completed` with 409.
+- `_run_pipeline_generation_job` referenced an undefined `deduplicate` in its
+  generic-failure branch, so a non-auth Step 1 provider error crashed after
+  the refund instead of marking the job `failed` — job was stuck in
+  `processing` forever. Fixed.
+- `_db_save_pipeline` / `_db_update_render_jobs` / `_db_update_async_jobs` and
+  `assembly_routes.py`'s job writers now refresh `expires_at` on every write
+  (30-day pipeline / 7-day assembly rolling retention), so an actively-edited
+  pipeline no longer expires mid-session.
+- Step 4 shows a "Needs re-render" badge/alert and keeps download/publish
+  gated on `completed`; Pipeline History warns when `expires_at` is within 3
+  days. New tests: `tests/test_pipeline_invalidation.py` (4 passed). Ruff
+  clean. Details:
+  [Stale render invalidation + Step 1 failure handling](47-stale-outputs-invalidation-and-step1-retry.md).
+
 ## 2026-07-22 - EF-1: pipeline/progress/runner ownership checks + overlay SSRF fix
 
 - Every `pipeline_routes.py` route touching a `pipeline_id` now goes through
