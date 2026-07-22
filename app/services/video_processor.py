@@ -14,6 +14,8 @@ import threading
 import cv2
 import numpy as np
 from scipy.fftpack import dct
+from app.services.srt_validator import sanitize_srt_full as _sanitize_srt_full
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 
 # NOTE: .env loading is handled by pydantic-settings in app/config.py.
 # Do NOT call load_dotenv() here — it creates order-sensitive env state divergence.
@@ -73,9 +75,6 @@ def refresh_gemini_availability() -> bool:
             pass
     GEMINI_AVAILABLE = bool(_key and len(_key) > 10)
     return GEMINI_AVAILABLE
-
-from app.services.srt_validator import sanitize_srt_full as _sanitize_srt_full
-from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +710,7 @@ class VideoEditor:
         Returns:
             Tuple (output_path, voice_segments_info)
         """
-        from .voice_detector import VoiceDetector, mute_voice_segments
+        from .voice_detector import mute_voice_segments
 
         video_path = Path(video_path)
         output_path = self.output_dir / f"{output_name}_voice_muted.mp4"
@@ -797,7 +796,7 @@ class VideoEditor:
                 logger.error(f"Error details: {'; '.join(error_lines[:3])}")
             else:
                 # Log last 5 lines of stderr
-                last_lines = [l for l in stderr.split('\n') if l.strip()][-5:]
+                last_lines = [line for line in stderr.split('\n') if line.strip()][-5:]
                 logger.error(f"FFmpeg output: {'; '.join(last_lines)}")
 
             raise RuntimeError(f"FFmpeg {operation} failed: {error_lines[0] if error_lines else stderr[-500:]}")
@@ -2076,7 +2075,6 @@ class VideoProcessorService:
 
             # STEP 3: Analyze secondary videos
             report_progress("Analyzing secondary videos")
-            secondary_analyzers = {}
             secondary_segments_by_keyword = {}
 
             for sv in secondary_videos:

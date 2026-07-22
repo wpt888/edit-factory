@@ -36,12 +36,12 @@ from app.utils import normalize_path
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
 from app.services.segment_transforms import SegmentTransform
 
-TARGET_FPS = 30  # All segments normalized to this frame rate before concat
 from app.services.srt_validator import sanitize_srt_full
+from app.repositories.factory import get_repository
+
+TARGET_FPS = 30  # All segments normalized to this frame rate before concat
 
 logger = logging.getLogger(__name__)
-
-from app.repositories.factory import get_repository
 
 
 # F4: transparent scoring weights per preset. Values are literals — the whole

@@ -16,8 +16,8 @@ from app.ffmpeg_setup import _setup_ffmpeg_path
 
 _setup_ffmpeg_path()
 
-from app.api.library_routes import _render_with_preset
-from app.services.subtitle_rotation import (
+from app.api.library_routes import _render_with_preset  # noqa: E402 -- after ffmpeg path setup
+from app.services.subtitle_rotation import (  # noqa: E402 -- after ffmpeg path setup
     NO_SUBTITLES_PRESET_ID,
     assigned_preset_id,
     regroup_srt_for_variant,

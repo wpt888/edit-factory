@@ -16,6 +16,7 @@ import httpx
 from jwt.exceptions import PyJWTError
 
 from app.config import get_settings
+from app.repositories.factory import get_repository as _get_repo
 
 logger = logging.getLogger(__name__)
 _DEV_PROFILE_ID = "00000000-0000-0000-0000-000000000000"
@@ -250,9 +251,6 @@ def require_role(required_role: str):
             )
         return user
     return role_checker
-
-
-from app.repositories.factory import get_repository as _get_repo
 
 
 def ensure_default_profile(repo, user: AuthUser) -> dict:

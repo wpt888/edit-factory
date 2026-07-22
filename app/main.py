@@ -1,6 +1,8 @@
 """
 Edit Factory - FastAPI Application
 """
+# ruff: noqa: E402 -- ordering: FFmpeg PATH must be set before importing the FastAPI/route
+# stack below, some of which probe FFmpeg/NVENC at import time.
 import asyncio
 import os
 import sys

@@ -12,7 +12,7 @@ import subprocess
 import json
 import mimetypes
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -50,6 +50,12 @@ from app.services.studio_metering import (
     settle_metering_record,
 )
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
+from app.services.ffmpeg_semaphore import (
+    acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
+    is_nvenc_available, get_prep_codec_params, safe_ffmpeg_run_with_progress,
+)
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 import logging
 
@@ -71,10 +77,6 @@ _MAX_CANCELLED = 200
 
 # ============== FFmpeg CONCURRENCY LIMIT ==============
 # Global semaphore shared across ALL routes (library, pipeline, product)
-from app.services.ffmpeg_semaphore import (
-    acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
-    is_nvenc_available, get_prep_codec_params, safe_ffmpeg_run_with_progress,
-)
 # Keep legacy name for backwards compat with product_generate_routes import
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
 
@@ -202,9 +204,6 @@ def cleanup_project_lock(project_id: str):
 _generation_progress: Dict[str, dict] = {}
 _progress_lock = threading.Lock()
 _MAX_PROGRESS_ENTRIES = 500
-
-from app.repositories.factory import get_repository
-from app.repositories.models import QueryFilters
 
 
 def _evict_old_progress():
@@ -2577,7 +2576,6 @@ async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
             clip["project_name"] = project_names.get(clip.get("project_id"), "Unknown")
             # Calculate days remaining before permanent deletion
             if clip.get("deleted_at"):
-                from datetime import timedelta
                 deleted = datetime.fromisoformat(clip["deleted_at"].replace("Z", "+00:00"))
                 days_elapsed = (datetime.now(timezone.utc) - deleted).days
                 clip["days_remaining"] = max(0, 30 - days_elapsed)

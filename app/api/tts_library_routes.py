@@ -26,6 +26,8 @@ from app.services.studio_metering import (
     settle_metering_record,
 )
 from app.services.tts_library_service import get_tts_library_service
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tts-library", tags=["TTS Library"])
@@ -33,9 +35,6 @@ router = APIRouter(prefix="/tts-library", tags=["TTS Library"])
 _PROCESS_INSTANCE_ID = uuid.uuid4().hex
 _TTS_LIBRARY_JOB_TYPE = "tts_library_asset"
 _TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "denied"})
-
-from app.repositories.factory import get_repository
-from app.repositories.models import QueryFilters
 
 
 class _TTSLibraryCancelled(Exception):

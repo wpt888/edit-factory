@@ -28,6 +28,7 @@ from app.models import (
     JobStatus, JobResponse, HealthResponse, VideoInfo, VideoSegment
 )
 from app.services.video_processor import VideoProcessorService
+from app.services.job_storage import get_job_storage
 
 import logging
 
@@ -35,8 +36,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Job storage - unified Supabase storage (with in-memory fallback)
-from app.services.job_storage import get_job_storage
-
 # All jobs now use get_job_storage() for persistent storage
 # This provides: Supabase persistence, automatic fallback to memory if unavailable
 

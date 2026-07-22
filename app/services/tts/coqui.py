@@ -8,9 +8,12 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from .base import TTSService, TTSVoice, TTSResult
+
+if TYPE_CHECKING:
+    from TTS.api import TTS
 
 logger = logging.getLogger(__name__)
 

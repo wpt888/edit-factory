@@ -6,7 +6,7 @@ cv2.VideoCapture is mocked where needed.
 """
 import pytest
 import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -132,7 +132,6 @@ def test_segment_is_visually_similar_different():
 
 def test_segment_is_visually_similar_mixed():
     """When more than half of comparisons are similar, returns True."""
-    from app.services.video_processor import VideoSegment
     h_same = np.ones(64, dtype=bool)
     # 3 identical hashes + 1 different hash
     h_diff = np.zeros(64, dtype=bool)
@@ -254,7 +253,6 @@ def test_calculate_contrast_score_uniform(mock_video_analyzer):
 
 def test_video_analyzer_init_stores_path(tmp_path):
     """VideoAnalyzer.__init__ stores video_path correctly."""
-    import cv2
     dummy_video = tmp_path / "video.mp4"
     dummy_video.touch()
     with patch("cv2.VideoCapture") as mock_cap_cls:
@@ -306,7 +304,6 @@ def test_processor_service_init(tmp_path):
 
 def test_compute_phash_returns_boolean_array():
     """compute_phash returns a boolean numpy array of size hash_size^2."""
-    import cv2
     from app.services.video_processor import compute_phash
     # Use a real numpy frame that cv2.resize and cv2.cvtColor can process
     frame = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)

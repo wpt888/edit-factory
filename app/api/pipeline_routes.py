@@ -17,6 +17,7 @@ import logging
 import math
 import ntpath
 import threading
+import time as _time_mod
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Literal, Optional, Dict, Tuple
@@ -595,8 +596,6 @@ def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
 
 
 # Cancel infrastructure for pipeline renders
-import time as _time_mod
-
 def _safe_relative_path(raw_path: Optional[str]) -> Optional[str]:
     """Strip absolute path to output_dir-relative path for client consumption."""
     if not raw_path:
