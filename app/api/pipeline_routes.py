@@ -5015,7 +5015,7 @@ async def _run_pipeline_generation_job(
                 "The selected AI provider rejected its credentials. "
                 "Update the API key in Setup, then try generating again."
             )
-        elif deduplicate:
+        else:
             user_error = "Pipeline generation service unavailable. Please try again later."
         _update_generation_job(
             pipeline_id,
