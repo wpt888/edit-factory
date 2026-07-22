@@ -16,10 +16,9 @@ import json as _json
 import logging
 import math
 import ntpath
-import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Literal, Optional, Dict, Tuple
 from pathlib import Path
 
@@ -107,6 +106,84 @@ logger = logging.getLogger(__name__)
 
 _SCRIPT_PROVIDERS = frozenset({"gemini", "claude", "codex"})
 _CODEX_MODEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$"
+_PIPELINE_RETENTION_DAYS = 30
+_STALE_RENDER_STATUS = "stale"
+
+
+def _pipeline_expiry_timestamp() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=_PIPELINE_RETENTION_DAYS)).isoformat()
+
+
+def _refresh_pipeline_expiry(pipeline: dict) -> str:
+    """Extend the rolling history-retention window after pipeline activity."""
+    expires_at = _pipeline_expiry_timestamp()
+    pipeline["expires_at"] = expires_at
+    return expires_at
+
+
+def _render_job_matches_variant(job_key: Any, variant_index: int) -> bool:
+    key = str(job_key)
+    return key == str(variant_index) or key.startswith(f"{variant_index}_")
+
+
+def _invalidate_render_jobs(
+    pipeline: dict,
+    *,
+    reason: str,
+    variant_indices: Optional[set[int]] = None,
+    preview_keys: Optional[set[str]] = None,
+) -> set[str]:
+    """Mark completed outputs stale when an input covered by their fingerprint changes.
+
+    The successful render fingerprint and file path remain available for audit/debug,
+    but the status is no longer publishable or eligible for cache reuse.
+    """
+    invalidated_clip_ids: set[str] = set()
+    render_jobs = pipeline.get("render_jobs") or {}
+    normalized_preview_keys = {str(key) for key in (preview_keys or set())}
+
+    for job_key, job in render_jobs.items():
+        if not isinstance(job, dict) or job.get("status") != "completed":
+            continue
+        matches = variant_indices is None and not normalized_preview_keys
+        if variant_indices is not None:
+            matches = any(
+                _render_job_matches_variant(job_key, variant_index)
+                for variant_index in variant_indices
+            )
+        if normalized_preview_keys:
+            key = str(job_key)
+            for preview_key in normalized_preview_keys:
+                if key == preview_key or (
+                    "_" not in preview_key and key.startswith(f"{preview_key}_")
+                ):
+                    matches = True
+                    break
+        if not matches:
+            continue
+
+        job["status"] = _STALE_RENDER_STATUS
+        job["progress"] = 0
+        job["current_step"] = "Needs re-render"
+        job["invalidated_at"] = _job_timestamp()
+        job["invalidation_reason"] = reason
+        clip_id = job.get("clip_id")
+        if isinstance(clip_id, str) and clip_id:
+            invalidated_clip_ids.add(clip_id)
+
+    return invalidated_clip_ids
+
+
+def _invalidate_library_clips(clip_ids: set[str]) -> None:
+    """Make linked stale outputs fail the existing final_status publish gates."""
+    if not clip_ids:
+        return
+    repo = get_repository()
+    for clip_id in clip_ids:
+        try:
+            repo.update_clip(clip_id, {"final_status": _STALE_RENDER_STATUS})
+        except Exception as exc:
+            logger.warning("Failed to invalidate library clip %s: %s", clip_id, exc)
 
 
 def _validate_script_provider(provider: str) -> None:
@@ -1043,6 +1120,7 @@ def _upsert_pipeline_with_schema_fallback(repo, row: dict) -> None:
 
 def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
     """Upsert full pipeline state to editai_pipelines. Graceful degradation with retry."""
+    expires_at = _refresh_pipeline_expiry(pipeline_dict)
     # PRE-PERSIST INVARIANT: no audio_path under temp/ may be persisted in DB.
     # This is a safety net on top of upstream fixes (assembly_service persists
     # newly generated TTS to the library before returning), so older code paths,
@@ -1109,6 +1187,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "subtitle_settings_by_key": subtitle_overrides_json,
                 "attention_timeline": attention_timeline_json,
                 "template_settings": copy.deepcopy(pipeline_dict.get("template_settings") or {}),
+                "expires_at": expires_at,
             }
             try:
                 _upsert_pipeline_with_schema_fallback(repo, row)
@@ -1162,7 +1241,10 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
     try:
         repo = get_repository()
         render_jobs_json = {str(k): v for k, v in render_jobs.items()}
-        repo.update_pipeline(pipeline_id, {"render_jobs": render_jobs_json})
+        repo.update_pipeline(
+            pipeline_id,
+            {"render_jobs": render_jobs_json, "expires_at": _pipeline_expiry_timestamp()},
+        )
         logger.debug(f"Pipeline {pipeline_id} render_jobs updated in DB")
     except Exception as e:
         logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
@@ -1701,6 +1783,7 @@ def _db_update_async_jobs(
         updates["tts_jobs"] = {str(k): v for k, v in dict(tts_jobs).items()}
     if not updates:
         return
+    updates["expires_at"] = _pipeline_expiry_timestamp()
     try:
         get_repository().update_pipeline(pipeline_id, updates)
     except Exception as e:
@@ -3031,6 +3114,7 @@ class PipelineListItem(BaseModel):
     variant_count: int
     keyword_count: int
     created_at: str
+    expires_at: Optional[str] = None
     target_script_duration: Optional[float] = None
     generation_job: Dict[str, Any] = Field(default_factory=dict)
 
@@ -3224,7 +3308,7 @@ async def list_pipelines(
         if repo:
             select_columns = (
                 "id, name, idea, provider, variant_count, keyword_count, "
-                "created_at, target_script_duration, generation_job"
+                "created_at, expires_at, target_script_duration, generation_job"
             )
             try:
                 result = repo.list_pipelines(
@@ -3265,6 +3349,7 @@ async def list_pipelines(
                         variant_count=row.get("variant_count", 0),
                         keyword_count=row.get("keyword_count", 0),
                         created_at=row.get("created_at", ""),
+                        expires_at=row.get("expires_at"),
                         target_script_duration=row.get("target_script_duration"),
                         generation_job=row.get("generation_job") or {},
                     ))
@@ -3289,6 +3374,7 @@ async def list_pipelines(
             variant_count=p.get("variant_count", 0),
             keyword_count=p.get("keyword_count", 0),
             created_at=p.get("created_at", ""),
+            expires_at=p.get("expires_at"),
             target_script_duration=p.get("target_script_duration"),
             generation_job=p.get("generation_job") or {},
         ))
@@ -3314,10 +3400,17 @@ async def update_pipeline_template_settings(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     with _get_pipeline_state_lock(pipeline_id):
+        settings_changed = pipeline.get("template_settings") != settings
         pipeline["template_settings"] = settings
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Pipeline settings changed")
+            if settings_changed
+            else set()
+        )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {"status": "saved", "schema_version": 1}
 
 
@@ -3707,19 +3800,21 @@ async def update_source_selection(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    with _pipelines_lock:
+    with _get_pipeline_state_lock(pipeline_id):
+        selection_changed = pipeline.get("source_video_ids", []) != request.source_video_ids
         pipeline["source_video_ids"] = request.source_video_ids
-        _pipelines[pipeline_id] = pipeline
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Source selection changed")
+            if selection_changed
+            else set()
+        )
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
 
     # Persist to DB — gracefully handle missing column (migration 021 not yet applied)
-    db_persisted = False
-    try:
-        repo = get_repository()
-        if repo:
-            repo.update_pipeline(pipeline_id, {"source_video_ids": request.source_video_ids})
-            db_persisted = True
-    except Exception as e:
-        logger.warning(f"Failed to save source selection for {pipeline_id}: {e}")
+    _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
+    db_persisted = True
 
     return {"source_video_ids": request.source_video_ids, "db_persisted": db_persisted}
 
@@ -3932,12 +4027,15 @@ async def update_attention_timeline(
         }
         timelines[preview_key] = document
         pipeline["attention_timeline"] = timelines
+        invalidated_clip_ids = _invalidate_render_jobs(
+            pipeline,
+            reason="Attention timeline changed",
+            preview_keys={preview_key},
+        )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-        try:
-            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
-        except Exception:
-            _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return document
 
 
@@ -4007,12 +4105,15 @@ async def apply_attention_template(
         document = {"revision": current_revision + 1, "cues": cues}
         timelines[preview_key] = document
         pipeline["attention_timeline"] = timelines
+        invalidated_clip_ids = _invalidate_render_jobs(
+            pipeline,
+            reason="Attention template applied",
+            preview_keys={preview_key},
+        )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-        try:
-            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
-        except Exception:
-            _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return document
 
 
@@ -4037,14 +4138,18 @@ async def update_attention_selection(
     }
     with _get_pipeline_state_lock(pipeline_id):
         timelines = dict(pipeline.get("attention_timeline") or {})
+        selection_changed = timelines.get(ATTENTION_SELECTION_KEY) != selection
         timelines[ATTENTION_SELECTION_KEY] = selection
         pipeline["attention_timeline"] = timelines
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Attention selection changed")
+            if selection_changed
+            else set()
+        )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-        try:
-            get_repository().update_pipeline(pipeline_id, {"attention_timeline": timelines})
-        except Exception:
-            _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return selection
 
 
@@ -4075,11 +4180,19 @@ async def update_meta_multiplication(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    with _pipelines_lock:
+    with _get_pipeline_state_lock(pipeline_id):
+        meta_changed = bool(pipeline.get("meta_multiplication", True)) != bool(request.enabled)
         pipeline["meta_multiplication"] = bool(request.enabled)
-        _pipelines[pipeline_id] = pipeline
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Meta multiplication changed")
+            if meta_changed
+            else set()
+        )
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
 
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {"meta_multiplication": bool(request.enabled)}
 
 
@@ -4174,12 +4287,22 @@ async def update_subtitle_rotation(
     with _get_pipeline_state_lock(pipeline_id):
         settings = copy.deepcopy(pipeline.get("template_settings") or {})
         subtitles = settings.setdefault("subtitles", {})
+        subtitle_selection_changed = (
+            subtitles.get("rotation") != rotation
+            or subtitles.get("variantTemplates") != variant_templates
+        )
         subtitles["rotation"] = rotation
         subtitles["variantTemplates"] = variant_templates
         pipeline["template_settings"] = settings
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Subtitle template selection changed")
+            if subtitle_selection_changed
+            else set()
+        )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {**rotation, "variantTemplates": variant_templates}
 
 
@@ -4209,12 +4332,21 @@ async def update_subtitle_overrides(
         if not isinstance(key, str) or not _key_pattern.match(key):
             raise HTTPException(status_code=400, detail=f"Invalid override key: {key!r}")
 
-    with _pipelines_lock:
+    with _get_pipeline_state_lock(pipeline_id):
         # Empty dict from the client means "clear all overrides"
-        pipeline["subtitle_settings_by_key"] = dict(request.overrides) if request.overrides else {}
-        _pipelines[pipeline_id] = pipeline
+        overrides = dict(request.overrides) if request.overrides else {}
+        overrides_changed = pipeline.get("subtitle_settings_by_key", {}) != overrides
+        pipeline["subtitle_settings_by_key"] = overrides
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(pipeline, reason="Subtitle styling changed")
+            if overrides_changed
+            else set()
+        )
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
 
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {"overrides": pipeline["subtitle_settings_by_key"]}
 
 
@@ -4253,6 +4385,13 @@ async def update_pipeline_scripts(
         # Invalidate TTS and preview caches for scripts that changed
         # Compare cleaned text (tags stripped) — tag-only changes don't invalidate TTS
         old_scripts = pipeline.get("scripts", [])
+        changed_render_variants = {
+            index
+            for index in range(max(len(old_scripts), len(request.scripts)))
+            if index >= len(old_scripts)
+            or index >= len(request.scripts)
+            or _stable_hash(str(old_scripts[index])) != _stable_hash(str(request.scripts[index]))
+        }
         tts_previews = pipeline.setdefault("tts_previews", {})
         previews = pipeline.setdefault("previews", {})
         for i, new_script in enumerate(request.scripts):
@@ -4297,25 +4436,15 @@ async def update_pipeline_scripts(
         for k in orphan_seg_keys:
             segment_usage.pop(k, None)
 
+        invalidated_clip_ids = _invalidate_render_jobs(
+            pipeline,
+            reason="Script changed",
+            variant_indices=changed_render_variants,
+        )
+
     # Persist to DB — convert int keys to strings for JSONB compatibility
-    try:
-        repo = get_repository()
-        if repo:
-            tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
-            previews_json = {str(k): v for k, v in pipeline.get("previews", {}).items()}
-            segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
-            pipeline_update = {
-                "scripts": request.scripts,
-                "variant_count": len(request.scripts),
-                "tts_previews": tts_previews_json,
-                "previews": previews_json,
-                "segment_usage": segment_usage_json,
-            }
-            if request.script_names is not None:
-                pipeline_update["script_names"] = pipeline["script_names"]
-            repo.update_pipeline(pipeline_id, pipeline_update)
-    except Exception as e:
-        logger.warning(f"Failed to update scripts for pipeline {pipeline_id} in DB: {e}")
+    _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
 
     logger.info(
         f"[Profile {profile.profile_id}] Updated scripts for pipeline {pipeline_id} "
@@ -4345,12 +4474,7 @@ async def update_pipeline_script_names(
     with _pipelines_lock:
         _pipelines[pipeline_id] = pipeline
 
-    try:
-        repo = get_repository()
-        if repo:
-            repo.update_pipeline(pipeline_id, {"script_names": request.script_names})
-    except Exception as e:
-        logger.warning(f"Failed to update script names for pipeline {pipeline_id} in DB: {e}")
+    _db_save_pipeline(pipeline_id, pipeline)
 
     return {
         "status": "updated",
@@ -4574,6 +4698,7 @@ async def regenerate_script(
 
         # Update pipeline state
         with _get_pipeline_state_lock(pipeline_id):
+            script_changed = _stable_hash(str(pipeline["scripts"][variant_index])) != output_fingerprint
             pipeline["scripts"][variant_index] = new_script
             if body.provider == "codex":
                 pipeline["codex_model"] = body.codex_model
@@ -4593,10 +4718,21 @@ async def regenerate_script(
             if variant_index in previews:
                 del previews[variant_index]
 
+            invalidated_clip_ids = (
+                _invalidate_render_jobs(
+                    pipeline,
+                    reason="Script regenerated",
+                    variant_indices={variant_index},
+                )
+                if script_changed
+                else set()
+            )
+
             pipeline_snapshot = dict(pipeline)
 
         # Persist to DB
         _db_save_pipeline(pipeline_id, pipeline_snapshot)
+        _invalidate_library_clips(invalidated_clip_ids)
 
         metering["output_persisted"] = True
         metering["state"] = "output_persisted"
@@ -4730,13 +4866,7 @@ async def rename_pipeline(
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     pipeline["name"] = request.name
-
-    try:
-        repo = get_repository()
-        if repo:
-            repo.update_pipeline(pipeline_id, {"name": request.name})
-    except Exception as e:
-        logger.warning(f"Failed to update name for pipeline {pipeline_id} in DB: {e}")
+    _db_save_pipeline(pipeline_id, pipeline)
 
     return {"status": "updated", "pipeline_id": pipeline_id, "name": request.name}
 
@@ -4764,14 +4894,7 @@ async def approve_tts_variant(
     tts_data = tts_previews.get(key) or tts_previews.get(variant_index)
     tts_data["approved"] = request.approved
 
-    # Persist to DB
-    try:
-        repo = get_repository()
-        if repo:
-            tts_previews_json = {str(k): v for k, v in dict(tts_previews).items()}
-            repo.update_pipeline(pipeline_id, {"tts_previews": tts_previews_json})
-    except Exception as e:
-        logger.warning(f"Failed to persist TTS approval for pipeline {pipeline_id}: {e}")
+    _db_save_pipeline(pipeline_id, pipeline)
 
     return {"status": "updated", "pipeline_id": pipeline_id, "variant_index": variant_index, "approved": request.approved}
 
@@ -5333,9 +5456,15 @@ async def adopt_library_tts(
             previews.pop(variant_index, None)
             previews.pop(str(variant_index), None)
             logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS changed via library)")
+        invalidated_clip_ids = _invalidate_render_jobs(
+            pipeline,
+            reason="Voice-over changed",
+            variant_indices={variant_index},
+        )
 
     # Persist to DB (outside lock)
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
 
     logger.info(
         f"[Profile {profile.profile_id}] Adopted library TTS asset {request.asset_id} "
@@ -5572,6 +5701,11 @@ async def _generate_variant_tts_work(
                     pipeline["tts_previews"].pop(str(variant_index), None)
                 cancelled_after_generation = True
             else:
+                invalidated_clip_ids = _invalidate_render_jobs(
+                    pipeline,
+                    reason="Voice-over regenerated",
+                    variant_indices={variant_index},
+                )
                 live_metering = live_job.get("metering")
                 if isinstance(live_metering, dict):
                     live_metering["output_persisted"] = True
@@ -5592,6 +5726,7 @@ async def _generate_variant_tts_work(
             f"audio_path={pipeline['tts_previews'][variant_index].get('audio_path')}, duration={audio_duration:.2f}s"
         )
         _db_save_pipeline(pipeline_id, pipeline)
+        _invalidate_library_clips(invalidated_clip_ids)
 
         return PipelineTtsResponse(
             status="ok",
@@ -6341,6 +6476,13 @@ async def preview_variant(
             pipeline.setdefault("segment_usage", {})[preview_key] = used_segment_ids
 
             # Store preview result in pipeline state
+            existing_preview = pipeline["previews"].get(preview_key)
+            if existing_preview is None and normalized_visual_version is None:
+                existing_preview = pipeline["previews"].get(variant_index)
+            preview_changed = (
+                not isinstance(existing_preview, dict)
+                or existing_preview.get("preview_data") != preview_data
+            )
             pipeline["previews"][preview_key] = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "elevenlabs_model": elevenlabs_model,
@@ -6348,6 +6490,15 @@ async def preview_variant(
                 "meta_platform": meta_platform,
                 "preview_data": preview_data
             }
+            invalidated_clip_ids = (
+                _invalidate_render_jobs(
+                    pipeline,
+                    reason="Preview composition changed",
+                    preview_keys={preview_key},
+                )
+                if preview_changed
+                else set()
+            )
 
             # Persist SRT content into tts_previews so Step 3 render can reuse it
             # without calling ElevenLabs a second time just to get subtitle timestamps.
@@ -6380,6 +6531,7 @@ async def preview_variant(
 
         # Persist to DB (outside lock — DB I/O should not hold the state lock)
         _db_save_pipeline(pipeline_id, pipeline)
+        _invalidate_library_clips(invalidated_clip_ids)
 
         if preview_tts_metered:
             await _settle_tts_metering(
@@ -8475,12 +8627,12 @@ async def get_pipeline_status(
                 delivered=False,
             )
 
-    # Enforce 30-day TTL
-    created_at = pipeline.get("created_at", "")
-    if created_at:
+    # Enforce the rolling history TTL. Edits extend expires_at by 30 days.
+    expires_at = pipeline.get("expires_at")
+    if expires_at:
         try:
-            created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            if (datetime.now(timezone.utc) - created_dt).days > 30:
+            expires_dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) >= expires_dt:
                 raise HTTPException(status_code=404, detail="Pipeline expired")
         except (ValueError, TypeError):
             pass  # Can't parse date, skip TTL check
@@ -8881,7 +9033,7 @@ async def sync_pipeline_to_library(
                     "description": f"Auto-generated from pipeline {pipeline_id}",
                     "status": "completed",
                 })
-            except Exception as create_err:
+            except Exception:
                 # Race: another worker created it between the lookup and insert.
                 _retry_proj = repo.get_project_by_name(profile.profile_id, pipeline_name)
                 if _retry_proj:
@@ -9338,14 +9490,25 @@ async def save_matches(
                 detail=f"No preview exists for variant {preview_key} — generate a preview first",
             )
         pd = entry["preview_data"]
+        matches_changed = pd.get("matches") != body.matches
         pd["matches"] = body.matches
         matched = sum(1 for m in body.matches if m.get("segment_id"))
         pd["matched_count"] = matched
         pd["unmatched_count"] = len(body.matches) - matched
         entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(
+                pipeline,
+                reason="Timeline matches changed",
+                preview_keys={preview_key},
+            )
+            if matches_changed
+            else set()
+        )
 
     # Persist outside the lock (DB I/O should not hold the state lock)
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {
         "status": "saved",
         "preview_key": preview_key,
@@ -9514,11 +9677,17 @@ async def save_composition(
             )
 
         preview_data = entry["preview_data"]
+        music_settings = body.music.model_dump() if body.music else None
+        composition_changed = any((
+            preview_data.get("video_timeline", preview_data.get("timeline")) != normalized_timeline,
+            preview_data.get("default_transition") != default_transition,
+            preview_data.get("music") != music_settings,
+        ))
         preview_data["video_timeline"] = normalized_timeline
         preview_data["timeline"] = normalized_timeline
         preview_data["default_transition"] = default_transition
         # Music travels with every composition save (like default_transition).
-        preview_data["music"] = body.music.model_dump() if body.music else None
+        preview_data["music"] = music_settings
         intro_segments = [
             clip for clip in normalized_timeline if clip.get("kind") == "intro"
         ]
@@ -9527,8 +9696,18 @@ async def save_composition(
             float(clip["timeline_duration"]) for clip in intro_segments
         )
         entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        invalidated_clip_ids = (
+            _invalidate_render_jobs(
+                pipeline,
+                reason="Composition, transitions, or music changed",
+                preview_keys={preview_key},
+            )
+            if composition_changed
+            else set()
+        )
 
     _db_save_pipeline(pipeline_id, pipeline)
+    _invalidate_library_clips(invalidated_clip_ids)
     return {
         "status": "saved",
         "preview_key": preview_key,
