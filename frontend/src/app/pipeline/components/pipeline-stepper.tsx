@@ -230,11 +230,11 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       )}
     >
       <div
-        className="absolute left-1/2 hidden w-full max-w-2xl -translate-x-1/2 items-center justify-center min-[1950px]:flex"
+        className="absolute left-1/2 hidden w-full max-w-xl -translate-x-1/2 items-center justify-center min-[1800px]:flex"
         aria-label="Pipeline progress"
         data-testid="pipeline-progress"
       >
-        <div className="flex w-full max-w-2xl min-w-0 items-center">
+        <div className="flex w-full max-w-xl min-w-0 items-center">
           {PIPELINE_STEPS.map((item, index) => {
             const isComplete = item.num < step;
             const isActive = item.num === step;
@@ -247,7 +247,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   disabled={!canOpen}
                   aria-current={isActive ? "step" : undefined}
                   onClick={() => openStep(item.num)}
-                  className={`group flex h-10 items-center gap-2.5 px-1 text-sm transition-colors disabled:opacity-100 ${
+                  className={`group flex h-10 items-center gap-2 px-1 text-sm transition-colors disabled:opacity-100 ${
                     isActive
                       ? "font-semibold text-primary"
                       : canOpen
@@ -257,7 +257,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   data-testid={`pipeline-step-${item.num}`}
                 >
                   <span
-                    className={`flex size-8 items-center justify-center rounded-full border-2 bg-background text-sm font-semibold transition-[border-color,box-shadow,color] ${
+                    className={`flex size-7 items-center justify-center rounded-full border-2 bg-background text-xs font-semibold transition-[border-color,box-shadow,color] ${
                       isActive
                         ? "border-primary text-primary ring-2 ring-primary/15"
                         : isComplete
@@ -273,7 +273,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                 </button>
                 {index < PIPELINE_STEPS.length - 1 && (
                   <div
-                    className={`mx-3 h-px min-w-4 flex-1 ${
+                    className={`mx-2 h-px min-w-3 flex-1 ${
                       step > item.num ? "bg-primary/45" : "bg-border"
                     }`}
                   />
