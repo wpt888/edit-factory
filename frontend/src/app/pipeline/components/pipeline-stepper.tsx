@@ -2,7 +2,14 @@
 
 import { Button } from "@/components/ui/button";
 import { EditorHeader } from "@/components/editor-header";
-import { ArrowLeft, CheckCircle, Clock, Download, Film, Loader2, Sparkles, Upload } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ArrowLeft, CheckCircle, Clock, Download, Film, Loader2, Plus, Upload } from "lucide-react";
 import { useRef, type Dispatch, type SetStateAction } from "react";
 
 // Mirrors the inline confirmDialog state shape in PipelinePage (page.tsx).
@@ -47,6 +54,8 @@ function formatCount(count: number, singular: string, plural = `${singular}s`) {
 export function PipelineStepper({ ctx }: { ctx: any }) {
   const {
     step,
+    step3Mode,
+    setStep3Mode,
     pipelineId,
     scripts,
     previews,
@@ -132,105 +141,175 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       void handlePreviewAll?.();
       return;
     }
+    if (targetStep === 3 && step < 3) {
+      setStep3Mode("edit");
+    }
     setStep(targetStep);
+  };
+
+  const canOpenExport = step === 3 && selectedPreviewCount > 0;
+  const openWorkspaceMode = (mode: string) => {
+    if (mode === step3Mode) return;
+    if (mode === "edit" || canOpenExport) {
+      setPreviewError(null);
+      setStep3Mode(mode);
+    }
   };
 
   return (
     <EditorHeader
+      compact
       className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85"
       testId="pipeline-toolbar"
       icon={<Film className="size-4 shrink-0 text-primary" />}
       title={<span data-testid="pipeline-toolbar-context">Multi-Variant Pipeline</span>}
       breadcrumb={STEP_CONTEXT_LABELS[step]}
       subtitle={contextCount}
+      navigation={step === 3 ? (
+        <Tabs
+          value={step3Mode}
+          onValueChange={openWorkspaceMode}
+          className="gap-0"
+          data-testid="pipeline-workspace-tabs"
+        >
+          <TabsList variant="line" className="h-8 gap-2 p-0">
+            <TabsTrigger
+              value="edit"
+              className="h-8 min-w-16 px-2 after:top-[-5px] after:bottom-auto"
+              data-testid="pipeline-mode-edit"
+            >
+              Edit
+            </TabsTrigger>
+            <TabsTrigger
+              value="export"
+              disabled={!canOpenExport}
+              className="h-8 min-w-16 px-2 after:top-[-5px] after:bottom-auto"
+              data-testid="pipeline-mode-export"
+            >
+              Export
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      ) : undefined}
       actions={(
       <div
-        className="flex shrink-0 items-center justify-end gap-1"
+        className="flex shrink-0 items-center justify-end gap-1 [&_button]:size-8"
         data-testid="pipeline-toolbar-actions"
       >
-        <input
-          ref={templateInputRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          data-testid="pipeline-template-file-input"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) void handleImportPipelineTemplate(file);
-          }}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 px-2.5 text-sm"
-          disabled={!!templateTransferBusy}
-          onClick={() => templateInputRef.current?.click()}
-          title="Import a complete pipeline template"
-          data-testid="pipeline-template-import"
-        >
-          {templateTransferBusy === "import"
-            ? <Loader2 className="mr-1.5 size-4 animate-spin" />
-            : <Upload className="mr-1.5 size-4" />}
-          <span className="hidden min-[1450px]:inline">Import Template</span>
-          <span className="min-[1450px]:hidden">Import</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 px-2.5 text-sm"
-          disabled={!pipelineId || !!templateTransferBusy}
-          onClick={() => void handleExportPipelineTemplate()}
-          title={pipelineId ? "Export every pipeline setting as JSON" : "Create or load a pipeline before exporting"}
-          data-testid="pipeline-template-export"
-        >
-          {templateTransferBusy === "export"
-            ? <Loader2 className="mr-1.5 size-4 animate-spin" />
-            : <Download className="mr-1.5 size-4" />}
-          <span className="hidden min-[1450px]:inline">Export Template</span>
-          <span className="min-[1450px]:hidden">Export</span>
-        </Button>
-        {step === 3 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-9 px-2.5 text-sm"
-            aria-pressed={!!showHistoryPanel}
-            onClick={() => setShowHistoryPanel?.((prev: boolean) => !prev)}
-            title={showHistoryPanel ? "Hide script history" : "Show script history"}
-            data-testid="pipeline-history-toggle"
-          >
-            <Clock className="mr-1.5 size-4" />
-            <span className="hidden min-[1450px]:inline">{showHistoryPanel ? "Hide History" : "History"}</span>
-          </Button>
-        )}
-        {step === 3 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-9 px-2.5 text-sm"
-            onClick={() => openStep(2)}
-          >
-            <ArrowLeft className="mr-1.5 size-4" />
-            Back to Scripts
-          </Button>
-        )}
-        {step > 1 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-9 px-2.5 text-sm text-muted-foreground hover:text-foreground"
-            onClick={startNewPipeline}
-          >
-            <Sparkles className="mr-1.5 size-4" />
-            New Pipeline
-          </Button>
-        )}
+        <TooltipProvider>
+          <input
+            ref={templateInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            data-testid="pipeline-template-file-input"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void handleImportPipelineTemplate(file);
+            }}
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex" tabIndex={templateTransferBusy ? 0 : -1}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={!!templateTransferBusy}
+                  onClick={() => templateInputRef.current?.click()}
+                  aria-label="Import Pipeline Preset"
+                  data-testid="pipeline-template-import"
+                >
+                  {templateTransferBusy === "import"
+                    ? <Loader2 className="size-4 animate-spin" />
+                    : <Upload className="size-4" />}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Import Pipeline Preset</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="inline-flex"
+                tabIndex={!pipelineId || templateTransferBusy ? 0 : -1}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={!pipelineId || !!templateTransferBusy}
+                  onClick={() => void handleExportPipelineTemplate()}
+                  aria-label="Export Pipeline Preset"
+                  data-testid="pipeline-template-export"
+                >
+                  {templateTransferBusy === "export"
+                    ? <Loader2 className="size-4 animate-spin" />
+                    : <Download className="size-4" />}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {pipelineId
+                ? "Export Pipeline Preset"
+                : "Create or load a pipeline before exporting"}
+            </TooltipContent>
+          </Tooltip>
+          {step >= 1 && step <= 4 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={showHistoryPanel ? "Hide Script History" : "Show Script History"}
+                  aria-pressed={!!showHistoryPanel}
+                  onClick={() => setShowHistoryPanel?.((prev: boolean) => !prev)}
+                  data-testid="pipeline-history-toggle"
+                >
+                  <Clock className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {showHistoryPanel ? "Hide Script History" : "Show Script History"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {step === 3 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Back to Scripts"
+                  onClick={() => openStep(2)}
+                >
+                  <ArrowLeft className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Back to Scripts</TooltipContent>
+            </Tooltip>
+          )}
+          {step > 1 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="New Pipeline"
+                  onClick={startNewPipeline}
+                >
+                  <Plus className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New Pipeline</TooltipContent>
+            </Tooltip>
+          )}
+        </TooltipProvider>
       </div>
       )}
     >
       <div
-        className="absolute left-1/2 hidden w-full max-w-xl -translate-x-1/2 items-center justify-center min-[1800px]:flex"
+        className="absolute left-1/2 hidden w-full max-w-md -translate-x-1/2 items-center justify-center min-[1800px]:flex"
         aria-label="Pipeline progress"
         data-testid="pipeline-progress"
       >
@@ -247,7 +326,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   disabled={!canOpen}
                   aria-current={isActive ? "step" : undefined}
                   onClick={() => openStep(item.num)}
-                  className={`group flex h-10 items-center gap-2 px-1 text-sm transition-colors disabled:opacity-100 ${
+                  className={`group flex h-8 items-center gap-1.5 px-1 text-xs transition-colors disabled:opacity-100 ${
                     isActive
                       ? "font-semibold text-primary"
                       : canOpen
@@ -257,7 +336,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   data-testid={`pipeline-step-${item.num}`}
                 >
                   <span
-                    className={`flex size-7 items-center justify-center rounded-full border-2 bg-background text-xs font-semibold transition-[border-color,box-shadow,color] ${
+                    className={`flex size-6 items-center justify-center rounded-full border bg-background text-[11px] font-semibold transition-[border-color,box-shadow,color] ${
                       isActive
                         ? "border-primary text-primary ring-2 ring-primary/15"
                         : isComplete
@@ -267,13 +346,13 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                             : "border-border text-muted-foreground/55"
                     }`}
                   >
-                    {isComplete ? <CheckCircle className="size-4" /> : item.num}
+                    {isComplete ? <CheckCircle className="size-3.5" /> : item.num}
                   </span>
                   <span>{item.label}</span>
                 </button>
                 {index < PIPELINE_STEPS.length - 1 && (
                   <div
-                    className={`mx-2 h-px min-w-3 flex-1 ${
+                    className={`mx-1.5 h-px min-w-3 flex-1 ${
                       step > item.num ? "bg-primary/45" : "bg-border"
                     }`}
                   />

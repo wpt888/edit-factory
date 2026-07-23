@@ -60,8 +60,10 @@ def layout_positions(layer_count: int, size: float) -> List[tuple[float, float]]
 def template_track_cues(
     *,
     template: Dict[str, Any],
-    asset_ids: Optional[List[str]] = None,
+    asset_ids: Optional[List[Any]] = None,
     duration_ms: int = 0,
+    animation_override: Optional[str] = None,
+    enter_ms_override: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Track-based templates: each authored image becomes one cue on lane V(2+track).
 
@@ -73,6 +75,7 @@ def template_track_cues(
     tracks = template.get("tracks") or []
     zone = template.get("zone", "behind")
     animation = template.get("animation", "pop")
+    enter_ms = max(0, min(10_000, int(template.get("enterMs", 250))))
     assets = _normalize_assets(asset_ids)
     cues: List[Dict[str, Any]] = []
     asset_cursor = 0
@@ -89,6 +92,13 @@ def template_track_cues(
                 sfx_volume_db = float(image.get("sfxVolumeDb") or 0)
             except (TypeError, ValueError):
                 sfx_volume_db = 0.0
+            slot_animation = animation_override or image.get("animation") or animation
+            raw_slot_enter_ms = (
+                enter_ms_override
+                if enter_ms_override is not None
+                else image.get("enterMs", enter_ms)
+            )
+            slot_enter_ms = max(0, min(10_000, int(raw_slot_enter_ms)))
             cues.append({
                 "id": f"attention-t{track_index}-{image_index}-{start}",
                 "startMs": start,
@@ -108,7 +118,7 @@ def template_track_cues(
                     "opacity": float(image.get("opacity", 1.0)),
                     "zIndex": track_index + 1,
                     "fit": image.get("fit") if image.get("fit") in ("contain", "cover") else "contain",
-                    "animation": {"preset": animation, "enterMs": 250,
+                    "animation": {"preset": slot_animation, "enterMs": slot_enter_ms,
                                   "exitMs": 200, "delayMs": 0, "intensity": 1},
                 }],
             })
@@ -160,6 +170,7 @@ def distribute_attention_cues(
     layer_count = max(1, min(10, int(template.get("layers", 1))))
     size = float(template.get("size", 0.8))
     zone = template.get("zone", "behind")
+    enter_ms = max(0, min(10_000, int(template.get("enterMs", 250))))
     positions = layout_positions(layer_count, size)
     cues = []
     asset_cursor = 0
@@ -173,7 +184,7 @@ def distribute_attention_cues(
                 "mediaType": media_type,
                 "x": positions[layer_index][0], "y": positions[layer_index][1],
                 "width": size, "height": size, "zIndex": layer_index + 1, "fit": "contain",
-                "animation": {"preset": template.get("animation", "static"), "enterMs": 250,
+                "animation": {"preset": template.get("animation", "static"), "enterMs": enter_ms,
                               "exitMs": 200, "delayMs": layer_index * 120, "intensity": 1},
             })
         cues.append({"id": f"attention-{cue_index}-{start}", "startMs": start,

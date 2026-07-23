@@ -107,6 +107,10 @@ for (const file of files) {
   ) {
     report(file, "workspace Card styling must use the shared Card workspace variant");
   }
+
+  if (source.includes("reorderable={false}")) {
+    report(file, "named workspace panels must keep header reordering enabled");
+  }
 }
 
 for (const generator of ["src/app/create-image/page.tsx", "src/app/create-video/page.tsx"]) {
@@ -127,13 +131,39 @@ const workspacePanelHeaderPath = join(root, "src/components/workspace-panel-head
 const workspacePanelHeader = await readFile(workspacePanelHeaderPath, "utf8");
 for (const contract of [
   'data-slot="workspace-panel-header"',
-  "h-12 shrink-0 items-center gap-2 border-b border-border px-3",
+  "relative z-[60] flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2",
   'data-slot="workspace-panel-grip"',
   'data-slot="workspace-panel-title"',
 ]) {
   if (!workspacePanelHeader.includes(contract)) {
     report(workspacePanelHeaderPath, `missing canonical workspace panel-header contract: ${contract}`);
   }
+}
+
+const workspacePanelEndcapPath = join(root, "src/components/workspace-panel-endcap.tsx");
+const workspacePanelEndcap = await readFile(workspacePanelEndcapPath, "utf8");
+if (!workspacePanelEndcap.includes('data-slot="workspace-panel-endcap"')) {
+  report(workspacePanelEndcapPath, "missing canonical workspace panel-endcap slot");
+}
+
+for (const contract of [
+  '[data-workspace-pane]::after',
+  '[data-slot="workspace-panel-endcap"]',
+  "height: 0.75rem",
+  "border-top: 1px solid var(--border)",
+  "background: var(--surface-panel)",
+  "position: absolute",
+  "bottom: 0",
+]) {
+  if (!globals.includes(contract)) {
+    report(join(root, "src/app/globals.css"), `missing workspace panel-endcap contract: ${contract}`);
+  }
+}
+if (globals.includes(':has(> [data-slot="workspace-panel-header"])::after')) {
+  report(
+    join(root, "src/app/globals.css"),
+    "workspace panel endcaps must be explicit; header-based pseudo-elements create internal separators",
+  );
 }
 
 for (const file of files) {

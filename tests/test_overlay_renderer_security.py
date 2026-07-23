@@ -34,6 +34,32 @@ def test_downloader_accepts_file_inside_allowed_root(tmp_path, monkeypatch):
     assert resolved == str(asset.resolve())
 
 
+def test_downloader_resolves_base_dir_relative_attention_asset(tmp_path, monkeypatch):
+    media_dir = tmp_path / "media" / "attention" / "profile"
+    media_dir.mkdir(parents=True)
+    asset = media_dir / "asset.png"
+    asset.write_bytes(b"image")
+    monkeypatch.setattr(
+        overlay_renderer,
+        "get_settings",
+        lambda: type("Settings", (), {"base_dir": tmp_path})(),
+    )
+    monkeypatch.setattr(
+        overlay_renderer,
+        "_allowed_local_roots",
+        lambda _temp: ((tmp_path / "media").resolve(),),
+    )
+
+    resolved = asyncio.run(
+        overlay_renderer._download_image(
+            "media/attention/profile/asset.png",
+            str(tmp_path / "temp"),
+        )
+    )
+
+    assert resolved == str(asset.resolve())
+
+
 def test_downloader_rejects_non_allowlisted_host(tmp_path, monkeypatch):
     monkeypatch.setattr(overlay_renderer, "_allowed_remote_hosts", lambda: {"storage.example.test"})
 

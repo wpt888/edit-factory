@@ -81,6 +81,32 @@ def test_video_item_has_no_loop_input():
     assert "-loop" not in cmd
 
 
+def test_attention_image_static_and_motion_presets_change_filtergraph():
+    base = {
+        "source_path": "image.png", "is_video": False,
+        "start": 2.0, "end": 3.5, "box_px": (100, 200, 400, 500),
+        "fit": "contain", "z": 2,
+    }
+
+    static_fc = _fc(_run_overlay([{**base, "animation": {
+        "preset": "static", "enterMs": 250, "exitMs": 200,
+    }}]))
+    assert "fade=" not in static_fc
+    assert "overlay=100:200" in static_fc
+
+    slide_fc = _fc(_run_overlay([{**base, "animation": {
+        "preset": "slide-right", "enterMs": 250, "exitMs": 200,
+    }}]))
+    assert "fade=t=in" in slide_fc
+    assert "overlay='100+" in slide_fc
+
+    zoom_fc = _fc(_run_overlay([{**base, "animation": {
+        "preset": "zoom", "enterMs": 250, "exitMs": 200,
+    }}]))
+    assert "eval=frame" in zoom_fc
+    assert "overlay_w" in zoom_fc
+
+
 def test_fit_contain_vs_cover_sizing_at_both_resolutions():
     # contain -> decrease + pad ; cover -> increase + crop. Box px verbatim.
     full_1080 = _video_item(2000, "v.mp4", box_px=(0, 0, 1080, 1920), fit="contain")
@@ -370,6 +396,17 @@ def red_clip(tmp_path):
     return path
 
 
+@pytest.fixture
+def red_image(tmp_path):
+    path = tmp_path / "red.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:size=80x80",
+         "-frames:v", "1", str(path)],
+        check=True, capture_output=True, timeout=30,
+    )
+    return path
+
+
 def _ffprobe_duration(path):
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -388,6 +425,29 @@ def _frame_mean(path, t):
     )
     data = out.stdout
     return sum(data) / len(data) if data else 0.0
+
+
+@_no_ffmpeg
+@pytest.mark.parametrize("preset", [
+    "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
+    "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
+])
+def test_attention_image_transition_filtergraph_runs_in_ffmpeg(base_video, red_image, preset):
+    output = base_video.parent / f"attention_{preset}.mp4"
+    rendered = asyncio.run(overlay_renderer.apply_overlay_timeline(
+        base_video,
+        [{
+            "source_path": str(red_image), "is_video": False,
+            "start": 1.0, "end": 2.2, "box_px": (80, 150, 160, 160),
+            "fit": "contain", "z": 2,
+            "animation": {
+                "preset": preset, "enterMs": 250, "exitMs": 200, "intensity": 1,
+            },
+        }],
+        output, 320, 568, 6.0,
+    ))
+    assert rendered == output
+    assert output.exists()
 
 
 @_no_ffmpeg

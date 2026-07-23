@@ -11,6 +11,12 @@ export interface SubtitleTemplateRotation {
 // SubtitleSettings.enabled=false at the render boundary.
 export const NO_SUBTITLES_PRESET_ID = "__none__";
 
+export function isNoSubtitlesPreset(preset: UserSubtitlePreset | undefined): boolean {
+  if (!preset) return false;
+  if (preset.settings.enabled === false) return true;
+  return ["none", "no subtitles", "off"].includes(preset.name.trim().toLocaleLowerCase());
+}
+
 export const EMPTY_SUBTITLE_TEMPLATE_ROTATION: SubtitleTemplateRotation = {
   enabled: false,
   presetIds: [],
@@ -18,6 +24,34 @@ export const EMPTY_SUBTITLE_TEMPLATE_ROTATION: SubtitleTemplateRotation = {
 
 // Explicit manual per-variant template picks, keyed by PreviewKey ("0", "0_A").
 export type VariantTemplateSelections = Partial<Record<PreviewKey, string>>;
+
+type SubtitleRotationCard = Pick<PreviewCard, "key" | "baseIndex" | "visualVersion"> & {
+  /** Preview-only callers can point directly at one slot in the template. */
+  rotationIndex?: number;
+};
+
+export type SubtitleAssignmentSource = "manual" | "rotation" | "default";
+
+export type ResolvedSubtitleAssignment = {
+  source: SubtitleAssignmentSource;
+  presetId?: string;
+  preset?: UserSubtitlePreset;
+  disabled: boolean;
+};
+
+/**
+ * Return the output ordinal consumed by subtitle rotation.
+ *
+ * Meta multiplication turns every script into two consecutive outputs, so
+ * 0_A, 0_B, 1_A, 1_B must consume slots 0, 1, 2, 3. Using only baseIndex
+ * would assign the same style to both Meta outputs and skip half the template.
+ */
+export function subtitleRotationIndexForCard(card: SubtitleRotationCard): number {
+  if (card.rotationIndex != null) return card.rotationIndex;
+  if (card.visualVersion === "A") return card.baseIndex * 2;
+  if (card.visualVersion === "B") return card.baseIndex * 2 + 1;
+  return card.baseIndex;
+}
 
 export function assignedSubtitlePreset(
   rotation: SubtitleTemplateRotation,
@@ -29,29 +63,53 @@ export function assignedSubtitlePreset(
   return presets.find((preset) => preset.id === presetId);
 }
 
-function resolvedSubtitlePresetIdForCard(
+export function resolveSubtitleAssignmentForCard(
   rotation: SubtitleTemplateRotation,
   selections: VariantTemplateSelections,
   presets: UserSubtitlePreset[],
-  card: Pick<PreviewCard, "key" | "baseIndex">,
-): string | undefined {
+  card: SubtitleRotationCard,
+): ResolvedSubtitleAssignment {
   const explicitId = selections?.[card.key];
-  if (explicitId === NO_SUBTITLES_PRESET_ID) return explicitId;
-  if (explicitId && presets.some((preset) => preset.id === explicitId)) return explicitId;
+  if (explicitId === NO_SUBTITLES_PRESET_ID) {
+    return { source: "manual", presetId: explicitId, disabled: true };
+  }
+  const explicitPreset = explicitId
+    ? presets.find((preset) => preset.id === explicitId)
+    : undefined;
+  if (explicitPreset) {
+    return {
+      source: "manual",
+      presetId: explicitPreset.id,
+      preset: explicitPreset,
+      disabled: isNoSubtitlesPreset(explicitPreset),
+    };
+  }
 
-  if (!rotation.enabled || rotation.presetIds.length === 0 || card.baseIndex < 0) return undefined;
-  const rotatedId = rotation.presetIds[card.baseIndex % rotation.presetIds.length];
-  if (rotatedId === NO_SUBTITLES_PRESET_ID) return rotatedId;
-  return presets.some((preset) => preset.id === rotatedId) ? rotatedId : undefined;
+  if (!rotation.enabled || rotation.presetIds.length === 0 || card.baseIndex < 0) {
+    return { source: "default", disabled: false };
+  }
+  const rotationIndex = subtitleRotationIndexForCard(card) % rotation.presetIds.length;
+  const rotatedId = rotation.presetIds[rotationIndex];
+  if (rotatedId === NO_SUBTITLES_PRESET_ID) {
+    return { source: "rotation", presetId: rotatedId, disabled: true };
+  }
+  const rotatedPreset = presets.find((preset) => preset.id === rotatedId);
+  if (!rotatedPreset) return { source: "default", disabled: false };
+  return {
+    source: "rotation",
+    presetId: rotatedPreset.id,
+    preset: rotatedPreset,
+    disabled: isNoSubtitlesPreset(rotatedPreset),
+  };
 }
 
 export function subtitlesDisabledForCard(
   rotation: SubtitleTemplateRotation,
   selections: VariantTemplateSelections,
   presets: UserSubtitlePreset[],
-  card: Pick<PreviewCard, "key" | "baseIndex">,
+  card: SubtitleRotationCard,
 ): boolean {
-  return resolvedSubtitlePresetIdForCard(rotation, selections, presets, card) === NO_SUBTITLES_PRESET_ID;
+  return resolveSubtitleAssignmentForCard(rotation, selections, presets, card).disabled;
 }
 
 // Precedence: explicit per-variant selection > rotation round-robin > none.
@@ -60,11 +118,9 @@ export function resolveSubtitlePresetForCard(
   rotation: SubtitleTemplateRotation,
   selections: VariantTemplateSelections,
   presets: UserSubtitlePreset[],
-  card: Pick<PreviewCard, "key" | "baseIndex">,
+  card: SubtitleRotationCard,
 ): UserSubtitlePreset | undefined {
-  const presetId = resolvedSubtitlePresetIdForCard(rotation, selections, presets, card);
-  if (!presetId || presetId === NO_SUBTITLES_PRESET_ID) return undefined;
-  return presets.find((preset) => preset.id === presetId);
+  return resolveSubtitleAssignmentForCard(rotation, selections, presets, card).preset;
 }
 
 export function wordsPerSubtitleForVariant(
@@ -76,7 +132,8 @@ export function wordsPerSubtitleForVariant(
   previewKey?: PreviewKey,
 ): number {
   const key = previewKey ?? (String(variantIndex) as PreviewKey);
-  const card = { key, baseIndex: variantIndex };
+  const visualVersion = key.endsWith("_B") ? "B" : key.endsWith("_A") ? "A" : undefined;
+  const card = { key, baseIndex: variantIndex, visualVersion };
   const preset = resolveSubtitlePresetForCard(rotation, selections ?? {}, presets, card);
   return Math.max(1, Math.min(20, preset?.wordsPerSubtitle ?? fallback));
 }
@@ -122,12 +179,27 @@ export function resolveRotatedSubtitleSettings({
   const metaOverride = metaOverrides[styleKey];
   const variantOverride = variantOverrides[card.key];
 
-  // Rotation chooses the base. Meta A/B stays orthogonal and layers on top;
-  // a card-local edit is last and never mutates the reusable template.
-  let effective = { ...defaultSettings, ...(preset?.settings ?? {}), enabled: true };
+  // A selected template owns the complete visual baseline, including colors.
+  // Multi-variant templates may also carry a dedicated A/B look. Falling back
+  // to the platform Meta style after resolving a template would overwrite its
+  // text/highlight/outline colors while leaving font and sizing intact.
+  const presetSettings = preset
+    ? (
+        card.visualVersion === "A"
+          ? preset.settingsA ?? preset.settings
+          : card.visualVersion === "B"
+            ? preset.settingsB ?? preset.settings
+            : preset.settings
+      )
+    : undefined;
+  let effective = { ...defaultSettings, ...(presetSettings ?? {}) };
   if (metaOverride && Object.keys(metaOverride).length > 0) {
-    effective = { ...effective, ...metaOverride };
-  } else if (card.visualVersion && metaFallback?.[card.visualVersion]) {
+    // Legacy A/B overrides can contain the complete editor value. Applying
+    // that object wholesale would erase the selected template. Only fields
+    // that differ from the pipeline default are platform adjustments.
+    const metaDelta = subtitleSettingsDiff(defaultSettings, metaOverride);
+    effective = { ...effective, ...metaDelta };
+  } else if (!preset && card.visualVersion && metaFallback?.[card.visualVersion]) {
     effective = { ...effective, ...metaFallback[card.visualVersion] };
   }
   if (variantOverride && Object.keys(variantOverride).length > 0) {

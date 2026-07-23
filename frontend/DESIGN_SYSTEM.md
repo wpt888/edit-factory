@@ -45,11 +45,22 @@ Templates, Segments.
 - Panes use `surface-canvas` and one-pixel dividers.
 - Use `<Card variant="workspace">` for sections that must be cards on narrow
   layouts and flush inspector sections from 1280 px upward.
-- Every pane begins with the shared `WorkspacePanelHeader`. Its geometry is
-  invariant: `h-12` (48 px), `px-3`, one-pixel bottom divider, vertically
-  centered `text-sm font-semibold` title, and the same leading grip. Adjacent
-  pane headers must share the exact top edge, bottom edge, and title baseline;
-  page-local `h-10`/`h-14` headers are forbidden.
+- Every pane begins with the shared `WorkspacePanelHeader`. Its compact geometry
+  is invariant: `h-9` (36 px), `px-2`, one-pixel bottom divider, vertically
+  centered `text-xs font-semibold` title, and the same leading grip. Headers
+  remain permanently visible; do not hide them behind hover. Adjacent pane
+  headers must share the exact top edge, bottom edge, and title baseline;
+  page-local `h-10`/`h-12`/`h-14` headers are forbidden.
+- The grip is always functional: every named workspace pane can be dragged by
+  its header and exchanged with its sibling panes. Reordering persists for the
+  workspace; a visible named header must never advertise a disabled drag.
+- Every workspace pane has the same lower endcap: `h-3` (12 px), a one-pixel
+  `border-border` top divider, and `surface-panel`. Complete pane shells carry
+  `data-workspace-pane`; the shared rule reserves 12 px and pins the endcap to
+  the pane's bottom edge so it remains visible while content scrolls. Never
+  infer it from the presence of a header because workspace panes may contain
+  nested headers and cards. Headerless exceptional panes may render
+  `WorkspacePanelEndcap` explicitly.
 - Do not neutralize a default Card with page-local combinations of
   `rounded-none`, `border-0`, and `bg-background`.
 - Dense editor controls may use smaller heights, but the choice belongs to a
@@ -62,7 +73,8 @@ Never mix document Card composition and workspace composition in the same pane.
 - Page container: `PageShell` (`default`, `narrow`, or `wide`).
 - Generator container: `GeneratorShell`.
 - Document header: `PageHeader`.
-- Full-bleed editor header: `EditorHeader`.
+- Full-bleed editor header: `EditorHeader`; tool-heavy workspaces may use its
+  compact 44 px variant.
 - Workspace pane/tab header: `WorkspacePanelHeader`.
 - Content surface: `Card`; use its `workspace` variant inside workspaces.
 - Buttons, inputs, selects, textareas, switches, tabs, dialogs, badges, and

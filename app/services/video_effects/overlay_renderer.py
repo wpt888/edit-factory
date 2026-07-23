@@ -99,7 +99,12 @@ def _allowed_remote_hosts() -> set[str]:
 
 
 def _validate_local_source(raw_path: str, temp_dir: str) -> Path:
-    source = Path(raw_path).expanduser().resolve()
+    source = Path(raw_path).expanduser()
+    if not source.is_absolute():
+        # Persisted attention assets use a base-dir-relative path so the same
+        # pipeline remains portable between dev and packaged desktop installs.
+        source = get_settings().base_dir / source
+    source = source.resolve()
     if not source.is_file():
         raise OverlaySourceError("Overlay source file does not exist")
     if not any(source.is_relative_to(root) for root in _allowed_local_roots(temp_dir)):
@@ -313,6 +318,18 @@ async def generate_interstitial_clip(
             return None
 
 
+ATTENTION_ANIMATION_PRESETS = frozenset({
+    "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
+    "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
+})
+
+
+def _attention_animation_preset(animation: dict) -> str:
+    """Return a safe preset name; old timelines without a preset keep fading."""
+    preset = str(animation.get("preset", "fade"))
+    return preset if preset in ATTENTION_ANIMATION_PRESETS else "fade"
+
+
 def _fade_filter(start: float, end: float, animation: dict) -> str:
     """Alpha fade in/out anchored to the ABSOLUTE timeline, matching the overlay
     enable window; returns a leading-comma filter fragment or '' if there's no room.
@@ -321,6 +338,10 @@ def _fade_filter(start: float, end: float, animation: dict) -> str:
     shifted the looped still to ``start`` seconds, so for any cue past t=0 the
     in-fade was a silent no-op and there was never an out-fade at all.
     """
+    # Static/classic is a true hard appearance. This explicit guard is what
+    # differentiates it from legacy timelines, which had no preset and faded.
+    if _attention_animation_preset(animation) == "static":
+        return ""
     avail = end - start
     if avail <= 0:
         return ""
@@ -332,6 +353,83 @@ def _fade_filter(start: float, end: float, animation: dict) -> str:
     if leave > .001:
         parts.append(f"fade=t=out:st={end - leave}:d={leave}:alpha=1")
     return ("," + ",".join(parts)) if parts else ""
+
+
+def _attention_motion_filters(
+    start: float,
+    end: float,
+    animation: dict,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> tuple[str, str, str]:
+    """Build safe FFmpeg motion filters and overlay coordinates for a preset.
+
+    Filter expressions are assembled exclusively from an allowlisted preset and
+    numeric values validated above. ``t`` is local in the image filter chain,
+    while overlay coordinates use the absolute output clock.
+    """
+    preset = _attention_animation_preset(animation)
+    if preset in {"static", "fade"}:
+        return "", str(x), str(y)
+
+    available = max(0.001, end - start)
+    enter = min(max(float(animation.get("enterMs", 250)) / 1000, 0.001), available)
+    intensity = max(0.0, min(3.0, float(animation.get("intensity", 1.0))))
+    absolute_progress = f"min(max((t-{start:.3f})/{enter:.3f},0),1)"
+    local_progress = f"min(max(t/{enter:.3f},0),1)"
+
+    if preset in {"slide", "slide-right", "slide-up", "slide-down", "wipe-left", "wipe-right"}:
+        # Wipes use a shorter travel and alpha ramp, reading as a crisp reveal
+        # while remaining compatible with FFmpeg builds lacking mask filters.
+        distance = 1.0 if preset.startswith("slide") else 0.18
+        distance *= max(0.25, intensity)
+        if preset in {"slide", "wipe-left"}:
+            x_expr = f"'{x}-{width * distance:.3f}*(1-{absolute_progress})'"
+            return "", x_expr, str(y)
+        if preset in {"slide-right", "wipe-right"}:
+            x_expr = f"'{x}+{width * distance:.3f}*(1-{absolute_progress})'"
+            return "", x_expr, str(y)
+        if preset == "slide-up":
+            y_expr = f"'{y}+{height * distance:.3f}*(1-{absolute_progress})'"
+            return "", str(x), y_expr
+        y_expr = f"'{y}-{height * distance:.3f}*(1-{absolute_progress})'"
+        return "", str(x), y_expr
+
+    if preset == "bounce":
+        y_expr = (
+            f"'{y}-{height * .28 * max(.25, intensity):.3f}*"
+            f"(1-{absolute_progress})*cos({absolute_progress}*3*PI)'"
+        )
+        return "", str(x), y_expr
+
+    filters: list[str] = []
+    x_expr = f"'{x}+({width}-overlay_w)/2'"
+    y_expr = f"'{y}+({height}-overlay_h)/2'"
+    if preset in {"zoom", "pop", "tornado"}:
+        if preset == "zoom":
+            scale = f"{1 - .18 * max(.25, intensity):.4f}+{.18 * max(.25, intensity):.4f}*{local_progress}"
+        else:
+            # Pop/tornado overshoot slightly before settling at 1.0.
+            scale = (
+                f"if(lt(t,{enter * .7:.3f}),"
+                f"{max(.12, 1 - .55 * max(.25, intensity)):.4f}+"
+                f"{.63 * max(.25, intensity):.4f}*t/{enter * .7:.3f},"
+                f"if(lt(t,{enter:.3f}),1.08-.08*(t-{enter * .7:.3f})/{enter * .3:.3f},1))"
+            )
+        filters.append(
+            "scale="
+            f"w='max(2,trunc(iw*({scale})/2)*2)':"
+            f"h='max(2,trunc(ih*({scale})/2)*2)':eval=frame"
+        )
+    if preset in {"spin", "tornado"}:
+        turns = 1.0 if preset == "spin" else 3.0
+        angle = f"if(lt(t,{enter:.3f}),-{turns:.1f}*2*PI*(1-{local_progress}),0)"
+        filters.append(
+            f"rotate='{angle}':ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=none"
+        )
+    return ("," + ",".join(filters)) if filters else "", x_expr, y_expr
 
 
 def _pretrim_overlay_video(src: str, dst: str, duration_s: float):
@@ -445,13 +543,17 @@ async def apply_overlay_timeline(
             sizing = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
         else:
             sizing = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
-        fade = "" if it.get("is_video") else _fade_filter(start, end, it.get("animation", {}))
+        animation = it.get("animation", {})
+        fade = "" if it.get("is_video") else _fade_filter(start, end, animation)
+        motion, overlay_x, overlay_y = ("", str(x), str(y)) if it.get("is_video") else _attention_motion_filters(
+            start, end, animation, x, y, w, h
+        )
         opacity = max(0.0, min(1.0, float(it.get("opacity", 1.0))))
         alpha = "" if opacity >= 0.999 else f",colorchannelmixer=aa={opacity}"
-        filters.append(f"[{index}:v]{sizing},format=rgba{alpha},setpts=PTS-STARTPTS+{start}/TB{fade}[ov{index}]")
+        filters.append(f"[{index}:v]{sizing},format=rgba{motion}{alpha},setpts=PTS-STARTPTS+{start}/TB{fade}[ov{index}]")
         output = f"vov{index}"
         filters.append(
-            f"[{previous}][ov{index}]overlay={x}:{y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"
+            f"[{previous}][ov{index}]overlay={overlay_x}:{overlay_y}:enable='between(t,{start},{end})':eof_action=pass[{output}]"
         )
         previous = output
     filters.append(f"[{previous}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")

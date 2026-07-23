@@ -1,6 +1,7 @@
 # Blipost Engineering Wiki
 
 - [Contract unic pentru capetele de panou din workspace-uri](43-workspace-panel-header-contract.md)
+- [Contract unificat pentru terminația inferioară a panourilor](50-workspace-panel-endcap-contract.md)
 
 Version-controlled operational notes for the Blipost desktop application.
 
@@ -42,6 +43,7 @@ Version-controlled operational notes for the Blipost desktop application.
 - [Attention Templates editor: off-screen layout + silently broken standalone build](41-attention-templates-layout-and-build-fix.md)
 - [Subtitle & attention template goals — Step 3 application surface](42-subtitle-attention-template-goals.md)
 - [Route ownership model + overlay-downloader SSRF fix (EF-1)](44-pipeline-ownership-and-overlay-ssrf-fix.md)
+- [Attention Templates Save: storage migration, RLS auth, and PostgREST cache](45-attention-template-save-storage-recovery.md)
 - [Captions → Smart Schedule chain fix (EF-2)](46-captions-smart-schedule-chain-fix.md)
 - [Stale render invalidation + Step 1 failure handling (EF-3)](47-stale-outputs-invalidation-and-step1-retry.md)
 - [Step 4 UX (navigation, Retry, Stop confirm) + accessibility (EF-4)](48-step4-ux-a11y.md)

@@ -5,9 +5,8 @@ import { test, expect } from '@playwright/test';
  *
  * Verifies the Subtitle Style card in Step 3 of the pipeline (Advanced mode):
  *   1. Meta OFF → zero tabs, one "Live Preview" panel, one settings panel.
- *   2. Meta ON  → exactly two tabs ("A" / "B"),
- *                 one useful-size preview switched by the active tab, and one
- *                 shared settings panel.
+ *   2. Meta ON  → two real A/B outputs in one preview selector and one shared
+ *                 settings panel.
  *
  * NOTE: These tests assume specific fixture pipelines exist in the DB,
  * each pre-configured with a different `meta_multiplication` value. The
@@ -136,7 +135,14 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path.endsWith(`/pipeline/${pipelineId}/restore-previews`)) {
-      await route.fulfill({ json: { previews: { '0': preview }, available_segments: [] } });
+      await route.fulfill({
+        json: {
+          previews: metaMultiplication
+            ? { '0_A': preview, '0_B': preview }
+            : { '0': preview },
+          available_segments: [],
+        },
+      });
       return;
     }
     if (path.endsWith(`/pipeline/status/${pipelineId}`)) {
@@ -216,16 +222,13 @@ async function enterAdvancedMode(page: import('@playwright/test').Page) {
 }
 
 /**
- * Locate the Subtitle Style card's root element. We scope all assertions
+ * Locate the Subtitle Settings card's root element. We scope all assertions
  * to this scope to avoid false positives from the outer page (e.g. "Meta"
  * appearing in a breadcrumb).
  */
 function styleCardLocator(page: import('@playwright/test').Page) {
-  // Nearest Card ancestor of the "Subtitle Style" CardTitle (the outer
-  // card, not the inner <h3> rendered by SubtitleEditor's settings panel).
   return page
-    .locator('[data-slot="card-title"]')
-    .filter({ hasText: /^Subtitle Style$/ })
+    .getByTestId('step3-subtitle-style-header')
     .first()
     .locator('xpath=ancestor::div[@data-slot="card"][1]');
 }
@@ -263,7 +266,7 @@ test('subtitle preview stays continuously visible between inspector and variants
   await expect(page.getByTestId('subtitle-style-preview-toggle')).toHaveCount(0);
 });
 
-test.describe('Per-variant subtitle template selection', () => {
+test.describe('Template-only subtitle assignment', () => {
   const PRESETS = [
     { id: 'preset-red', name: 'Bold Red', created_at: '', settings: { ...SUBTITLE_SETTINGS, textColor: '#ff0000' }, wordsPerSubtitle: 2 },
     { id: 'preset-yellow', name: 'Punchy Yellow', created_at: '', settings: { ...SUBTITLE_SETTINGS, textColor: '#ffff00' }, wordsPerSubtitle: 3 },
@@ -296,7 +299,7 @@ test.describe('Per-variant subtitle template selection', () => {
     return () => stored;
   }
 
-  test('selector visible with presets and picking one updates the effective template', async ({ page }) => {
+  test('choosing one template updates every output through the single assignment source', async ({ page }) => {
     await withPresetRoutes(page);
     await page.goto(`/pipeline?step=3&id=${PIPELINE_META_OFF}`);
     await page.waitForLoadState('networkidle');
@@ -304,13 +307,17 @@ test.describe('Per-variant subtitle template selection', () => {
     await enterAdvancedMode(page);
     await page.waitForTimeout(1000);
 
-    const selector = page.getByTestId('subtitle-template-select').first();
+    const selector = page.getByTestId('step3-subtitle-template-select');
     await expect(selector).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Default style · Default');
 
-    // Picking a preset makes the card's effective template name that preset.
     await selector.click();
-    await page.getByRole('option', { name: 'Punchy Yellow' }).click();
-    await expect(selector).toContainText('Punchy Yellow');
+    await page.getByRole('option', { name: 'Punchy Yellow · 1 style', exact: true }).click();
+    await expect(selector).toContainText('Punchy Yellow · 1 style');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Punchy Yellow · Template rotation');
+    await expect(page.getByTestId('subtitle-assignment-badge')).toContainText('Punchy Yellow · Rotation');
+    await expect(page.getByTestId('subtitle-style-to-apply')).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'Subtitle apply scope' })).toHaveCount(0);
   });
 
   test('selection survives reload (persisted via rotation endpoint)', async ({ page }) => {
@@ -321,10 +328,11 @@ test.describe('Per-variant subtitle template selection', () => {
     await enterAdvancedMode(page);
     await page.waitForTimeout(1000);
 
-    const selector = page.getByTestId('subtitle-template-select').first();
+    const selector = page.getByTestId('step3-subtitle-template-select');
     await selector.click();
-    await page.getByRole('option', { name: 'Bold Red' }).click();
-    await expect(selector).toContainText('Bold Red');
+    await page.getByRole('option', { name: 'Bold Red · 1 style', exact: true }).click();
+    await expect(selector).toContainText('Bold Red · 1 style');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Bold Red · Template rotation');
 
     // Reload — the captured PUT is replayed by GET, so the pick is restored.
     await page.reload();
@@ -333,11 +341,56 @@ test.describe('Per-variant subtitle template selection', () => {
     await enterAdvancedMode(page);
     await page.waitForTimeout(1000);
 
-    await expect(page.getByTestId('subtitle-template-select').first()).toContainText('Bold Red');
+    await expect(page.getByTestId('step3-subtitle-template-select')).toContainText('Bold Red · 1 style');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Bold Red · Template rotation');
   });
 });
 
 test.describe('Subtitle style — per-Meta-version model', () => {
+  test('Meta ON separates the A/B switch from the template subtitle styles', async ({ page }) => {
+    const templatePresets = [
+      { id: 'preset-red', name: 'Bold Red', created_at: '', settings: { ...SUBTITLE_SETTINGS, textColor: '#ff0000' }, wordsPerSubtitle: 2 },
+      { id: 'preset-yellow', name: 'Punchy Yellow', created_at: '', settings: { ...SUBTITLE_SETTINGS, textColor: '#ffff00' }, wordsPerSubtitle: 3 },
+    ];
+
+    await page.route('**/api/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-presets`)) {
+        await route.fulfill({ json: { presets: templatePresets } });
+        return;
+      }
+      if (path.endsWith(`/pipeline/${PIPELINE_META_ON}/subtitle-rotation`)) {
+        await route.fulfill({
+          json: { enabled: true, presetIds: ['preset-red', 'preset-yellow'], variantTemplates: {} },
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1500);
+    await enterAdvancedMode(page);
+
+    const previewOutput = page.getByRole('combobox', { name: 'Preview output' });
+    await expect(previewOutput).toContainText('Variant 1 A · Bold Red');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Bold Red · Template rotation');
+    await previewOutput.click();
+
+    await expect(page.getByRole('option')).toHaveText([
+      'Variant 1 A · Bold Red',
+      'Variant 1 B · Punchy Yellow',
+    ]);
+    await expect(page.getByRole('listbox')).not.toContainText(/Instagram|Facebook/);
+    await page.getByRole('option', { name: 'Variant 1 B · Punchy Yellow', exact: true }).click();
+
+    await expect(previewOutput).toContainText('Variant 1 B · Punchy Yellow');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Punchy Yellow · Template rotation');
+    await expect(page.getByRole('combobox', { name: 'Subtitle style to apply' })).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'Subtitle apply scope' })).toHaveCount(0);
+  });
+
   test('Meta OFF → single preview, zero tabs', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
@@ -350,11 +403,8 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await enterAdvancedMode(page);
     await page.waitForTimeout(1500);
 
-    // Subtitle Style card must be visible
-    // Target the Subtitle Style CardTitle specifically (avoids collision with
-    // the inner <h3> "Subtitle Style" rendered by SubtitleEditor's settings panel).
-    await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^Subtitle Style$/ })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('button', { name: /about subtitle styles/i })).toBeVisible();
+    await expect(page.getByTestId('step3-subtitle-style-header')).toContainText('Subtitle Settings', { timeout: 10000 });
+    await expect(page.getByRole('button', { name: /about subtitle settings/i })).toBeVisible();
 
     const styleCard = styleCardLocator(page);
 
@@ -362,10 +412,11 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     const tabsInStyleCard = styleCard.getByRole('tab');
     await expect(tabsInStyleCard).toHaveCount(0, { timeout: 3000 });
 
-    // Meta OFF: the preview panel follows the single "default" style — its
-    // target selector reads "Default", never a Meta version.
+    // Meta OFF: the preview panel follows the one real output and reports its
+    // current assignment independently from the staged style candidate.
     await expect(page.getByTestId('subtitle-style-preview-panel')).toBeVisible();
-    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('Default');
+    await expect(page.getByRole('combobox', { name: 'Preview output' })).toContainText('Variant 1 · Default');
+    await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Default style · Default');
 
     // "Save as preset" button must still be present (global action)
     await expect(page.getByRole('button', { name: /save as preset/i })).toBeVisible();
@@ -378,7 +429,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     expect(consoleErrors, `Console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('Meta ON → two tabs + one active live preview', async ({ page }) => {
+  test('Meta ON → two real outputs + one active live preview', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
@@ -390,23 +441,17 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await enterAdvancedMode(page);
     await page.waitForTimeout(1500);
 
-    // Target the Subtitle Style CardTitle specifically (avoids collision with
-    // the inner <h3> "Subtitle Style" rendered by SubtitleEditor's settings panel).
-    await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^Subtitle Style$/ })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('button', { name: /about subtitle styles/i })).toBeVisible();
+    await expect(page.getByTestId('step3-subtitle-style-header')).toContainText('Subtitle Settings', { timeout: 10000 });
+    await expect(page.getByRole('button', { name: /about subtitle settings/i })).toBeVisible();
 
     const styleCard = styleCardLocator(page);
 
-    // Exactly two tabs: A and B
+    // Output selection lives with the preview, not in the settings inspector.
     const tabs = styleCard.getByRole('tab');
-    await expect(tabs).toHaveCount(2, { timeout: 5000 });
+    await expect(tabs).toHaveCount(0, { timeout: 5000 });
 
-    // The versions are intentionally identified only as A and B.
-    await expect(styleCard.getByRole('tab', { name: 'A', exact: true })).toBeVisible();
-    await expect(styleCard.getByRole('tab', { name: 'B', exact: true })).toBeVisible();
-
-    // The preview target follows the selected version (A by default).
-    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('A · Instagram');
+    await expect(page.getByRole('combobox', { name: 'Preview output' })).toContainText('Variant 1 A · Default');
+    await expect(page.getByRole('radio', { name: /Preview video variant/ })).toHaveCount(0);
 
     await page.screenshot({
       path: 'screenshots/subtitle-meta-on.png',
@@ -416,32 +461,24 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     expect(consoleErrors, `Console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('Meta ON → switching tabs replaces the active preview', async ({ page }) => {
+  test('Meta ON → switching the preview target replaces the active preview and settings', async ({ page }) => {
     await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
     await enterAdvancedMode(page);
     await page.waitForTimeout(1500);
 
-    const styleCard = styleCardLocator(page);
-
-    // Click A, then B — the single preview follows the selected version.
-    const tabA = styleCard.getByRole('tab', { name: 'A', exact: true });
-    const tabB = styleCard.getByRole('tab', { name: 'B', exact: true });
-
-    await tabA.click();
-    await page.waitForTimeout(300);
-    await expect(tabA).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('A · Instagram');
+    const previewOutput = page.getByRole('combobox', { name: 'Preview output' });
+    await expect(previewOutput).toContainText('Variant 1 A · Default');
 
     await page.screenshot({
       path: 'screenshots/subtitle-editing-a-vs-b.png',
       fullPage: true,
     });
 
-    await tabB.click();
+    await previewOutput.click();
+    await page.getByRole('option', { name: 'Variant 1 B · Default', exact: true }).click();
     await page.waitForTimeout(300);
-    await expect(tabB).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('combobox', { name: 'Subtitle preview target' })).toContainText('B · Facebook');
+    await expect(previewOutput).toContainText('Variant 1 B · Default');
   });
 });

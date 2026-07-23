@@ -2,10 +2,10 @@
 
 HTML ``video`` and ``img`` elements cannot attach the Bearer header used by the
 normal API client.  We therefore mint an HttpOnly cookie after an authenticated
-source-video API call.  The cookie contains only a signed user/profile claim
-(never the Supabase access token) and is accepted solely by source-video media
-endpoints.  Desktop cookies remain loopback-only; hosted cookies are Secure and
-scoped to the Studio API origin.
+media API call.  The cookie contains only a signed user/profile claim (never the
+Supabase access token) and is accepted solely by opted-in media endpoints.
+Desktop cookies remain loopback-only; hosted cookies are Secure and scoped to
+the Studio API origin.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ SOURCE_MEDIA_TTL_SECONDS = 12 * 60 * 60
 # thumbnails) — all consumed by <video>/<img> elements that cannot send the
 # Bearer header. Only endpoints that opt into get_source_media_profile_context
 # actually accept the cookie; the rest of /segments still requires Bearer.
-_SOURCE_MEDIA_COOKIE_PATH = "/api/v1/segments"
+_SOURCE_MEDIA_COOKIE_PATH = "/api/v1"
 
 _signing_key: Optional[bytes] = None
 _signing_key_lock = threading.Lock()

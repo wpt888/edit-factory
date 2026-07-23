@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 
-test('Verify pipeline history sidebar is always visible', async ({ page }) => {
+test('Verify pipeline history sidebar is available on demand', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto('/pipeline');
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1000);
 
-  // Sidebar should be visible without any click
+  // History is available on demand from the pipeline toolbar.
+  await page.getByTestId('pipeline-history-toggle').click();
   const sidebarTitle = page.getByText('Script History');
   await expect(sidebarTitle).toBeVisible({ timeout: 5000 });
 
@@ -98,7 +99,7 @@ test('pipeline toolbar stays consistent and Step 3 history starts below it', asy
 
     const toolbarBox = await toolbar.boundingBox();
     expect(toolbarBox).not.toBeNull();
-    expect(toolbarBox!.height).toBe(56);
+    expect(toolbarBox!.height).toBe(44);
 
     if (step === 2) {
       await page.screenshot({
@@ -124,13 +125,13 @@ test('pipeline toolbar stays consistent and Step 3 history starts below it', asy
       expect(historyHeaderBox).not.toBeNull();
       expect(toolbarContextBox).not.toBeNull();
       expect(toolbarActionsBox).not.toBeNull();
-      expect(toolbarContextBox!.width).toBeGreaterThan(160);
+      expect(toolbarContextBox!.width).toBeGreaterThan(140);
       expect(toolbarContextBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x);
       expect(toolbarActionsBox!.x + toolbarActionsBox!.width).toBeLessThanOrEqual(
         toolbarBox!.x + toolbarBox!.width,
       );
       expect(historyHeaderBox!.y).toBeGreaterThanOrEqual(
-        toolbarBox!.y + toolbarBox!.height + 10,
+        toolbarBox!.y + toolbarBox!.height,
       );
       await page.screenshot({
         path: 'screenshots/pipeline-step3-toolbar-history.png',

@@ -320,6 +320,7 @@ export function EditorLayout({
         >
           <div
             data-editor-panel={panelId}
+            data-workspace-pane
             className={cn("relative flex h-full min-w-0 flex-col bg-card", draggedPanel === panelId && "opacity-50")}
           >
             {panelDropIndicator(panelId)}
@@ -351,6 +352,7 @@ export function EditorLayout({
         >
           <div
             data-editor-panel={panelId}
+            data-workspace-pane
             className={cn("relative flex h-full min-w-0 flex-col bg-card", draggedPanel === panelId && "opacity-50")}
           >
             {panelDropIndicator(panelId)}
@@ -375,6 +377,7 @@ export function EditorLayout({
       >
         <div
           data-editor-panel={panelId}
+          data-workspace-pane
           className={cn("relative flex h-full min-w-0 flex-col overflow-hidden bg-card", draggedPanel === panelId && "opacity-50")}
         >
           {panelDropIndicator(panelId)}

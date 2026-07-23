@@ -3,7 +3,6 @@ Subtitle style builder for FFmpeg ASS force_style parameter.
 Implements shadow depth, glow effects, and adaptive font sizing.
 """
 import logging
-import os
 import re
 import srt
 from dataclasses import dataclass
@@ -13,19 +12,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-KARAOKE_WIDTH_CALIBRATION = 1.0
-
 _KARAOKE_TAG_RE = re.compile(r"\{\\k(\d+)\}")
-_COMMON_WINDOWS_FONT_FILES = {
-    "arial": ("arialbd.ttf", "arial.ttf"),
-    "impact": ("impact.ttf",),
-    "calibri": ("calibrib.ttf", "calibri.ttf"),
-    "times new roman": ("timesbd.ttf", "times.ttf"),
-    "verdana": ("verdanab.ttf", "verdana.ttf"),
-    "georgia": ("georgiab.ttf", "georgia.ttf"),
-    "comic sans ms": ("comicbd.ttf", "comic.ttf"),
-    "trebuchet ms": ("trebucbd.ttf", "trebuc.ttf"),
-}
 
 
 @dataclass
@@ -423,58 +410,6 @@ def _timedelta_to_ass(td) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
 
-def _resolve_karaoke_font_file(font_family: str) -> 'Path | None':
-    """Resolve the actual font file Pillow needs for box positioning."""
-    requested = font_family.strip().strip("'\"")
-    family_key = requested.casefold()
-
-    if os.name == "nt":
-        windows_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-        for filename in _COMMON_WINDOWS_FONT_FILES.get(family_key, ()):
-            candidate = windows_fonts / filename
-            if candidate.is_file():
-                return candidate
-
-    try:
-        from app.services.font_manager import bundled_fonts_dir, installed_font_index
-
-        bundled = bundled_fonts_dir()
-        if bundled.is_dir():
-            normalized_family = re.sub(r"[^a-z0-9]", "", family_key)
-            bundled_candidates = sorted(
-                bundled.iterdir(),
-                key=lambda path: ("700" not in path.stem and "bold" not in path.stem.casefold(), path.name),
-            )
-            for candidate in bundled_candidates:
-                normalized_stem = re.sub(r"[^a-z0-9]", "", candidate.stem.casefold())
-                if (
-                    candidate.is_file()
-                    and candidate.suffix.casefold() in {".ttf", ".otf", ".ttc"}
-                    and normalized_stem.startswith(normalized_family)
-                ):
-                    return candidate
-
-        installed = installed_font_index().get(family_key)
-        if installed and installed.is_file():
-            return installed
-    except Exception as e:
-        logger.debug("Karaoke box font lookup failed for %s: %s", requested, e)
-
-    return None
-
-
-def _font_file_from_dir(fonts_dir: 'Path | None') -> 'Path | None':
-    if not fonts_dir or not fonts_dir.is_dir():
-        return None
-    return next(
-        (
-            path for path in fonts_dir.iterdir()
-            if path.is_file() and path.suffix.casefold() in {".ttf", ".otf", ".ttc"}
-        ),
-        None,
-    )
-
-
 def _ass_color_with_opacity(color: str, opacity: int) -> str:
     ass_alpha = int((100 - opacity) / 100 * 255)
     if color.startswith("&H") and len(color) >= 10:
@@ -506,7 +441,10 @@ def _box_mode_style_lines(style_config: 'SubtitleStyleConfig') -> tuple[str, str
     box_fields[5] = _opaque_ass_color(style_config.highlight_bg_color)
     box_fields[6] = "&H00000000"
     box_fields[15] = "3"
-    box_fields[16] = str(max(8, style_config.font_size // 6))
+    # Per-event \xbord/\ybord overrides below mirror the browser preview's
+    # asymmetric padding. Keep the style default at zero so it cannot leak
+    # into separator spaces or inactive words.
+    box_fields[16] = "0"
     box_fields[17] = "0"
 
     return "Style: " + ",".join(box_fields), "Style: " + ",".join(line_fields)
@@ -523,6 +461,19 @@ def _box_mode_center_y(style_config: 'SubtitleStyleConfig', video_height: int) -
 
 def _format_ass_coord(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _box_mode_padding(style_config: 'SubtitleStyleConfig') -> tuple[str, str]:
+    r"""Return ASS x/y box padding matching the CSS karaoke word span.
+
+    The preview uses ``padding: 0.08em 0.18em`` (vertical, horizontal). ASS's
+    plain ``\bord`` applies one value on both axes, which made the final box
+    almost twice as tall relative to the glyphs. libass supports independent
+    ``\xbord`` and ``\ybord`` overrides, so preserve those same proportions.
+    """
+    padding_x = max(1.0, style_config.font_size * 0.18)
+    padding_y = max(1.0, style_config.font_size * 0.08)
+    return _format_ass_coord(padding_x), _format_ass_coord(padding_y)
 
 
 def _parse_karaoke_words(text: str) -> 'list[tuple[int, str]] | None':
@@ -545,24 +496,7 @@ def _build_box_karaoke_ass_content(
     style_config: 'SubtitleStyleConfig',
     video_width: int,
     video_height: int,
-    font_file: 'Path | None' = None,
 ) -> 'str | None':
-    font_file = font_file or _resolve_karaoke_font_file(style_config.font_family)
-    if font_file is None:
-        logger.warning(
-            "Karaoke box: no font file resolved for '%s'; using color sweep",
-            style_config.font_family,
-        )
-        return None
-
-    try:
-        from PIL import ImageFont
-
-        font = ImageFont.truetype(str(font_file), style_config.font_size)
-    except Exception as e:
-        logger.warning("Karaoke box: Pillow could not load %s (%s); using color sweep", font_file, e)
-        return None
-
     box_style, line_style = _box_mode_style_lines(style_config)
     center_x = video_width / 2
     center_y = _box_mode_center_y(style_config, video_height)
@@ -574,6 +508,7 @@ def _build_box_karaoke_ass_content(
     base = _inline_ass_color(
         _ass_color_with_opacity(style_config.primary_color, style_config.opacity)
     )
+    box_padding_x, box_padding_y = _box_mode_padding(style_config)
     events = []
 
     for sub in subs:
@@ -583,18 +518,9 @@ def _build_box_karaoke_ass_content(
             return None
 
         words = [word for _, word in tagged_words]
-        widths = [float(font.getlength(word)) * KARAOKE_WIDTH_CALIBRATION for word in words]
-        space_width = float(font.getlength(" ")) * KARAOKE_WIDTH_CALIBRATION
-        total_width = sum(widths) + space_width * max(0, len(words) - 1)
-        left = center_x - total_width / 2
-        word_centers = []
-        cursor_x = left
-        for width in widths:
-            word_centers.append(cursor_x + width / 2)
-            cursor_x += width + space_width
 
         cursor_time = sub.start
-        for index, ((duration_cs, word), word_center) in enumerate(zip(tagged_words, word_centers)):
+        for index, (duration_cs, _word) in enumerate(tagged_words):
             event_end = cursor_time + timedelta(seconds=duration_cs / 100)
             if index == len(tagged_words) - 1 and abs((event_end - sub.end).total_seconds()) <= 0.05:
                 event_end = sub.end
@@ -609,12 +535,36 @@ def _build_box_karaoke_ass_content(
                 else:
                     phrase_parts.append(phrase_word)
             phrase = " ".join(phrase_parts)
+            # Render the box from the *whole phrase* too, with every word
+            # transparent except the active one.  This deliberately lets
+            # libass perform the exact same shaping, kerning, fallback-font,
+            # bold and spacing calculations for the box and visible line.
+            #
+            # The previous implementation estimated each word centre with
+            # Pillow and positioned a second, single-word event there. ASS
+            # font sizes are not Pillow pixel sizes and fallback/diacritic
+            # metrics can differ, so the estimate drifted away from the text
+            # in final renders even though the browser preview looked right.
+            box_phrase_parts = []
+            for word_index, phrase_word in enumerate(words):
+                if word_index == index:
+                    # Reset the opaque border immediately after the glyphs.
+                    # Without this reset, the plain separator inserted by
+                    # ``" ".join(...)`` inherits the active word's border and
+                    # makes the box wider on the right than on the left.
+                    box_phrase_parts.append(
+                        f"{{\\3a&H00&\\xbord{box_padding_x}\\ybord{box_padding_y}}}"
+                        f"{phrase_word}{{\\3a&HFF&\\xbord0\\ybord0}}"
+                    )
+                else:
+                    box_phrase_parts.append(f"{{\\3a&HFF&\\xbord0\\ybord0}}{phrase_word}")
+            box_phrase = " ".join(box_phrase_parts)
             start_text = _timedelta_to_ass(cursor_time)
             end_text = _timedelta_to_ass(event_end)
-            word_x_text = _format_ass_coord(word_center)
             events.append(
                 f"Dialogue: 0,{start_text},{end_text},Box,,0,0,0,,"
-                f"{{\\an5\\pos({word_x_text},{center_y_text})\\1a&HFF&}}{word}"
+                f"{{\\an5\\pos({center_x_text},{center_y_text})\\1a&HFF&\\3a&HFF&\\xbord0\\ybord0}}"
+                f"{box_phrase}"
             )
             events.append(
                 f"Dialogue: 1,{start_text},{end_text},Line,,0,0,0,,"
@@ -646,7 +596,6 @@ def build_karaoke_ass_file(
     style_config: 'SubtitleStyleConfig',
     video_width: int,
     video_height: int,
-    font_file: 'Path | None' = None,
 ) -> 'Path | None':
     """Convert a ``{\\k}``-tagged SRT into a real .ass file for karaoke burn-in.
 
@@ -683,7 +632,7 @@ def build_karaoke_ass_file(
     ass_content = None
     if style_config.karaoke_style == "box":
         ass_content = _build_box_karaoke_ass_content(
-            subs, style_config, video_width, video_height, font_file
+            subs, style_config, video_width, video_height
         )
 
     if ass_content is None:
@@ -765,26 +714,8 @@ def build_subtitle_filter(
 
     from app.services.font_manager import prepare_render_fonts
     from app.services.video_processor import escape_srt_path_for_ffmpeg
-    requested_family = style_config.font_family
-    box_font_file = (
-        _resolve_karaoke_font_file(requested_family)
-        if style_config.karaoke and style_config.karaoke_style == "box"
-        else None
-    )
-    if box_font_file is not None:
-        # Keep ASS and Pillow on the same resolved family/file. This also covers
-        # systems where optional font name-table indexing is unavailable.
-        style_config.font_family = requested_family
-        fonts_dir = box_font_file.parent
-    else:
-        effective_family, fonts_dir, _warning = prepare_render_fonts(requested_family)
-        style_config.font_family = effective_family
-        if style_config.karaoke and style_config.karaoke_style == "box":
-            box_font_file = _font_file_from_dir(fonts_dir) or _resolve_karaoke_font_file(
-                effective_family
-            )
-            if fonts_dir is None and box_font_file is not None:
-                fonts_dir = box_font_file.parent
+    effective_family, fonts_dir, _warning = prepare_render_fonts(style_config.font_family)
+    style_config.font_family = effective_family
 
     # Karaoke (word-level highlight) MUST burn via a real .ass file — libass
     # silently ignores {\k} tags embedded in an SRT via the `subtitles` filter,
@@ -793,7 +724,7 @@ def build_subtitle_filter(
     # from the same style config; otherwise fall through to the static path.
     if style_config.karaoke:
         ass_path = build_karaoke_ass_file(
-            srt_path, style_config, video_width, video_height, box_font_file
+            srt_path, style_config, video_width, video_height
         )
         if ass_path is not None:
             ass_escaped = escape_srt_path_for_ffmpeg(ass_path)

@@ -15,6 +15,7 @@ import {
   Volume2,
   Pause,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import type { PipelineListItem } from "../pipeline-types";
 import { useState, type Dispatch, type SetStateAction } from "react";
@@ -99,12 +100,14 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     setPreviews,
     playingAudio,
     handlePlayAudio,
+    setShowHistoryPanel,
   }: PipelineHistorySidebarCtx = ctx;
   const isEditingWorkspace = step >= 1 && step <= 3;
 
   return (
           <div
             className={`w-full min-w-0 bg-background ${isEditingWorkspace ? "min-[1280px]:h-full min-[1280px]:min-h-0" : ""}`}
+            data-workspace-pane={isEditingWorkspace ? "" : undefined}
             data-testid="pipeline-history-sidebar"
           >
             <Card variant={isEditingWorkspace ? "workspace" : "default"} className={isEditingWorkspace
@@ -115,6 +118,19 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                 icon={Clock}
                 title="Script History"
                 data-testid="pipeline-history-header"
+                actions={(
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    onClick={() => setShowHistoryPanel(false)}
+                    aria-label="Close Script History"
+                    data-testid="pipeline-history-close"
+                  >
+                    <X className="size-4" aria-hidden="true" />
+                  </Button>
+                )}
               />
               <CardContent className={`max-h-[28rem] space-y-2 overflow-y-auto py-3 min-[1280px]:max-h-[calc(100vh-5rem)] ${
                 isEditingWorkspace ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:max-h-none min-[1280px]:px-3 min-[1280px]:py-3" : ""
@@ -299,6 +315,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                     setHistorySelectedScripts(new Set());
                                     setPreviews({});
                                     setPreviewError(null);
+                                    setShowHistoryPanel(false);
                                   }}
                                 >
                                   {historyImporting ? (

@@ -1,10 +1,43 @@
 export type AttentionAnimationPreset =
   | "static"
+  | "fade"
   | "pop"
   | "zoom"
   | "slide"
+  | "slide-right"
+  | "slide-up"
+  | "slide-down"
+  | "wipe-left"
+  | "wipe-right"
+  | "bounce"
   | "spin"
   | "tornado";
+
+export const DEFAULT_ATTENTION_ENTER_MS = 250;
+export const DEFAULT_ATTENTION_EXIT_MS = 200;
+
+export const ATTENTION_ANIMATION_OPTIONS: ReadonlyArray<{
+  value: AttentionAnimationPreset;
+  label: string;
+  description: string;
+}> = [
+  { value: "static", label: "Static / Classic", description: "Appears instantly and stays still" },
+  { value: "fade", label: "Fade", description: "Soft fade into the slot" },
+  { value: "pop", label: "Pop", description: "Quick scale with a light overshoot" },
+  { value: "zoom", label: "Zoom in", description: "Smoothly grows into position" },
+  { value: "bounce", label: "Bounce", description: "Drops in with a playful bounce" },
+  { value: "slide", label: "Slide from left", description: "Enters horizontally from the left" },
+  { value: "slide-right", label: "Slide from right", description: "Enters horizontally from the right" },
+  { value: "slide-up", label: "Slide from bottom", description: "Rises into the frame" },
+  { value: "slide-down", label: "Slide from top", description: "Drops into the frame" },
+  { value: "wipe-left", label: "Wipe from left", description: "Fast directional reveal from the left" },
+  { value: "wipe-right", label: "Wipe from right", description: "Fast directional reveal from the right" },
+  { value: "spin", label: "Spin", description: "Rotates and settles into place" },
+  { value: "tornado", label: "Tornado", description: "High-energy spin, drop, and scale" },
+];
+
+export const attentionAnimationLabel = (preset: AttentionAnimationPreset): string =>
+  ATTENTION_ANIMATION_OPTIONS.find(option => option.value === preset)?.label ?? preset;
 
 export type AttentionLayer = {
   id: string;

@@ -1,10 +1,12 @@
 import type { AttentionSelection } from "@/components/attention-template-picker";
-import type { AttentionTimeline } from "@/types/attention-timeline";
+import type { AttentionAnimationPreset, AttentionTimeline } from "@/types/attention-timeline";
 
 import type { PreviewData } from "./pipeline-types";
 
 export type AttentionTemplateApplyPayload = {
   templateId: string;
+  animation?: AttentionAnimationPreset;
+  enterMs?: number;
   assets: { url: string; type: "image" | "video" }[];
   durationMs: number;
   subtitleBoundariesMs: number[];
@@ -32,6 +34,8 @@ export function buildAttentionTemplateApplyPayload({
 }): AttentionTemplateApplyPayload {
   return {
     templateId: selection.templateId,
+    animation: selection.animation,
+    enterMs: selection.enterMs,
     // Typed slot content — images composite as stills, videos as muted overlay
     // clips. Backend still accepts the legacy flat assetUrls for old clients.
     assets: selection.assets.map((asset) => ({ url: asset.url, type: asset.type })),

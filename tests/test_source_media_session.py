@@ -118,7 +118,9 @@ def test_hosted_media_cookie_is_secure_and_authenticates_remote_request(tmp_path
     assert cookie["secure"]
     assert cookie["httponly"]
     assert cookie["samesite"].lower() == "lax"
-    assert cookie["path"] == "/api/v1/segments/source-videos"
+    # Segment and library media live under different namespaces. The cookie is
+    # delivered to both, but only explicitly opted-in endpoints accept it.
+    assert cookie["path"] == "/api/v1"
 
     resolved = asyncio.run(media_session.get_source_media_profile_context(
         request=_request(client_host="10.0.0.10", scheme="https"),
@@ -129,6 +131,32 @@ def test_hosted_media_cookie_is_secure_and_authenticates_remote_request(tmp_path
         x_profile_id=None,
     ))
     assert resolved == expected
+
+
+def test_library_file_route_accepts_media_session_dependency():
+    from app.api import library_routes
+
+    route = next(
+        route
+        for route in library_routes.router.routes
+        if getattr(route, "path", None) == "/library/files/{file_path:path}"
+    )
+    dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+
+    assert media_session.get_source_media_profile_context in dependency_calls
+
+
+def test_pipeline_status_refreshes_media_session():
+    from app.api import pipeline_routes
+
+    route = next(
+        route
+        for route in pipeline_routes.router.routes
+        if getattr(route, "path", None) == "/pipeline/status/{pipeline_id}"
+    )
+    dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+
+    assert media_session.get_profile_context_with_media_session in dependency_calls
 
 
 def test_desktop_signing_key_is_reused(tmp_path, monkeypatch):

@@ -5,9 +5,11 @@ Manual video segment selection system - Source videos, segments, and matching.
 import uuid
 import subprocess
 import asyncio
+import hashlib
 import json
 import struct
 import math
+import re as _re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
@@ -26,18 +28,48 @@ from app.api.media_session import (
     get_profile_context_with_media_session,
     get_source_media_profile_context,
 )
-from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
+from app.api.validators import (
+    ALLOWED_IMAGE_MIMES,
+    ALLOWED_VIDEO_MIMES,
+    validate_file_mime_type,
+    validate_upload_size,
+)
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 from app.core.rate_limit import limiter
 from app.services.ffmpeg_semaphore import get_prep_codec_params, safe_ffmpeg_run, acquire_preview_slot
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/segments", tags=["segments"])
 
-from app.repositories.factory import get_repository
-from app.repositories.models import QueryFilters
+
+ATTENTION_MEDIA_MIME_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+}
+ATTENTION_MEDIA_MAX_BYTES = 100 * 1024 * 1024
+
+
+def _attention_media_profile_key(profile_id: str) -> str:
+    """Keep profile identifiers out of filesystem paths while preserving isolation."""
+    return hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:32]
+
+
+def _attention_media_dir(profile_id: str) -> Path:
+    return (
+        get_settings().base_dir
+        / "media"
+        / "attention"
+        / _attention_media_profile_key(profile_id)
+    )
 
 
 def _refresh_segments_count(repo, video_id: str, profile_id: str) -> None:
@@ -730,7 +762,7 @@ async def find_local_file(
         raise HTTPException(status_code=404, detail=f"File '{filename}' ({target_size} bytes) not found on disk")
 
     # Security: filter out matches from sensitive directories
-    settings = get_settings()
+    get_settings()
     _sensitive_prefixes = ("Windows", "Program Files", "ProgramData", "AppData", ".ssh", ".gnupg")
     safe_matches = [
         m for m in matches
@@ -964,7 +996,7 @@ async def upload_source_video(
             "preview_proxy_status": "pending",
             "preview_proxy_error": None,
         })
-    except Exception as e:
+    except Exception:
         video_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to save video")
 
@@ -1480,7 +1512,7 @@ async def create_segment(
             created_at=datetime.now(timezone.utc).isoformat(),
             source_video_name=source_video.get("name")
         )
-    except Exception as e:
+    except Exception:
         thumbnail_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to create segment")
 
@@ -2657,6 +2689,85 @@ async def extract_segment_frame_at(
     return {"pos": pos_q, "timestamp": round(ts, 3), "frame_url": frame_filename}
 
 
+# ============== ATTENTION MEDIA ==============
+
+@router.post("/attention-media")
+async def upload_attention_media(
+    file: UploadFile = File(...),
+    profile: ProfileContext = Depends(get_profile_context_with_media_session),
+):
+    """Persist an attention image/video locally; no Blipost account is required."""
+    content_type = (file.content_type or "").lower().split(";", 1)[0].strip()
+    extension = ATTENTION_MEDIA_MIME_EXTENSIONS.get(content_type)
+    if not extension:
+        await file.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Choose a PNG, JPEG, WebP, GIF, MP4, WebM, or MOV file.",
+        )
+
+    allowed_mimes = ALLOWED_IMAGE_MIMES | ALLOWED_VIDEO_MIMES
+    await validate_upload_size(file, ATTENTION_MEDIA_MAX_BYTES)
+    await validate_file_mime_type(file, allowed_mimes, "attention media")
+
+    media_dir = _attention_media_dir(profile.profile_id)
+    media_dir.mkdir(parents=True, exist_ok=True)
+    asset_id = f"{uuid.uuid4().hex}{extension}"
+    destination = media_dir / asset_id
+    try:
+        import shutil
+
+        with destination.open("xb") as output:
+            await asyncio.to_thread(shutil.copyfileobj, file.file, output, 1024 * 1024)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Could not save attention media locally.")
+    finally:
+        await file.close()
+
+    relative_path = destination.relative_to(get_settings().base_dir).as_posix()
+    return {
+        "asset": {
+            "url": relative_path,
+            "type": "video" if content_type.startswith("video/") else "image",
+        }
+    }
+
+
+@router.get("/attention-media/{asset_id}")
+async def serve_attention_media(
+    asset_id: str,
+    profile: ProfileContext = Depends(get_source_media_profile_context),
+):
+    """Serve a profile-owned local attention asset to native img/video elements."""
+    if not _re.fullmatch(
+        r"[0-9a-f]{32}\.(?:png|jpg|webp|gif|mp4|webm|mov)",
+        asset_id,
+        flags=_re.IGNORECASE,
+    ):
+        raise HTTPException(status_code=404, detail="Attention media not found")
+
+    media_path = (_attention_media_dir(profile.profile_id) / asset_id).resolve()
+    if not media_path.is_file():
+        raise HTTPException(status_code=404, detail="Attention media not found")
+
+    extension = media_path.suffix.lower()
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+    }
+    return FileResponse(
+        path=str(media_path),
+        media_type=media_types[extension],
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 # ============== FILES ENDPOINT ==============
 
 @router.get("/files/{file_path:path}")
@@ -2671,7 +2782,6 @@ async def serve_segment_file(
     settings = get_settings()
 
     from urllib.parse import unquote
-    import os
 
     decoded_path = unquote(file_path)
 

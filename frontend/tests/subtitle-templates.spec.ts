@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
  *
  * Mocks the profile + subtitle-template API and verifies the hierarchy:
  * templates expand to ordered styles, styles can be added, and the full set
- * persists in one request.
+ * persists automatically without a manual Save action.
  */
 
 const PROFILE = {
@@ -121,7 +121,7 @@ async function elementRect(locator: import('@playwright/test').Locator) {
   });
 }
 
-test('lists a template with child styles, adds a style, saves, and deletes', async ({ page }) => {
+test('lists a template with child styles, autosaves create and edits, and deletes', async ({ page }) => {
   await page.goto('/subtitle-templates');
   await page.waitForLoadState('networkidle');
 
@@ -129,26 +129,57 @@ test('lists a template with child styles, adds a style, saves, and deletes', asy
   const editor = page.getByTestId('subtitle-template-editor');
   await expect(editor).toBeVisible();
   await expect(page.getByTestId('subtitle-template-row')).toHaveText(/Launch captions.*2 styles/);
+  await expect(page.getByText('New template', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('Add style', { exact: true })).toHaveCount(0);
 
-  // Create: fresh page defaults to "New template" mode -> Save should POST.
-  await page.getByTestId('subtitle-template-save').click();
+  // Create: the first valid edit persists automatically; there is no Save CTA.
+  await expect(page.getByRole('button', { name: 'Save template' })).toHaveCount(0);
+  await page.getByTestId('subtitle-template-name').fill('Always saved captions');
   await expect.poll(() => recorded(page).some((request) => request.method === 'POST')).toBe(true);
-  await expect(page.getByText('Template created')).not.toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('subtitle-template-save-status')).toHaveText('Saved');
 
   // Selecting expands the saved template and exposes both styles underneath.
-  await page.getByTestId('subtitle-template-row').click();
-  await expect(page.getByTestId('subtitle-style-row')).toHaveCount(2);
-  await expect(page.getByTestId('subtitle-style-row')).toHaveText([/Bold Yellow/, /Clean White/]);
+  await page.getByRole('button', { name: 'Launch captions 2 styles' }).click();
+  const launchGroup = page.getByTestId('subtitle-template-group').filter({ hasText: 'Launch captions' });
+  const launchStyles = launchGroup.getByTestId('subtitle-style-row');
+  await expect(launchStyles).toHaveCount(2);
+  await expect(launchStyles).toHaveText([/Bold Yellow/, /Clean White/]);
+  await expect(page.getByText('Add style', { exact: true })).toHaveCount(0);
+
+  // The template group name follows the same double-click inline-edit contract as styles.
+  await launchGroup.getByText('Launch captions', { exact: true }).dblclick();
+  const inlineTemplateName = page.getByTestId('subtitle-template-name-input');
+  await expect(inlineTemplateName).toBeFocused();
+  await inlineTemplateName.fill('Social launch captions');
+  await inlineTemplateName.press('Enter');
+  const renamedLaunchGroup = page.getByTestId('subtitle-template-group').filter({ hasText: 'Social launch captions' });
+  const renamedLaunchStyles = renamedLaunchGroup.getByTestId('subtitle-style-row');
+  await expect(renamedLaunchGroup.getByTestId('subtitle-template-row')).toContainText('Social launch captions');
+  await expect(page.getByTestId('subtitle-template-name')).toHaveValue('Social launch captions');
+  await expect.poll(() => {
+    const puts = recorded(page).filter((request) => request.method === 'PUT');
+    return (puts.at(-1)?.body as { name?: string } | undefined)?.name;
+  }).toBe('Social launch captions');
+
+  // Template deletion stays in the top action bar, immediately after New template.
+  const newTemplateAction = page.getByRole('button', { name: 'New template' }).first();
+  const deleteTemplateAction = page.getByRole('button', { name: 'Delete template' });
+  const [newTemplateBox, deleteTemplateBox] = await Promise.all([
+    elementRect(newTemplateAction),
+    elementRect(deleteTemplateAction),
+  ]);
+  expect(Math.abs(newTemplateBox.y - deleteTemplateBox.y)).toBeLessThanOrEqual(1);
+  expect(deleteTemplateBox.x).toBeGreaterThan(newTemplateBox.x);
 
   // Add a third style and rename it inline by double-clicking its current name.
-  await page.getByRole('button', { name: 'Add style to Launch captions' }).click();
-  await expect(page.getByTestId('subtitle-style-row')).toHaveCount(3);
-  await page.getByTestId('subtitle-style-row').nth(2).getByText('Style 3').dblclick();
+  await page.getByRole('button', { name: 'Add style to Social launch captions' }).click();
+  await expect(renamedLaunchStyles).toHaveCount(3);
+  await renamedLaunchStyles.nth(2).getByText('Style 3').dblclick();
   const inlineName = page.getByTestId('subtitle-style-name-input');
   await expect(inlineName).toBeFocused();
   await inlineName.fill('Karaoke Green');
   await inlineName.press('Enter');
-  await expect(page.getByTestId('subtitle-style-row').nth(2)).toContainText('Karaoke Green');
+  await expect(renamedLaunchStyles.nth(2)).toContainText('Karaoke Green');
   await expect(page.getByTestId('subtitle-style-name')).toHaveValue('Karaoke Green');
   await expect(editor).toHaveScreenshot('subtitle-template-with-three-styles.png', {
     animations: 'disabled',
@@ -157,14 +188,40 @@ test('lists a template with child styles, adds a style, saves, and deletes', asy
   const slider = page.getByRole('slider').first();
   await slider.focus();
   await slider.press('ArrowRight');
-  await page.getByTestId('subtitle-template-save').click();
+  await expect.poll(() => {
+    const puts = recorded(page).filter((request) => request.method === 'PUT');
+    const latest = puts.at(-1)?.body as { styles?: Array<{ settings: { fontSize?: number } }> } | undefined;
+    return latest?.styles?.[2]?.settings.fontSize ?? 0;
+  }).toBeGreaterThan(48);
+  await expect(page.getByTestId('subtitle-template-save-status')).toHaveText('Saved');
 
-  await expect.poll(() => recorded(page).find((request) => request.method === 'PUT')).toBeTruthy();
-  const put = recorded(page).find((request) => request.method === 'PUT');
+  const put = recorded(page).filter((request) => request.method === 'PUT').at(-1);
   const styles = (put?.body as { styles?: Array<{ name: string; settings: { fontSize?: number } }> })?.styles;
   expect(styles).toHaveLength(3);
   expect(styles?.map((style) => style.name)).toEqual(['Bold Yellow', 'Clean White', 'Karaoke Green']);
   expect(styles?.[2]?.settings.fontSize).toBeGreaterThan(48);
+
+  // Style deletion is immediate, persists through autosave, and stays undoable
+  // with the platform keyboard shortcut without opening a modal.
+  await renamedLaunchStyles.nth(1).getByRole('button', { name: 'Delete style Clean White' }).click();
+  await expect(page.getByRole('alertdialog', { name: 'Delete subtitle style?' })).toHaveCount(0);
+  await expect(renamedLaunchStyles).toHaveCount(2);
+  await expect(renamedLaunchStyles).toHaveText([/Bold Yellow/, /Karaoke Green/]);
+  await expect.poll(() => {
+    const puts = recorded(page).filter((request) => request.method === 'PUT');
+    const latest = puts.at(-1)?.body as { styles?: Array<{ name: string }> } | undefined;
+    return latest?.styles?.map((style) => style.name);
+  }).toEqual(['Bold Yellow', 'Karaoke Green']);
+  await expect(page.getByTestId('subtitle-template-save-status')).toHaveText('Saved');
+
+  await page.keyboard.press('Control+z');
+  await expect(renamedLaunchStyles).toHaveCount(3);
+  await expect(renamedLaunchStyles).toHaveText([/Bold Yellow/, /Clean White/, /Karaoke Green/]);
+  await expect.poll(() => {
+    const puts = recorded(page).filter((request) => request.method === 'PUT');
+    const latest = puts.at(-1)?.body as { styles?: Array<{ name: string }> } | undefined;
+    return latest?.styles?.map((style) => style.name);
+  }).toEqual(['Bold Yellow', 'Clean White', 'Karaoke Green']);
 
   // Delete keeps the existing confirm-gated template deletion flow.
   await page.getByRole('button', { name: 'Delete template' }).first().click();
@@ -173,6 +230,7 @@ test('lists a template with child styles, adds a style, saves, and deletes', asy
 });
 
 test('orders, reorders, and resizes all subtitle workspace panels', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/subtitle-templates');
   await page.waitForLoadState('networkidle');
 
@@ -183,13 +241,15 @@ test('orders, reorders, and resizes all subtitle workspace panels', async ({ pag
   await expect(settings).toBeVisible();
   await expect(preview).toBeVisible();
 
-  const [templatesBox, settingsBox, previewBox] = await Promise.all([
-    elementRect(templates),
-    elementRect(settings),
-    elementRect(preview),
-  ]);
-  expect(templatesBox.x).toBeLessThan(settingsBox.x);
-  expect(settingsBox.x).toBeLessThan(previewBox.x);
+  await expect.poll(async () => {
+    const [templatesRect, settingsRect, previewRect] = await Promise.all([
+      elementRect(templates),
+      elementRect(settings),
+      elementRect(preview),
+    ]);
+    return templatesRect.x < settingsRect.x && settingsRect.x < previewRect.x;
+  }).toBe(true);
+  const templatesBox = await elementRect(templates);
   await expect(page.locator('[data-slot="resizable-handle"]')).toHaveCount(2);
 
   const panelHeaders = page.locator('[data-slot="workspace-panel-header"]');
@@ -198,17 +258,33 @@ test('orders, reorders, and resizes all subtitle workspace panels', async ({ pag
     const rect = header.getBoundingClientRect();
     return { y: rect.y, height: rect.height };
   }));
-  expect(headerRects.map(({ height }) => height)).toEqual([48, 48, 48]);
+  expect(headerRects.map(({ height }) => height)).toEqual([36, 36, 36]);
   expect(new Set(headerRects.map(({ y }) => y)).size).toBe(1);
 
-  // Every header is a drag surface, including Preview.
+  // Every compact header remains visible and draggable, including Preview.
   const previewHeader = page.getByTestId('subtitle-panel-header-preview');
+  await expect(previewHeader).toBeVisible();
   const previewHeaderBox = await elementRect(previewHeader);
+  await expect.poll(() => page.evaluate(({ x, y }) => (
+    document
+      .elementFromPoint(x, y)
+      ?.closest('[data-slot="workspace-panel-header"]')
+      ?.getAttribute('data-testid')
+  ), {
+    x: previewHeaderBox.x + 24,
+    y: previewHeaderBox.y + previewHeaderBox.height / 2,
+  })).toBe('subtitle-panel-header-preview');
   await page.mouse.move(
-    previewHeaderBox.x + previewHeaderBox.width / 2,
+    previewHeaderBox.x + 24,
     previewHeaderBox.y + previewHeaderBox.height / 2,
   );
   await page.mouse.down();
+  await page.mouse.move(
+    previewHeaderBox.x + 84,
+    previewHeaderBox.y + previewHeaderBox.height / 2,
+    { steps: 4 },
+  );
+  await expect(preview).toHaveCSS('opacity', '0.5');
   await page.mouse.move(templatesBox.x + 10, templatesBox.y + 24, { steps: 8 });
   await page.mouse.up();
 

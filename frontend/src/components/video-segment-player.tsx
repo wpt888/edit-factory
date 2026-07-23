@@ -6,7 +6,16 @@ import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
-import { TimelineClipShell } from "@/components/timeline/timeline-primitives";
+import {
+  TimelineAudioTrackSurface,
+  TimelineClipShell,
+} from "@/components/timeline/timeline-primitives";
+import {
+  alignedTimelineRangeEdge,
+  snapTimelineRange,
+  snapTimelineTime,
+  timelineRangeEdges,
+} from "@/lib/timeline-snapping";
 import {
   MultiTrackTimeline,
   TIMELINE_MIN_WIDTH,
@@ -171,6 +180,7 @@ export function VideoSegmentPlayer({
     startClientX?: number;
   } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ start: number; end: number } | null>(null);
+  const [snapGuideTime, setSnapGuideTime] = useState<number | null>(null);
   const resizePreviewRef = useRef<{ start: number; end: number } | null>(null);
   const wasPlayingBeforeResize = useRef(false);
   const segmentDragMovedRef = useRef(false);
@@ -966,35 +976,75 @@ export function VideoSegmentPlayer({
       const time = getTimeFromMouseEvent(e);
       if (time === null) return;
       const clampedTime = Math.max(0, Math.min(safeDuration, time));
+      const snapPoints = [
+        0,
+        safeDuration,
+        ...timelineRangeEdges(
+          segments.filter(candidate => candidate.id !== resizingInfo.segmentId),
+          candidate => ({ start: candidate.start_time, end: candidate.end_time }),
+        ),
+        ...timelineRangeEdges(voiceRegions, region => ({ start: region.start, end: region.end })),
+        ...timelineRangeEdges(productGroups, group => ({ start: group.start_time, end: group.end_time })),
+      ];
+      const currentPreview = resizePreviewRef.current;
+      if (!currentPreview) return;
+      const axisWidth = timelineRef.current?.clientWidth ?? timelineLaneWidth;
+      const MIN_GAP = 0.1;
+      let updated: { start: number; end: number };
+      let guide: number | null = null;
 
-      setResizePreview(prev => {
-        if (!prev) return prev;
-        const MIN_GAP = 0.1;
-        let updated: { start: number; end: number };
-        if (resizingInfo.edge === 'move') {
-          const segmentDuration = resizingInfo.originalEnd - resizingInfo.originalStart;
-          const maxStart = Math.max(0, safeDuration - segmentDuration);
-          const newStart = Math.max(
-            0,
-            Math.min(maxStart, clampedTime - (resizingInfo.grabOffset ?? 0))
-          );
-          updated = { start: newStart, end: newStart + segmentDuration };
-        } else if (resizingInfo.edge === 'start') {
-          const newStart = Math.min(clampedTime, prev.end - MIN_GAP);
-          updated = { start: newStart, end: prev.end };
+      if (resizingInfo.edge === 'move') {
+        const segmentDuration = resizingInfo.originalEnd - resizingInfo.originalStart;
+        const requestedStart = clampedTime - (resizingInfo.grabOffset ?? 0);
+        const snapped = snapTimelineRange(
+          requestedStart,
+          requestedStart + segmentDuration,
+          snapPoints,
+          {
+            duration: visibleDuration,
+            axisWidth,
+            disabled: e.altKey,
+          },
+        );
+        const maxStart = Math.max(0, safeDuration - segmentDuration);
+        const newStart = Math.max(0, Math.min(maxStart, snapped.start));
+        updated = { start: newStart, end: newStart + segmentDuration };
+        guide = e.altKey
+          ? null
+          : alignedTimelineRangeEdge(updated.start, updated.end, snapPoints);
+      } else {
+        const snapped = snapTimelineTime(clampedTime, snapPoints, {
+          duration: visibleDuration,
+          axisWidth,
+          disabled: e.altKey,
+        });
+        if (resizingInfo.edge === 'start') {
+          const newStart = Math.max(0, Math.min(snapped.value, currentPreview.end - MIN_GAP));
+          updated = { start: newStart, end: currentPreview.end };
+          guide = snapped.snappedTo !== null && Math.abs(newStart - snapped.value) <= 0.0001
+            ? snapped.snappedTo
+            : null;
         } else {
-          const newEnd = Math.max(clampedTime, prev.start + MIN_GAP);
-          updated = { start: prev.start, end: newEnd };
+          const newEnd = Math.min(
+            safeDuration,
+            Math.max(snapped.value, currentPreview.start + MIN_GAP),
+          );
+          updated = { start: currentPreview.start, end: newEnd };
+          guide = snapped.snappedTo !== null && Math.abs(newEnd - snapped.value) <= 0.0001
+            ? snapped.snappedTo
+            : null;
         }
-        resizePreviewRef.current = updated;
-        return updated;
-      });
+      }
+
+      setSnapGuideTime(guide);
+      resizePreviewRef.current = updated;
+      setResizePreview(updated);
 
       // Resizing an edge previews that exact source frame. Moving the whole
       // range deliberately leaves the playhead alone so the two controls stay
       // independent.
       if (resizingInfo.edge !== 'move') {
-        seekTo(clampedTime);
+        seekTo(resizingInfo.edge === 'start' ? updated.start : updated.end);
       }
     };
 
@@ -1013,6 +1063,7 @@ export function VideoSegmentPlayer({
       }
       setResizingInfo(null);
       setResizePreview(null);
+      setSnapGuideTime(null);
       resizePreviewRef.current = null;
       segmentDragMovedRef.current = false;
       if (wasPlayingBeforeResize.current && videoRef.current) {
@@ -1028,7 +1079,7 @@ export function VideoSegmentPlayer({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resizingInfo, getTimeFromMouseEvent, seekTo, safeDuration, onSegmentResize]);
+  }, [resizingInfo, getTimeFromMouseEvent, seekTo, safeDuration, onSegmentResize, productGroups, segments, timelineLaneWidth, visibleDuration, voiceRegions]);
 
   // Fetch waveform data when sourceVideoId changes + reset voice data
   useEffect(() => {
@@ -1373,6 +1424,7 @@ export function VideoSegmentPlayer({
             />
           ),
         }}
+        snapGuide={snapGuideTime === null ? null : { time: snapGuideTime }}
         zoom={zoomLevel}
         minZoom={1}
         maxZoom={20}
@@ -1531,9 +1583,8 @@ export function VideoSegmentPlayer({
           {
             label: "Audio",
             height: "h-10",
-            axisClassName: "bg-zinc-950/95",
             content: (
-              <>
+              <TimelineAudioTrackSurface className="w-full">
                 {showWaveform && waveformData.length === 0 && !waveformLoading && (
                   <div className="absolute inset-0 opacity-25 pointer-events-none" style={{
                     backgroundImage: "repeating-linear-gradient(90deg, transparent 0 5px, rgba(255,255,255,.22) 5px 6px)",
@@ -1550,7 +1601,7 @@ export function VideoSegmentPlayer({
                     Waveform hidden
                   </span>
                 )}
-              </>
+              </TimelineAudioTrackSurface>
             ),
           },
           ...(showGroupBands && productGroups.length > 0 ? [{

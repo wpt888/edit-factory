@@ -27,7 +27,7 @@ const ATTENTION = {
   cues: [
     {
       id: "cue-a",
-      startMs: 500,
+      startMs: 0,
       durationMs: 1500,
       sfxVolumeDb: 0,
       zone: "behind",
@@ -39,6 +39,26 @@ const ATTENTION = {
           assetUrl: "https://example.com/a.png",
           x: 0.1, y: 0.1, width: 0.8, height: 0.8, zIndex: 1, fit: "contain",
           animation: { preset: "static", enterMs: 250, exitMs: 200, delayMs: 0, intensity: 1 },
+        },
+      ],
+    },
+  ],
+};
+
+const OVERLAPPING_ATTENTION = {
+  ...ATTENTION,
+  cues: [
+    ATTENTION.cues[0],
+    {
+      ...ATTENTION.cues[0],
+      id: "cue-b",
+      track: 3,
+      layers: [
+        {
+          ...ATTENTION.cues[0].layers[0],
+          id: "layer-b",
+          assetId: "https://example.com/b.png",
+          assetUrl: "https://example.com/b.png",
         },
       ],
     },
@@ -64,13 +84,22 @@ const makeSilentWav = () => {
   return buffer;
 };
 
-type Harness = { attentionPuts: Array<Record<string, unknown>> };
+type Harness = {
+  attentionPuts: Array<Record<string, unknown>>;
+  matchesPuts: Array<Record<string, unknown>>;
+};
 
 const openFullEditor = async (
   page: Page,
-  { maximize = true }: { maximize?: boolean } = {},
+  {
+    maximize = true,
+    attention = ATTENTION,
+  }: {
+    maximize?: boolean;
+    attention?: typeof ATTENTION;
+  } = {},
 ): Promise<{ editor: ReturnType<Page["getByTestId"]>; harness: Harness }> => {
-  const harness: Harness = { attentionPuts: [] };
+  const harness: Harness = { attentionPuts: [], matchesPuts: [] };
 
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
@@ -91,8 +120,14 @@ const openFullEditor = async (
         harness.attentionPuts.push(body);
         await route.fulfill({ json: body });
       } else {
-        await route.fulfill({ json: ATTENTION });
+        await route.fulfill({ json: attention });
       }
+      return;
+    }
+    if (path.endsWith(`/pipeline/${PIPELINE_ID}/matches/0`) && request.method() === "PUT") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      harness.matchesPuts.push(body);
+      await route.fulfill({ json: body });
       return;
     }
     if (path.endsWith(`/pipeline/audio/${PIPELINE_ID}/0`)) {
@@ -225,6 +260,151 @@ test("maximized program monitor fits the workspace at a 9:16 aspect ratio", asyn
   expect(frameBox!.width).toBeLessThan(frameBox!.height);
 });
 
+test("clicking a program subtitle opens text editing and persists the changed copy", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const subtitle = editor.getByTestId("preview-subtitle");
+  await expect(subtitle).toContainText("One two");
+
+  await subtitle.click();
+  const textEditor = editor.getByTestId("subtitle-text-editor");
+  const textarea = textEditor.getByLabel("Subtitle text");
+  await expect(textarea).toHaveValue("One two");
+  await textarea.fill("One two — edited on canvas");
+
+  await expect(subtitle).toContainText("One two — edited on canvas");
+  await expect.poll(() => {
+    const last = harness.matchesPuts.at(-1) as { matches?: Array<{ srt_text?: string }> } | undefined;
+    return last?.matches?.[0]?.srt_text;
+  }, { timeout: 5000 }).toBe("One two — edited on canvas");
+});
+
+test("an attention image can be selected, moved, and resized in the program monitor", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const layer = editor.getByTestId("attention-preview-cue-a-layer-a");
+  await expect(layer).toBeVisible();
+
+  const before = (await layer.boundingBox())!;
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width / 2 + 20, before.y + before.height / 2 + 24, { steps: 6 });
+  await page.mouse.up();
+
+  await expect(layer).toHaveAttribute("aria-pressed", "true");
+  const selectedTimelineCue = editor.locator('[data-cue-id="cue-a"]');
+  await expect(selectedTimelineCue).toHaveAttribute("aria-pressed", "true");
+  await expect(selectedTimelineCue).toHaveClass(/ring-2/);
+  const resize = editor.getByTestId("attention-resize-cue-a-layer-a");
+  await expect(resize).toBeVisible();
+  await expect(editor.getByTestId("attention-layer-0")).toHaveClass(/border-primary/);
+
+  const handle = (await resize.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 - 24, handle.y + handle.height / 2 - 48, { steps: 6 });
+  await page.mouse.up();
+
+  await expect.poll(() => {
+    const last = harness.attentionPuts.at(-1) as {
+      cues?: Array<{ layers?: Array<{ x?: number; y?: number; width?: number; height?: number }> }>;
+    } | undefined;
+    return last?.cues?.[0]?.layers?.[0];
+  }, { timeout: 5000 }).toMatchObject({
+    x: expect.any(Number),
+    y: expect.any(Number),
+    width: expect.any(Number),
+    height: expect.any(Number),
+  });
+
+  const saved = (harness.attentionPuts.at(-1) as {
+    cues: Array<{ layers: Array<{ x: number; y: number; width: number; height: number }> }>;
+  }).cues[0].layers[0];
+  expect(saved.x).toBeGreaterThan(0.1);
+  expect(saved.y).toBeGreaterThan(0.1);
+  expect(saved.width).toBeLessThan(0.8);
+  expect(saved.height).toBeLessThan(0.8);
+});
+
+test("timeline selection owns canvas interaction when attention images overlap", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page, { attention: OVERLAPPING_ATTENTION });
+  const selectedLayer = editor.getByTestId("attention-preview-cue-a-layer-a");
+  const coveringLayer = editor.getByTestId("attention-preview-cue-b-layer-b");
+  await expect(selectedLayer).toBeVisible();
+  await expect(coveringLayer).toBeVisible();
+
+  await editor.locator('[data-cue-id="cue-a"]').click();
+  await expect(selectedLayer).toHaveAttribute("aria-pressed", "true");
+  await expect(coveringLayer).toHaveCSS("pointer-events", "none");
+
+  const before = (await selectedLayer.boundingBox())!;
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width / 2 + 24, before.y + before.height / 2 + 20, { steps: 6 });
+  await page.mouse.up();
+
+  await expect.poll(() => {
+    const last = harness.attentionPuts.at(-1) as {
+      cues?: Array<{ id: string; layers: Array<{ x: number; y: number }> }>;
+    } | undefined;
+    return last?.cues?.map((cue) => ({
+      id: cue.id,
+      x: cue.layers[0].x,
+      y: cue.layers[0].y,
+    }));
+  }, { timeout: 5000 }).toEqual([
+    { id: "cue-a", x: expect.any(Number), y: expect.any(Number) },
+    { id: "cue-b", x: 0.1, y: 0.1 },
+  ]);
+
+  const saved = (harness.attentionPuts.at(-1) as {
+    cues: Array<{ id: string; layers: Array<{ x: number; y: number }> }>;
+  }).cues;
+  expect(saved[0].layers[0].x).toBeGreaterThan(0.1);
+  expect(saved[0].layers[0].y).toBeGreaterThan(0.1);
+});
+
+test("selecting an attention block exposes per-image effects inside a compact variant card", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page, { maximize: false });
+
+  await editor.locator('[data-cue-id="cue-a"]').click();
+
+  const layer = editor.getByTestId("attention-layer-0");
+  await expect(layer).toBeVisible();
+  const transition = editor.getByTestId("attention-layer-a-effect-select");
+  await transition.click();
+  await page.getByRole("option", { name: /Fade/ }).click();
+  await editor.getByTestId("attention-layer-a-enter-duration").fill("0.55");
+
+  await expect.poll(() => {
+    const last = harness.attentionPuts.at(-1) as {
+      cues?: Array<{ layers?: Array<{ animation?: { preset?: string; enterMs?: number } }> }>;
+    } | undefined;
+    return last?.cues?.[0]?.layers?.[0]?.animation;
+  }, { timeout: 5000 }).toMatchObject({ preset: "fade", enterMs: 550 });
+});
+
+test("an attention image transition can be changed per layer", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  await editor.getByTestId("attention-preview-cue-a-layer-a").click();
+
+  const transition = editor.getByTestId("attention-layer-a-effect-select");
+  await expect(transition).toContainText("Static / Classic");
+  await transition.click();
+  await page.getByRole("option", { name: /Wipe from right/ }).click();
+
+  await expect(transition).toContainText("Wipe from right");
+  await expect.poll(() => {
+    const last = harness.attentionPuts.at(-1) as {
+      cues?: Array<{ layers?: Array<{ animation?: { preset?: string } }> }>;
+    } | undefined;
+    return last?.cues?.[0]?.layers?.[0]?.animation?.preset;
+  }, { timeout: 5000 }).toBe("wipe-right");
+
+  await expect(editor.getByTestId("attention-layer-0")).toHaveScreenshot(
+    "attention-image-effect-controls.png",
+    { animations: "disabled" },
+  );
+});
+
 test("maximized editor stays above the sticky Variant Previews header", async ({ page }) => {
   const { editor } = await openFullEditor(page);
   const header = page.getByTestId("step3-variant-header");
@@ -251,6 +431,56 @@ test("lanes use unified V/A ids and stack V3 above V2 above V1 above A1", async 
   expect(labels).not.toContain("Subtitles");
   expect(labels).not.toContain("A1 Voiceover");
   await page.screenshot({ path: "screenshots/timeline-tracks-order.png" });
+});
+
+test("subtitle lane stays compact and audio tracks share one visual surface", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  const timeline = editor.locator('[aria-label="Multi-track timeline"]');
+  const captionBlocks = timeline.locator('[data-caption-density]');
+  const firstCaption = captionBlocks.first();
+
+  await expect(captionBlocks).toHaveCount(2);
+  await expect(firstCaption.locator("span")).toHaveCSS("white-space", "nowrap");
+  expect((await firstCaption.boundingBox())?.height).toBeLessThanOrEqual(27);
+
+  const audioSurface = timeline.locator('[data-timeline-audio-surface]').first();
+  await expect(audioSurface).toBeVisible();
+  await expect(audioSurface).toHaveCSS("overflow", "hidden");
+  const waveform = audioSurface.locator("canvas");
+  await expect(waveform).toBeVisible();
+  const initialCanvasWidth = await waveform.evaluate((canvas: HTMLCanvasElement) => canvas.width);
+
+  for (let step = 0; step < 4; step += 1) {
+    await timeline.getByRole("button", { name: "Zoom timeline in" }).click();
+  }
+  await expect.poll(
+    () => waveform.evaluate((canvas: HTMLCanvasElement) => canvas.width),
+  ).toBeGreaterThan(initialCanvasWidth);
+
+  await expect(timeline).toHaveScreenshot("timeline-compact-subtitles-audio.png", {
+    animations: "disabled",
+  });
+});
+
+test("timeline zoom keeps the placed playhead fixed in the viewport", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  const timeline = editor.locator('[aria-label="Multi-track timeline"]');
+  const ruler = timeline.locator("[data-timeline-ruler]");
+  const rulerBox = await ruler.boundingBox();
+  if (!rulerBox) throw new Error("Timeline ruler is missing");
+
+  await page.mouse.click(
+    rulerBox.x + rulerBox.width * 0.68,
+    rulerBox.y + rulerBox.height / 2,
+  );
+
+  const playhead = timeline.locator("[data-timeline-lane-playhead]");
+  await expect(playhead).toBeVisible();
+  const before = await playhead.boundingBox();
+  if (!before) throw new Error("Timeline playhead is missing");
+
+  await timeline.getByRole("button", { name: "Zoom timeline in" }).click();
+  await expect.poll(async () => (await playhead.boundingBox())?.x ?? -1).toBeCloseTo(before.x, 0);
 });
 
 test("Add video track inserts V3 and renumbers subtitles to V4", async ({ page }) => {
@@ -290,6 +520,8 @@ test("audio track settings add and delete tracks without duplicating the mute co
 test("track headers expose Premiere-style monitor, add, settings, and resize controls", async ({ page }) => {
   const { editor } = await openFullEditor(page);
 
+  await expect(editor.getByRole("button", { name: "Lock video track V1" })).toBeVisible();
+  await expect(editor.getByRole("button", { name: "Lock audio track A1" })).toBeVisible();
   const hideV1 = editor.getByRole("button", { name: "Hide video track V1" });
   const muteA1 = editor.getByRole("button", { name: "Mute audio track A1" });
   await expect(hideV1).toBeVisible();
@@ -320,6 +552,25 @@ test("track headers expose Premiere-style monitor, add, settings, and resize con
   await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2 + 24, { steps: 4 });
   await page.mouse.up();
   await expect(v1Resize).toHaveAttribute("aria-valuenow", "72");
+});
+
+test("locking a track prevents accidental edits while keeping visibility available", async ({ page }) => {
+  const { editor } = await openFullEditor(page, { maximize: false });
+
+  const lockV2 = editor.getByRole("button", { name: "Lock video track V2" });
+  await lockV2.click();
+
+  await expect(editor.getByRole("button", { name: "Unlock video track V2" }))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(editor.locator('[data-track-index="2"]')).toHaveAttribute("data-track-locked", "true");
+  await expect(editor.getByRole("button", { name: "Add media to V2" })).toBeDisabled();
+  await expect(editor.getByRole("button", { name: "Open V2 track settings" })).toBeDisabled();
+  await expect(editor.getByRole("separator", { name: "Resize V2 track height" })).toHaveCount(0);
+
+  const hideV2 = editor.getByRole("button", { name: "Hide video track V2" });
+  await expect(hideV2).toBeEnabled();
+  await hideV2.click();
+  await expect(editor.getByRole("button", { name: "Show video track V2" })).toBeVisible();
 });
 
 test("dragging a cue from V2 to V3 persists track: 3", async ({ page }) => {
@@ -353,6 +604,17 @@ test("card mode renders the generic lanes with a scrollable, sticky-ruler timeli
   expect(labels.indexOf("V2")).toBeGreaterThanOrEqual(0);
   expect(labels.indexOf("V2")).toBeLessThan(labels.indexOf("V1"));
   await page.screenshot({ path: "screenshots/timeline-tracks-card.png", fullPage: false });
+});
+
+test("the pipeline ruler exposes fine sub-second increments", async ({ page }) => {
+  const { editor } = await openFullEditor(page);
+  const ruler = editor.locator("[data-timeline-ruler]");
+  await expect(ruler).toBeVisible();
+
+  const minorStep = Number(await ruler.getAttribute("data-timeline-ruler-minor-step"));
+  expect(minorStep).toBeGreaterThan(0);
+  expect(minorStep).toBeLessThanOrEqual(0.2);
+  expect(await ruler.locator('[data-timeline-ruler-tick="minor"]').count()).toBeGreaterThan(10);
 });
 
 test("card timeline stays behind the sticky Variant Previews header while scrolling", async ({ page }) => {

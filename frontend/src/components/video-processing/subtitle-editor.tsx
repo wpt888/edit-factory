@@ -37,7 +37,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { InspectorSectionHeader } from "@/components/ui/inspector";
-import { Loader2, CheckCircle2, Maximize2, ScanLine, X } from "lucide-react";
+import { Loader2, Maximize2, ScanLine, X } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -98,6 +98,12 @@ interface SubtitleEditorProps {
    */
   visualVersion?: string;
   /**
+   * The caller already resolved the Meta A/B overlay into `settings`. Keep the
+   * visual version for the correct source frame, but do not apply its style a
+   * second time in the FFmpeg endpoint.
+   */
+  visualVersionStyleResolved?: boolean;
+  /**
    * Controls which sub-panels the component renders.
    *   "full"          — preview + settings side-by-side (current default).
    *   "preview-only"  — just the live preview panel, no settings controls.
@@ -134,6 +140,7 @@ export function SubtitleEditor({
   variantIndex = 0,
   previewText,
   visualVersion,
+  visualVersionStyleResolved = false,
   renderMode = "full",
   previewInteractive = false,
   userPresets = [],
@@ -230,6 +237,18 @@ export function SubtitleEditor({
   useEffect(() => {
     if (!pipelineId) return;
 
+    if (settings.enabled === false) {
+      if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
+      const disabledSeq = ++requestSeq.current;
+      latestAppliedSeq.current = disabledSeq;
+      setFfmpegLoading(false);
+      setFfmpegPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+      return;
+    }
+
     // Karaoke needs motion, so its preview uses the clean FFmpeg background
     // plus the animated local overlay below instead of a baked still frame.
     if (settings.karaoke) {
@@ -243,6 +262,7 @@ export function SubtitleEditor({
     const fingerprint =
       JSON.stringify(settings) +
       "|v=" + (visualVersion || "") +
+      "|resolved=" + String(visualVersionStyleResolved) +
       "|t=" + previewOverlayText;
     if (fingerprint === prevFingerprint.current) return;
 
@@ -254,7 +274,11 @@ export function SubtitleEditor({
       const mySeq = ++requestSeq.current;
 
       try {
-        const versionQuery = visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "";
+        const previewParams = new URLSearchParams();
+        if (visualVersion) previewParams.set("visual_version", visualVersion);
+        if (visualVersionStyleResolved) previewParams.set("apply_meta_overlay", "false");
+        const encodedPreviewParams = previewParams.toString();
+        const versionQuery = encodedPreviewParams ? `?${encodedPreviewParams}` : "";
         const resp = await apiPost(
           `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${versionQuery}`,
           {
@@ -289,7 +313,7 @@ export function SubtitleEditor({
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     };
-  }, [settings, pipelineId, previewOverlayText, variantIndex, visualVersion]);
+  }, [settings, pipelineId, previewOverlayText, variantIndex, visualVersion, visualVersionStyleResolved]);
 
   // Stable clean frame used as the live-edit background. The accurate FFmpeg
   // preview image already contains text, so overlaying local text on it causes
@@ -301,8 +325,12 @@ export function SubtitleEditor({
 
     (async () => {
       try {
+        const backgroundParams = new URLSearchParams();
+        if (visualVersion) backgroundParams.set("visual_version", visualVersion);
+        backgroundParams.set("apply_meta_overlay", "false");
+        const backgroundQuery = `?${backgroundParams.toString()}`;
         const resp = await apiPost(
-          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}`,
+          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${backgroundQuery}`,
           {
             subtitle_settings: {},
             sample_text: "",
@@ -327,7 +355,7 @@ export function SubtitleEditor({
     return () => {
       cancelled = true;
     };
-  }, [pipelineId, variantIndex]);
+  }, [pipelineId, variantIndex, visualVersion]);
 
   // Mirror the active blob URL into a ref so the unmount cleanup below can
   // read the *latest* value — a plain state capture with [] deps would freeze
@@ -420,6 +448,7 @@ export function SubtitleEditor({
     dimensions: { height: number },
     className = ""
   ) => {
+    if (settings.enabled === false) return null;
     const fontSize = scaleSubtitleFontPx(settings.fontSize, dimensions.height);
     const outlineWidth = scaleSubtitlePx(settings.outlineWidth, dimensions.height, 0);
     const shadowDepth = scaleSubtitlePx(settings.shadowDepth ?? 0, dimensions.height, 0);
@@ -546,7 +575,17 @@ export function SubtitleEditor({
               : `${previewDimensions.height}px`,
           }}
         >
-          {settings.karaoke ? (
+          {settings.enabled === false ? (
+            ffmpegBackgroundUrl ? (
+              <img
+                src={ffmpegBackgroundUrl}
+                alt="Subtitle preview"
+                className="absolute inset-0 w-full h-full object-contain rounded-lg"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-muted" />
+            )
+          ) : settings.karaoke ? (
             <>
               {ffmpegBackgroundUrl ? (
                 <img
@@ -615,7 +654,17 @@ export function SubtitleEditor({
               containerType: "size",
             }}
           >
-            {settings.karaoke ? (
+            {settings.enabled === false ? (
+              ffmpegBackgroundUrl ? (
+                <img
+                  src={ffmpegBackgroundUrl}
+                  alt="Subtitle preview"
+                  className="absolute inset-0 h-full w-full object-contain"
+                />
+              ) : (
+                <div className="absolute inset-0 bg-muted" />
+              )
+            ) : settings.karaoke ? (
               <>
                 {ffmpegBackgroundUrl ? (
                   <img
@@ -656,29 +705,6 @@ export function SubtitleEditor({
         </DialogContent>
       </Dialog>
 
-      {/* Info */}
-      <div className="text-center space-y-1">
-        <p className="text-xs text-muted-foreground">
-          Font: {settings.fontSize}px | Outline: {settings.outlineWidth}px | Y: {settings.positionY}%
-        </p>
-        {pipelineId && (
-          settings.karaoke ? (
-            <Badge variant="outline" className="text-[10px] text-success border-success/30">
-              <CheckCircle2 className="size-3 mr-1" />
-              Animated Karaoke preview
-            </Badge>
-          ) : ffmpegPreviewUrl ? (
-            <Badge variant="outline" className="text-[10px] text-success border-success/30">
-              <CheckCircle2 className="size-3 mr-1" />
-              Accurate preview
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="text-[10px] text-amber-500 border-amber-500/30">
-              Rendering preview
-            </Badge>
-          )
-        )}
-      </div>
     </div>
   ) : null;
 

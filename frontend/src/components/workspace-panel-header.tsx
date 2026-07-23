@@ -15,7 +15,7 @@ export type WorkspacePanelHeaderProps = Omit<ComponentProps<"div">, "title"> & {
 };
 
 /**
- * Canonical 48 px pane header for every full-bleed workspace.
+ * Canonical compact pane header for every full-bleed workspace.
  *
  * Keep geometry here so adjacent panes always share the same baseline,
  * separator, padding, and vertical centering.
@@ -37,7 +37,7 @@ export function WorkspacePanelHeader({
       data-slot="workspace-panel-header"
       title={tooltip}
       className={cn(
-        "flex h-12 shrink-0 items-center gap-2 border-b border-border px-3",
+        "relative z-[60] flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2",
         sticky && "sticky top-0 z-[60] bg-surface-canvas",
         className,
       )}
@@ -48,15 +48,15 @@ export function WorkspacePanelHeader({
           {showGrip && (
             <GripVertical
               data-slot="workspace-panel-grip"
-              className="size-4 shrink-0 text-muted-foreground/60"
+              className="size-3.5 shrink-0 text-muted-foreground/60"
               aria-hidden="true"
             />
           )}
           <div
             data-slot="workspace-panel-title"
-            className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold"
+            className="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-semibold"
           >
-            {Icon && <Icon className="size-4 shrink-0" aria-hidden="true" />}
+            {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 truncate">{title}</span>
             {titleAccessory}
           </div>

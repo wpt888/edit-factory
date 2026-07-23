@@ -2,6 +2,7 @@
 
 import {
   Children,
+  isValidElement,
   useCallback,
   useEffect,
   useRef,
@@ -174,6 +175,8 @@ export function WorkspaceSplit({
   });
 
   const [leftChild, rightChild] = Children.toArray(children);
+  const ownsNestedSplit = (child: ReactNode) =>
+    isValidElement(child) && child.type === WorkspaceSplit;
 
   if (!enabled || !desktop) {
     return (
@@ -238,6 +241,7 @@ export function WorkspaceSplit({
       <div
         data-workspace-split={splitId}
         data-workspace-split-panel="left"
+        data-workspace-pane={ownsNestedSplit(leftChild) ? undefined : ""}
         onPointerDown={(event) => beginPanelDrag("left", event)}
         className={cn(
           "relative h-full min-w-0",
@@ -257,6 +261,7 @@ export function WorkspaceSplit({
       <div
         data-workspace-split={splitId}
         data-workspace-split-panel="right"
+        data-workspace-pane={ownsNestedSplit(rightChild) ? undefined : ""}
         onPointerDown={(event) => beginPanelDrag("right", event)}
         className={cn(
           "relative h-full min-w-0",

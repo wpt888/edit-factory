@@ -37,6 +37,8 @@ export interface MultiTrackLane {
   axisProps?: HTMLAttributes<HTMLDivElement>;
   /** Optional interaction props for the free space after the lane's end marker. */
   endGutterProps?: HTMLAttributes<HTMLDivElement>;
+  /** Prevents edits inside this lane while preserving scrubbing and monitor controls. */
+  locked?: boolean;
   /** Draw the lime end-of-track marker at the right edge of the lane. */
   showEndLine?: boolean;
 }
@@ -72,6 +74,8 @@ export interface MultiTrackTimelineProps {
     /** Optional grab handle rendered at the top of the line (needs pointer-events: auto). */
     handle?: ReactNode;
   };
+  /** Active magnetic alignment guide, expressed on the same clock as the ruler. */
+  snapGuide?: { time: number } | null;
   zoom: number;
   minZoom?: number;
   maxZoom?: number;
@@ -93,6 +97,7 @@ export function MultiTrackTimeline({
   laneWidth,
   ruler,
   playhead,
+  snapGuide,
   zoom,
   minZoom = TIMELINE_MIN_ZOOM,
   maxZoom = TIMELINE_MAX_ZOOM,
@@ -147,6 +152,7 @@ export function MultiTrackTimeline({
           <TimelineRuler
             startTime={ruler.startTime}
             duration={ruler.duration}
+            axisWidth={laneWidth}
             className={cn("shrink-0", ruler.className)}
             style={{ width: laneWidth, ...ruler.style }}
             onPointerDown={ruler.onPointerDown}
@@ -185,7 +191,12 @@ export function MultiTrackTimeline({
               style={{ width: laneWidth }}
               {...lane.axisProps}
             >
-              {lane.content}
+              <div
+                className={cn("absolute inset-0", lane.locked && "pointer-events-none")}
+                aria-disabled={lane.locked || undefined}
+              >
+                {lane.content}
+              </div>
               {lane.showEndLine && (
                 <span className="pointer-events-none absolute inset-y-0 right-0 z-20 w-px bg-lime-300/70" />
               )}
@@ -193,6 +204,7 @@ export function MultiTrackTimeline({
             <div
               className={cn("relative shrink-0 border-l border-white/5 bg-[#0a0c0a]", lane.heightPx ? "h-full" : lane.height)}
               style={{ width: TIMELINE_END_GUTTER }}
+              data-track-locked={lane.locked ? "true" : undefined}
               {...lane.endGutterProps}
             >
               {lane.onHeightChange && (
@@ -227,6 +239,26 @@ export function MultiTrackTimeline({
               style={playhead.style}
             >
               {playhead.handle}
+            </div>
+          </div>
+        )}
+
+        {snapGuide && snapGuide.time >= (ruler.startTime ?? 0)
+          && snapGuide.time <= (ruler.startTime ?? 0) + ruler.duration && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 z-[35]"
+            style={{ left: TIMELINE_LABEL_WIDTH, width: laneWidth }}
+          >
+            <div
+              data-timeline-snap-guide
+              data-timeline-snap-time={snapGuide.time}
+              className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-primary"
+              style={{
+                left: `${((snapGuide.time - (ruler.startTime ?? 0)) / Math.max(0.001, ruler.duration)) * 100}%`,
+              }}
+            >
+              <span className="absolute -left-[3px] top-7 size-2 rotate-45 border border-primary bg-primary" />
             </div>
           </div>
         )}

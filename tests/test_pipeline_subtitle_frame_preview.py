@@ -52,7 +52,11 @@ def test_subtitle_frame_preview_uses_sample_text_and_fingerprint(tmp_path):
     async def _fake_acquire_preview_slot(timeout=None):
         return _DummyPreviewSlot()
 
-    async def _run(sample_text: str):
+    async def _run(
+        sample_text: str,
+        visual_version: str | None = None,
+        apply_meta_overlay: bool = True,
+    ):
         request = pipeline_routes.SubtitleFrameRequest(
             subtitle_settings={"fontFamily": "Anton", "fontSize": 54},
             timestamp=2.0,
@@ -68,19 +72,29 @@ def test_subtitle_frame_preview_uses_sample_text_and_fingerprint(tmp_path):
                 "pipe-1",
                 0,
                 request,
-                None,
+                visual_version,
                 profile,
+                apply_meta_overlay,
             )
 
     response_a = asyncio.run(_run("editor text one"))
     response_b = asyncio.run(_run("editor text two"))
+    response_resolved = asyncio.run(_run("resolved style", "A", False))
+    response_with_meta = asyncio.run(_run("endpoint overlay", "A", True))
 
     assert "00:00:00,000 --> 00:00:10,000" in captured_srt_contents[0]
     assert "editor text one" in captured_srt_contents[0]
     assert "old saved text" not in captured_srt_contents[0]
     assert "editor text two" in captured_srt_contents[1]
     assert Path(response_a.path).name != Path(response_b.path).name
-    assert captured_filter_args == [
-        {"subtitle_settings": {"fontFamily": "Anton", "fontSize": 54}, "video_width": 1080, "video_height": 1920},
-        {"subtitle_settings": {"fontFamily": "Anton", "fontSize": 54}, "video_width": 1080, "video_height": 1920},
+    expected_base = {"fontFamily": "Anton", "fontSize": 54}
+    assert captured_filter_args[:3] == [
+        {"subtitle_settings": expected_base, "video_width": 1080, "video_height": 1920},
+        {"subtitle_settings": expected_base, "video_width": 1080, "video_height": 1920},
+        {"subtitle_settings": expected_base, "video_width": 1080, "video_height": 1920},
     ]
+    assert captured_filter_args[3]["subtitle_settings"] == {
+        **expected_base,
+        **pipeline_routes.META_PROFILES[0].subtitle_style,
+    }
+    assert Path(response_resolved.path).name != Path(response_with_meta.path).name

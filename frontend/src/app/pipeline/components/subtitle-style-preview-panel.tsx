@@ -1,231 +1,154 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
+import { Badge } from "@/components/ui/badge";
 import { InspectorField } from "@/components/ui/inspector";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import type { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
-import type { StyleKey, PreviewCard } from "../pipeline-types";
-import type { SubtitleTemplateRotation, VariantTemplateSelections } from "../subtitle-template-rotation";
+import type { PreviewCard, PreviewKey, StyleKey } from "../pipeline-types";
 import {
-  NO_SUBTITLES_PRESET_ID,
-  resolveSubtitlePresetForCard,
-  subtitlesDisabledForCard,
+  resolveSubtitleAssignmentForCard,
+  type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 
-type PreviewCardTarget = Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">;
+type PreviewCardTarget = Pick<PreviewCard, "key" | "baseIndex" | "label" | "visualVersion">;
 
-type PreviewTarget =
-  | {
-      id: `style:${StyleKey}`;
-      kind: "style";
-      label: string;
-      styleKey: StyleKey;
-    }
-  | {
-      id: string;
-      kind: "rotation" | "variant";
-      label: string;
-      card: PreviewCardTarget;
-    };
-
-const STYLE_TARGETS: PreviewTarget[] = [
-  { id: "style:default", kind: "style", label: "Default", styleKey: "default" },
-  { id: "style:A", kind: "style", label: "A · Instagram", styleKey: "A" },
-  { id: "style:B", kind: "style", label: "B · Facebook", styleKey: "B" },
-];
-
-/**
- * Preview-only subtitle target picker for Step 3. Base styles use the legacy
- * A/B/default path; rotation entries and real variant cards are resolved by
- * the same callback used by the timeline and final preview player.
- */
 export function SubtitleStylePreviewPanel({
-  activeStyleKey,
-  getSubtitleSettingsFor,
-  getPreviewSubtitleSettingsFor,
-  hasStyleOverride,
-  getStylePreviewText,
-  pipelineId,
   previewCards,
+  pipelineId,
   subtitleRotation,
   userSubtitlePresets,
   variantTemplateSelections,
+  variantSubtitleOverrides,
+  getPreviewSubtitleSettingsFor,
+  getPreviewSubtitleTextFor,
+  onPreviewCardChange,
 }: {
-  activeStyleKey: StyleKey;
-  getSubtitleSettingsFor: (styleKey: StyleKey) => SubtitleSettings;
-  getPreviewSubtitleSettingsFor: (card: PreviewCardTarget) => SubtitleSettings;
-  hasStyleOverride: (styleKey: StyleKey) => boolean;
-  getStylePreviewText: (styleKey: StyleKey) => string | undefined;
-  pipelineId: string | undefined;
   previewCards: PreviewCard[];
+  pipelineId: string | undefined;
   subtitleRotation: SubtitleTemplateRotation;
   userSubtitlePresets: UserSubtitlePreset[];
-  variantTemplateSelections: VariantTemplateSelections;
+  variantTemplateSelections: Partial<Record<PreviewKey, string>>;
+  variantSubtitleOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
+  getPreviewSubtitleSettingsFor: (card: PreviewCardTarget) => SubtitleSettings;
+  getPreviewSubtitleTextFor: (card: PreviewCardTarget) => string | undefined;
+  onPreviewCardChange: (styleKey: StyleKey) => void;
 }) {
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [selectedCardKey, setSelectedCardKey] = useState<PreviewKey | null>(null);
+  const selectedCard = previewCards.find((card) => card.key === selectedCardKey)
+    ?? previewCards[0];
 
-  const rotationTargets = useMemo<PreviewTarget[]>(() => {
-    if (!subtitleRotation.enabled) return [];
+  useEffect(() => {
+    if (!selectedCard) return;
+    if (selectedCardKey !== selectedCard.key) setSelectedCardKey(selectedCard.key);
+  }, [selectedCard, selectedCardKey]);
 
-    return subtitleRotation.presetIds.flatMap((presetId, index) => {
-      if (presetId === NO_SUBTITLES_PRESET_ID) {
-        return [{
-          id: `rotation:${index}:${presetId}`,
-          kind: "rotation" as const,
-          label: `Rotation ${index + 1} · No subtitles`,
-          card: {
-            key: `__subtitle-preview-rotation-${index}`,
-            baseIndex: index,
-          },
-        }];
-      }
-      const preset = userSubtitlePresets.find((candidate) => candidate.id === presetId);
-      if (!preset) return [];
-      return [{
-        id: `rotation:${index}:${preset.id}`,
-        kind: "rotation" as const,
-        label: `Rotation ${index + 1} · ${preset.name}`,
-        // A synthetic key deliberately avoids card-local overrides. The
-        // resolver still follows the production rotation path by index.
-        card: {
-          key: `__subtitle-preview-rotation-${index}`,
-          baseIndex: index,
-        },
-      }];
-    });
-  }, [subtitleRotation, userSubtitlePresets]);
+  useEffect(() => {
+    if (!selectedCard) return;
+    onPreviewCardChange(
+      selectedCard.visualVersion === "A" || selectedCard.visualVersion === "B"
+        ? selectedCard.visualVersion
+        : "default",
+    );
+  }, [onPreviewCardChange, selectedCard]);
 
-  const variantTargets = useMemo<PreviewTarget[]>(() => (
-    previewCards.map((card) => {
-      const subtitlesDisabled = subtitlesDisabledForCard(
-        subtitleRotation,
-        variantTemplateSelections,
-        userSubtitlePresets,
-        card,
-      );
-      const preset = resolveSubtitlePresetForCard(
-        subtitleRotation,
-        variantTemplateSelections,
-        userSubtitlePresets,
-        card,
-      );
-      const compactLabel = card.visualVersion
-        ? `Variant ${card.baseIndex + 1}${card.visualVersion}`
-        : `Variant ${card.baseIndex + 1}`;
+  if (!selectedCard) {
+    return (
+      <p className="text-xs text-muted-foreground" data-testid="subtitle-style-preview-panel">
+        Generate a preview to inspect the subtitle template.
+      </p>
+    );
+  }
 
-      return {
-        id: `variant:${card.key}`,
-        kind: "variant" as const,
-        label: subtitlesDisabled
-          ? `${compactLabel} · No subtitles`
-          : preset
-            ? `${compactLabel} · ${preset.name}`
-            : compactLabel,
-        card,
-      };
-    })
-  ), [previewCards, subtitleRotation, userSubtitlePresets, variantTemplateSelections]);
-
-  const targets = useMemo(
-    () => [...STYLE_TARGETS, ...rotationTargets, ...variantTargets],
-    [rotationTargets, variantTargets],
+  const currentAssignment = resolveSubtitleAssignmentForCard(
+    subtitleRotation,
+    variantTemplateSelections,
+    userSubtitlePresets,
+    selectedCard,
   );
-
-  // Until the user makes an explicit preview-only choice, continue following
-  // the active A/B/default editor style. Removed targets fall back safely.
-  const selectedTarget = targets.find((target) => target.id === selectedTargetId)
-    ?? STYLE_TARGETS.find((target) => target.id === `style:${activeStyleKey}`)
-    ?? STYLE_TARGETS[0];
-
-  const selectedStyleKey = selectedTarget.kind === "style"
-    ? selectedTarget.styleKey
-    : selectedTarget.card.visualVersion === "A" || selectedTarget.card.visualVersion === "B"
-      ? selectedTarget.card.visualVersion
-      : "default";
-  const settings = selectedTarget.kind === "style"
-    ? getSubtitleSettingsFor(selectedTarget.styleKey)
-    : getPreviewSubtitleSettingsFor(selectedTarget.card);
-  const variantIndex = selectedTarget.kind === "style"
-    ? previewCards.find((card) => (
-        card.visualVersion === (selectedTarget.styleKey === "default" ? undefined : selectedTarget.styleKey)
-      ))?.baseIndex ?? 0
-    : selectedTarget.card.baseIndex;
-
-  // Card and rotation settings are already fully resolved (template, Meta,
-  // local delta), so the frame endpoint must not layer Meta a second time.
-  const visualVersion = selectedTarget.kind === "style"
-    && selectedTarget.styleKey !== "default"
-    && !hasStyleOverride(selectedTarget.styleKey)
-      ? selectedTarget.styleKey
-      : undefined;
-  const previewText = getStylePreviewText(selectedStyleKey);
+  const currentAssignmentLabel = currentAssignment.disabled
+    ? "No subtitles"
+    : currentAssignment.preset?.name ?? "Default style";
+  const currentSourceLabel = currentAssignment.source === "manual"
+    ? "Legacy override"
+    : currentAssignment.source === "rotation"
+      ? "Template rotation"
+      : "Default";
 
   return (
-    <div className="flex flex-col gap-3" data-testid="subtitle-style-preview-panel">
-      <InspectorField
-        label="Style or variant"
-        helper="Preview only · does not change saved subtitle settings."
-      >
-        <Select value={selectedTarget.id} onValueChange={setSelectedTargetId}>
-          <SelectTrigger
-            size="sm"
-            className="w-full text-xs"
-            aria-label="Subtitle preview target"
-            data-testid="subtitle-preview-target"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="start">
-            <SelectGroup>
-              <SelectLabel>Base styles</SelectLabel>
-              {STYLE_TARGETS.map((target) => (
-                <SelectItem key={target.id} value={target.id}>{target.label}</SelectItem>
-              ))}
-            </SelectGroup>
-            {rotationTargets.length > 0 && (
-              <SelectGroup>
-                <SelectLabel>Active rotation</SelectLabel>
-                {rotationTargets.map((target) => (
-                  <SelectItem key={target.id} value={target.id}>{target.label}</SelectItem>
-                ))}
-              </SelectGroup>
-            )}
-            {variantTargets.length > 0 && (
-              <SelectGroup>
-                <SelectLabel>Variants</SelectLabel>
-                {variantTargets.map((target) => (
-                  <SelectItem key={target.id} value={target.id}>{target.label}</SelectItem>
-                ))}
-              </SelectGroup>
-            )}
-          </SelectContent>
-        </Select>
-      </InspectorField>
+    <div
+      className="flex flex-col gap-3"
+      data-testid="subtitle-style-preview-panel"
+    >
       <SubtitleEditor
-        className="[&>div>div:first-child]:hidden"
+        className="min-[1280px]:bg-surface-canvas min-[1280px]:px-4 min-[1280px]:pt-3 [&>div>div:first-child]:hidden"
         renderMode="preview-only"
-        settings={settings}
+        settings={getPreviewSubtitleSettingsFor(selectedCard)}
         onSettingsChange={() => {
           /* preview-only — no-op */
         }}
-        showPreview={true}
+        showPreview
         previewHeight={440}
         previewMaxViewportHeight={42}
         compact={false}
         pipelineId={pipelineId}
-        variantIndex={variantIndex}
-        previewText={previewText}
-        visualVersion={visualVersion}
+        variantIndex={selectedCard.baseIndex}
+        previewText={getPreviewSubtitleTextFor(selectedCard)}
+        visualVersion={selectedCard.visualVersion}
+        visualVersionStyleResolved
       />
+
+      <div className="flex flex-col gap-3 min-[1280px]:px-4">
+        <InspectorField
+          label="Preview output"
+          helper="The frame, text, platform version, and current assignment all come from this output."
+        >
+          <Select value={selectedCard.key} onValueChange={(value) => setSelectedCardKey(value as PreviewKey)}>
+            <SelectTrigger
+              size="sm"
+              className="w-full text-xs"
+              aria-label="Preview output"
+              data-testid="subtitle-preview-output"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {previewCards.map((card) => {
+                const assignment = resolveSubtitleAssignmentForCard(
+                  subtitleRotation,
+                  variantTemplateSelections,
+                  userSubtitlePresets,
+                  card,
+                );
+                const label = assignment.disabled
+                  ? "No subtitles"
+                  : assignment.preset?.name ?? "Default";
+                return (
+                  <SelectItem key={card.key} value={card.key}>
+                    {card.label} · {label}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        </InspectorField>
+
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">Currently applied</span>
+          <Badge variant="outline" className="min-w-0 truncate font-normal" data-testid="subtitle-current-assignment">
+            {currentAssignmentLabel} · {currentSourceLabel}
+            {variantSubtitleOverrides[selectedCard.key] ? " + Override" : ""}
+          </Badge>
+        </div>
+      </div>
+
     </div>
   );
 }

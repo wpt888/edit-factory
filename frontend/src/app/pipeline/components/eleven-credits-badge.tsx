@@ -3,7 +3,13 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, RefreshCw } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { CircleAlert, Loader2, RefreshCw } from "lucide-react";
 
 export type ElevenCreditsProps = {
   credits: {
@@ -33,14 +39,28 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
   }
   if (error || !credits) {
     return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">
-          {error || "No ElevenLabs allowance"}
-        </span>
-        <Button variant="ghost" size="icon" className="size-6" onClick={onRefresh} title="Retry">
-          <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-        </Button>
-      </div>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-amber-500 hover:text-amber-400"
+              onClick={onRefresh}
+              aria-label="ElevenLabs credits unavailable. Retry"
+            >
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <CircleAlert className="size-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">
+            ElevenLabs credits unavailable. Click to retry.
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   }
 

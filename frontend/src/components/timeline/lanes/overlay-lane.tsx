@@ -69,6 +69,7 @@ export function OverlayLane({
             )}
             {/* Left-edge trim: drag the start, keeping the right edge fixed. */}
             <span
+              data-testid={`overlay-start-handle-${clip.id}`}
               className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize bg-black/25"
               onPointerDown={(event) => onBeginTimingDrag(event, clip, "resize-start")}
             />
@@ -76,6 +77,7 @@ export function OverlayLane({
               {label}
             </span>
             <span
+              data-testid={`overlay-end-handle-${clip.id}`}
               className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize bg-black/25"
               onPointerDown={(event) => onBeginTimingDrag(event, clip, "resize")}
             />

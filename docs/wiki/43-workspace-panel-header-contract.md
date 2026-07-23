@@ -13,11 +13,11 @@ fie perfect la linie, fără nicio discrepanță de distanță sau înălțime.
 ## Contract geometric obligatoriu
 
 - componentă unică: `frontend/src/components/workspace-panel-header.tsx`;
-- înălțime fixă: **48 px** (`h-12`);
-- padding orizontal: **12 px** (`px-3`);
-- spațiu intern: **8 px** (`gap-2`);
+- înălțime fixă: **36 px** (`h-9`);
+- padding orizontal: **8 px** (`px-2`);
+- spațiu intern: **6 px** (`gap-1.5`);
 - separator inferior: o singură linie de 1 px, cu tokenul `border-border`;
-- titlu: `text-sm font-semibold`, centrat vertical;
+- titlu: `text-xs font-semibold`, centrat vertical;
 - grip-ul din stânga: aceeași dimensiune, culoare și poziție în fiecare panou;
 - acțiunile rămân în dreapta și nu pot modifica înălțimea capului de panou;
 - panourile alăturate au exact aceeași margine superioară, margine inferioară
@@ -26,7 +26,7 @@ fie perfect la linie, fără nicio discrepanță de distanță sau înălțime.
   1 px și traversează inclusiv zona capetelor de panou; nu poate fi transparent
   până la hover.
 
-Sunt interzise implementările locale cu `h-10`, `h-14`, padding diferit sau
+Sunt interzise implementările locale cu `h-10`, `h-12`, `h-14`, padding diferit sau
 titlu repoziționat. `EditorHeader` rămâne bara paginii; nu înlocuiește capul
 fiecărui panou.
 
@@ -42,5 +42,13 @@ fiecărui panou.
 
 `npm run design:check` validează existența rețetei canonice în componenta
 partajată și respinge redefinirea slotului în alte fișiere. Testele Playwright
-verifică înălțimea de 48 px, separatorul, grip-ul și alinierea capetelor de
+verifică înălțimea de 36 px, separatorul, grip-ul și alinierea capetelor de
 panou relevante.
+
+## Contract de interacțiune
+
+Orice grip vizibil trebuie să fie funcțional. Fiecare panou denumit dintr-un
+workspace poate fi tras de cap și schimbat cu celelalte panouri din aceeași
+fereastră, iar ordinea rezultată se păstrează local. Un
+`WorkspacePanelHeader` nu poate rămâne doar decorativ și nu se acceptă
+`reorderable={false}` pentru un split cu panouri denumite.

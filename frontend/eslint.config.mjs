@@ -25,11 +25,10 @@ const eslintConfig = defineConfig([
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
-    // Default ignores of eslint-config-next:
-    ".next/**",
-    ".next-dev/**",
-    ".next-design/**",
-    ".next-verify/**",
+    // Every named Next build cache is generated output. Feature-specific
+    // preview directories use names such as `.next-attention-slot-ux` and
+    // must not be linted as application source.
+    ".next*/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

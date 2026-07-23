@@ -6,8 +6,8 @@ import { expect, test } from "@playwright/test";
 // renderPreviewSubtitleOverlay/PreviewSubtitleOverlayText, reused per
 // displayMode="full"), and (b) the settings column on the right exposes the
 // full preview-settings surface (Subtitles / Timing / Adjust tabs) reusing the
-// same Subtitle Style + Preview Timing + Render Settings panels/state as the
-// left inspector — no divergent copies.
+// same Subtitle Style + Preview Timing state as the left inspector. Export
+// settings are deliberately outside this editing surface.
 
 const PIPELINE_ID = "karaoke-max-pipeline";
 const PROFILE = {
@@ -164,11 +164,15 @@ test("maximized editor: karaoke overlay + full settings column with tabs", async
 
   // Turn karaoke ON with the "Background box" style from the left inspector.
   const settingsEditor = page.getByTestId("subtitle-style-variant-editor").first();
+  await settingsEditor.getByRole("button", { name: /Karaoke Off/ }).click();
   await expect(settingsEditor.getByText("Karaoke Highlight")).toBeVisible();
   const karaokeRow = settingsEditor.locator("div.flex.items-center.justify-between").filter({ hasText: "Karaoke Highlight" });
   await karaokeRow.getByRole("switch").click();
-  const styleSection = settingsEditor.locator("div.space-y-2").filter({ hasText: "Highlight Style" });
-  await styleSection.getByRole("combobox").click();
+  await settingsEditor
+    .getByText("Highlight Style", { exact: true })
+    .locator("..")
+    .getByRole("combobox")
+    .click();
   await page.getByRole("option", { name: "Background box" }).click();
 
   // Open the maximized editor for the variant card.
@@ -177,6 +181,19 @@ test("maximized editor: karaoke overlay + full settings column with tabs", async
 
   const fullEditor = page.getByTestId("step3-full-editor");
   await expect(fullEditor).toBeVisible();
+
+  // Both headerless panes use the same deliberate lower edge instead of
+  // ending abruptly at the viewport boundary.
+  const timelineEndcap = page.getByTestId("step3-full-editor-timeline-endcap");
+  const settingsEndcap = page.getByTestId("step3-full-editor-settings-endcap");
+  for (const endcap of [timelineEndcap, settingsEndcap]) {
+    await expect(endcap).toHaveCSS("height", "12px");
+    await expect(endcap).toHaveCSS("border-top-style", "solid");
+    await expect(endcap).toHaveCSS("background-color", "rgb(32, 32, 32)");
+  }
+  await expect(timelineEndcap).toHaveScreenshot("step3-full-editor-endcap.png", {
+    animations: "disabled",
+  });
 
   // --- (b) the settings column exposes the full surface, tabbed ----------
   const settingsColumn = page.getByTestId("step3-full-editor-settings");
@@ -187,7 +204,8 @@ test("maximized editor: karaoke overlay + full settings column with tabs", async
 
   // Subtitles tab (default) shows the same Subtitle Style panel (incl. the
   // karaoke toggle we just flipped, reflecting the SAME shared state).
-  await expect(settingsColumn.getByText("Subtitle Style")).toBeVisible();
+  await expect(settingsColumn.getByText("Subtitle Settings")).toBeVisible();
+  await settingsColumn.getByRole("button", { name: /Karaoke On/ }).click();
   const maximizedKaraokeRow = settingsColumn
     .locator("div.flex.items-center.justify-between")
     .filter({ hasText: "Karaoke Highlight" });
@@ -198,9 +216,10 @@ test("maximized editor: karaoke overlay + full settings column with tabs", async
   await expect(settingsColumn.getByText("Preview Timing")).toBeVisible();
   await expect(settingsColumn.getByText("Pacing")).toBeVisible();
 
-  // Adjust tab shows Render Settings (encoding + picture/audio adjustments).
+  // Adjust remains focused on preview-only controls. Export settings live in
+  // the top-level Export workspace instead of the Step 3 editor.
   await settingsColumn.getByRole("tab", { name: "Adjust" }).click();
-  await expect(settingsColumn.getByText("Render Settings")).toBeVisible();
+  await expect(settingsColumn.getByText("Export Settings")).toHaveCount(0);
 
   // Back to Subtitles for the screenshot.
   await settingsColumn.getByRole("tab", { name: "Subtitles" }).click();

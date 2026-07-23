@@ -17,6 +17,12 @@ class _AttentionRepository:
         self.pipeline_updates.append((pipeline_id, changes))
         return changes
 
+    def upsert_pipeline(self, row):
+        # The route now persists the full pipeline row; keep this focused fake's
+        # assertion surface limited to the attention document under test.
+        self.pipeline_updates.append((row["id"], {"attention_timeline": row["attention_timeline"]}))
+        return row
+
 
 def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
     profile_id = "profile-attention"
@@ -51,6 +57,8 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
 
     body = {
         "templateId": "personal-stack",
+        # Step 3 may override the template's authored "pop" without mutating it.
+        "animation": "static",
         "assetUrls": ["https://assets.test/one.png", "https://assets.test/two.png", "https://assets.test/three.png"],
         "durationMs": 10000,
         "subtitleBoundariesMs": [4500],
@@ -72,6 +80,8 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
         assert len(cue["layers"]) == 3
         assert [layer["width"] for layer in cue["layers"]] == [0.42, 0.42, 0.42]
         assert [layer["assetId"] for layer in cue["layers"]] == body["assetUrls"]
+        assert all(layer["animation"]["preset"] == "static" for layer in cue["layers"])
+        assert template["config"]["animation"] == "pop"
         assert repository.pipeline_updates[-1] == (
             "pipeline-attention",
             {"attention_timeline": {"0": document}},

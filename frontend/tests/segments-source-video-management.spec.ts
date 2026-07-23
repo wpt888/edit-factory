@@ -138,7 +138,7 @@ test("browser upload polls until ready and the source video can be deleted", asy
     const rect = header.getBoundingClientRect();
     return { y: rect.y, height: rect.height };
   }));
-  expect(headerRects.map(({ height }) => height)).toEqual([48, 48, 48]);
+  expect(headerRects.map(({ height }) => height)).toEqual([36, 36, 36]);
   expect(new Set(headerRects.map(({ y }) => y)).size).toBe(1);
   for (const header of await panelHeaders.all()) {
     await expect(header.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();

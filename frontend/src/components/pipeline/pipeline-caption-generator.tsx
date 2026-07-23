@@ -188,7 +188,7 @@ export function PipelineCaptionGenerator({
       });
       initialCaptionsAppliedRef.current = true;
     }
-  }, [initialCaptions, completedClips]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialCaptions, completedClips]);
 
   // AI settings state (persisted in localStorage)
   const [tone, setTone] = useState(() =>

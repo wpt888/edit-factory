@@ -27,6 +27,60 @@ const COMPOSITION = [
   { id: "ov-2", kind: "body", track: 2, segment_id: "seg-b", segment_keywords: ["overlay two"], source_video_id: "source-b", start_time: 1, end_time: 2, timeline_start: 3, timeline_duration: 1 },
 ];
 
+const ATTENTION_TIMELINE = {
+  revision: 1,
+  cues: [{
+    id: "attention-at-second-segment",
+    startMs: 2_000,
+    durationMs: 2_000,
+    track: 2,
+    zone: "behind",
+    sfxVolumeDb: 0,
+    layers: [{
+      id: "attention-layer",
+      assetId: "https://assets.test/attention.png",
+      assetUrl: "https://assets.test/attention.png",
+      x: 0.1,
+      y: 0.1,
+      width: 0.8,
+      height: 0.8,
+      zIndex: 0,
+      fit: "contain",
+      animation: { preset: "zoom", enterMs: 300, exitMs: 0, delayMs: 0, intensity: 1 },
+    }],
+  }],
+};
+
+const DURATION_INVARIANT_ATTENTION_TIMELINE = {
+  revision: 1,
+  cues: [
+    {
+      ...ATTENTION_TIMELINE.cues[0],
+      id: "attention-short-slot",
+      startMs: 0,
+      durationMs: 1_000,
+      layers: [{
+        ...ATTENTION_TIMELINE.cues[0].layers[0],
+        id: "attention-short-layer",
+        assetId: "https://assets.test/attention-short.png",
+        assetUrl: "https://assets.test/attention-short.png",
+      }],
+    },
+    {
+      ...ATTENTION_TIMELINE.cues[0],
+      id: "attention-long-slot",
+      startMs: 2_000,
+      durationMs: 2_000,
+      layers: [{
+        ...ATTENTION_TIMELINE.cues[0].layers[0],
+        id: "attention-long-layer",
+        assetId: "https://assets.test/attention-long.png",
+        assetUrl: "https://assets.test/attention-long.png",
+      }],
+    },
+  ],
+};
+
 type Clip = { id: string; track?: number; overlay_box?: unknown; timeline_start: number; timeline_duration: number };
 type Harness = { compositionPuts: Array<{ video_timeline: Clip[] }> };
 
@@ -49,7 +103,10 @@ const makeSilentWav = () => {
   return buffer;
 };
 
-const openFullEditor = async (page: Page): Promise<{ editor: ReturnType<Page["getByTestId"]>; harness: Harness }> => {
+const openFullEditor = async (
+  page: Page,
+  attentionTimeline: typeof ATTENTION_TIMELINE | { revision: number; cues: [] } = { revision: 0, cues: [] },
+): Promise<{ editor: ReturnType<Page["getByTestId"]>; harness: Harness }> => {
   const harness: Harness = { compositionPuts: [] };
 
   await page.addInitScript(({ profile, pipelineId }) => {
@@ -142,7 +199,7 @@ const openFullEditor = async (page: Page): Promise<{ editor: ReturnType<Page["ge
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/attention-timeline/0`)) {
-      await route.fulfill({ json: { revision: 0, cues: [] } });
+      await route.fulfill({ json: attentionTimeline });
       return;
     }
     if (path.endsWith("/profiles/") || path.endsWith("/profiles")) {
@@ -193,6 +250,120 @@ test("a track-2 clip renders as an overlay block on V2, not in the V1 sequence",
   // The overlay is NOT a V1 clip block.
   await expect(editor.getByTestId("composition-clip-ov-1")).toHaveCount(0);
   await expect(editor.getByTestId("composition-clip-body-a")).toBeVisible();
+});
+
+test("a paused segment jump does not play the attention image entrance", async ({ page }) => {
+  const { editor } = await openFullEditor(page, ATTENTION_TIMELINE);
+
+  // Activate the media preview, pause it, then perform the same V1 segment
+  // click that moves the playhead to the second segment / attention cue.
+  await editor.getByRole("button", { name: "Play preview" }).click();
+  await expect(editor.getByRole("button", { name: "Pause preview" })).toBeVisible();
+  await editor.getByRole("button", { name: "Pause preview" }).click();
+  await editor.getByTestId("composition-clip-body-b").click();
+
+  const attentionImage = editor.locator('img[src="https://assets.test/attention.png"]');
+  await expect(attentionImage).toBeVisible();
+  await expect(attentionImage).toHaveCSS("animation-name", "none");
+
+  const initialTransform = await attentionImage.evaluate((element) => getComputedStyle(element).transform);
+  await page.waitForTimeout(350);
+  await expect.poll(() => attentionImage.evaluate((element) => getComputedStyle(element).transform))
+    .toBe(initialTransform);
+});
+
+test("an attention entrance has a fixed timeline block and fixed preview duration", async ({ page }) => {
+  const { editor } = await openFullEditor(page, DURATION_INVARIANT_ATTENTION_TIMELINE);
+  const shortCue = editor.locator('[data-cue-id="attention-short-slot"]');
+  const longCue = editor.locator('[data-cue-id="attention-long-slot"]');
+  const shortEntrance = editor.getByTestId("attention-entrance-attention-short-slot");
+  const longEntrance = editor.getByTestId("attention-entrance-attention-long-slot");
+
+  await expect(shortEntrance).toHaveAttribute("title", /Entrance: Zoom in · 300ms/);
+  await expect(longEntrance).toHaveAttribute("title", /Entrance: Zoom in · 300ms/);
+  const [shortCueBox, longCueBox, shortEntranceBox, longEntranceBox] = await Promise.all([
+    shortCue.boundingBox(),
+    longCue.boundingBox(),
+    shortEntrance.boundingBox(),
+    longEntrance.boundingBox(),
+  ]);
+  expect(shortCueBox).not.toBeNull();
+  expect(longCueBox).not.toBeNull();
+  expect(shortEntranceBox).not.toBeNull();
+  expect(longEntranceBox).not.toBeNull();
+  expect(shortEntranceBox!.width / shortCueBox!.width).toBeCloseTo(300 / 1_000, 1);
+  expect(longEntranceBox!.width / longCueBox!.width).toBeCloseTo(300 / 2_000, 1);
+
+  await editor.getByRole("button", { name: "Play preview" }).click();
+  const shortImage = editor.locator('img[src="https://assets.test/attention-short.png"]');
+  await expect(shortImage).toBeVisible();
+  await expect(shortImage).toHaveCSS("animation-duration", "0.3s");
+
+  await editor.getByRole("button", { name: "Pause preview" }).click();
+  await editor.getByTestId("composition-clip-body-b").click();
+  await editor.getByRole("button", { name: "Play preview" }).click();
+  const longImage = editor.locator('img[src="https://assets.test/attention-long.png"]');
+  await expect(longImage).toBeVisible();
+  await expect(longImage).toHaveCSS("animation-duration", "0.3s");
+
+  await expect(longCue).toHaveScreenshot("attention-entrance-block.png", {
+    animations: "disabled",
+  });
+});
+
+test("an overlay trim edge snaps to a media boundary on another video track", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const overlay = editor.getByTestId("overlay-clip-ov-1");
+  const endHandle = overlay.getByTestId("overlay-end-handle-ov-1");
+  const v1 = editor.locator('[data-magnetic-lane]');
+  const [handleBox, v1Box] = await Promise.all([endHandle.boundingBox(), v1.boundingBox()]);
+  expect(handleBox).not.toBeNull();
+  expect(v1Box).not.toBeNull();
+
+  // V1 has a cut at 2s on a 6s ruler. Move just past it: the 10px magnet
+  // should pull the overlay edge back to the exact shared boundary.
+  const boundaryX = v1Box!.x + v1Box!.width / 3;
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(boundaryX + 3, handleBox!.y + handleBox!.height / 2, { steps: 8 });
+  await expect(editor.locator("[data-timeline-snap-guide]")).toBeVisible();
+  await page.mouse.up();
+  await expect(editor.locator("[data-timeline-snap-guide]")).toHaveCount(0);
+
+  await expect.poll(() => {
+    const saved = lastPut(harness)?.find(clip => clip.id === "ov-1");
+    return saved ? saved.timeline_start + saved.timeline_duration : Number.NaN;
+  }).toBeCloseTo(2, 3);
+});
+
+test("moving an overlay snaps either clip edge and shows the shared alignment guide", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const overlay = editor.getByTestId("overlay-clip-ov-1"); // 0.5–1.5s
+  const v2 = editor.locator('[data-track-index="2"]');
+  const [overlayBox, laneBox] = await Promise.all([overlay.boundingBox(), v2.boundingBox()]);
+  expect(overlayBox).not.toBeNull();
+  expect(laneBox).not.toBeNull();
+
+  // Shift by ~0.5s so the trailing edge approaches the V1 cut at 2s. The
+  // leading edge is not near that cut, proving whole-range snapping considers
+  // both sides of the moving clip.
+  const halfSecondPx = laneBox!.width * (0.5 / 6);
+  const pointerX = overlayBox!.x + overlayBox!.width / 2;
+  const pointerY = overlayBox!.y + overlayBox!.height / 2;
+  await page.mouse.move(pointerX, pointerY);
+  await page.mouse.down();
+  await page.mouse.move(pointerX + halfSecondPx + 3, pointerY, { steps: 8 });
+
+  const guide = editor.locator("[data-timeline-snap-guide]");
+  await expect(guide).toBeVisible();
+  await expect(guide).toHaveAttribute("data-timeline-snap-time", "2");
+  await page.mouse.up();
+  await expect(guide).toHaveCount(0);
+
+  await expect.poll(() => {
+    const saved = lastPut(harness)?.find(clip => clip.id === "ov-1");
+    return saved ? saved.timeline_start + saved.timeline_duration : Number.NaN;
+  }).toBeCloseTo(2, 3);
 });
 
 test("dragging a V1 clip onto V2 converts it to an overlay (track + overlay_box), V1 reflows", async ({ page }) => {

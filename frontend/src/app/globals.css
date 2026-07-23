@@ -210,15 +210,29 @@ body {
 
 /* Attention overlays use the voiceover clock for visibility. CSS provides the
    lightweight Instant approximation; FFmpeg remains the final-look renderer. */
-@keyframes attention-pop { 0% { opacity: 0; transform: scale(.25); } 16% { opacity: 1; transform: scale(calc(1 + .08 * var(--attention-intensity, 1))); } 28%, 100% { opacity: 1; transform: scale(1); } }
-@keyframes attention-zoom { 0% { opacity: 0; transform: scale(calc(1 - .18 * var(--attention-intensity, 1))); } 20%, 100% { opacity: 1; transform: scale(1); } }
-@keyframes attention-slide { 0% { opacity: 0; transform: translateX(calc(-40% * var(--attention-intensity, 1))); } 22%, 100% { opacity: 1; transform: translateX(0); } }
-@keyframes attention-spin { 0% { opacity: 0; transform: scale(.4) rotate(-180deg); } 24%, 100% { opacity: 1; transform: scale(1) rotate(0); } }
-@keyframes attention-tornado { 0% { opacity: 0; transform: scale(.15) rotate(-540deg) translateY(-35%); } 28%, 100% { opacity: 1; transform: scale(1) rotate(0) translateY(0); } }
+@keyframes attention-pop { 0% { opacity: 0; transform: scale(.25); } 68% { opacity: var(--attention-opacity, 1); transform: scale(calc(1 + .08 * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: scale(1); } }
+@keyframes attention-zoom { 0% { opacity: 0; transform: scale(calc(1 - .18 * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: scale(1); } }
+@keyframes attention-slide { 0% { opacity: 0; transform: translateX(calc(-40% * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: translateX(0); } }
+@keyframes attention-slide-right { 0% { opacity: 0; transform: translateX(calc(40% * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: translateX(0); } }
+@keyframes attention-slide-up { 0% { opacity: 0; transform: translateY(calc(40% * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: translateY(0); } }
+@keyframes attention-slide-down { 0% { opacity: 0; transform: translateY(calc(-40% * var(--attention-intensity, 1))); } 100% { opacity: var(--attention-opacity, 1); transform: translateY(0); } }
+@keyframes attention-wipe-left { 0% { opacity: 0; clip-path: inset(0 100% 0 0); } 100% { opacity: var(--attention-opacity, 1); clip-path: inset(0); } }
+@keyframes attention-wipe-right { 0% { opacity: 0; clip-path: inset(0 0 0 100%); } 100% { opacity: var(--attention-opacity, 1); clip-path: inset(0); } }
+@keyframes attention-bounce { 0% { opacity: 0; transform: translateY(-28%) scale(.82); } 52% { opacity: var(--attention-opacity, 1); transform: translateY(8%) scale(1.03); } 76% { transform: translateY(-3%) scale(.99); } 100% { opacity: var(--attention-opacity, 1); transform: translateY(0) scale(1); } }
+@keyframes attention-spin { 0% { opacity: 0; transform: scale(.4) rotate(-180deg); } 100% { opacity: var(--attention-opacity, 1); transform: scale(1) rotate(0); } }
+@keyframes attention-tornado { 0% { opacity: 0; transform: scale(.15) rotate(-540deg) translateY(-35%); } 100% { opacity: var(--attention-opacity, 1); transform: scale(1) rotate(0) translateY(0); } }
+@keyframes attention-fade { 0% { opacity: 0; } 100% { opacity: var(--attention-opacity, 1); } }
 .attention-static { animation: none; }
+.attention-fade { animation-name: attention-fade; animation-timing-function: ease-in-out; animation-fill-mode: both; }
 .attention-pop { animation-name: attention-pop; animation-timing-function: ease-out; animation-fill-mode: both; }
 .attention-zoom { animation-name: attention-zoom; animation-timing-function: ease-out; animation-fill-mode: both; }
 .attention-slide { animation-name: attention-slide; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-slide-right { animation-name: attention-slide-right; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-slide-up { animation-name: attention-slide-up; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-slide-down { animation-name: attention-slide-down; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-wipe-left { animation-name: attention-wipe-left; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-wipe-right { animation-name: attention-wipe-right; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
+.attention-bounce { animation-name: attention-bounce; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
 .attention-spin { animation-name: attention-spin; animation-timing-function: ease-out; animation-fill-mode: both; }
 .attention-tornado { animation-name: attention-tornado; animation-timing-function: cubic-bezier(.2,.8,.2,1); animation-fill-mode: both; }
 
@@ -252,6 +266,33 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* Every complete workspace pane owns a persistent lower endcap. The pane
+   reserves its height, while the endcap stays pinned outside the scrolling
+   content. Only pane shells opt in, so nested headers cannot create internal
+   separators. */
+[data-workspace-pane] {
+  position: relative;
+  padding-bottom: 0.75rem;
+}
+
+[data-workspace-pane]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 70;
+}
+
+[data-workspace-pane]::after,
+[data-slot="workspace-panel-endcap"] {
+  display: block;
+  width: 100%;
+  height: 0.75rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-panel);
+  pointer-events: none;
 }
 
 @layer base {
@@ -327,6 +368,17 @@ body {
 /* Keep Step 3 timeline panning intact without reserving a bar below the lanes. */
 .timeline-horizontal-scrollbar-hidden::-webkit-scrollbar:horizontal {
   height: 0;
+}
+
+/* Workspace inspectors keep wheel, trackpad, touch, and keyboard scrolling
+   without showing a persistent gutter beside dense editor controls. */
+.workspace-inspector-scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workspace-inspector-scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 /* Firefox only (web builds). Chromium 121+ also reads scrollbar-width and

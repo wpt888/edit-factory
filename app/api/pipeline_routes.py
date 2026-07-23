@@ -29,6 +29,7 @@ import re as _re
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
+from app.api.media_session import get_profile_context_with_media_session
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.utils import normalize_path
@@ -833,6 +834,15 @@ def _compute_render_fingerprint(
         "music": music_variant,
         "music_mtime": _music_asset_mtime(music_variant),
     }
+    if (
+        effective_subtitle.get("karaoke")
+        and str(effective_subtitle.get("karaokeStyle", "color")).lower() == "box"
+    ):
+        # Invalidate completed box-karaoke renders created by the former
+        # Pillow-positioned renderer. Without a renderer revision in the
+        # fingerprint, an otherwise identical request would reuse the
+        # misaligned video even after the libass-only fix was deployed.
+        key_data["subtitle_renderer_version"] = "karaoke-box-libass-v3-asymmetric-padding"
     return hashlib.sha256(
         _json.dumps(key_data, sort_keys=True, default=str).encode()
     ).hexdigest()[:32]
@@ -3875,7 +3885,10 @@ class SubtitleRotationRequest(BaseModel):
 
 
 class AttentionAnimation(BaseModel):
-    preset: Literal["static", "pop", "zoom", "slide", "spin", "tornado"] = "static"
+    preset: Literal[
+        "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
+        "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
+    ] = "static"
     enterMs: int = Field(default=250, ge=0, le=10000)
     exitMs: int = Field(default=200, ge=0, le=10000)
     delayMs: int = Field(default=0, ge=0, le=60000)
@@ -3939,6 +3952,11 @@ def _resolve_attention_assets(
 
 class ApplyAttentionTemplateRequest(BaseModel):
     templateId: str = Field(min_length=1, max_length=100)
+    animation: Optional[Literal[
+        "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
+        "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
+    ]] = None
+    enterMs: Optional[int] = Field(default=None, ge=0, le=10000)
     # New typed form; assetUrls kept for backward compatibility (flat = images).
     assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
     assetUrls: List[str] = Field(default_factory=list, max_length=100)
@@ -3960,6 +3978,11 @@ class ApplyAttentionTemplateRequest(BaseModel):
 class AttentionSelectionRequest(BaseModel):
     """Step 3 template pick, stored until previews exist to apply it to."""
     templateId: str = Field(default="", max_length=100)
+    animation: Optional[Literal[
+        "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
+        "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
+    ]] = None
+    enterMs: Optional[int] = Field(default=None, ge=0, le=10000)
     # New typed form; assetUrls kept for backward compatibility (flat = images).
     assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
     assetUrls: List[str] = Field(default_factory=list, max_length=100)
@@ -4075,13 +4098,20 @@ async def apply_attention_template(
             template=resolved,
             asset_ids=resolved_assets,
             duration_ms=request.durationMs,
+            animation_override=request.animation,
+            enter_ms_override=request.enterMs,
         )
     else:
         # ponytail: legacy strategy-based templates (system + pre-refactor rows)
+        legacy_resolved = {
+            **resolved,
+            **({"animation": request.animation} if request.animation is not None else {}),
+            **({"enterMs": request.enterMs} if request.enterMs is not None else {}),
+        }
         new_cues = distribute_attention_cues(
             duration_ms=request.durationMs,
             subtitle_boundaries_ms=request.subtitleBoundariesMs,
-            template=resolved,
+            template=legacy_resolved,
             asset_ids=resolved_assets,
         )
     if request.startOffsetMs:
@@ -4133,6 +4163,8 @@ async def update_attention_selection(
         "templateId": request.templateId,
         # Store typed assets; the frontend migrates legacy assetUrls on load.
         "assets": _resolve_attention_assets(request.assets, request.assetUrls),
+        **({"animation": request.animation} if request.animation is not None else {}),
+        **({"enterMs": request.enterMs} if request.enterMs is not None else {}),
         "staggerSeconds": request.staggerSeconds,
     }
     with _get_pipeline_state_lock(pipeline_id):
@@ -8578,7 +8610,10 @@ def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
 @router.get("/status/{pipeline_id}", response_model=PipelineStatusResponse)
 async def get_pipeline_status(
     pipeline_id: str,
-    profile: ProfileContext = Depends(get_profile_context),
+    # Status polling completes before Step 4 mounts its native <video> player.
+    # Refresh the signed media cookie here so reopening a completed pipeline
+    # does not depend on having visited another media screen first.
+    profile: ProfileContext = Depends(get_profile_context_with_media_session),
 ):
     """
     Get status of all variants in a pipeline.
@@ -10722,14 +10757,15 @@ async def subtitle_frame_preview(
     request: SubtitleFrameRequest,
     visual_version: Optional[str] = None,
     ctx: ProfileContext = Depends(get_profile_context),
+    apply_meta_overlay: bool = True,
 ):
     """Render a single FFmpeg frame with optional subtitle overlay for preview.
 
-    Optional query param `visual_version=A|B` applies the corresponding Meta
-    profile subtitle overlay on top of request.subtitle_settings. The frontend
-    should only pass this when there is NO explicit user override for that
-    key — matching the render-time rule that user overrides suppress Meta.
-    Invalid `visual_version` values raise 400 (matches /render-preview).
+    Optional query param `visual_version=A|B` selects the corresponding preview
+    output and, by default, applies its Meta subtitle overlay. Callers that
+    already resolved that overlay can set `apply_meta_overlay=false` while
+    retaining the correct A/B source frame. Invalid `visual_version` values
+    raise 400 (matches /render-preview).
     """
     from app.services.video_effects.subtitle_styler import build_subtitle_filter
     from app.services.segment_transforms import SegmentTransform
@@ -10750,7 +10786,7 @@ async def subtitle_frame_preview(
     # instead of silently ignoring them.
     effective_subtitle_settings = dict(request.subtitle_settings or {})
     normalized_version = _normalize_meta_version_label(visual_version)
-    if normalized_version:
+    if normalized_version and apply_meta_overlay:
         meta_profile = next(
             (META_PROFILES[i] for i in range(len(META_PROFILES))
              if get_version_label(i) == normalized_version),
@@ -10820,7 +10856,7 @@ async def subtitle_frame_preview(
     # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
     settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)
     fingerprint_input = (
-        f"{settings_json}|{source_video_path}|{source_timestamp:.3f}|{selected_match or {}}|{visual_version or ''}|{sample_text}|subs={include_subtitles}"
+        f"{settings_json}|{source_video_path}|{source_timestamp:.3f}|{selected_match or {}}|{visual_version or ''}|meta={apply_meta_overlay}|{sample_text}|subs={include_subtitles}"
     )
     fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
     output_path = preview_dir / f"{fingerprint}.jpg"

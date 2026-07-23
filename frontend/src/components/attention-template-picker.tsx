@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ImagePlus, Images, Replace, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -11,17 +12,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AttentionAssetPickerDialog } from "@/components/dialogs/attention-asset-picker-dialog";
+import {
+  AttentionAssetPickerDialog,
+  attentionAssetPreviewUrl,
+} from "@/components/dialogs/attention-asset-picker-dialog";
 import type { AttentionAsset } from "@/components/dialogs/attention-asset-picker-dialog";
 import { InspectorField } from "@/components/ui/inspector";
-import { apiGet } from "@/lib/api";
+import { AttentionEffectControls } from "@/components/attention-effect-controls";
+import { apiGetWithRetry } from "@/lib/api";
 import type { AttentionTemplate } from "@/types/attention-template";
 import { normalizeAttentionTemplate } from "@/types/attention-template";
+import {
+  type AttentionAnimationPreset,
+} from "@/types/attention-timeline";
 
 export type { AttentionAsset } from "@/components/dialogs/attention-asset-picker-dialog";
 
 export type AttentionSelection = {
   templateId: string;
+  /** Step 3 override. Absent on old pipelines means "use the template default". */
+  animation?: AttentionAnimationPreset;
+  /** Step 3 timing override. Absent means use each authored slot/default. */
+  enterMs?: number;
   /** Slot content in order — images or videos. Fewer assets than slots repeat (index % length). */
   assets: AttentionAsset[];
   /** Seconds added per variant so image bursts never land on the same second twice (0 = off). */
@@ -43,6 +55,8 @@ export function normalizeAttentionSelection(raw: unknown): AttentionSelection {
     assets?: unknown;
     assetUrls?: unknown;
     staggerSeconds?: unknown;
+    animation?: unknown;
+    enterMs?: unknown;
   };
   let assets: AttentionAsset[] = [];
   if (Array.isArray(record.assets)) {
@@ -60,6 +74,12 @@ export function normalizeAttentionSelection(raw: unknown): AttentionSelection {
   }
   return {
     templateId: typeof record.templateId === "string" ? record.templateId : "",
+    animation: isAttentionAnimationPreset(record.animation)
+      ? record.animation as AttentionAnimationPreset
+      : undefined,
+    enterMs: typeof record.enterMs === "number" && Number.isFinite(record.enterMs)
+      ? Math.max(0, Math.min(10_000, Math.round(record.enterMs)))
+      : undefined,
     assets,
     staggerSeconds: typeof record.staggerSeconds === "number" ? record.staggerSeconds : 1,
   };
@@ -68,6 +88,8 @@ export function normalizeAttentionSelection(raw: unknown): AttentionSelection {
 type AttentionTemplatePickerProps = {
   selection: AttentionSelection;
   onSelectionChange: (selection: AttentionSelection) => void;
+  /** Personal templates are profile-scoped, so changing profile must reload the library. */
+  profileId?: string;
   /** Render target, used only to warn when the template aspect ratio differs. */
   outputWidth?: number;
   outputHeight?: number;
@@ -79,29 +101,42 @@ type AttentionTemplatePickerProps = {
 export function AttentionTemplatePicker({
   selection,
   onSelectionChange,
+  profileId,
   outputWidth = 1080,
   outputHeight = 1920,
 }: AttentionTemplatePickerProps) {
   const [templates, setTemplates] = useState<AttentionTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedProfileId, setLoadedProfileId] = useState<string | null>(null);
+  const [personalTemplatesAvailable, setPersonalTemplatesAvailable] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeSlot, setActiveSlot] = useState<number | null>(null);
+  const loading = loadedProfileId !== (profileId ?? "");
 
   useEffect(() => {
     let cancelled = false;
-    apiGet("/attention-templates")
+    apiGetWithRetry("/attention-templates", { cache: "no-store" })
       .then(async (response) => {
-        const data = (await response.json()) as { templates?: AttentionTemplate[] };
-        if (!cancelled) setTemplates(data.templates ?? []);
+        const data = (await response.json()) as {
+          templates?: AttentionTemplate[];
+          personal_templates_available?: boolean;
+        };
+        if (!cancelled) {
+          setTemplates(data.templates ?? []);
+          setPersonalTemplatesAvailable(data.personal_templates_available !== false);
+          setLoadFailed(false);
+          setLoadedProfileId(profileId ?? "");
+        }
       })
       .catch(() => {
-        if (!cancelled) setTemplates([]);
+        if (!cancelled) {
+          setTemplates([]);
+          setLoadFailed(true);
+          setLoadedProfileId(profileId ?? "");
+        }
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
     return () => { cancelled = true; };
-  }, []);
+  }, [profileId]);
 
   const selectedTemplate = templates.find((template) => template.id === selection.templateId);
   const config = normalizeAttentionTemplate(selectedTemplate);
@@ -135,7 +170,16 @@ export function AttentionTemplatePicker({
       .flatMap((track) => track.map((image) => image.defaultAsset))
       .filter((asset): asset is AttentionAsset => Boolean(asset));
     const assets = selection.assets.length === 0 && defaults.length > 0 ? defaults : selection.assets;
-    onSelectionChange({ ...selection, templateId, staggerSeconds: templateGapSeconds, assets });
+    onSelectionChange({
+      ...selection,
+      templateId,
+      // A new template starts from its authored per-slot effects. Run-specific
+      // all-slot overrides remain an explicit user action.
+      animation: undefined,
+      enterMs: undefined,
+      staggerSeconds: templateGapSeconds,
+      assets,
+    });
   };
 
   return (
@@ -143,7 +187,15 @@ export function AttentionTemplatePicker({
       <InspectorField
         label="Layout template"
         htmlFor="step3-attention-template"
-        helper={templates.length === 0 && !loading ? "Create a template in the template space first." : undefined}
+        helper={
+          loadFailed
+            ? "Could not load attention templates. Try again after the API is available."
+            : !personalTemplatesAvailable
+              ? "Personal templates are unavailable until the attention-template database migration is applied."
+              : templates.length === 0 && !loading
+                ? "Create a template in the template space first."
+                : undefined
+        }
       >
         <Select
           value={selection.templateId || "__none__"}
@@ -186,46 +238,30 @@ export function AttentionTemplatePicker({
             </p>
           )}
 
-          <div className="flex items-center justify-center rounded-lg border bg-black/30 p-3" data-testid="attention-layout-preview">
-            <div
-              className="relative max-h-40 max-w-full overflow-hidden rounded-md border border-white/10 bg-gradient-to-b from-zinc-800 to-zinc-950"
-              style={{
-                aspectRatio: `${config.canvasWidth} / ${config.canvasHeight}`,
-                height: config.canvasWidth <= config.canvasHeight ? "10rem" : "auto",
-                width: config.canvasWidth > config.canvasHeight ? "100%" : "auto",
-              }}
-            >
-              <div className="absolute inset-x-2 top-2 text-center text-[7px] uppercase tracking-[0.18em] text-white/25">Video frame</div>
-              {templateSlots.map(({ image }, index) => {
-                const asset = selection.assets.length > 0
-                  ? selection.assets[index % selection.assets.length]
-                  : undefined;
-                return (
-                  <div
-                    key={image.id}
-                    className="absolute grid place-items-center overflow-hidden rounded border border-primary/70 bg-primary/15 text-[9px] font-semibold text-primary"
-                    style={{
-                      left: `${image.x * 100}%`, top: `${image.y * 100}%`,
-                      width: `${image.width * 100}%`, height: `${image.height * 100}%`,
-                      opacity: image.opacity,
-                      zIndex: index + 1,
-                    }}
-                  >
-                    {asset ? <AssetThumb asset={asset} /> : index + 1}
-                  </div>
-                );
-              })}
-              <div className="absolute inset-x-2 bottom-2 z-20 rounded bg-white/10 px-2 py-0.5 text-center text-[7px] text-white/50">Subtitle safe area</div>
-            </div>
-          </div>
+          <AttentionEffectControls
+            animation={selection.animation}
+            enterMs={selection.enterMs}
+            inherited={{
+              animation: config.animation,
+              enterMs: config.enterMs,
+              label: "Template defaults",
+            }}
+            onAnimationChange={(animation) => onSelectionChange({ ...selection, animation })}
+            onEnterMsChange={(enterMs) => onSelectionChange({ ...selection, enterMs })}
+            onReset={() => onSelectionChange({ ...selection, animation: undefined, enterMs: undefined })}
+            effectLabel="All-slot entrance effect"
+            helper="Optional run-specific override. Individual cues remain editable on each variant timeline after apply."
+            testIdPrefix="step3-attention"
+          />
 
           <InspectorField
             label="Delay / variant"
             htmlFor="attention-stagger-seconds"
             helper="Offsets each variant so bursts never land on the same second twice."
+            className="max-w-44"
           >
             <div className="relative">
-              <input
+              <Input
                 id="attention-stagger-seconds"
                 type="number" min={0} max={30} step={0.5}
                 value={selection.staggerSeconds}
@@ -233,7 +269,7 @@ export function AttentionTemplatePicker({
                   ...selection,
                   staggerSeconds: Math.min(30, Math.max(0, Number(event.target.value) || 0)),
                 })}
-                className="h-8 w-full rounded-md border bg-background px-2 pr-8 text-xs outline-none focus:border-primary"
+                className="h-8 w-full px-2 pr-8 text-xs"
                 data-testid="attention-stagger-seconds"
               />
               <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">sec</span>
@@ -249,7 +285,7 @@ export function AttentionTemplatePicker({
               </Button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               {Array.from({ length: visibleSlotCount }, (_, index) => {
                 const slot = templateSlots[index];
                 const asset = selection.assets[index];
@@ -311,9 +347,9 @@ export function AttentionTemplatePicker({
 
 function AssetThumb({ asset, label = "" }: { asset: AttentionAsset; label?: string }) {
   if (asset.type === "video") {
-    return <video src={asset.url} muted playsInline preload="metadata" className="size-full object-cover" />;
+    return <video src={attentionAssetPreviewUrl(asset.url)} muted playsInline preload="metadata" className="size-full object-cover" />;
   }
-  return <img src={asset.url} alt={label} className="size-full object-cover" />;
+  return <img src={attentionAssetPreviewUrl(asset.url)} alt={label} className="size-full object-cover" />;
 }
 
 function formatRatio(width: number, height: number): string {
@@ -323,4 +359,11 @@ function formatRatio(width: number, height: number): string {
   let b = right;
   while (b) [a, b] = [b, a % b];
   return `${left / a}:${right / a}`;
+}
+
+function isAttentionAnimationPreset(value: unknown): value is AttentionAnimationPreset {
+  return [
+    "static", "fade", "pop", "zoom", "slide", "slide-right", "slide-up",
+    "slide-down", "wipe-left", "wipe-right", "bounce", "spin", "tornado",
+  ].includes(String(value));
 }

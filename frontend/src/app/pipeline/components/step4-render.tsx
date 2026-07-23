@@ -179,7 +179,7 @@ export function Step4Render({ ctx }: { ctx: any }) {
               <h2 className="text-2xl font-semibold">Render Progress</h2>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(3)}>
-                  Back to Preview
+                  Back to Export
                 </Button>
                 {isRendering && (
                   <Button variant="destructive" onClick={requestStopRender}>
@@ -215,8 +215,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
             {variantStatuses.length === 0 ? (
               <EmptyState
                 icon={<Workflow className="size-6" />}
-                title="No pipeline"
-                description="Configure a pipeline to generate videos."
+                title="No render in progress"
+                description="Configure the export from Step 3 before starting a render."
               />
             ) : null}
             <div
@@ -519,25 +519,27 @@ export function Step4Render({ ctx }: { ctx: any }) {
             )}
 
             {/* Schedule & Publish — calendar then schedule form */}
-            <PipelineSchedule
-              completedClips={variantStatuses
-                .filter(v => v.status === "completed" && v.clip_id)
-                .map(v => ({
-                  clip_id: v.clip_id!,
-                  variant_index: v.variant_index,
-                  final_video_path: v.final_video_path || "",
-                  thumbnail_path: v.thumbnail_path,
-                  visual_version: v.visual_version,
-                }))}
-              initialCaptions={generatedCaptions}
-              projectId={libraryProjectId ?? undefined}
-              allLibrarySaved={
-                variantStatuses.filter(v => v.status === "completed").length > 0 &&
-                variantStatuses
-                  .filter(v => v.status === "completed")
-                  .every(v => v.library_saved === true)
-              }
-            />
+            {variantStatuses.some(v => v.status === "completed" && v.clip_id) && (
+              <PipelineSchedule
+                completedClips={variantStatuses
+                  .filter(v => v.status === "completed" && v.clip_id)
+                  .map(v => ({
+                    clip_id: v.clip_id!,
+                    variant_index: v.variant_index,
+                    final_video_path: v.final_video_path || "",
+                    thumbnail_path: v.thumbnail_path,
+                    visual_version: v.visual_version,
+                  }))}
+                initialCaptions={generatedCaptions}
+                projectId={libraryProjectId ?? undefined}
+                allLibrarySaved={
+                  variantStatuses.filter(v => v.status === "completed").length > 0 &&
+                  variantStatuses
+                    .filter(v => v.status === "completed")
+                    .every(v => v.library_saved === true)
+                }
+              />
+            )}
           </div>
   );
 }

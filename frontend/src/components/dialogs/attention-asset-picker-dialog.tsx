@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { apiGet, apiUpload } from "@/lib/api";
+import { apiGet, apiUpload, getApiUrl } from "@/lib/api";
 
 export type AttentionAssetType = "image" | "video";
 export type AttentionAsset = { url: string; type: AttentionAssetType };
@@ -42,20 +42,29 @@ function typeFromMime(mimeType: string | undefined): AttentionAssetType {
   return mimeType?.startsWith("video/") ? "video" : "image";
 }
 
-/** Upload an image or video to the shared media library and resolve its
- *  preview URL. Reused by the dialog Upload tab and by Ctrl+V paste. */
-export async function uploadPlatformMedia(file: File): Promise<AttentionAsset> {
+const LOCAL_ATTENTION_MEDIA = /^media\/attention\/[^/]+\/([^/]+)$/i;
+
+/** Resolve a persisted local path to the authenticated media endpoint used by
+ *  native img/video elements. Cloud and user-entered URLs pass through. */
+export function attentionAssetPreviewUrl(url: string): string {
+  const match = LOCAL_ATTENTION_MEDIA.exec(url);
+  if (!match) return url;
+  const profileId = typeof window === "undefined"
+    ? ""
+    : localStorage.getItem("editai_current_profile_id") || "";
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  return `${getApiUrl()}/segments/attention-media/${encodeURIComponent(match[1])}${query}`;
+}
+
+/** Save an image or video in the local attention-media library. Reused by the
+ *  dialog Upload tab and by Ctrl+V paste; no Blipost account is required. */
+export async function uploadAttentionMedia(file: File): Promise<AttentionAsset> {
   const form = new FormData();
   form.append("file", file);
-  const response = await apiUpload("/platform/media/upload", form, { timeout: 15 * 60_000 });
-  const { mediaId } = (await response.json()) as { mediaId: string };
-  const list = await apiGet("/platform/media?limit=100", { cache: "no-store" });
-  const data = (await list.json()) as { media?: CloudMedia[] };
-  const found = data.media?.find((item) => item.id === mediaId);
-  if (!found?.previewUrl) {
-    throw new Error("Upload succeeded but no preview URL was returned.");
-  }
-  return { url: found.previewUrl, type: typeFromMime(found.mimeType || file.type) };
+  const response = await apiUpload("/segments/attention-media", form, { timeout: 15 * 60_000 });
+  const data = (await response.json()) as { asset?: AttentionAsset };
+  if (!data.asset?.url) throw new Error("Upload succeeded but no local asset was returned.");
+  return data.asset;
 }
 
 export function AttentionAssetPickerDialog({
@@ -88,16 +97,19 @@ export function AttentionAssetPickerDialog({
   }, []);
 
   useEffect(() => {
-    if (!open) {
-      setUrl("");
-      return;
-    }
-    void loadMedia();
+    if (!open) return;
+    const timer = window.setTimeout(() => void loadMedia(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadMedia, open]);
 
   const choose = (asset: AttentionAsset) => {
     onSelect(asset);
     onOpenChange(false);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setUrl("");
+    onOpenChange(nextOpen);
   };
 
   const uploadFile = async (file: File) => {
@@ -107,7 +119,7 @@ export function AttentionAssetPickerDialog({
     }
     setUploading(true);
     try {
-      const asset = await uploadPlatformMedia(file);
+      const asset = await uploadAttentionMedia(file);
       choose(asset);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed");
@@ -117,7 +129,7 @@ export function AttentionAssetPickerDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col">
         <DialogHeader>
           <DialogTitle>Choose attention media</DialogTitle>
@@ -196,7 +208,8 @@ export function AttentionAssetPickerDialog({
           <div className="flex min-h-52 flex-col items-center justify-center gap-4 rounded-lg border border-dashed bg-muted/20 p-8 text-center">
             {uploading ? <Loader2 className="size-10 animate-spin text-primary" /> : <Upload className="size-10 text-primary" />}
             <div>
-              <p className="font-medium">Upload to the shared media library</p>
+              <p className="font-medium">Add from this device</p>
+              <p className="mt-1 text-sm text-muted-foreground">Saved locally. Blipost connection is not required.</p>
               <p className="mt-1 text-sm text-muted-foreground">Images (PNG, JPEG, WebP, GIF) or videos (MP4, WebM, MOV).</p>
             </div>
             <input

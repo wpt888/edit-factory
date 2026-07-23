@@ -21,6 +21,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Progress } from "@/components/ui/progress";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { apiPost, apiPatch, handleApiError } from "@/lib/api";
 import {
   Loader2,
@@ -53,7 +59,7 @@ import {
   analyzeGroupTags,
 } from "../pipeline-utils";
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useRef, useState } from "react";
 import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
 import { SourceVideosCard } from "./source-videos-card";
@@ -103,6 +109,38 @@ type Step2Ctx = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
+
+function StepActionIcon({
+  label,
+  onClick,
+  disabled,
+  destructive = false,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`size-8 ${destructive ? "text-destructive hover:text-destructive" : "text-muted-foreground hover:text-foreground"}`}
+          onClick={onClick}
+          disabled={disabled}
+          aria-label={label}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function Step2TTS({ ctx }: { ctx: any }) {
@@ -246,65 +284,55 @@ export function Step2TTS({ ctx }: { ctx: any }) {
   };
 
   const renderStepActions = () => (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {regeneratingAllScripts ? (
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={handleCancelRegenerateAllScripts}
-          aria-label={`Stop script regeneration (${(regeneratingAllScriptsIndex ?? 0) + 1} of ${scripts.length})`}
-        >
-          <X className="size-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
-          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>
-            Stop Scripts ({(regeneratingAllScriptsIndex ?? 0) + 1}/{scripts.length})
-          </span>
-        </Button>
-      ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRegenerateAllScripts}
-          disabled={scripts.length === 0 || regeneratingAll || Object.values(regeneratingScript).some(Boolean)}
-          aria-label="Regenerate all scripts"
-        >
-          <Sparkles className="size-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
-          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Regenerate Scripts</span>
-        </Button>
-      )}
-      {regeneratingAll ? (
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={handleCancelRegenerateAll}
-          aria-label={`Stop voice-over regeneration (${(regeneratingAllIndex ?? 0) + 1} of ${scripts.length})`}
-        >
-          <X className="size-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
-          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>
-            Stop Voice-overs ({(regeneratingAllIndex ?? 0) + 1}/{scripts.length})
-          </span>
-        </Button>
-      ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRegenerateAllTts}
-          disabled={scripts.length === 0 || Object.values(ttsResults).some((result) => result.generating)}
-          aria-label="Regenerate all voice-overs"
-        >
-          <RefreshCw className="size-3.5 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
-          <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Regenerate Voice-overs</span>
-        </Button>
-      )}
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => { setStep(1); setPreviewError(null); }}
-        aria-label="Back to Idea"
+    <TooltipProvider>
+      <div
+        className="flex items-center justify-end gap-1"
+        data-testid="step2-secondary-actions"
+        role="toolbar"
+        aria-label="Script review actions"
       >
-        <ArrowLeft className="size-4 min-[1280px]:mr-0 min-[1600px]:mr-1.5" />
-        <span className={workspaceLayout ? "min-[1280px]:hidden min-[1600px]:inline" : undefined}>Back to Idea</span>
-      </Button>
-    </div>
+        {regeneratingAllScripts ? (
+          <StepActionIcon
+            label={`Stop script regeneration (${(regeneratingAllScriptsIndex ?? 0) + 1} of ${scripts.length})`}
+            onClick={handleCancelRegenerateAllScripts}
+            destructive
+          >
+            <X className="size-4" />
+          </StepActionIcon>
+        ) : (
+          <StepActionIcon
+            label="Regenerate all scripts"
+            onClick={handleRegenerateAllScripts}
+            disabled={scripts.length === 0 || regeneratingAll || Object.values(regeneratingScript).some(Boolean)}
+          >
+            <Sparkles className="size-4" />
+          </StepActionIcon>
+        )}
+        {regeneratingAll ? (
+          <StepActionIcon
+            label={`Stop voice-over regeneration (${(regeneratingAllIndex ?? 0) + 1} of ${scripts.length})`}
+            onClick={handleCancelRegenerateAll}
+            destructive
+          >
+            <X className="size-4" />
+          </StepActionIcon>
+        ) : (
+          <StepActionIcon
+            label="Regenerate all voice-overs"
+            onClick={handleRegenerateAllTts}
+            disabled={scripts.length === 0 || Object.values(ttsResults).some((result) => result.generating)}
+          >
+            <RefreshCw className="size-4" />
+          </StepActionIcon>
+        )}
+        <StepActionIcon
+          label="Back to Idea"
+          onClick={() => { setStep(1); setPreviewError(null); }}
+        >
+          <ArrowLeft className="size-4" />
+        </StepActionIcon>
+      </div>
+    </TooltipProvider>
   );
 
   return (
@@ -323,7 +351,6 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                   {scripts.length} {scripts.length === 1 ? "script" : "scripts"}
                 </p>
               </div>
-              {renderStepActions()}
             </div>
 
             <WorkspaceSplit
@@ -624,10 +651,16 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       {scripts.length} {scripts.length === 1 ? "script" : "scripts"}
                     </span>
                   )}
-                  actions={renderStepActions()}
                   className={workspaceLayout ? "hidden min-[1280px]:flex" : "hidden"}
                   data-testid="step2-review-header"
                 />
+
+                <div
+                  className="flex h-12 shrink-0 items-center justify-end border-b border-border bg-surface-panel px-3"
+                  data-testid="step2-action-dock"
+                >
+                  {renderStepActions()}
+                </div>
 
                 <div className={`space-y-3 ${workspaceLayout ? "min-[1280px]:min-h-0 min-[1280px]:flex-1 min-[1280px]:overflow-y-auto min-[1280px]:overscroll-contain min-[1280px]:p-3" : ""}`}>
 

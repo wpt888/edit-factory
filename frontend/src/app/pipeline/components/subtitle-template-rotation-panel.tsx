@@ -1,7 +1,10 @@
 "use client";
 
 import { useMemo, useState, type Ref } from "react";
-import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
+import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,79 +16,103 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
-import type { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
+import {
+  DEFAULT_SUBTITLE_SETTINGS,
+  type SubtitleSettings,
+  type UserSubtitlePreset,
+} from "@/types/video-processing";
 import {
   NO_SUBTITLES_PRESET_ID,
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 import {
-  findMatchingSubtitleTemplateGroup,
   formatSubtitleStyleCount,
   getAssignedSubtitleStyleCount,
-  getSubtitleTemplateGroups,
 } from "../subtitle-template-collections";
 
 type Props = {
   rotation: SubtitleTemplateRotation;
   presets: UserSubtitlePreset[];
   onChange: (rotation: SubtitleTemplateRotation) => void;
-  onUpdatePreset: (presetId: string, settings: SubtitleSettings, wordsPerSubtitle: number) => void;
+  onSaveStyles?: (styles: UserSubtitlePreset[]) => Promise<boolean>;
   panelRef?: Ref<HTMLDivElement>;
 };
+
+function copyPreset(preset: UserSubtitlePreset): UserSubtitlePreset {
+  return {
+    ...preset,
+    settings: { ...preset.settings },
+    settingsA: preset.settingsA ? { ...preset.settingsA } : undefined,
+    settingsB: preset.settingsB ? { ...preset.settingsB } : undefined,
+  };
+}
 
 export function SubtitleTemplateRotationPanel({
   rotation,
   presets,
   onChange,
-  onUpdatePreset,
+  onSaveStyles,
   panelRef,
 }: Props) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const editingPreset = presets.find((preset) => preset.id === editingId);
-  const [draftSettings, setDraftSettings] = useState<SubtitleSettings | null>(null);
-  const [draftWords, setDraftWords] = useState(2);
-  const unusedPresets = useMemo(
-    () => presets.filter((preset) => !rotation.presetIds.includes(preset.id)),
-    [presets, rotation.presetIds],
-  );
-  const canAddNoSubtitles = !rotation.presetIds.includes(NO_SUBTITLES_PRESET_ID);
-  const templateGroups = useMemo(() => getSubtitleTemplateGroups(presets), [presets]);
-  const selectedTemplateId = useMemo(
-    () => findMatchingSubtitleTemplateGroup(templateGroups, rotation.presetIds)?.id,
-    [rotation.presetIds, templateGroups],
-  );
+  const [draftPreset, setDraftPreset] = useState<UserSubtitlePreset | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UserSubtitlePreset | null>(null);
   const assignedStyleCount = useMemo(
     () => getAssignedSubtitleStyleCount(rotation.presetIds, presets),
     [presets, rotation.presetIds],
   );
+  const templateStyles = useMemo(
+    () => rotation.presetIds.flatMap((presetId) => {
+      const preset = presets.find((candidate) => candidate.id === presetId);
+      return preset ? [preset] : [];
+    }),
+    [presets, rotation.presetIds],
+  );
 
-  const replaceAt = (index: number, presetId: string) => {
-    const presetIds = [...rotation.presetIds];
-    presetIds[index] = presetId;
-    onChange({ ...rotation, presetIds });
+  const beginAdd = () => {
+    setDraftPreset({
+      id: `new-${Date.now()}`,
+      name: `Style ${templateStyles.length + 1}`,
+      created_at: "",
+      settings: { ...DEFAULT_SUBTITLE_SETTINGS },
+      wordsPerSubtitle: 2,
+      templateId: templateStyles[0]?.templateId,
+      templateName: templateStyles[0]?.templateName,
+    });
   };
 
-  const move = (index: number, delta: -1 | 1) => {
-    const target = index + delta;
-    if (target < 0 || target >= rotation.presetIds.length) return;
-    const presetIds = [...rotation.presetIds];
-    [presetIds[index], presetIds[target]] = [presetIds[target], presetIds[index]];
-    onChange({ ...rotation, presetIds });
+  const saveDraft = async () => {
+    if (!draftPreset || !onSaveStyles) return;
+    const name = draftPreset.name.trim();
+    if (!name) {
+      toast.error("Style name cannot be empty");
+      return;
+    }
+
+    const exists = templateStyles.some((style) => style.id === draftPreset.id);
+    const nextStyles = exists
+      ? templateStyles.map((style) => style.id === draftPreset.id ? { ...copyPreset(draftPreset), name } : style)
+      : [...templateStyles, { ...copyPreset(draftPreset), name }];
+
+    setSaving(true);
+    const saved = await onSaveStyles(nextStyles);
+    setSaving(false);
+    if (saved) {
+      setDraftPreset(null);
+      toast.success(exists ? "Subtitle style updated" : "Subtitle style added");
+    }
   };
 
-  const openEditor = (preset: UserSubtitlePreset) => {
-    setEditingId(preset.id);
-    setDraftSettings({ ...preset.settings });
-    setDraftWords(preset.wordsPerSubtitle ?? 2);
+  const deleteStyle = async () => {
+    if (!deleteTarget || !onSaveStyles || templateStyles.length <= 1) return;
+    setSaving(true);
+    const saved = await onSaveStyles(templateStyles.filter((style) => style.id !== deleteTarget.id));
+    setSaving(false);
+    if (saved) {
+      setDeleteTarget(null);
+      toast.success("Subtitle style deleted");
+    }
   };
 
   return (
@@ -93,15 +120,15 @@ export function SubtitleTemplateRotationPanel({
       id="subtitle-template-rotation-panel"
       ref={panelRef}
       tabIndex={-1}
-      className="space-y-3 rounded-md border border-border/70 bg-background/45 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="space-y-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="subtitle-template-rotation"
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium">Template rotation</p>
-          <p className="text-xs text-muted-foreground" data-testid="subtitle-rotation-summary">
+          <p className="text-sm font-medium">Automatic rotation</p>
+          <p className="text-[11px] text-muted-foreground" data-testid="subtitle-rotation-summary">
             {rotation.enabled
-              ? "Assign these caption looks to variants in order, then repeat."
+              ? "Template styles follow their saved order, then repeat."
               : `${formatSubtitleStyleCount(assignedStyleCount)} ready · off`}
           </p>
         </div>
@@ -112,162 +139,143 @@ export function SubtitleTemplateRotationPanel({
         />
       </div>
 
-      {rotation.enabled && (
-        <div className="space-y-2">
-          {templateGroups.length > 0 && (
-            <Select
-              value={selectedTemplateId}
-              onValueChange={(templateId) => {
-                const template = templateGroups.find((candidate) => candidate.id === templateId);
-                if (!template) return;
-                onChange({ ...rotation, presetIds: template.presets.map((preset) => preset.id) });
-              }}
-            >
-              <SelectTrigger size="sm" className="w-full text-xs" aria-label="Use subtitle template">
-                <SelectValue placeholder="Use a subtitle template" />
-              </SelectTrigger>
-              <SelectContent>
-                {templateGroups.map((template) => (
-                  <SelectItem key={template.id} value={template.id}>
-                    {template.name} · {template.presets.length} {template.presets.length === 1 ? "style" : "styles"}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-
+      {rotation.presetIds.length > 0 && (
+        <div className="divide-y divide-border/70" role="list" aria-label="Template style order">
           {rotation.presetIds.map((presetId, index) => {
             const preset = presets.find((candidate) => candidate.id === presetId);
+            const label = presetId === NO_SUBTITLES_PRESET_ID
+              ? "No subtitles"
+              : preset?.name ?? "Unavailable style";
+            const words = presetId === NO_SUBTITLES_PRESET_ID
+              ? "Off"
+              : `${preset?.wordsPerSubtitle ?? 2}w`;
+
             return (
-              <div key={`${presetId}-${index}`} className="flex items-center gap-1.5" data-testid="subtitle-rotation-row">
-                <span className="w-6 shrink-0 text-center text-xs font-semibold text-primary">{index + 1}</span>
-                <Select value={presetId} onValueChange={(value) => replaceAt(index, value)}>
-                  <SelectTrigger size="sm" className="min-w-0 flex-1 text-xs" aria-label={`Rotation template ${index + 1}`}>
-                    <SelectValue placeholder="Choose template" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      value={NO_SUBTITLES_PRESET_ID}
-                      disabled={presetId !== NO_SUBTITLES_PRESET_ID && !canAddNoSubtitles}
-                    >
-                      None
-                    </SelectItem>
-                    {presets.map((candidate) => (
-                      <SelectItem
-                        key={candidate.id}
-                        value={candidate.id}
-                        disabled={candidate.id !== presetId && rotation.presetIds.includes(candidate.id)}
-                      >
-                        {candidate.templateName ? `${candidate.templateName} / ${candidate.name}` : candidate.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <span className="w-8 text-center text-[11px] text-muted-foreground">
-                  {presetId === NO_SUBTITLES_PRESET_ID ? "Off" : `${preset?.wordsPerSubtitle ?? 2}w`}
+              <div
+                key={`${presetId}-${index}`}
+                className="flex min-h-8 items-center gap-1 py-1"
+                role="listitem"
+                data-testid="subtitle-rotation-row"
+              >
+                <span className="w-6 shrink-0 text-center text-xs font-semibold text-primary">
+                  {index + 1}
                 </span>
-                {preset && (
-                  <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`Edit ${preset.name}`} onClick={() => openEditor(preset)}>
-                    <Pencil className="size-3.5" />
-                  </Button>
+                <span className="min-w-0 flex-1 truncate text-xs" title={label}>{label}</span>
+                <span className="w-8 shrink-0 text-right text-[11px] text-muted-foreground">{words}</span>
+                {preset && onSaveStyles && (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="size-7"
+                      aria-label={`Edit ${preset.name}`}
+                      onClick={() => setDraftPreset(copyPreset(preset))}
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={`Delete ${preset.name}`}
+                      title={templateStyles.length <= 1 ? "A template must keep at least one style" : `Delete ${preset.name}`}
+                      disabled={templateStyles.length <= 1}
+                      onClick={() => setDeleteTarget(preset)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </>
                 )}
-                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`Move template ${index + 1} up`} disabled={index === 0} onClick={() => move(index, -1)}>
-                  <ArrowUp className="size-3.5" />
-                </Button>
-                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`Move template ${index + 1} down`} disabled={index === rotation.presetIds.length - 1} onClick={() => move(index, 1)}>
-                  <ArrowDown className="size-3.5" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 text-destructive"
-                  aria-label={`Remove template ${index + 1}`}
-                  onClick={() => onChange({
-                    ...rotation,
-                    presetIds: rotation.presetIds.filter((_, candidateIndex) => candidateIndex !== index),
-                  })}
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
               </div>
             );
           })}
-
-          {(unusedPresets.length > 0 || canAddNoSubtitles) && (
-            <Select
-              value=""
-              onValueChange={(presetId) => onChange({
-                ...rotation,
-                presetIds: [...rotation.presetIds, presetId],
-              })}
-            >
-              <SelectTrigger size="sm" className="w-full border-dashed text-xs" aria-label="Add subtitle template to rotation">
-                <Plus className="mr-1 size-3.5" />
-                <SelectValue placeholder="Add style" />
-              </SelectTrigger>
-              <SelectContent>
-                {canAddNoSubtitles && (
-                  <SelectItem value={NO_SUBTITLES_PRESET_ID}>None</SelectItem>
-                )}
-                {unusedPresets.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id}>
-                    {preset.templateName ? `${preset.templateName} / ${preset.name}` : preset.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {presets.length === 0 && rotation.presetIds.length === 0 && (
-            <p className="text-xs text-muted-foreground">Add None to rotate a caption-free variant.</p>
-          )}
         </div>
       )}
 
-      <Dialog open={editingId !== null} onOpenChange={(open) => { if (!open) setEditingId(null); }}>
+      {onSaveStyles && (
+        <Button type="button" variant="outline" size="sm" className="h-8 w-full border-dashed text-xs" onClick={beginAdd}>
+          <Plus className="size-3.5" />
+          Add style
+        </Button>
+      )}
+
+      {rotation.presetIds.length === 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          This template has no styles yet.
+        </p>
+      )}
+
+      <Dialog open={draftPreset !== null} onOpenChange={(open) => { if (!open && !saving) setDraftPreset(null); }}>
         <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Edit template · {editingPreset?.name}</DialogTitle>
-            <DialogDescription>Every currently assigned variant updates; variant overrides stay untouched.</DialogDescription>
+            <DialogTitle>
+              {draftPreset && templateStyles.some((style) => style.id === draftPreset.id)
+                ? "Edit subtitle style"
+                : "Add subtitle style"}
+            </DialogTitle>
+            <DialogDescription>
+              Changes stay inside the selected template and update its automatic rotation.
+            </DialogDescription>
           </DialogHeader>
-          {draftSettings && (
+          {draftPreset && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-4 rounded-md border p-3">
-                <Label htmlFor="template-words-per-subtitle">Words per subtitle</Label>
-                <Input
-                  id="template-words-per-subtitle"
-                  type="number"
-                  min={1}
-                  max={20}
-                  className="w-20"
-                  value={draftWords}
-                  onChange={(event) => setDraftWords(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-                />
+              <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
+                <div className="space-y-1.5">
+                  <Label htmlFor="rotation-style-name" className="text-xs text-muted-foreground">Style name</Label>
+                  <Input
+                    id="rotation-style-name"
+                    className="h-8 text-xs"
+                    value={draftPreset.name}
+                    onChange={(event) => setDraftPreset((current) => current ? { ...current, name: event.target.value } : current)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rotation-style-words" className="text-xs text-muted-foreground">Words per subtitle</Label>
+                  <Input
+                    id="rotation-style-words"
+                    type="number"
+                    min={1}
+                    max={20}
+                    className="h-8 text-xs"
+                    value={draftPreset.wordsPerSubtitle ?? 2}
+                    onChange={(event) => {
+                      const wordsPerSubtitle = Math.max(1, Math.min(20, Number(event.target.value) || 1));
+                      setDraftPreset((current) => current ? { ...current, wordsPerSubtitle } : current);
+                    }}
+                  />
+                </div>
               </div>
               <SubtitleEditor
                 renderMode="settings-only"
-                settings={draftSettings}
-                onSettingsChange={setDraftSettings}
+                settings={draftPreset.settings as SubtitleSettings}
+                onSettingsChange={(settings) => setDraftPreset((current) => current ? { ...current, settings } : current)}
                 showPreview={false}
                 compact
               />
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>
-            <Button
-              disabled={!editingPreset || !draftSettings}
-              onClick={() => {
-                if (!editingPreset || !draftSettings) return;
-                onUpdatePreset(editingPreset.id, draftSettings, draftWords);
-                setEditingId(null);
-              }}
-            >
-              Save template
+            <Button type="button" variant="outline" disabled={saving} onClick={() => setDraftPreset(null)}>Cancel</Button>
+            <Button type="button" disabled={saving || !draftPreset?.name.trim()} onClick={() => void saveDraft()}>
+              {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              Save style
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => { if (!open && !saving) setDeleteTarget(null); }}
+        title="Delete subtitle style?"
+        description={`This permanently removes “${deleteTarget?.name ?? "this style"}” from the selected template.`}
+        confirmLabel="Delete style"
+        variant="destructive"
+        loading={saving}
+        onConfirm={() => void deleteStyle()}
+      />
     </div>
   );
 }

@@ -3,6 +3,8 @@ import {
   assignedSubtitlePreset,
   NO_SUBTITLES_PRESET_ID,
   resolveRotatedSubtitleSettings,
+  resolveSubtitleAssignmentForCard,
+  resolveSubtitlePresetForCard,
   subtitlesDisabledForCard,
   subtitleSettingsDiff,
   wordsPerSubtitleForVariant,
@@ -50,6 +52,36 @@ test("words per subtitle follows the assigned template", () => {
   ]);
 });
 
+test("Meta outputs consume every template style in card order and then repeat", () => {
+  const rotation = { enabled: true, presetIds: ["one", "two", "three", "four"] };
+  const cards = [0, 1, 2, 3].flatMap((baseIndex) => ([
+    { key: `${baseIndex}_A`, baseIndex, visualVersion: "A" },
+    { key: `${baseIndex}_B`, baseIndex, visualVersion: "B" },
+  ]));
+
+  expect(cards.map((card) => resolveSubtitlePresetForCard(rotation, {}, presets, card)?.id)).toEqual([
+    "one", "two", "three", "four", "one", "two", "three", "four",
+  ]);
+});
+
+test("a preset named none disables subtitles even when legacy settings omit enabled", () => {
+  const nonePreset: UserSubtitlePreset = {
+    id: "legacy-none",
+    name: "none",
+    created_at: "",
+    settings,
+  };
+  const resolved = resolveRotatedSubtitleSettings({
+    card: { key: "0", baseIndex: 0 },
+    rotation: { enabled: true, presetIds: [nonePreset.id] },
+    presets: [nonePreset],
+    defaultSettings: settings,
+    metaOverrides: {},
+    variantOverrides: {},
+  });
+  expect(resolved.enabled).toBe(false);
+});
+
 test("variant override stores only its delta and keeps following template edits", () => {
   const card = { key: "0_A", baseIndex: 0, visualVersion: "A" };
   const rotation = { enabled: true, presetIds: ["one"] };
@@ -77,7 +109,103 @@ test("variant override stores only its delta and keeps following template edits"
   })).toMatchObject({ fontSize: 72, textColor: "#a3e635" });
 });
 
-test("Step 3 shows rotation controls and assigned template badges", async ({ page }) => {
+test("assignment reports the source and a legacy full Meta override preserves the template", () => {
+  const card = { key: "0_A", baseIndex: 0, visualVersion: "A" };
+  const rotation = { enabled: true, presetIds: ["one"] };
+
+  expect(resolveSubtitleAssignmentForCard(rotation, {}, presets, card)).toMatchObject({
+    source: "rotation",
+    presetId: "one",
+    disabled: false,
+  });
+  expect(resolveSubtitleAssignmentForCard(rotation, { "0_A": "two" }, presets, card)).toMatchObject({
+    source: "manual",
+    presetId: "two",
+    disabled: false,
+  });
+
+  const templatePresets = presets.map((preset) => (
+    preset.id === "one"
+      ? { ...preset, settings: { ...preset.settings, fontSize: 72, textColor: "#f59e0b" } }
+      : preset
+  ));
+  expect(resolveRotatedSubtitleSettings({
+    card,
+    rotation,
+    presets: templatePresets,
+    defaultSettings: settings,
+    metaOverrides: { A: { ...settings, outlineWidth: 7 } },
+    variantOverrides: {},
+  })).toMatchObject({ fontSize: 72, textColor: "#f59e0b", outlineWidth: 7 });
+});
+
+test("template colors stay authoritative over automatic Meta fallback colors", () => {
+  const templatePreset: UserSubtitlePreset = {
+    id: "brand-style",
+    name: "Brand style",
+    created_at: "",
+    settings: {
+      ...settings,
+      textColor: "#f59e0b",
+      outlineColor: "#111827",
+      highlightColor: "#a3e635",
+      highlightBgColor: "#312e81",
+    },
+  };
+
+  const resolved = resolveRotatedSubtitleSettings({
+    card: { key: "0_A", baseIndex: 0, visualVersion: "A" },
+    rotation: { enabled: true, presetIds: [templatePreset.id] },
+    presets: [templatePreset],
+    defaultSettings: settings,
+    metaOverrides: {},
+    variantOverrides: {},
+    metaFallback: {
+      A: {
+        textColor: "#ff0000",
+        outlineColor: "#ffffff",
+        highlightColor: "#0000ff",
+        highlightBgColor: "#00ff00",
+      },
+    },
+  });
+
+  expect(resolved).toMatchObject({
+    textColor: "#f59e0b",
+    outlineColor: "#111827",
+    highlightColor: "#a3e635",
+    highlightBgColor: "#312e81",
+  });
+});
+
+test("multi-variant template styles use their saved A and B settings", () => {
+  const templatePreset: UserSubtitlePreset = {
+    id: "platform-style",
+    name: "Platform style",
+    created_at: "",
+    settings: { ...settings, textColor: "#ffffff" },
+    settingsA: { ...settings, textColor: "#fb7185", outlineColor: "#4c0519" },
+    settingsB: { ...settings, textColor: "#38bdf8", outlineColor: "#082f49" },
+  };
+  const shared = {
+    rotation: { enabled: true, presetIds: [templatePreset.id] },
+    presets: [templatePreset],
+    defaultSettings: settings,
+    metaOverrides: {},
+    variantOverrides: {},
+  };
+
+  expect(resolveRotatedSubtitleSettings({
+    ...shared,
+    card: { key: "0_A", baseIndex: 0, visualVersion: "A" },
+  })).toMatchObject({ textColor: "#fb7185", outlineColor: "#4c0519" });
+  expect(resolveRotatedSubtitleSettings({
+    ...shared,
+    card: { key: "0_B", baseIndex: 0, visualVersion: "B" },
+  })).toMatchObject({ textColor: "#38bdf8", outlineColor: "#082f49" });
+});
+
+test("Step 3 edits selected template styles inline", async ({ page }) => {
   const visualPresets: UserSubtitlePreset[] = [
     {
       id: "punchy",
@@ -117,6 +245,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   ];
   const subtitlePersistenceWrites: string[] = [];
   const rotationWrites: Array<Record<string, unknown>> = [];
+  const templateWrites: Array<{ name: string; styles: UserSubtitlePreset[] }> = [];
   const preview = (index: number) => ({
     audio_duration: 6,
     srt_content: "1\n00:00:00,000 --> 00:00:03,000\nOne two three four\n\n2\n00:00:03,000 --> 00:00:06,000\nFive six seven eight",
@@ -172,6 +301,26 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
     const path = new URL(request.url()).pathname;
     if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-presets`)) {
       await route.fulfill({ json: { presets: visualPresets } });
+      return;
+    }
+    if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-templates/launch-captions`)) {
+      const body = request.postDataJSON() as {
+        name: string;
+        styles: UserSubtitlePreset[];
+      };
+      templateWrites.push(body);
+      await route.fulfill({
+        json: {
+          id: "launch-captions",
+          name: body.name,
+          created_at: "",
+          styles: body.styles.map((style) => ({
+            ...style,
+            id: style.id.startsWith("new-") ? "created-style" : style.id,
+            created_at: style.created_at ?? "",
+          })),
+        },
+      });
       return;
     }
     if (path.endsWith(`/profiles/${PROFILE.id}/subtitle-settings`)) {
@@ -235,7 +384,7 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
         json: {
           enabled: true,
           presetIds: ["punchy", "minimal", "editorial"],
-          variantTemplates: {},
+          variantTemplates: { "3": "minimal" },
         },
       });
       return;
@@ -295,57 +444,66 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
 
   const rotationPanel = page.getByTestId("subtitle-template-rotation");
-  const inspectorCard = page.getByTestId("step3-attention-apply");
+  const attentionCard = page.getByTestId("step3-attention-apply");
   await expect(rotationPanel).toBeVisible();
   await expect(rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" })).toBeChecked();
-  await expect(inspectorCard.getByTestId("subtitle-template-state")).toHaveText("Launch captions · 3 styles");
-  await inspectorCard.screenshot({
-    path: "screenshots/subtitle-template-discovery-on.png",
-    animations: "disabled",
-  });
-  await expect(page.getByTestId("subtitle-template-select")).toHaveText([
-    "Auto (Punchy Karaoke)",
-    "Auto (Minimal Clean)",
-    "Auto (Editorial Blue)",
-    "Auto (Punchy Karaoke)",
+  await expect(attentionCard.getByText("Subtitle templates", { exact: true })).toHaveCount(0);
+  const templateSelect = page.getByRole("combobox", { name: "Subtitle template", exact: true });
+  await expect(templateSelect).toHaveText("Launch captions · 3 styles");
+  const variantCanvas = page.getByTestId("step3-variant-canvas");
+  await expect(page.getByTestId("variant-template-assignments")).toHaveCount(0);
+  await expect(rotationPanel.getByRole("combobox")).toHaveCount(0);
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveText([
+    /1Punchy Karaoke2w/,
+    /2Minimal Clean4w/,
+    /3Editorial Blue3w/,
+  ]);
+  await expect(rotationPanel.getByRole("button", { name: "Add style" })).toBeVisible();
+  await expect(rotationPanel.getByRole("button", { name: "Edit Punchy Karaoke" })).toBeVisible();
+  await expect(rotationPanel.getByRole("button", { name: "Delete Punchy Karaoke" })).toBeVisible();
+  await expect(page.getByTestId("subtitle-template-controls")).toHaveScreenshot(
+    "subtitle-template-inline-style-controls.png",
+    { animations: "disabled", maxDiffPixelRatio: 0.001 },
+  );
+  await expect(variantCanvas.getByTestId("subtitle-assignment-badge")).toHaveText([
+    "Punchy Karaoke · Rotation",
+    "Minimal Clean · Rotation",
+    "Editorial Blue · Rotation",
+    "Minimal Clean · Manual",
   ]);
 
-  await rotationPanel.getByRole("combobox", { name: "Add subtitle template to rotation" }).click();
-  await page.getByRole("option", { name: "None", exact: true }).click();
-  await expect(rotationPanel.getByTestId("subtitle-rotation-row").nth(3)).toContainText("None");
-
-  await page.getByTestId("subtitle-template-select").nth(3).click();
-  await expect(page.getByRole("option", { name: "No subtitles", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
+  const legacyAssignments = page.getByTestId("subtitle-legacy-assignments");
+  await expect(legacyAssignments).toContainText("1 legacy assignment takes precedence");
+  const writeCountBeforeLegacyReset = rotationWrites.length;
+  await legacyAssignments.getByRole("button", { name: "Use template for all outputs" }).click();
+  await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeLegacyReset + 1);
+  expect(rotationWrites.at(-1)).toMatchObject({
+    enabled: true,
+    presetIds: ["punchy", "minimal", "editorial"],
+    variantTemplates: {},
+  });
+  await expect(legacyAssignments).toHaveCount(0);
+  await expect(variantCanvas.getByTestId("subtitle-assignment-badge")).toHaveText([
+    "Punchy Karaoke · Rotation",
+    "Minimal Clean · Rotation",
+    "Editorial Blue · Rotation",
+    "Punchy Karaoke · Rotation",
+  ]);
 
   const previewPanel = page.getByTestId("subtitle-style-preview-panel");
-  const previewTarget = page.getByRole("combobox", { name: "Subtitle preview target" });
-  await expect(previewTarget).toContainText("Default");
-  await expect(previewPanel).toContainText("Font: 48px | Outline: 3px | Y: 85%");
+  const previewOutput = page.getByRole("combobox", { name: "Preview output" });
+  await expect(previewOutput).toContainText("Variant 1 · Punchy Karaoke");
+  await expect(previewPanel.getByTestId("subtitle-current-assignment")).toHaveText("Punchy Karaoke · Template rotation");
+  await expect(page.getByRole("combobox", { name: "Subtitle style to apply" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Subtitle apply scope" })).toHaveCount(0);
+  await expect(previewPanel.getByTestId("subtitle-preview-state")).toHaveCount(0);
+  await expect(previewPanel).not.toContainText("Accurate preview");
 
-  await previewTarget.click();
-  await expect(page.getByRole("option", { name: "Default", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "A · Instagram", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "B · Facebook", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Rotation 1 · Punchy Karaoke", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Rotation 2 · Minimal Clean", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Rotation 3 · Editorial Blue", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Rotation 4 · No subtitles", exact: true })).toBeVisible();
-  await page.getByRole("option", { name: "A · Instagram", exact: true }).click();
-  await expect(previewTarget).toContainText("A · Instagram");
-  await expect(previewPanel).toContainText("Font: 48px | Outline: 3px | Y: 85%");
-
-  await previewTarget.click();
+  await previewOutput.click();
   await page.getByRole("option", { name: "Variant 2 · Minimal Clean", exact: true }).click();
-
-  await expect(previewTarget).toContainText("Variant 2 · Minimal Clean");
-  await expect(previewPanel).toContainText("Font: 72px | Outline: 6px | Y: 68%");
+  await expect(previewPanel.getByTestId("subtitle-current-assignment")).toHaveText("Minimal Clean · Template rotation");
+  await expect(previewPanel).not.toContainText(/Font: \d+px \| Outline: \d+px \| Y: \d+%/);
   expect(subtitlePersistenceWrites).toEqual([]);
-
-  await expect(previewPanel).toHaveScreenshot("subtitle-live-preview-variant-2.png", {
-    animations: "disabled",
-    maxDiffPixelRatio: 0.001,
-  });
 
   await page.getByTitle("Override subtitles for Variant 1").click();
   const overrideDialog = page.getByTestId("variant-subtitle-override-dialog");
@@ -356,27 +514,69 @@ test("Step 3 shows rotation controls and assigned template badges", async ({ pag
   const rotationSwitch = rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" });
   await rotationSwitch.click();
   await expect(rotationSwitch).not.toBeChecked();
-  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(0);
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(3);
   await expect(rotationPanel.getByTestId("subtitle-rotation-summary")).toHaveText("3 styles ready · off");
-  await expect(inspectorCard.getByTestId("subtitle-template-state")).toHaveText("No template applied");
-  await inspectorCard.screenshot({
-    path: "screenshots/subtitle-template-discovery-off.png",
-    animations: "disabled",
-  });
+  await expect(templateSelect).toHaveText("Launch captions · 3 styles");
+  await expect(rotationPanel.getByRole("button", { name: "Add style" })).toBeVisible();
+  await expect(rotationPanel.getByRole("button", { name: "Edit Punchy Karaoke" })).toBeVisible();
+  await expect(rotationPanel.getByRole("button", { name: "Delete Punchy Karaoke" })).toBeVisible();
 
-  const writeCountBeforeShortcut = rotationWrites.length;
-  await inspectorCard.getByRole("button", { name: "Enable rotation" }).click();
-  await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeShortcut + 1);
+  const writeCountBeforeRotationEnable = rotationWrites.length;
+  await rotationSwitch.click();
+  await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeRotationEnable + 1);
   expect(rotationWrites.at(-1)).toMatchObject({
     enabled: true,
-    presetIds: ["punchy", "minimal", "editorial", NO_SUBTITLES_PRESET_ID],
+    presetIds: ["punchy", "minimal", "editorial"],
+    variantTemplates: {},
   });
+  await expect(templateSelect).toHaveText("Launch captions · 3 styles");
   await expect(rotationSwitch).toBeChecked();
-  await expect(rotationPanel).toBeFocused();
-  await page.screenshot({
-    path: "screenshots/subtitle-live-preview-variant-2.png",
-    fullPage: false,
+  await expect(variantCanvas.getByTestId("subtitle-assignment-badge")).toHaveText([
+    "Punchy Karaoke · Rotation",
+    "Minimal Clean · Rotation",
+    "Editorial Blue · Rotation",
+    "Punchy Karaoke · Rotation",
+  ]);
+  await expect(page.getByTestId("step3-variant-canvas").getByTestId("preview-subtitle")).toHaveCount(4);
+  await expect(rotationPanel.getByRole("combobox")).toHaveCount(0);
+
+  await rotationPanel.getByRole("button", { name: "Add style" }).click();
+  const styleDialog = page.getByRole("dialog", { name: "Add subtitle style" });
+  await expect(styleDialog).toBeVisible();
+  await styleDialog.getByLabel("Style name").fill("Fresh captions");
+  await styleDialog.getByLabel("Words per subtitle").fill("5");
+  await styleDialog.getByRole("button", { name: "Save style" }).click();
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(4);
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row").last()).toContainText("Fresh captions");
+  expect(templateWrites.at(-1)?.styles).toHaveLength(4);
+  expect(rotationWrites.at(-1)).toMatchObject({
+    presetIds: ["punchy", "minimal", "editorial", "created-style"],
   });
+
+  await rotationPanel.getByRole("button", { name: "Edit Fresh captions" }).click();
+  await page.getByRole("dialog", { name: "Edit subtitle style" }).getByLabel("Style name").fill("Fresh edited");
+  await page.getByRole("dialog", { name: "Edit subtitle style" }).getByRole("button", { name: "Save style" }).click();
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row").last()).toContainText("Fresh edited");
+
+  await rotationPanel.getByRole("button", { name: "Delete Fresh edited" }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("Delete subtitle style?");
+  await page.getByRole("button", { name: "Delete style", exact: true }).click();
+  await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(3);
+  expect(templateWrites.at(-1)?.styles).toHaveLength(3);
+
+  const subtitleSettingsSections = page.getByTestId("subtitle-settings-sections");
+  await subtitleSettingsSections.getByRole("button", { name: /^Subtitle templates/ }).click();
+  await subtitleSettingsSections.getByRole("button", { name: /^Subtitle style/ }).click();
+  await page.getByTestId("step3-preview-timing").getByRole("button", { name: /^Preview Timing/ }).click();
+  await page.getByTestId("step3-safe-zone-settings").getByRole("button", { name: /^Safe Zone/ }).click();
+  await attentionCard.getByRole("button", { name: /^Image templates/ }).click();
+  await page.getByTestId("step3-sources").getByRole("button", { name: /^Sources/ }).click();
+  await expect(page.getByTestId("subtitle-template-controls")).toBeHidden();
+  await expect(page.getByTestId("subtitle-style-variant-editor")).toBeHidden();
+  await expect(page.getByTestId("step3-preview-timing").getByText("Pacing", { exact: true })).toBeHidden();
+  await expect(attentionCard.getByTestId("attention-template-picker")).toBeHidden();
+  await expect(page.getByTestId("step3-source-inventory")).toBeHidden();
+  await expect(subtitleSettingsSections.getByRole("button", { name: /^Variant templates/ })).toHaveCount(0);
 });
 
 test("a None rotation slot disables only its assigned variant", () => {

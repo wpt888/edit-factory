@@ -1,4 +1,7 @@
-import type { AttentionAnimationPreset } from "@/types/attention-timeline";
+import {
+  DEFAULT_ATTENTION_ENTER_MS,
+  type AttentionAnimationPreset,
+} from "@/types/attention-timeline";
 
 /** One authored image slot on a template track. Coordinates are 0..1 frame fractions. */
 export type AttentionTemplateImage = {
@@ -13,6 +16,10 @@ export type AttentionTemplateImage = {
   fit: "contain" | "cover";
   startMs: number;
   durationMs: number;
+  /** Optional per-slot entrance settings. Missing values inherit the template
+   *  defaults, so older templates keep their original behavior. */
+  animation?: AttentionAnimationPreset;
+  enterMs?: number;
   /** Optional content saved with the slot. Step 3 pre-populates from it; the
    *  pipeline overrides it per-run without mutating the template. */
   defaultAsset?: { url: string; type: "image" | "video" };
@@ -30,6 +37,8 @@ export type AttentionTemplatePayload = {
   name: string;
   zone: "behind" | "front";
   animation: AttentionAnimationPreset;
+  /** Fixed entrance duration. It is independent from every slot's duration. */
+  enterMs: number;
   /** Authored canvas size. Slot coordinates remain normalized frame fractions. */
   canvasWidth: number;
   canvasHeight: number;
@@ -61,6 +70,7 @@ export const DEFAULT_ATTENTION_TEMPLATE: AttentionTemplatePayload = {
   name: "New attention template",
   zone: "behind",
   animation: "pop",
+  enterMs: DEFAULT_ATTENTION_ENTER_MS,
   canvasWidth: 1080,
   canvasHeight: 1920,
   variantGapMs: 1000,
@@ -103,6 +113,9 @@ export function normalizeAttentionTemplate(
 ): AttentionTemplatePayload {
   const zone = template?.zone === "front" ? "front" : "behind";
   const animation = template?.animation ?? "pop";
+  const enterMs = Math.max(0, Math.min(10_000, Math.round(
+    template?.enterMs ?? DEFAULT_ATTENTION_ENTER_MS,
+  )));
   const canvasWidth = normalizeCanvasDimension(template?.canvasWidth, 1080);
   const canvasHeight = normalizeCanvasDimension(template?.canvasHeight, 1920);
   const variantGapMs = Math.max(0, template?.variantGapMs ?? 1000);
@@ -117,6 +130,10 @@ export function normalizeAttentionTemplate(
       sfxLabel: image.sfxLabel,
       sfxVolumeDb: Math.max(-60, Math.min(12, image.sfxVolumeDb ?? 0)),
       sfxTrack: Math.max(1, Math.min(10, Math.round(image.sfxTrack ?? 1))),
+      animation: isAttentionAnimationPreset(image.animation) ? image.animation : undefined,
+      enterMs: image.enterMs === undefined
+        ? undefined
+        : Math.max(0, Math.min(10_000, Math.round(image.enterMs))),
     })));
     const highestAssignedAudioTrack = Math.max(
       1,
@@ -125,7 +142,7 @@ export function normalizeAttentionTemplate(
     return {
       name: template.name ?? "",
       zone,
-      animation, canvasWidth, canvasHeight, variantGapMs,
+      animation, enterMs, canvasWidth, canvasHeight, variantGapMs,
       audioTrackCount: Math.max(
         highestAssignedAudioTrack,
         Math.min(10, Math.max(1, Math.round(template.audioTrackCount ?? 1))),
@@ -140,7 +157,7 @@ export function normalizeAttentionTemplate(
   return {
     name: template?.name ?? DEFAULT_ATTENTION_TEMPLATE.name,
     zone,
-    animation, canvasWidth, canvasHeight, variantGapMs, audioTrackCount: 1,
+    animation, enterMs, canvasWidth, canvasHeight, variantGapMs, audioTrackCount: 1,
     tracks: template
       ? positions.map((position, index) =>
           [newTemplateImage({
@@ -155,6 +172,13 @@ export function normalizeAttentionTemplate(
           })])
       : [[]],
   };
+}
+
+function isAttentionAnimationPreset(value: unknown): value is AttentionAnimationPreset {
+  return [
+    "static", "fade", "pop", "zoom", "slide", "slide-right", "slide-up",
+    "slide-down", "wipe-left", "wipe-right", "bounce", "spin", "tornado",
+  ].includes(String(value));
 }
 
 /** Keep only a well-formed {url, type}; drop anything else so old/garbled rows

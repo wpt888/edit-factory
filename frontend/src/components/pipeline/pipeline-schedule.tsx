@@ -475,7 +475,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   const toggleBuffer = (id: string) => {
     setSelectedBufferIds(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
@@ -483,7 +483,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   const toggleClip = (clipId: string) => {
     setSelectedClipIds(prev => {
       const next = new Set(prev);
-      next.has(clipId) ? next.delete(clipId) : next.add(clipId);
+      if (next.has(clipId)) next.delete(clipId); else next.add(clipId);
       return next;
     });
   };

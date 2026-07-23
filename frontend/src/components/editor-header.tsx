@@ -2,6 +2,8 @@
 
 import { ReactNode } from "react";
 
+import { cn } from "@/lib/utils";
+
 export interface EditorHeaderProps {
   /** Icon at the far left, e.g. <Type className="size-4 text-primary" />. */
   icon: ReactNode;
@@ -11,10 +13,14 @@ export interface EditorHeaderProps {
   breadcrumb?: ReactNode;
   /** Small supporting line under the title. */
   subtitle?: ReactNode;
+  /** Primary workspace navigation placed beside the editor identity. */
+  navigation?: ReactNode;
   /** Controls aligned to the right. */
   actions?: ReactNode;
   /** Extra classes on the <header> (e.g. "relative z-50" for anchored popovers). */
   className?: string;
+  /** Dense 44 px chrome for tool-heavy workspaces such as Pipeline. */
+  compact?: boolean;
   /** Stable selector for browser tests. */
   testId?: string;
   /** Overlays anchored inside the header (popovers, menus). */
@@ -27,10 +33,14 @@ export interface EditorHeaderProps {
  * breadcrumb + subtitle on the left and actions on the right. Document-style
  * pages keep using PageHeader instead.
  */
-export function EditorHeader({ icon, title, breadcrumb, subtitle, actions, className, testId, children }: EditorHeaderProps) {
+export function EditorHeader({ icon, title, breadcrumb, subtitle, navigation, actions, className, compact = false, testId, children }: EditorHeaderProps) {
   return (
     <header
-      className={`flex h-14 shrink-0 items-center justify-between border-b border-border px-4 ${className ?? ""}`}
+      className={cn(
+        "flex shrink-0 items-center justify-between border-b border-border",
+        compact ? "h-11 px-3" : "h-14 px-4",
+        className,
+      )}
       data-testid={testId}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -47,6 +57,11 @@ export function EditorHeader({ icon, title, breadcrumb, subtitle, actions, class
           </div>
           {subtitle && <p className="text-[10px] text-muted-foreground/70">{subtitle}</p>}
         </div>
+        {navigation && (
+          <div className="shrink-0 border-l border-border pl-3">
+            {navigation}
+          </div>
+        )}
       </div>
       {actions && <div className="flex items-center gap-1.5">{actions}</div>}
       {children}

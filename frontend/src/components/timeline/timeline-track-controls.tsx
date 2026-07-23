@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, EyeOff, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Lock, LockOpen, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -15,6 +15,8 @@ type TimelineTrackControlsProps = {
   id: string;
   kind: TimelineTrackKind;
   disabled?: boolean;
+  locked?: boolean;
+  onLockChange?: () => void;
   monitored?: boolean;
   onMonitorChange?: () => void;
   addMedia?: () => void;
@@ -34,6 +36,8 @@ export function TimelineTrackControls({
   id,
   kind,
   disabled = false,
+  locked = false,
+  onLockChange,
   monitored = true,
   onMonitorChange,
   addMedia,
@@ -48,9 +52,24 @@ export function TimelineTrackControls({
     ? `${monitored ? "Hide" : "Show"} video track ${id}`
     : `${monitored ? "Mute" : "Unmute"} audio track ${id}`;
   const addMediaLabel = `Add media to ${id}`;
+  const lockLabel = `${locked ? "Unlock" : "Lock"} ${kind} track ${id}`;
 
   return (
     <div className="flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={onLockChange}
+        disabled={disabled || !onLockChange}
+        aria-label={lockLabel}
+        aria-pressed={locked}
+        className={`flex size-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-35 ${
+          locked ? "bg-primary/15 text-primary" : "text-white/50"
+        }`}
+        title={lockLabel}
+      >
+        {locked ? <Lock className="size-3" /> : <LockOpen className="size-3" />}
+      </button>
+
       <button
         type="button"
         onClick={onMonitorChange}
@@ -70,7 +89,7 @@ export function TimelineTrackControls({
       <button
         type="button"
         onClick={addMedia}
-        disabled={disabled || !addMedia}
+        disabled={disabled || locked || !addMedia}
         className="shrink-0 rounded p-0.5 text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:text-white/20 disabled:hover:bg-transparent"
         title={addMedia && !disabled ? addMediaLabel : addMediaUnavailable}
         aria-label={addMedia && !disabled ? addMediaLabel : `${addMediaLabel} unavailable`}
@@ -82,7 +101,7 @@ export function TimelineTrackControls({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            disabled={disabled}
+            disabled={disabled || locked}
             className="flex size-5 shrink-0 items-center justify-center rounded text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
             aria-label={`Open ${id} track settings`}
             title={`${id} track settings`}

@@ -125,11 +125,11 @@ export function RenderSettingsPanel({
     : "custom";
 
   return (
-    <Card variant="workspace" data-testid="step3-render-settings">
+    <Card variant="workspace" data-testid="export-render-settings">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
           <Settings2 className="size-4" />
-          Render Settings
+          Export Settings
         </CardTitle>
         <CardDescription>
           Output format, encoding quality, and final video or audio adjustments.

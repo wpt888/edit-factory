@@ -29,12 +29,12 @@ import {
   Settings,
   BarChart3,
   Music,
-  ImageIcon,
   Images,
   CalendarClock,
   Calendar,
   NotebookPen,
   LogOut,
+  Sparkles,
   Zap,
   ChevronLeft,
   ChevronRight,
@@ -51,17 +51,33 @@ const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 // one-line change instead of a refactor.
 const WEB_ONLY_HREFS = new Set<string>([]);
 
-const allNavGroups = [
+type NavItem = {
+  label: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  activeHrefs?: string[];
+};
+
+const allNavGroups: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "Create",
     items: [
+      {
+        label: "Create",
+        href: "/create",
+        icon: Sparkles,
+        activeHrefs: ["/create-image", "/create-video"],
+      },
+    ],
+  },
+  {
+    label: "Studio",
+    items: [
       { label: "Video Pipeline", href: "/pipeline", icon: Clapperboard },
-      { label: "Attention Templates", href: "/attention-templates", icon: LayoutTemplate },
+      { label: "Image Templates", href: "/attention-templates", icon: LayoutTemplate },
       { label: "Subtitle Templates", href: "/subtitle-templates", icon: Captions },
       { label: "Footage & Segments", href: "/segments", icon: ListVideo },
       { label: "Clipping", href: "/clipping", icon: Scissors },
-      { label: "AI Image", href: "/create-image", icon: ImageIcon },
-      { label: "AI Video", href: "/create-video", icon: Film },
     ],
   },
   {
@@ -104,8 +120,10 @@ const navGroups = DESKTOP_MODE
       .filter((group) => group.items.length > 0)
   : allNavGroups;
 
-function isActive(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(href + "/");
+function isActive(pathname: string, item: NavItem) {
+  return [item.href, ...(item.activeHrefs ?? [])].some(
+    (href) => pathname === href || pathname.startsWith(href + "/"),
+  );
 }
 
 function NavLink({
@@ -113,15 +131,11 @@ function NavLink({
   pathname,
   collapsed = false,
 }: {
-  item: {
-    label: string;
-    href: string;
-    icon: React.ComponentType<{ className?: string }>;
-  };
+  item: NavItem;
   pathname: string;
   collapsed?: boolean;
 }) {
-  const active = isActive(pathname, item.href);
+  const active = isActive(pathname, item);
   return (
     <Link
       href={item.href}
@@ -240,10 +254,8 @@ function CreditBalance() {
 }
 
 function Wordmark({ className }: { className?: string }) {
-  // Keep the brand artwork identical across themes. Its white lettering needs
-  // a stable dark field for contrast on the light sidebar.
   return (
-    <span className="inline-flex rounded-md bg-ink px-2 py-1.5">
+    <span className="inline-flex">
       <Image
         src={blipostLogo}
         alt="Blipost"

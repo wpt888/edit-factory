@@ -161,6 +161,8 @@ export interface PipelineScriptsResponse {
   meta_multiplication?: boolean;
   attention_selection?: {
     templateId?: string;
+    animation?: import("@/types/attention-timeline").AttentionAnimationPreset;
+    enterMs?: number;
     assets?: { url: string; type: "image" | "video" }[];
     // Legacy fields tolerated on load (migrated by normalizeAttentionSelection):
     assetUrls?: string[];

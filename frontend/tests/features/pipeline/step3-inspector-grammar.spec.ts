@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 
 // Screenshot-only verification for the unified Step 3 inspector grammar. Uses
 // fully mocked API routes (same approach as attention-step1-picker) so it does
-// not depend on a seeded backend pipeline. Renders both the left Subtitle Style
-// inspector and the right Render Settings panel.
+// not depend on a seeded backend pipeline. Verifies the editing workspace and
+// the separate top-level Export workspace.
 
 const PIPELINE_ID = "grammar-step3-pipeline";
 const PROFILE = {
@@ -26,7 +26,7 @@ const previewFor = (offset: number) => ({
   available_segments: [],
 });
 
-test("Step 3 renders both inspectors on the unified grammar", async ({ page }) => {
+test("Edit and Export stay separate while sharing the inspector grammar", async ({ page }) => {
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
     localStorage.setItem("editai_current_profile_id", profile.id);
@@ -114,7 +114,6 @@ test("Step 3 renders both inspectors on the unified grammar", async ({ page }) =
 
   await page.setViewportSize({ width: 2048, height: 1200 });
   await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
-  await page.waitForLoadState("networkidle");
 
   const advanced = page.getByRole("button", { name: /^Advanced$/ });
   if (await advanced.count() > 0) {
@@ -122,17 +121,60 @@ test("Step 3 renders both inspectors on the unified grammar", async ({ page }) =
     await page.waitForTimeout(500);
   }
 
-  const renderSettings = page.getByTestId("step3-render-settings");
-  await expect(renderSettings).toBeVisible({ timeout: 15_000 });
-  await expect(renderSettings.getByText("Encoding Mode", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("export-render-settings")).toHaveCount(0);
+  await expect(page.getByTestId("pipeline-step-4")).toBeVisible();
+  await expect(page.getByTestId("pipeline-step-4")).toContainText("Render");
 
   const subtitlePanel = page.getByTestId("step3-inspector");
   const previewTargetPanel = page.getByTestId("step3-preview-target-panel");
   const variantPanel = page.getByTestId("step3-variant-canvas");
-  await expect(subtitlePanel.locator('[data-slot="workspace-panel-header"]').filter({ hasText: "Subtitle Style" })).toBeVisible();
-  await expect(previewTargetPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Preview Target");
+  await expect(page.getByTestId("step3-workspace")).toHaveCSS("overflow", "hidden");
+  await expect(subtitlePanel.locator('[data-slot="workspace-panel-header"]').filter({ hasText: "Subtitle Settings" })).toBeVisible();
+  await expect(previewTargetPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Subtitle Preview");
   await expect(variantPanel.locator('[data-slot="workspace-panel-header"]')).toContainText("Variant Previews");
   await expect(previewTargetPanel.locator(':scope > [data-slot="workspace-panel-header"]')).toHaveCount(1);
+  const workspacePanes = [
+    subtitlePanel.locator("xpath=ancestor::*[@data-workspace-pane][1]"),
+    previewTargetPanel.locator("xpath=ancestor::*[@data-workspace-pane][1]"),
+    variantPanel.locator("xpath=ancestor::*[@data-workspace-pane][1]"),
+  ];
+  for (const pane of workspacePanes) {
+    await expect(pane).toHaveCount(1);
+    await expect(pane).toHaveCSS("padding-bottom", "12px");
+    expect(await pane.evaluate((element) => {
+      const endcap = getComputedStyle(element, "::after");
+      return {
+        position: endcap.position,
+        bottom: endcap.bottom,
+        height: endcap.height,
+      };
+    })).toEqual({ position: "absolute", bottom: "0px", height: "12px" });
+  }
+  const resourceTablist = previewTargetPanel.getByRole("tablist", { name: "Preview resource panels" });
+  const imageTemplatesTab = resourceTablist.getByRole("tab", { name: /Image Templates/ });
+  await expect(imageTemplatesTab).toBeVisible();
+  await expect(imageTemplatesTab).toHaveCSS("border-top-width", "2px");
+  await expect(imageTemplatesTab).toHaveCSS("border-bottom-width", "0px");
+  const [resourceTablistBox, imageTemplatesTabBox] = await Promise.all([
+    resourceTablist.boundingBox(),
+    imageTemplatesTab.boundingBox(),
+  ]);
+  expect(resourceTablistBox).not.toBeNull();
+  expect(imageTemplatesTabBox).not.toBeNull();
+  expect(Math.abs(resourceTablistBox!.x - imageTemplatesTabBox!.x)).toBeLessThanOrEqual(1);
+  const sourcesTab = previewTargetPanel.getByRole("tab", { name: /Sources/ });
+  await expect(sourcesTab).toBeVisible();
+  await sourcesTab.click();
+  await expect(sourcesTab).toHaveAttribute("aria-selected", "true");
+  await expect(previewTargetPanel.getByTestId("step3-sources")).toBeVisible();
+  const imageTemplatesPanel = previewTargetPanel.getByTestId("step3-attention-apply");
+  await expect(imageTemplatesPanel).toBeAttached();
+  await expect(imageTemplatesPanel).toBeHidden();
+  await expect(imageTemplatesPanel).toHaveAttribute("hidden", "");
+  await expect(previewTargetPanel.getByRole("combobox", { name: "Filter sources by type" })).toBeVisible();
+  await expect(previewTargetPanel.getByRole("button", { name: "List view" })).toHaveAttribute("aria-pressed", "true");
+  await previewTargetPanel.getByRole("button", { name: "Icon view" }).click();
+  await expect(previewTargetPanel.getByTestId("step3-source-inventory")).toHaveAttribute("data-view", "icons");
 
   const previewTargetHeader = page.getByTestId("step3-preview-target-header");
   const variantHeader = page.getByTestId("step3-variant-header");
@@ -145,12 +187,101 @@ test("Step 3 renders both inspectors on the unified grammar", async ({ page }) =
   expect(Math.abs(previewTargetHeaderBox!.y - variantHeaderBox!.y)).toBeLessThanOrEqual(1);
   expect(previewTargetHeaderBox!.height).toBe(variantHeaderBox!.height);
   await expect(previewTargetPanel).toHaveCSS("padding-top", "0px");
-  await expect(previewTargetHeader.locator("svg")).toHaveCount(0);
+  await expect(previewTargetHeader.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();
+  await expect(variantPanel).toHaveCSS("overflow-x", "hidden");
 
-  // Open the flush collapsible sections so the grammar (dividers, no boxes) shows.
-  await renderSettings.getByRole("button", { name: /Video adjustments/ }).click();
-  await renderSettings.getByRole("button", { name: /Audio adjustments/ }).click();
-  await page.waitForTimeout(300);
+  const previewPanel = page.getByTestId("subtitle-style-preview-panel");
+  const previewFrame = previewPanel.locator(":scope > div").first();
+  const targetSelect = previewPanel.getByTestId("subtitle-preview-output");
+  const [previewFrameBox, targetSelectBox] = await Promise.all([
+    previewFrame.boundingBox(),
+    targetSelect.boundingBox(),
+  ]);
+  expect(previewFrameBox).not.toBeNull();
+  expect(targetSelectBox).not.toBeNull();
+  expect(targetSelectBox!.y).toBeGreaterThan(previewFrameBox!.y + previewFrameBox!.height);
+  await expect(subtitlePanel.getByTestId("subtitle-version-switch")).toHaveCount(0);
+
+  const previewPane = page.getByTestId("subtitle-sticky-preview");
+  const previewPanelsScroller = page.getByTestId("step3-preview-panels-scroll");
+  await expect(previewPane).toHaveCSS("overflow", "hidden");
+  await expect(previewPanelsScroller).toHaveCSS("overflow-y", "auto");
+  const [resourceTabsBeforeScroll, previewPanelsScrollerBox] = await Promise.all([
+    resourceTablist.boundingBox(),
+    previewPanelsScroller.boundingBox(),
+  ]);
+  expect(resourceTabsBeforeScroll).not.toBeNull();
+  expect(previewPanelsScrollerBox).not.toBeNull();
+  expect(previewPanelsScrollerBox!.y).toBeGreaterThanOrEqual(
+    resourceTabsBeforeScroll!.y + resourceTabsBeforeScroll!.height - 1,
+  );
+  const previewFrameY = (await previewFrame.boundingBox())!.y;
+  await previewPanelsScroller.evaluate((element) => {
+    element.scrollTop = Math.min(800, element.scrollHeight - element.clientHeight);
+  });
+  await expect.poll(async () => {
+    const stickyPreviewBox = await previewFrame.boundingBox();
+    if (!stickyPreviewBox) return Number.POSITIVE_INFINITY;
+    return Math.abs(stickyPreviewBox.y - previewFrameY);
+  }).toBeLessThanOrEqual(0.5);
+  await expect.poll(async () => {
+    const resourceTabsAfterScroll = await resourceTablist.boundingBox();
+    if (!resourceTabsAfterScroll) return Number.POSITIVE_INFINITY;
+    return Math.abs(resourceTabsAfterScroll.y - resourceTabsBeforeScroll!.y);
+  }).toBeLessThanOrEqual(0.5);
 
   await page.screenshot({ path: "screenshots/step3-inspector-grammar.png", fullPage: true });
+
+  await page.mouse.move(
+    previewTargetHeaderBox!.x + previewTargetHeaderBox!.width / 2,
+    previewTargetHeaderBox!.y + previewTargetHeaderBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    variantHeaderBox!.x + variantHeaderBox!.width / 2,
+    variantHeaderBox!.y + variantHeaderBox!.height / 2,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+
+  await expect.poll(async () => (await previewTargetHeader.boundingBox())?.x)
+    .toBeGreaterThan((await variantHeader.boundingBox())?.x ?? Number.MAX_SAFE_INTEGER);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("blipost.pipeline-split.step3-preview-canvas.swapped")))
+    .toBe("1");
+
+  const editTab = page.getByTestId("pipeline-mode-edit");
+  const exportTab = page.getByTestId("pipeline-mode-export");
+  const [editTabBefore, exportTabBefore] = await Promise.all([
+    editTab.boundingBox(),
+    exportTab.boundingBox(),
+  ]);
+  await expect(page.getByTestId("step3-go-to-export")).toBeEnabled();
+  await page.getByTestId("step3-go-to-export").click();
+  const exportSettings = page.getByTestId("export-render-settings");
+  await expect(exportSettings).toBeVisible();
+  await expect(exportSettings.getByText("Encoding Mode", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("step3-workspace")).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`\\?step=3&id=${PIPELINE_ID}`));
+  await expect(page.getByTestId("pipeline-workspace-tabs")).toBeVisible();
+  await expect(exportTab).toHaveAttribute("data-state", "active");
+  const [editTabAfter, exportTabAfter] = await Promise.all([
+    editTab.boundingBox(),
+    exportTab.boundingBox(),
+  ]);
+  expect(editTabAfter).toEqual(editTabBefore);
+  expect(exportTabAfter).toEqual(exportTabBefore);
+  expect(await exportTab.evaluate((element) => getComputedStyle(element, "::after").top)).toBe("-5px");
+
+  await exportSettings.getByRole("button", { name: /Video adjustments/ }).click();
+  await exportSettings.getByRole("button", { name: /Audio adjustments/ }).click();
+  await expect(page.getByTestId("export-render-button")).toBeEnabled();
+  await page.screenshot({ path: "screenshots/export-settings-workspace.png", fullPage: true });
+
+  await page.getByTestId("pipeline-mode-edit").click();
+  await expect(page.getByTestId("step3-workspace")).toBeVisible();
+  await expect(page.getByTestId("export-render-settings")).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`\\?step=3&id=${PIPELINE_ID}`));
+
+  await page.getByTestId("pipeline-step-2").click();
+  await expect(page.getByTestId("pipeline-workspace-tabs")).toHaveCount(0);
 });

@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, CopyPlus, Loader2, Plus, Save, Trash2, Type } from "lucide-react";
+import { ChevronDown, CopyPlus, Loader2, Plus, Trash2, Type } from "lucide-react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { toast } from "sonner";
 
@@ -58,11 +58,22 @@ type Tab = "shared" | "A" | "B";
 type PanelId = "templates" | "settings" | "preview";
 type DropTarget = { panelId: PanelId; side: "before" | "after" };
 type StyleNameEdit = { templateId: string; styleIndex: number; value: string };
+type TemplateNameEdit = { templateId: string; value: string };
+type DeletedStyleUndo = { session: number; styleIndex: number; style: StyleDraft };
+type SaveState = "idle" | "saving" | "saved" | "error";
+type SaveSnapshot = {
+  draft: Draft;
+  revision: number;
+  selectedStyleIndex: number;
+  session: number;
+  templateId: string;
+};
 
 const DEFAULT_PANEL_ORDER: PanelId[] = ["templates", "settings", "preview"];
 const PANEL_ORDER_STORAGE_KEY = "blipost.subtitle-templates.panel-order.v1";
 const PANEL_LAYOUT_STORAGE_KEY = "blipost.subtitle-templates.panel-layout.v1";
 const DRAG_THRESHOLD = 5;
+const AUTOSAVE_DELAY_MS = 650;
 const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
 const noopStorage = { getItem: () => null, setItem: () => {} };
 
@@ -136,15 +147,24 @@ export default function SubtitleTemplatesPage() {
   const [expandedTemplateIds, setExpandedTemplateIds] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("shared");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [draftRevision, setDraftRevision] = useState(0);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deletedStyleUndo, setDeletedStyleUndo] = useState<DeletedStyleUndo | null>(null);
+  const [templateNameEdit, setTemplateNameEdit] = useState<TemplateNameEdit | null>(null);
   const [styleNameEdit, setStyleNameEdit] = useState<StyleNameEdit | null>(null);
   const [panelOrder, setPanelOrder] = useState<PanelId[]>(DEFAULT_PANEL_ORDER);
   const [draggedPanel, setDraggedPanel] = useState<PanelId | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const panelOrderRef = useRef(panelOrder);
+  const draftRevisionRef = useRef(0);
+  const editSessionRef = useRef(0);
+  const selectedTemplateIdRef = useRef(selectedTemplateId);
+  const persistedRevisionsRef = useRef(new Map<number, number>([[0, 0]]));
+  const sessionTemplateIdsRef = useRef(new Map<number, string>());
+  const queuedSnapshotsRef = useRef(new Set<string>());
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const dragRef = useRef<{
     panelId: PanelId;
     startX: number;
@@ -159,6 +179,24 @@ export default function SubtitleTemplatesPage() {
   const isNew = selectedTemplateId === "new";
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const selectedStyle = draft.styles[selectedStyleIndex] ?? draft.styles[0];
+
+  const markDirty = useCallback((preserveStyleUndo = false) => {
+    if (!preserveStyleUndo) setDeletedStyleUndo(null);
+    setSaveState("saving");
+    setDraftRevision((current) => {
+      const next = current + 1;
+      draftRevisionRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const startEditSession = (templateId: string, persisted = true) => {
+    const session = editSessionRef.current + 1;
+    editSessionRef.current = session;
+    selectedTemplateIdRef.current = templateId;
+    if (persisted) persistedRevisionsRef.current.set(session, draftRevisionRef.current);
+    return session;
+  };
 
   // Settings shown/edited for the active tab. "A"/"B" fall back to the shared
   // style until the user explicitly edits them (then the override is created).
@@ -211,6 +249,95 @@ export default function SubtitleTemplatesPage() {
   useEffect(() => {
     panelOrderRef.current = panelOrder;
   }, [panelOrder]);
+
+  const enqueueSave = useCallback((snapshot: SaveSnapshot) => {
+    if (!profileId) return;
+    const name = snapshot.draft.name.trim();
+    if (!name || snapshot.draft.styles.some((style) => !style.name.trim())) return;
+
+    const snapshotKey = `${snapshot.session}:${snapshot.revision}`;
+    if (queuedSnapshotsRef.current.has(snapshotKey)) return;
+    queuedSnapshotsRef.current.add(snapshotKey);
+
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const effectiveTemplateId = sessionTemplateIdsRef.current.get(snapshot.session) ?? snapshot.templateId;
+        const payload = {
+          name,
+          styles: snapshot.draft.styles.map((style) => ({
+            id: style.id,
+            name: style.name.trim(),
+            settings: style.settings,
+            settingsA: style.settingsA,
+            settingsB: style.settingsB,
+            wordsPerSubtitle: style.wordsPerSubtitle,
+          })),
+        };
+
+        try {
+          const res = effectiveTemplateId === "new"
+            ? await apiPost(`/profiles/${profileId}/subtitle-templates`, payload)
+            : await apiPut(`/profiles/${profileId}/subtitle-templates/${effectiveTemplateId}`, payload);
+          const saved = (await res.json()) as UserSubtitleTemplate;
+          sessionTemplateIdsRef.current.set(snapshot.session, saved.id);
+          persistedRevisionsRef.current.set(snapshot.session, snapshot.revision);
+          setTemplates((current) => {
+            const index = current.findIndex((template) => template.id === saved.id);
+            if (index < 0) return [...current, saved];
+            return current.map((template) => template.id === saved.id ? saved : template);
+          });
+
+          if (editSessionRef.current !== snapshot.session) return;
+          if (selectedTemplateIdRef.current === "new") {
+            selectedTemplateIdRef.current = saved.id;
+            setSelectedTemplateId(saved.id);
+            setExpandedTemplateIds((current) => current.includes(saved.id) ? current : [...current, saved.id]);
+          }
+          if (draftRevisionRef.current === snapshot.revision) {
+            const styleIndex = Math.min(snapshot.selectedStyleIndex, saved.styles.length - 1);
+            setSelectedStyleIndex(Math.max(0, styleIndex));
+            setDraft(toDraft(saved));
+            setSaveState("saved");
+          } else {
+            setSaveState("saving");
+          }
+        } catch (error) {
+          if (editSessionRef.current === snapshot.session) setSaveState("error");
+          toast.error(error instanceof Error ? error.message : "Could not autosave template");
+        } finally {
+          queuedSnapshotsRef.current.delete(snapshotKey);
+        }
+      });
+  }, [profileId]);
+
+  const flushCurrentDraft = () => {
+    const session = editSessionRef.current;
+    if ((persistedRevisionsRef.current.get(session) ?? -1) >= draftRevision) return;
+    enqueueSave({
+      draft,
+      revision: draftRevision,
+      selectedStyleIndex,
+      session,
+      templateId: selectedTemplateId,
+    });
+  };
+
+  useEffect(() => {
+    const session = editSessionRef.current;
+    if (
+      loading
+      || !profileId
+      || (persistedRevisionsRef.current.get(session) ?? -1) >= draftRevision
+      || !draft.name.trim()
+      || draft.styles.some((style) => !style.name.trim())
+    ) return;
+
+    const timeout = window.setTimeout(() => {
+      enqueueSave({ draft, revision: draftRevision, selectedStyleIndex, session, templateId: selectedTemplateId });
+    }, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timeout);
+  }, [draft, draftRevision, enqueueSave, loading, profileId, selectedStyleIndex, selectedTemplateId]);
 
   useEffect(() => {
     const resetDrag = () => {
@@ -286,15 +413,24 @@ export default function SubtitleTemplatesPage() {
   }, []);
 
   const select = (template: UserSubtitleTemplate, styleIndex = 0) => {
+    flushCurrentDraft();
+    startEditSession(template.id);
+    setDeletedStyleUndo(null);
+    setTemplateNameEdit(null);
+    setStyleNameEdit(null);
     setSelectedTemplateId(template.id);
     setSelectedStyleIndex(styleIndex);
     setDraft(toDraft(template));
     setExpandedTemplateIds((current) => current.includes(template.id) ? current : [...current, template.id]);
     setTab("shared");
-    setSavedAt(false);
+    setSaveState("saved");
   };
 
-  const beginCreate = () => {
+  const beginCreate = (autosave = true) => {
+    flushCurrentDraft();
+    startEditSession("new");
+    setTemplateNameEdit(null);
+    setStyleNameEdit(null);
     setSelectedTemplateId("new");
     setSelectedStyleIndex(0);
     setDraft({
@@ -302,7 +438,8 @@ export default function SubtitleTemplatesPage() {
       styles: [{ ...NEW_STYLE, settings: { ...DEFAULT_SUBTITLE_SETTINGS } }],
     });
     setTab("shared");
-    setSavedAt(false);
+    setSaveState(autosave ? "saving" : "idle");
+    if (autosave) markDirty();
   };
 
   const addStyle = (template?: UserSubtitleTemplate) => {
@@ -313,13 +450,18 @@ export default function SubtitleTemplatesPage() {
       settings: { ...DEFAULT_SUBTITLE_SETTINGS },
     };
     if (template) {
+      if (template.id !== selectedTemplateId) {
+        flushCurrentDraft();
+        startEditSession(template.id);
+      }
       setSelectedTemplateId(template.id);
+      selectedTemplateIdRef.current = template.id;
       setExpandedTemplateIds((current) => current.includes(template.id) ? current : [...current, template.id]);
     }
     setDraft({ ...base, styles: [...base.styles, nextStyle] });
     setSelectedStyleIndex(base.styles.length);
     setTab("shared");
-    setSavedAt(false);
+    markDirty();
   };
 
   const beginStyleNameEdit = (style: StyleDraft | UserSubtitlePreset, styleIndex: number, template?: UserSubtitleTemplate) => {
@@ -335,7 +477,27 @@ export default function SubtitleTemplatesPage() {
       setSelectedStyleIndex(styleIndex);
       setTab("shared");
     }
+    setTemplateNameEdit(null);
     setStyleNameEdit({ templateId, styleIndex, value: style.name });
+  };
+
+  const beginTemplateNameEdit = (template: UserSubtitleTemplate) => {
+    if (selectedTemplateId !== template.id) select(template);
+    setStyleNameEdit(null);
+    setTemplateNameEdit({ templateId: template.id, value: template.name });
+  };
+
+  const commitTemplateNameEdit = () => {
+    if (!templateNameEdit || templateNameEdit.templateId !== selectedTemplateId) {
+      setTemplateNameEdit(null);
+      return;
+    }
+    const name = templateNameEdit.value.trim();
+    if (name) {
+      setDraft((current) => ({ ...current, name }));
+      markDirty();
+    }
+    setTemplateNameEdit(null);
   };
 
   const commitStyleNameEdit = () => {
@@ -349,12 +511,97 @@ export default function SubtitleTemplatesPage() {
         ...current,
         styles: current.styles.map((style, index) => index === styleNameEdit.styleIndex ? { ...style, name } : style),
       }));
-      setSavedAt(false);
+      markDirty();
     }
     setStyleNameEdit(null);
   };
 
+  const removeStyle = (
+    style: StyleDraft | UserSubtitlePreset,
+    styleIndex: number,
+    template?: UserSubtitleTemplate,
+  ) => {
+    const base = template && template.id !== selectedTemplateId ? toDraft(template) : draft;
+    let session = editSessionRef.current;
+    if (base.styles.length <= 1) {
+      toast.error("A template must keep at least one style");
+      return;
+    }
+
+    if (template && template.id !== selectedTemplateId) {
+      flushCurrentDraft();
+      session = startEditSession(template.id);
+      setSelectedTemplateId(template.id);
+      selectedTemplateIdRef.current = template.id;
+      setExpandedTemplateIds((current) => current.includes(template.id) ? current : [...current, template.id]);
+    }
+    setTemplateNameEdit(null);
+    setStyleNameEdit(null);
+    setDeletedStyleUndo({
+      session,
+      styleIndex,
+      style: {
+        id: style.id,
+        name: style.name,
+        settings: { ...style.settings },
+        settingsA: style.settingsA ? { ...style.settingsA } : undefined,
+        settingsB: style.settingsB ? { ...style.settingsB } : undefined,
+        wordsPerSubtitle: style.wordsPerSubtitle ?? 2,
+      },
+    });
+    setDraft({
+      ...base,
+      styles: base.styles.filter((_, index) => index !== styleIndex),
+    });
+    setSelectedStyleIndex(Math.min(styleIndex, base.styles.length - 2));
+    setTab("shared");
+    markDirty(true);
+    toast.success("Style deleted · Ctrl+Z to undo");
+  };
+
+  const undoStyleDelete = useCallback(() => {
+    if (!deletedStyleUndo || deletedStyleUndo.session !== editSessionRef.current) return;
+
+    const restoredIndex = Math.min(deletedStyleUndo.styleIndex, draft.styles.length);
+    setDraft((current) => {
+      const styles = [...current.styles];
+      styles.splice(restoredIndex, 0, deletedStyleUndo.style);
+      return { ...current, styles };
+    });
+    setSelectedStyleIndex(restoredIndex);
+    setDeletedStyleUndo(null);
+    setTab("shared");
+    markDirty(true);
+    toast.success("Style restored");
+  }, [deletedStyleUndo, draft.styles.length, markDirty]);
+
+  useEffect(() => {
+    const handleUndo = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "z"
+        || (!event.ctrlKey && !event.metaKey)
+        || event.shiftKey
+        || event.altKey
+      ) return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && target.closest("input, textarea, [contenteditable='true'], [role='textbox']")
+      ) return;
+
+      if (!deletedStyleUndo || deletedStyleUndo.session !== editSessionRef.current) return;
+      event.preventDefault();
+      undoStyleDelete();
+    };
+
+    window.addEventListener("keydown", handleUndo);
+    return () => window.removeEventListener("keydown", handleUndo);
+  }, [deletedStyleUndo, undoStyleDelete]);
+
   const duplicate = () => {
+    flushCurrentDraft();
+    startEditSession("new");
     setSelectedTemplateId("new");
     setDraft((current) => ({
       ...current,
@@ -368,11 +615,10 @@ export default function SubtitleTemplatesPage() {
       })),
     }));
     setTab("shared");
-    setSavedAt(false);
+    markDirty();
   };
 
   const applySettings = (next: SubtitleSettings) => {
-    setSavedAt(false);
     setDraft((current) => {
       const styles = current.styles.map((style, index) => {
         if (index !== selectedStyleIndex) return style;
@@ -382,48 +628,7 @@ export default function SubtitleTemplatesPage() {
       });
       return { ...current, styles };
     });
-  };
-
-  const save = async () => {
-    if (!profileId) {
-      toast.error("No active profile");
-      return;
-    }
-    const name = draft.name.trim();
-    if (!name) {
-      toast.error("Template name cannot be empty");
-      return;
-    }
-    if (draft.styles.some((style) => !style.name.trim())) {
-      toast.error("Style names cannot be empty");
-      return;
-    }
-    setSaving(true);
-    try {
-      const payload = {
-        name,
-        styles: draft.styles.map((style) => ({
-          id: style.id,
-          name: style.name.trim(),
-          settings: style.settings,
-          settingsA: style.settingsA,
-          settingsB: style.settingsB,
-          wordsPerSubtitle: style.wordsPerSubtitle,
-        })),
-      };
-      const res = isNew
-        ? await apiPost(`/profiles/${profileId}/subtitle-templates`, payload)
-        : await apiPut(`/profiles/${profileId}/subtitle-templates/${selectedTemplateId}`, payload);
-      const saved = (await res.json().catch(() => null)) as UserSubtitleTemplate | null;
-      const preferredStyleId = saved?.styles[Math.min(selectedStyleIndex, (saved?.styles.length ?? 1) - 1)]?.id;
-      await loadTemplates(saved?.id ?? (isNew ? undefined : selectedTemplateId), preferredStyleId);
-      setSavedAt(true);
-      toast.success(isNew ? "Template created" : "Template saved");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save template");
-    } finally {
-      setSaving(false);
-    }
+    markDirty();
   };
 
   const remove = async () => {
@@ -432,7 +637,7 @@ export default function SubtitleTemplatesPage() {
     try {
       await apiDelete(`/profiles/${profileId}/subtitle-presets/${selectedTemplate.id}`);
       setDeleteOpen(false);
-      beginCreate();
+      beginCreate(false);
       await loadTemplates();
       toast.success("Template deleted");
     } catch (error) {
@@ -482,19 +687,12 @@ export default function SubtitleTemplatesPage() {
     templates: (
       <div className="flex h-full min-w-0 flex-col bg-surface-canvas">
         {panelHeader("templates", "Templates", (
-          <Button size="icon" variant="ghost" className="size-7" onClick={beginCreate} aria-label="New template">
+          <Button size="icon" variant="ghost" className="size-7" onClick={() => beginCreate()} aria-label="New template">
             <Plus className="size-4" />
           </Button>
         ))}
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-1 p-2">
-            <button
-              type="button"
-              onClick={beginCreate}
-              className={`flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring ${isNew ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-accent"}`}
-            >
-              <Plus className="size-3.5" />New template
-            </button>
             {isNew && (
               <div className="ml-5 space-y-1 border-l border-border pl-2" data-testid="subtitle-template-draft-styles">
                 {draft.styles.map((style, index) => (
@@ -526,27 +724,36 @@ export default function SubtitleTemplatesPage() {
                       <span className="shrink-0 text-[11px] text-muted-foreground">{style.wordsPerSubtitle}w</span>
                     </div>
                   ) : (
-                    <button
-                      key={style.id ?? index}
-                      type="button"
-                      onClick={() => { setSelectedStyleIndex(index); setTab("shared"); }}
-                      data-testid="subtitle-style-row"
-                      className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
-                    >
-                      <span
-                        className="truncate"
-                        title="Double-click to rename"
-                        onDoubleClick={() => beginStyleNameEdit(style, index)}
+                    <div key={style.id ?? index} className="flex items-center gap-1" data-testid="subtitle-style-row">
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedStyleIndex(index); setTab("shared"); }}
+                        className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
                       >
-                        {style.name}
-                      </span>
-                      <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle}w</span>
-                    </button>
+                        <span
+                          className="truncate"
+                          title="Double-click to rename"
+                          onDoubleClick={() => beginStyleNameEdit(style, index)}
+                        >
+                          {style.name}
+                        </span>
+                        <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle}w</span>
+                      </button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => removeStyle(style, index)}
+                        disabled={draft.styles.length <= 1}
+                        aria-label={`Delete style ${style.name}`}
+                        title={draft.styles.length <= 1 ? "A template must keep at least one style" : `Delete ${style.name}`}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
                   )
                 ))}
-                <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle()}>
-                  <Plus className="size-3.5" />Add style
-                </Button>
               </div>
             )}
             {loading ? (
@@ -557,6 +764,7 @@ export default function SubtitleTemplatesPage() {
               templates.map((template) => {
                 const expanded = expandedTemplateIds.includes(template.id);
                 const visibleStyles = selectedTemplateId === template.id ? draft.styles : template.styles;
+                const visibleTemplateName = selectedTemplateId === template.id ? draft.name : template.name;
                 return (
                   <Collapsible
                     key={template.id}
@@ -571,22 +779,54 @@ export default function SubtitleTemplatesPage() {
                   >
                     <div className="flex items-stretch gap-0.5 p-1">
                       <CollapsibleTrigger asChild>
-                        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`${expanded ? "Collapse" : "Expand"} ${template.name}`}>
+                        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`${expanded ? "Collapse" : "Expand"} ${visibleTemplateName}`}>
                           <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`} />
                         </Button>
                       </CollapsibleTrigger>
-                      <button
-                        type="button"
-                        onClick={() => select(template)}
-                        data-testid="subtitle-template-row"
-                        className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <span className="block truncate text-sm font-medium">{template.name}</span>
-                        <span className="block text-[11px] text-muted-foreground">
-                          {visibleStyles.length} {visibleStyles.length === 1 ? "style" : "styles"}
-                        </span>
-                      </button>
-                      <Button type="button" variant="ghost" size="icon" className="size-8 self-center" onClick={() => addStyle(template)} aria-label={`Add style to ${template.name}`}>
+                      {templateNameEdit?.templateId === template.id ? (
+                        <div
+                          className="min-w-0 flex-1 rounded-md bg-primary/10 px-2 py-1"
+                          data-testid="subtitle-template-row"
+                        >
+                          <Input
+                            autoFocus
+                            value={templateNameEdit.value}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) => setTemplateNameEdit((current) => current ? { ...current, value: event.target.value } : current)}
+                            onBlur={commitTemplateNameEdit}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitTemplateNameEdit();
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                setTemplateNameEdit(null);
+                              }
+                            }}
+                            className="h-8 px-2 text-xs"
+                            aria-label={`Rename ${visibleTemplateName}`}
+                            data-testid="subtitle-template-name-input"
+                          />
+                          <span className="block px-2 text-[11px] text-muted-foreground">
+                            {visibleStyles.length} {visibleStyles.length === 1 ? "style" : "styles"}
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => select(template)}
+                          onDoubleClick={() => beginTemplateNameEdit(template)}
+                          title="Double-click to rename"
+                          data-testid="subtitle-template-row"
+                          className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <span className="block truncate text-sm font-medium">{visibleTemplateName}</span>
+                          <span className="block text-[11px] text-muted-foreground">
+                            {visibleStyles.length} {visibleStyles.length === 1 ? "style" : "styles"}
+                          </span>
+                        </button>
+                      )}
+                      <Button type="button" variant="ghost" size="icon" className="size-8 self-center" onClick={() => addStyle(template)} aria-label={`Add style to ${visibleTemplateName}`}>
                         <Plus className="size-3.5" />
                       </Button>
                     </div>
@@ -621,34 +861,43 @@ export default function SubtitleTemplatesPage() {
                               <span className="shrink-0 text-[11px] text-muted-foreground">{style.wordsPerSubtitle ?? 2}w</span>
                             </div>
                           ) : (
-                            <button
-                              key={style.id ?? index}
-                              type="button"
-                              onClick={() => {
-                                if (selectedTemplateId === template.id) {
-                                  setSelectedStyleIndex(index);
-                                  setTab("shared");
-                                  return;
-                                }
-                                select(template, index);
-                              }}
-                              data-testid="subtitle-style-row"
-                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedTemplateId === template.id && selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
-                            >
-                              <span
-                                className="truncate"
-                                title="Double-click to rename"
-                                onDoubleClick={() => beginStyleNameEdit(style, index, template)}
+                            <div key={style.id ?? index} className="flex items-center gap-1" data-testid="subtitle-style-row">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (selectedTemplateId === template.id) {
+                                    setSelectedStyleIndex(index);
+                                    setTab("shared");
+                                    return;
+                                  }
+                                  select(template, index);
+                                }}
+                                className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedTemplateId === template.id && selectedStyleIndex === index ? "bg-primary/10 text-foreground" : "text-muted-foreground"}`}
                               >
-                                {style.name}
-                              </span>
-                              <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle ?? 2}w</span>
-                            </button>
+                                <span
+                                  className="truncate"
+                                  title="Double-click to rename"
+                                  onDoubleClick={() => beginStyleNameEdit(style, index, template)}
+                                >
+                                  {style.name}
+                                </span>
+                                <span className="shrink-0 text-[11px]">{style.wordsPerSubtitle ?? 2}w</span>
+                              </button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => removeStyle(style, index, template)}
+                                disabled={visibleStyles.length <= 1}
+                                aria-label={`Delete style ${style.name}`}
+                                title={visibleStyles.length <= 1 ? "A template must keep at least one style" : `Delete ${style.name}`}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           )
                         ))}
-                        <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => addStyle(template)}>
-                          <Plus className="size-3.5" />Add style
-                        </Button>
                       </div>
                     </CollapsibleContent>
                   </Collapsible>
@@ -656,13 +905,6 @@ export default function SubtitleTemplatesPage() {
               })
             )}
           </div>
-          {!isNew && selectedTemplate && (
-            <div className="p-3">
-              <Button variant="ghost" size="sm" className="w-full text-destructive hover:bg-destructive/10" onClick={() => setDeleteOpen(true)}>
-                <Trash2 className="mr-2 size-4" />Delete template
-              </Button>
-            </div>
-          )}
         </div>
       </div>
     ),
@@ -675,7 +917,7 @@ export default function SubtitleTemplatesPage() {
               <Label className="text-xs text-muted-foreground">Template name</Label>
               <Input
                 value={draft.name}
-                onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setSavedAt(false); }}
+                onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); markDirty(); }}
                 data-testid="subtitle-template-name"
               />
             </div>
@@ -688,7 +930,7 @@ export default function SubtitleTemplatesPage() {
                     ...current,
                     styles: current.styles.map((style, index) => index === selectedStyleIndex ? { ...style, name: event.target.value } : style),
                   }));
-                  setSavedAt(false);
+                  markDirty();
                 }}
                 data-testid="subtitle-style-name"
               />
@@ -706,7 +948,7 @@ export default function SubtitleTemplatesPage() {
                     ...current,
                     styles: current.styles.map((style, index) => index === selectedStyleIndex ? { ...style, wordsPerSubtitle } : style),
                   }));
-                  setSavedAt(false);
+                  markDirty();
                 }}
                 data-testid="subtitle-template-words"
               />
@@ -770,16 +1012,32 @@ export default function SubtitleTemplatesPage() {
         subtitle="Reusable caption sets for video variants"
         actions={
           <>
-            {savedAt && !saving && <span className="mr-1 text-xs text-muted-foreground" data-testid="subtitle-template-saved">Saved</span>}
+            {saveState !== "idle" && (
+              <span
+                className={`mr-1 inline-flex items-center gap-1.5 text-xs ${saveState === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                data-testid="subtitle-template-save-status"
+                role="status"
+              >
+                {saveState === "saving" && <Loader2 className="size-3.5 animate-spin" />}
+                {saveState === "saving" ? "Saving..." : saveState === "saved" ? "Saved" : "Couldn’t save"}
+              </span>
+            )}
             <Button variant="ghost" size="sm" onClick={duplicate} disabled={loading}>
               <CopyPlus className="mr-2 size-4" />Duplicate
             </Button>
-            <Button variant="ghost" size="sm" onClick={beginCreate}>
+            <Button variant="ghost" size="sm" onClick={() => beginCreate()}>
               <Plus className="mr-2 size-4" />New template
             </Button>
-            <Button variant="cta" size="sm" onClick={() => void save()} disabled={saving || !draft.name.trim() || draft.styles.some((style) => !style.name.trim()) || !profileId} data-testid="subtitle-template-save">
-              <Save className="mr-2 size-4" />{saving ? "Saving..." : "Save template"}
-            </Button>
+            {!isNew && selectedTemplate && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="mr-2 size-4" />Delete template
+              </Button>
+            )}
           </>
         }
       />
@@ -809,6 +1067,7 @@ export default function SubtitleTemplatesPage() {
             >
               <div
                 data-subtitle-template-panel={panelId}
+                data-workspace-pane
                 data-testid={`subtitle-panel-${panelId}`}
                 className={`relative h-full min-w-0 ${draggedPanel === panelId ? "opacity-50" : ""}`}
               >
@@ -819,7 +1078,6 @@ export default function SubtitleTemplatesPage() {
           </Fragment>
         ))}
       </ResizablePanelGroup>
-
 
       <ConfirmDialog
         open={deleteOpen}

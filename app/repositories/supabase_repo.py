@@ -6,8 +6,9 @@ exact query patterns currently used across routes and services.
 """
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.db import get_supabase
 from app.repositories.base import DataRepository
@@ -19,9 +20,44 @@ logger = logging.getLogger(__name__)
 class SupabaseRepository(DataRepository):
     """Concrete DataRepository backed by Supabase (PostgREST)."""
 
+    def __init__(self, client=None) -> None:
+        self._client = client
+
     def get_client(self):
         """Return the raw Supabase client for complex chained queries."""
-        return get_supabase()
+        return self._client or get_supabase()
+
+    @contextmanager
+    def authenticated(self, access_token: str) -> Iterator["SupabaseRepository"]:
+        """Yield a request-scoped repository authenticated as the API caller.
+
+        Desktop/local backends intentionally ship only the public anon key.
+        Forwarding the already-verified caller token lets PostgREST enforce RLS
+        without mutating the process-wide Supabase singleton or exposing a
+        service-role credential in the desktop application.
+        """
+        import httpx
+        from supabase import create_client
+        from supabase.lib.client_options import SyncClientOptions
+
+        from app.config import get_settings
+
+        settings = get_settings()
+        httpx_client = httpx.Client(
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
+        options = SyncClientOptions(
+            auto_refresh_token=False,
+            persist_session=False,
+            httpx_client=httpx_client,
+        )
+        client = create_client(settings.supabase_url, settings.supabase_key, options)
+        client.postgrest.auth(access_token)
+        try:
+            yield SupabaseRepository(client=client)
+        finally:
+            httpx_client.close()
 
     # ── helpers ───────────────────────────────────────
 
@@ -67,7 +103,7 @@ class SupabaseRepository(DataRepository):
         self, table: str, filters: Optional[QueryFilters] = None
     ) -> QueryResult:
         """Run a select query with optional filters and return QueryResult."""
-        sb = get_supabase()
+        sb = self.get_client()
         select_cols = filters.select if filters and filters.select else "*"
         query = sb.table(table).select(select_cols)
         query = self._apply_filters(query, filters)
@@ -77,28 +113,28 @@ class SupabaseRepository(DataRepository):
 
     def _get_one(self, table: str, id_col: str, id_val: str) -> Optional[Dict[str, Any]]:
         """Fetch a single row by primary key."""
-        sb = get_supabase()
+        sb = self.get_client()
         result = sb.table(table).select("*").eq(id_col, id_val).execute()
         rows = result.data or []
         return rows[0] if rows else None
 
     def _insert(self, table: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Insert a single row and return the created record."""
-        sb = get_supabase()
+        sb = self.get_client()
         result = sb.table(table).insert(data).execute()
         rows = result.data or []
         return rows[0] if rows else data
 
     def _update(self, table: str, id_col: str, id_val: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Update a row by primary key and return the updated record."""
-        sb = get_supabase()
+        sb = self.get_client()
         result = sb.table(table).update(data).eq(id_col, id_val).execute()
         rows = result.data or []
         return rows[0] if rows else data
 
     def _delete(self, table: str, id_col: str, id_val: str) -> None:
         """Delete a row by primary key."""
-        sb = get_supabase()
+        sb = self.get_client()
         sb.table(table).delete().eq(id_col, id_val).execute()
 
     # ──────────────────────────────────────────────

@@ -28,7 +28,12 @@ import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { ProductPickerDialog } from "@/components/dialogs/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/dialogs/image-picker-dialog";
 import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
-import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS, UserSubtitlePreset } from "@/types/video-processing";
+import {
+  SubtitleSettings,
+  DEFAULT_SUBTITLE_SETTINGS,
+  UserSubtitlePreset,
+  type UserSubtitleTemplate,
+} from "@/types/video-processing";
 import { SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailSelection } from "@/components/thumbnail-picker";
 import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
@@ -64,11 +69,14 @@ import {
   type PipelineTemplateSettings,
 } from "./pipeline-template";
 import {
+  beginImportedTemplateTimelineBatch,
+  shouldRestoreImportedTemplateTimeline,
+} from "./pipeline-template-timeline";
+import {
   EMPTY_SUBTITLE_TEMPLATE_ROTATION,
   resolveRotatedSubtitleSettings,
   subtitleSettingsDiff,
   wordsPerSubtitleForVariant,
-  resolveSubtitlePresetForCard,
   type SubtitleTemplateRotation,
   type VariantTemplateSelections,
 } from "./subtitle-template-rotation";
@@ -76,6 +84,7 @@ import { PipelineErrorBoundary } from "./components/pipeline-error-boundary";
 import { Step1Script } from "./components/step1-script";
 import { Step2TTS } from "./components/step2-tts";
 import { Step3Preview } from "./components/step3-preview";
+import { Step3Export } from "./components/step3-export";
 import { Step4Render } from "./components/step4-render";
 import { PipelineStepper } from "./components/pipeline-stepper";
 import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
@@ -165,6 +174,7 @@ function PipelinePage() {
     const n = param ? parseInt(param, 10) : NaN;
     return n >= 1 && n <= 4 ? n : 1;
   });
+  const [step3Mode, setStep3Mode] = useState<"edit" | "export">("edit");
 
   // Pipeline ID from URL — used for restoring session on page load
   const urlPipelineId = searchParams.get("id");
@@ -303,7 +313,7 @@ function PipelinePage() {
   // Segment proximity — near-adjacent same-source clips: keep them apart
   // (default, avoids a visible jump-cut) or merge them into one continuous shot.
   const [segmentProximity, setSegmentProximity] = useState<"separate" | "merge">("separate");
-  // Render-time picture & audio adjustments (Step 3 "Render Settings" card).
+  // Render-time picture & audio adjustments configured in the Export workspace.
   // Applied by the render engine (eq / volume / afade), not by segment matching.
   const [renderAdjust, setRenderAdjust] = useState({
     enableColor: false,
@@ -338,8 +348,8 @@ function PipelinePage() {
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  // Step 3 hides Script History by default (toggled from the toolbar) so the
-  // variant previews claim the full width; other steps keep it visible.
+  // Script History is an on-demand workspace panel. Keeping one visibility
+  // state across steps prevents a load from turning it into a permanent column.
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [historyScripts, setHistoryScripts] = useState<string[]>([]);
@@ -539,6 +549,7 @@ function PipelinePage() {
   const applyPipelineTemplateSettings = useCallback((
     settings: PipelineTemplateSettings,
     targetPipelineId?: string,
+    restoreTimelineBindings = true,
   ) => {
     const { generation, content, voice, assembly, timeline, subtitles, render } = settings;
     activeTemplatePipelineIdRef.current = targetPipelineId || pipelineIdRef.current;
@@ -573,7 +584,11 @@ function PipelinePage() {
     setSegmentProximity(assembly.segmentProximity || "separate");
     setSelectedSourceIds(new Set((assembly.sourceVideos || []).map((source) => source.id).filter(Boolean)));
 
-    importedTemplateTimelineRef.current = timeline;
+    // A fresh import needs its saved timeline applied to the first generated
+    // preview. A restored pipeline already has that timeline in its persisted
+    // previews, so arming it again would overwrite later Pacing/Proximity
+    // reassemblies with the old template composition.
+    importedTemplateTimelineRef.current = restoreTimelineBindings ? timeline : null;
     setSelectedVariants(new Set(timeline.selectedVariantIndices || []));
     setInterstitialSlides(timeline.interstitialSlides || {});
     const selection = timeline.attentionSelection
@@ -718,17 +733,6 @@ function PipelinePage() {
       })
     ),
     [subtitleOverrides, subtitleRotation, subtitleSettings, userSubtitlePresets, variantTemplateSelections],
-  );
-
-  // Effective template for a card: explicit selection > rotation > none.
-  const getAssignedSubtitlePreset = useCallback(
-    (card: Pick<PreviewCard, "key" | "baseIndex">) => resolveSubtitlePresetForCard(
-      subtitleRotation,
-      variantTemplateSelections,
-      userSubtitlePresets,
-      card,
-    ),
-    [subtitleRotation, userSubtitlePresets, variantTemplateSelections],
   );
 
   const getWordsPerSubtitleForVariant = useCallback(
@@ -1097,7 +1101,11 @@ function PipelinePage() {
         if (data.variant_count) setVariantCount(data.variant_count);
         setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
         if (isPipelineTemplateSettings(data.template_settings)) {
-          applyPipelineTemplateSettings(data.template_settings, data.pipeline_id);
+          applyPipelineTemplateSettings(
+            data.template_settings,
+            data.pipeline_id,
+            shouldRestoreImportedTemplateTimeline(data.preview_info),
+          );
         }
         if (data.attention_selection?.templateId) {
           const restoredSelection = normalizeAttentionSelection(data.attention_selection);
@@ -1334,7 +1342,6 @@ function PipelinePage() {
     } finally {
       setSourceVideosLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProfile?.id]);
 
   // Fetch total segment duration on profile load
@@ -1386,19 +1393,17 @@ function PipelinePage() {
 
   // Source videos: restore selection from a saved pipeline
   const restoreSourceSelection = useCallback(async (pid: string) => {
-    let restored = false;
     try {
       const res = await apiGet(`/pipeline/${pid}/source-selection`);
       const data = await res.json();
       if (data.source_video_ids && data.source_video_ids.length > 0) {
         setSelectedSourceIds(new Set(data.source_video_ids));
-        restored = true;
       }
     } catch {
       // Ignore — fresh pipeline or column not yet migrated
     }
     // No fallback — user selects manually if no saved selection exists
-  }, [sourceVideos]);
+  }, []);
 
   // Source videos: toggle a single video selection
   const handleSourceToggle = (videoId: string) => {
@@ -1623,19 +1628,14 @@ function PipelinePage() {
     return !!override && Object.keys(override).length > 0;
   }, [subtitleOverrides, activeStyleKey]);
 
-  const getStylePreviewText = useCallback((styleKey: StyleKey): string | undefined => {
-    const targetVersion =
-      styleKey === "A" ? "A" : styleKey === "B" ? "B" : undefined;
-    const card =
-      previewCards.find((candidate) => candidate.visualVersion === targetVersion)
-      ?? previewCards[0];
-
-    if (!card) return undefined;
-
+  const getPreviewSubtitleTextFor = useCallback((
+    card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">,
+  ): string | undefined => {
+    const previewCard = previewCards.find((candidate) => candidate.key === card.key);
     return (
       extractPreviewSubtitleText(previews[card.key]?.srt_content)
       ?? extractPreviewSubtitleText(ttsResults[card.baseIndex]?.srt_content)
-      ?? card.script?.trim()
+      ?? previewCard?.script?.trim()
       ?? undefined
     );
   }, [previewCards, previews, ttsResults]);
@@ -1915,15 +1915,15 @@ function PipelinePage() {
     },
   });
 
-  // Start/stop render polling when isRendering/step changes
+  // Keep render polling alive while the user switches between Edit and Export.
   useEffect(() => {
-    if (pipelineId && isRendering && step === 4) {
+    if (pipelineId && isRendering) {
       startRenderPolling();
     } else {
       stopRenderPolling();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipelineId, isRendering, step]);
+  }, [pipelineId, isRendering]);
 
   // Check for existing renders when on Step 3 (show "view existing" button)
   useEffect(() => {
@@ -2179,6 +2179,11 @@ function PipelinePage() {
     setPreviewError(null);
     const newPreviews: Record<PreviewKey, PreviewData> = {};
     const cardsToPreview = previewCards;
+    // Snapshot the one-shot template bindings for the whole batch. They must
+    // remain available to every variant, then be consumed only after the full
+    // batch succeeds so later timing changes can use the fresh server result.
+    const importedTimelineBatch = beginImportedTemplateTimelineBatch(importedTemplateTimelineRef);
+    const importedTimelineForBatch = importedTimelineBatch.timeline;
 
     // Snapshot ready-count BEFORE the loop. ttsResultsRef is mutated during the loop
     // (setTtsResults triggers re-renders that update the ref), so evaluating this after
@@ -2216,9 +2221,8 @@ function PipelinePage() {
 
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
           const responseData = await res.json() as PreviewData;
-          const importedTimeline = importedTemplateTimelineRef.current;
-          const importedMatches = importedTimeline?.matches?.[previewCard.key];
-          const importedComposition = importedTimeline?.compositions?.[previewCard.key];
+          const importedMatches = importedTimelineForBatch?.matches?.[previewCard.key];
+          const importedComposition = importedTimelineForBatch?.compositions?.[previewCard.key];
           const data: PreviewData = {
             ...responseData,
             ...(Array.isArray(importedMatches) ? {
@@ -2290,6 +2294,8 @@ function PipelinePage() {
           return;
         }
       }
+
+      importedTimelineBatch.commit();
 
       // Collect available segments from the first preview response (all previews share same segment pool)
       const firstPreview = Object.values(newPreviews)[0];
@@ -2677,7 +2683,7 @@ function PipelinePage() {
       preset: assemblyPreset,
       segment_proximity: segmentProximity,
       meta_multiplication: metaMultiplication,
-      // Picture & audio adjustments (Step 3 Render Settings)
+      // Picture & audio adjustments from the Export workspace
       enable_color: renderAdjust.enableColor,
       brightness: renderAdjust.brightness,
       contrast: renderAdjust.contrast,
@@ -3391,15 +3397,27 @@ function PipelinePage() {
     (styleKey: StyleKey, newSettings: SubtitleSettings) => {
       if (styleKey === "default") {
         setSubtitleSettings(newSettings);
+        setSubtitleOverrides(prev => {
+          if (!("default" in prev)) return prev;
+          const next = { ...prev };
+          delete next.default;
+          scheduleOverridesSave(next);
+          return next;
+        });
+        scheduleProfileSubtitleSave(newSettings);
+        return;
       }
+
       setSubtitleOverrides(prev => {
-        const next = { ...prev, [styleKey]: newSettings };
+        const next = { ...prev };
+        const delta = subtitleSettingsDiff(subtitleSettings, newSettings);
+        if (Object.keys(delta).length > 0) next[styleKey] = delta as SubtitleSettings;
+        else delete next[styleKey];
         scheduleOverridesSave(next);
         return next;
       });
-      scheduleProfileSubtitleSave(newSettings);
     },
-    [scheduleOverridesSave, scheduleProfileSubtitleSave]
+    [scheduleOverridesSave, scheduleProfileSubtitleSave, subtitleSettings]
   );
 
   // Remove an override for a Meta version (Reset to default).
@@ -3454,13 +3472,15 @@ function PipelinePage() {
           sourceOverride && Object.keys(sourceOverride).length > 0
             ? { ...subtitleSettings, ...sourceOverride }
             : { ...subtitleSettings };
-        const next = { ...prev, [targetKey]: sourceEffective };
+        const next = { ...prev };
+        const delta = subtitleSettingsDiff(subtitleSettings, sourceEffective);
+        if (Object.keys(delta).length > 0) next[targetKey] = delta as SubtitleSettings;
+        else delete next[targetKey];
         scheduleOverridesSave(next);
-        scheduleProfileSubtitleSave(sourceEffective);
         return next;
       });
     },
-    [scheduleOverridesSave, scheduleProfileSubtitleSave, subtitleSettings]
+    [scheduleOverridesSave, subtitleSettings]
   );
 
   // Submit a "Save as preset" — POSTs the shared style plus any explicit A/B
@@ -3573,76 +3593,104 @@ function PipelinePage() {
   }, [pipelineId]);
 
   // Persist rotation + manual selections together (same endpoint/envelope).
-  const persistSubtitleRotation = useCallback((
+  const persistSubtitleRotation = useCallback(async (
     rotation: SubtitleTemplateRotation,
     selections: VariantTemplateSelections,
-  ) => {
+  ): Promise<boolean> => {
     const savedPipelineId = pipelineIdRef.current;
-    if (!savedPipelineId) return;
-    apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, {
-      ...rotation,
-      variantTemplates: selections,
-    }).catch(() => {
+    if (!savedPipelineId) {
       toast.error("Could not save subtitle template settings");
-    });
+      return false;
+    }
+    try {
+      await apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, {
+        ...rotation,
+        variantTemplates: selections,
+      });
+      return true;
+    } catch {
+      toast.error("Could not save subtitle template settings");
+      return false;
+    }
   }, []);
 
   const handleSubtitleRotationChange = useCallback((next: SubtitleTemplateRotation) => {
     setSubtitleRotation(next);
     scheduleReassemblePreviews();
-    persistSubtitleRotation(next, variantTemplateSelections);
+    void persistSubtitleRotation(next, variantTemplateSelections);
   }, [scheduleReassemblePreviews, persistSubtitleRotation, variantTemplateSelections]);
 
-  // Manual per-variant template pick. Empty string clears the selection back
-  // to Auto (rotation). Triggers preview re-resolution like other subtitle edits.
-  const handleVariantTemplateSelectionChange = useCallback((previewKey: PreviewKey, presetId: string) => {
-    setVariantTemplateSelections((previous) => {
-      const next = { ...previous };
-      if (presetId) next[previewKey] = presetId;
-      else delete next[previewKey];
-      // Selecting a new template drops any card-local override so Reset baseline
-      // follows the freshly picked template.
-      setVariantSubtitleOverrides((prevOverrides) => {
-        if (!(previewKey in prevOverrides)) return prevOverrides;
-        const nextOverrides = { ...prevOverrides };
-        delete nextOverrides[previewKey];
-        scheduleOverridesSave(subtitleOverrides, nextOverrides);
-        return nextOverrides;
-      });
-      persistSubtitleRotation(subtitleRotation, next);
-      return next;
+  // Choosing a complete saved template starts a new automatic assignment.
+  // Keeping manual picks from the previous template (especially an earlier
+  // "apply to all" / No subtitles choice) would silently mask the new
+  // rotation in every variant preview.
+  const handleSubtitleTemplateChange = useCallback((next: SubtitleTemplateRotation) => {
+    const nextSelections: VariantTemplateSelections = {};
+    setSubtitleRotation(next);
+    setVariantTemplateSelections(nextSelections);
+    setVariantSubtitleOverrides((previous) => {
+      if (Object.keys(previous).length === 0) return previous;
+      scheduleOverridesSave(subtitleOverrides, {});
+      return {};
     });
+    void persistSubtitleRotation(next, nextSelections);
     scheduleReassemblePreviews();
-  }, [persistSubtitleRotation, subtitleRotation, scheduleReassemblePreviews, scheduleOverridesSave, subtitleOverrides]);
+  }, [persistSubtitleRotation, scheduleOverridesSave, scheduleReassemblePreviews, subtitleOverrides]);
 
-  const handleUpdateSubtitlePreset = useCallback((
-    presetId: string,
-    settings: SubtitleSettings,
-    presetWordsPerSubtitle: number,
-  ) => {
-    const preset = userSubtitlePresets.find((candidate) => candidate.id === presetId);
+  const handleUpdateSubtitleTemplateStyles = useCallback(async (
+    templateId: string,
+    templateName: string,
+    styles: UserSubtitlePreset[],
+  ): Promise<boolean> => {
     const profileId = currentProfileIdRef.current;
-    if (!preset || !profileId) return;
-    const updated = {
-      ...preset,
-      settings,
-      wordsPerSubtitle: presetWordsPerSubtitle,
-    };
-    setUserSubtitlePresets((previous) => previous.map((candidate) => (
-      candidate.id === presetId ? updated : candidate
-    )));
+    if (!profileId || !templateId || styles.length === 0) return false;
+
+    try {
+      const response = await apiPut(`/profiles/${profileId}/subtitle-templates/${templateId}`, {
+        name: templateName,
+        styles: styles.map((style) => ({
+          id: style.id,
+          name: style.name,
+          settings: style.settings,
+          settingsA: style.settingsA,
+          settingsB: style.settingsB,
+          wordsPerSubtitle: style.wordsPerSubtitle ?? 2,
+        })),
+      });
+      const saved = (await response.json()) as UserSubtitleTemplate;
+      const flattened = saved.styles.map((style) => ({
+        ...style,
+        templateId: saved.id,
+        templateName: saved.name,
+      }));
+      const nextRotation: SubtitleTemplateRotation = {
+        enabled: true,
+        presetIds: flattened.map((style) => style.id),
+      };
+      const nextSelections: VariantTemplateSelections = {};
+
+      setUserSubtitlePresets((current) => [
+        ...current.filter((style) => style.templateId !== saved.id),
+        ...flattened,
+      ]);
+      setSubtitleRotation(nextRotation);
+      setVariantTemplateSelections(nextSelections);
+      void persistSubtitleRotation(nextRotation, nextSelections);
+      scheduleReassemblePreviews();
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save subtitle template");
+      return false;
+    }
+  }, [persistSubtitleRotation, scheduleReassemblePreviews]);
+
+  const handleUseSubtitleTemplateForAll = useCallback(async (): Promise<void> => {
+    const nextSelections: VariantTemplateSelections = {};
+    const saved = await persistSubtitleRotation(subtitleRotation, nextSelections);
+    if (!saved) return;
+    setVariantTemplateSelections(nextSelections);
     scheduleReassemblePreviews();
-    apiPut(`/profiles/${profileId}/subtitle-presets/${presetId}`, {
-      name: updated.name,
-      settings: updated.settings,
-      settingsA: updated.settingsA,
-      settingsB: updated.settingsB,
-      wordsPerSubtitle: updated.wordsPerSubtitle,
-    }).catch(() => {
-      toast.error("Could not update subtitle template");
-      refreshUserSubtitlePresets();
-    });
-  }, [refreshUserSubtitlePresets, scheduleReassemblePreviews, userSubtitlePresets]);
+  }, [persistSubtitleRotation, scheduleReassemblePreviews, subtitleRotation]);
 
   // Debounced auto-save scripts to backend
   const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[], updatedNames?: string[]) => {
@@ -3984,6 +4032,7 @@ function PipelinePage() {
       }
 
       // Always land on step 2 so user can review source videos & segments
+      setShowHistoryPanel(false);
       setStep(2);
       return;
     }
@@ -4016,6 +4065,7 @@ function PipelinePage() {
         : defaultScriptNames((data.scripts || []).length);
       setScriptNames(importedNames);
       saveScriptNamesToBackend(pid, importedNames);
+      setShowHistoryPanel(false);
       setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -5043,14 +5093,14 @@ function PipelinePage() {
     setUserSubtitlePresets,
     subtitleRotation,
     handleSubtitleRotationChange,
-    getAssignedSubtitlePreset,
+    handleSubtitleTemplateChange,
+    handleUpdateSubtitleTemplateStyles,
+    handleUseSubtitleTemplateForAll,
     getWordsPerSubtitleForVariant,
     variantSubtitleOverrides,
     handleVariantTemplateOverrideChange,
     handleResetVariantTemplateOverride,
     variantTemplateSelections,
-    handleVariantTemplateSelectionChange,
-    handleUpdateSubtitlePreset,
     subtitleSettings,
     setSubtitleSettings,
     scheduleProfileSubtitleSave,
@@ -5059,7 +5109,7 @@ function PipelinePage() {
     scheduleOverridesSave,
     currentProfileIdRef,
     getSubtitleSettingsFor,
-    getStylePreviewText,
+    getPreviewSubtitleTextFor,
     handleVariantSubtitleChange,
     toggleVariant,
     handlePlayAudio,
@@ -5125,6 +5175,8 @@ function PipelinePage() {
     generatedYoutubeTitles,
     libraryProjectId,
     step,
+    step3Mode,
+    setStep3Mode,
     historyLoading,
     historyPipelines,
     selectedHistoryId,
@@ -5166,9 +5218,9 @@ function PipelinePage() {
   // applied elsewhere, where a linear reading order is more approachable.
   const usesWideWorkspace = step === 3 || pipelineLayout === "workspace";
   const usesFixedWorkspace = isEditingWorkspace && usesWideWorkspace;
-  // History gets a permanent column everywhere except Step 3, where it is a
-  // toggled overlay-free column so the previews take the freed width by default.
-  const historyVisible = step === 3 ? showHistoryPanel : true;
+  // History is always opt-in and overlay-free, so closing it gives the current
+  // step its full width and the choice persists when navigation changes steps.
+  const historyVisible = showHistoryPanel;
   const splitEnabled = usesFixedWorkspace && historyVisible;
 
   return (
@@ -5204,7 +5256,11 @@ function PipelinePage() {
         {step === 2 && <Step2TTS ctx={pipelineCtx} />}
 
         {/* Step 3 — Preview & Select */}
-        {step === 3 && <Step3Preview ctx={pipelineCtx} />}
+        {step === 3 && (
+          step3Mode === "edit"
+            ? <Step3Preview ctx={pipelineCtx} />
+            : <Step3Export ctx={pipelineCtx} />
+        )}
 
         {/* Step 4 — Render Progress */}
         {step === 4 && <Step4Render ctx={pipelineCtx} />}

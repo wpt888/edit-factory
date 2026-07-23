@@ -155,7 +155,7 @@ test("Step 3 picks and applies an attention template to all variants with overwr
 
   const applyCard = page.getByTestId("step3-attention-apply");
   await expect(applyCard).toBeVisible();
-  await expect(applyCard.getByRole("link", { name: "Open template space" })).toBeVisible();
+  await expect(applyCard.getByRole("link", { name: "Manage templates" })).toBeVisible();
   await expect.poll(() => timelineGets.size, { timeout: 20_000 }).toBe(2);
 
   await applyCard.getByRole("combobox", { name: "Layout template", exact: true }).click();
@@ -164,6 +164,10 @@ test("Step 3 picks and applies an attention template to all variants with overwr
   await page.getByRole("tab", { name: "URL" }).click();
   await page.getByLabel("Media URL").fill("https://assets.test/step3-attention.png");
   await page.getByRole("button", { name: "Use media URL" }).click();
+
+  await applyCard.getByRole("combobox", { name: "All-slot entrance effect" }).click();
+  await page.getByRole("option", { name: /Slide from right/ }).click();
+  await applyCard.getByTestId("step3-attention-enter-duration").fill("0.45");
 
   await expect(applyCard.getByRole("combobox", { name: "Attention template apply scope", exact: true })).toHaveText(/All variants/);
   await applyCard.scrollIntoViewIfNeeded();
@@ -180,6 +184,8 @@ test("Step 3 picks and applies an attention template to all variants with overwr
   const byKey = Object.fromEntries(applyPosts.map((post) => [post.key, post.body]));
   expect(byKey["0"]).toMatchObject({
     templateId: TEMPLATE.id,
+    animation: "slide-right",
+    enterMs: 450,
     assets: [{ url: "https://assets.test/step3-attention.png", type: "image" }],
     durationMs: 12000,
     subtitleBoundariesMs: [0, 6000, 12000],

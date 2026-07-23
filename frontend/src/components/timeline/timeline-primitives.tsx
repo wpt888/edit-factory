@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { CSSProperties, DragEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { ZoomIn, ZoomOut } from "lucide-react";
 import { cn, formatTimeShort } from "@/lib/utils";
@@ -11,25 +12,50 @@ const majorStepFor = (duration: number) => {
   return 1;
 };
 
+const MINOR_TICK_STEPS = [
+  0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+  1, 2, 5, 10, 15, 30, 60, 120, 300,
+] as const;
+
+/**
+ * Keep ruler subdivisions roughly 6px apart. The clock therefore becomes
+ * progressively finer as the user zooms in, down to 10ms, without turning a
+ * fit-to-window timeline into an unreadable picket fence.
+ */
+export function timelineMinorStepFor(duration: number, axisWidth: number): number {
+  const safeDuration = Math.max(0.001, duration);
+  const pixelsPerSecond = Math.max(1, axisWidth) / safeDuration;
+  const desiredStep = 6 / pixelsPerSecond;
+  return MINOR_TICK_STEPS.find((step) => step >= desiredStep)
+    ?? Math.ceil(desiredStep / 300) * 300;
+}
+
 export function TimelineRuler({
   duration,
   startTime = 0,
+  axisWidth,
   className,
   style,
   onPointerDown,
 }: {
   duration: number;
   startTime?: number;
+  axisWidth?: number;
   className?: string;
   style?: CSSProperties;
   onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
 }) {
   const safeDuration = Math.max(0.001, duration);
   const majorStep = majorStepFor(safeDuration);
-  const minorStep = majorStep >= 10 ? majorStep / 5 : majorStep >= 5 ? 1 : 0.5;
+  const resolvedAxisWidth = axisWidth
+    ?? (typeof style?.width === "number" ? style.width : 0);
+  const minorStep = resolvedAxisWidth > 0
+    ? timelineMinorStepFor(safeDuration, resolvedAxisWidth)
+    : majorStep >= 10 ? majorStep / 5 : majorStep >= 5 ? 1 : 0.5;
   const ticks: number[] = [];
-  for (let value = 0; value < safeDuration - 0.001; value += minorStep) {
-    ticks.push(value);
+  const tickCount = Math.ceil(safeDuration / minorStep);
+  for (let index = 0; index < tickCount; index += 1) {
+    ticks.push(Number((index * minorStep).toFixed(6)));
   }
 
   return (
@@ -38,6 +64,8 @@ export function TimelineRuler({
       style={style}
       onPointerDown={onPointerDown}
       data-timeline-axis
+      data-timeline-ruler
+      data-timeline-ruler-minor-step={minorStep}
     >
       {ticks.map((value) => {
         const isMajor = Math.abs(value / majorStep - Math.round(value / majorStep)) < 0.001;
@@ -49,6 +77,8 @@ export function TimelineRuler({
               isMajor ? "h-3 bg-white/35" : "h-1.5",
             )}
             style={{ left: `${value / safeDuration * 100}%` }}
+            data-timeline-ruler-tick={isMajor ? "major" : "minor"}
+            data-timeline-time={value}
           >
             {isMajor && (
               <span className="absolute bottom-3 left-1 whitespace-nowrap font-mono text-[9px] text-white/55">
@@ -85,15 +115,100 @@ export function TimelineWaveform({
       </div>
     );
   }
+
   return (
-    <div className={cn("absolute inset-0 flex items-center gap-px overflow-hidden", className)} aria-hidden="true">
-      {peaks.map((peak, index) => (
-        <span
-          key={index}
-          className={cn("min-w-px flex-1 rounded-full", colorClassName)}
-          style={{ height: `${Math.max(8, Math.min(100, peak * 100))}%` }}
-        />
-      ))}
+    <ResponsiveWaveformCanvas peaks={peaks} className={className} />
+  );
+}
+
+function ResponsiveWaveformCanvas({
+  peaks,
+  className,
+}: {
+  peaks: number[];
+  className?: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const draw = () => {
+      const bounds = canvas.getBoundingClientRect();
+      const width = Math.max(1, bounds.width);
+      const height = Math.max(1, bounds.height);
+      const requestedScale = Math.min(window.devicePixelRatio || 1, 2);
+      const scale = Math.min(requestedScale, 32767 / width, 32767 / height);
+      canvas.width = Math.max(1, Math.floor(width * scale));
+      canvas.height = Math.max(1, Math.floor(height * scale));
+
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = "rgba(110, 231, 183, 0.78)";
+
+      // Keep bars close to 2px at every zoom level. Zooming therefore reveals
+      // more source detail instead of stretching the same handful of peaks.
+      const barCount = Math.max(1, Math.min(peaks.length, Math.ceil(width / 2)));
+      const barWidth = width / barCount;
+      const gap = Math.min(0.75, barWidth * 0.25);
+
+      for (let barIndex = 0; barIndex < barCount; barIndex += 1) {
+        const sourceStart = Math.floor(barIndex / barCount * peaks.length);
+        const sourceEnd = Math.max(
+          sourceStart + 1,
+          Math.ceil((barIndex + 1) / barCount * peaks.length),
+        );
+        let peak = 0;
+        for (let sourceIndex = sourceStart; sourceIndex < sourceEnd; sourceIndex += 1) {
+          peak = Math.max(peak, peaks[sourceIndex] ?? 0);
+        }
+        const barHeight = Math.max(1, Math.min(height, peak * height));
+        context.fillRect(
+          barIndex * barWidth,
+          (height - barHeight) / 2,
+          Math.max(0.5, barWidth - gap),
+          barHeight,
+        );
+      }
+    };
+
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [peaks]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={cn("pointer-events-none absolute inset-0 size-full", className)}
+      aria-hidden="true"
+    />
+  );
+}
+
+export function TimelineAudioTrackSurface({
+  children,
+  className,
+  style,
+}: {
+  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <div
+      data-timeline-audio-surface
+      className={cn(
+        "absolute inset-y-0 left-0 overflow-hidden border-y border-emerald-300/15 bg-emerald-400/5",
+        className,
+      )}
+      style={style}
+    >
+      {children}
     </div>
   );
 }

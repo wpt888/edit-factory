@@ -29,20 +29,28 @@ const previewFor = (offset: number) => ({
 // Shared route table for a Step 3 pipeline. `attentionSelection` seeds the
 // persisted selection so callers can start empty or pre-populated.
 type MediaRow = { id: string; displayName: string | null; mimeType: string; previewUrl: string; status: string };
+type UploadedAsset = { url: string; type: "image" | "video" };
 
 function routeStep3(page: import("@playwright/test").Page, opts: {
   attentionSelection: Record<string, unknown> | null;
   onApply?: (key: string, body: { startOffsetMs?: number }) => void;
   media?: MediaRow[];
-  uploadMediaId?: string;
+  mediaConnected?: boolean;
+  uploadedAsset?: UploadedAsset;
   templates?: unknown[];
+  personalTemplatesAvailable?: boolean;
 }) {
   return page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
 
-    if (path.endsWith("/platform/media/upload") && request.method() === "POST") {
-      await route.fulfill({ json: { mediaId: opts.uploadMediaId ?? "" } });
+    if (path.endsWith("/segments/attention-media") && request.method() === "POST") {
+      await route.fulfill({ json: {
+        asset: opts.uploadedAsset ?? {
+          url: "media/attention/profile/pasted.png",
+          type: "image",
+        },
+      } });
       return;
     }
 
@@ -58,7 +66,10 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
       return;
     }
     if (path.endsWith("/attention-templates")) {
-      await route.fulfill({ json: { templates: opts.templates ?? TEMPLATES } });
+      await route.fulfill({ json: {
+        templates: opts.templates ?? TEMPLATES,
+        personal_templates_available: opts.personalTemplatesAvailable ?? true,
+      } });
       return;
     }
     if (path.endsWith(`/pipeline/scripts/${PIPELINE_ID}`)) {
@@ -113,7 +124,10 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
       return;
     }
     if (path.includes("/platform/media")) {
-      await route.fulfill({ json: { connected: true, media: opts.media ?? [] } });
+      await route.fulfill({ json: {
+        connected: opts.mediaConnected ?? true,
+        media: opts.media ?? [],
+      } });
       return;
     }
     if (path.endsWith("/profiles/") || path.endsWith("/profiles")) {
@@ -155,14 +169,25 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
   await picker.getByRole("combobox", { name: "Layout template" }).click();
   await page.getByRole("option", { name: "Tornado Stack · System" }).click();
 
-  await expect(card.getByTestId("attention-layout-preview")).toBeVisible();
+  // The live variant canvas is the visual source of truth; the old miniature
+  // simulation consumed most of the inspector without adding useful feedback.
+  await expect(card.getByTestId("attention-layout-preview")).toHaveCount(0);
   await expect(card.getByTestId("attention-stagger-seconds")).toBeVisible();
+  const transition = card.getByRole("combobox", { name: "All-slot entrance effect" });
+  await expect(transition).toContainText("Tornado");
+  await transition.click();
+  await page.getByRole("option", { name: /Static \/ Classic/ }).click();
+  await expect(transition).toContainText("Static / Classic");
   await expect(card.getByText("3 slots")).toBeVisible();
   // maxVariants was removed — Apply scope covers per-variant targeting now.
   await expect(card.getByTestId("attention-max-variants")).toHaveCount(0);
 
   const slots = card.getByTestId("attention-content-slots");
   await expect(slots.getByText("Choose")).toHaveCount(3);
+  await expect(slots.locator(":scope > div").nth(1)).toHaveCSS(
+    "grid-template-columns",
+    /.+ .+ .+ .+/,
+  );
 
   await slots.getByText("Choose").first().click();
   await page.getByRole("tab", { name: "URL" }).click();
@@ -171,7 +196,34 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
   await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
 
   await card.scrollIntoViewIfNeeded();
+  await expect(card.getByText("All-slot entrance effect", { exact: true }).locator("..")).toHaveScreenshot("attention-step3-transition-picker.png", {
+    animations: "disabled",
+  });
   await page.screenshot({ path: "screenshots/attention-step3-picker.png", fullPage: true });
+});
+
+test("step 3 explains when personal template storage is unavailable", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  await routeStep3(page, {
+    attentionSelection: null,
+    personalTemplatesAvailable: false,
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
+
+  const card = page.getByTestId("step3-attention-apply");
+  await expect(card).toContainText(
+    "Personal templates are unavailable until the attention-template database migration is applied.",
+  );
 });
 
 test("selecting a template with saved default content pre-populates the slots", async ({ page }) => {
@@ -251,7 +303,7 @@ test("auto-apply staggers each variant by the configured offset", async ({ page 
   expect(byKey["1"].startOffsetMs).toBe(1000);
 });
 
-test("gallery lists video assets and a pasted image lands in a slot", async ({ page }) => {
+test("local upload works while Blipost is disconnected and paste lands in a slot", async ({ page }) => {
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
     localStorage.setItem("editai_current_profile_id", profile.id);
@@ -264,11 +316,8 @@ test("gallery lists video assets and a pasted image lands in a slot", async ({ p
   await routeStep3(page, {
     // Seed a selected template so the paste listener is active, no assets yet.
     attentionSelection: { templateId: "system-tornado-stack", assets: [], staggerSeconds: 1 },
-    uploadMediaId: "pasted-1",
-    media: [
-      { id: "vid-1", displayName: "Clip", mimeType: "video/mp4", previewUrl: "https://assets.test/clip.mp4", status: "ready" },
-      { id: "pasted-1", displayName: "Pasted", mimeType: "image/png", previewUrl: "https://assets.test/pasted.png", status: "ready" },
-    ],
+    mediaConnected: false,
+    uploadedAsset: { url: "media/attention/profile/pasted.png", type: "image" },
   });
 
   await page.setViewportSize({ width: 1600, height: 900 });
@@ -277,10 +326,25 @@ test("gallery lists video assets and a pasted image lands in a slot", async ({ p
   const card = page.getByTestId("step3-attention-apply");
   await expect(card).toBeVisible();
 
-  // Gallery surfaces the video item with a "Video" badge.
+  // Reproduce the reported state: the optional cloud gallery is disconnected.
   await card.getByTestId("attention-content-slots").getByText("Choose").first().click();
-  await expect(page.getByRole("dialog").getByText("Video")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expect(page.getByText("Connect Blipost to use the shared media gallery")).toBeVisible();
+
+  // The Upload tab uses local storage, independently of the Blipost gallery.
+  await page.getByRole("tab", { name: "Upload" }).click();
+  await expect(page.getByText("Blipost connection is not required.")).toBeVisible();
+  await page.locator('input[type="file"][accept="image/*,video/*"]').setInputFiles({
+    name: "local.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgo=", "base64"),
+  });
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute(
+    "src",
+    /\/segments\/attention-media\/pasted\.png\?profile_id=attention-step3-profile$/,
+  );
+
+  // Remove the first selection so paste verifies the same local upload path.
+  await card.getByRole("button", { name: "Remove content 1" }).click();
 
   // Synthesize a clipboard image paste; it uploads and fills the next slot.
   await page.evaluate(() => {
@@ -291,5 +355,8 @@ test("gallery lists video assets and a pasted image lands in a slot", async ({ p
     window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
   });
 
-  await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/pasted.png");
+  await expect(page.getByAltText("Attention content 1")).toHaveAttribute(
+    "src",
+    /\/segments\/attention-media\/pasted\.png\?profile_id=attention-step3-profile$/,
+  );
 });

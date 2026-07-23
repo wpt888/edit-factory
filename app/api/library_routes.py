@@ -27,6 +27,7 @@ from app.api.desktop_only import (
 from app.services.file_storage import get_file_storage
 from app.services.media_manager import get_media_manager
 from app.api.auth import AuthUser, ProfileContext, get_current_user, get_profile_context
+from app.api.media_session import get_source_media_profile_context
 from app.api.ml_gating import _enforce_ml_installed
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -348,7 +349,10 @@ def verify_project_ownership(project_id: str, profile_id: str) -> dict:
 async def serve_file(
     file_path: str,
     download: bool = Query(default=False),
-    profile: ProfileContext = Depends(get_profile_context),
+    # Native <video>/<img> requests cannot attach the API client's Bearer
+    # header. The signed media cookie remains profile-scoped, and the ownership
+    # checks below still constrain which file that profile may read.
+    profile: ProfileContext = Depends(get_source_media_profile_context),
 ):
     """
     Servește fișiere (thumbnails, videos) din directoarele output.
