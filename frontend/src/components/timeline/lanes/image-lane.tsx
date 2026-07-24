@@ -14,9 +14,11 @@ export type CueTimingEdge = "move" | "resize" | "resize-start";
 export interface ImageLaneProps {
   cues: AttentionCue[];
   trackIndex: number;
-  selectedCueId: string | null;
+  selectedCueIds: ReadonlySet<string>;
   onBeginTimingDrag: (event: React.PointerEvent, cue: AttentionCue, edge: CueTimingEdge) => void;
-  onSelectCue: (cueId: string) => void;
+  onSelectCue: (cueId: string, event: React.MouseEvent<HTMLButtonElement>) => void;
+  axisWidth: number;
+  timelineDuration: number;
   pct: (sec: number) => string;
   widthPct: (sec: number) => string;
   /** Show the "no images yet" hint when this track is empty (first image lane only). */
@@ -26,9 +28,11 @@ export interface ImageLaneProps {
 export function ImageLane({
   cues,
   trackIndex,
-  selectedCueId,
+  selectedCueIds,
   onBeginTimingDrag,
   onSelectCue,
+  axisWidth,
+  timelineDuration,
   pct,
   widthPct,
   showEmptyHint,
@@ -41,7 +45,9 @@ export function ImageLane({
         </div>
       )}
       {cues.map((cue) => {
-        const isSelected = selectedCueId === cue.id;
+        const isSelected = selectedCueIds.has(cue.id);
+        const blockWidthPx = cue.durationMs / 1000 / Math.max(0.001, timelineDuration) * axisWidth;
+        const showLabel = blockWidthPx >= 44;
         const entrance = [...cue.layers]
           .filter((layer) => layer.animation.preset !== "static" && layer.animation.enterMs > 0)
           .sort((left, right) => left.animation.delayMs - right.animation.delayMs)[0];
@@ -50,8 +56,10 @@ export function ImageLane({
           type="button"
           key={cue.id}
           data-timeline-block
+          data-attention-cue
           data-cue-id={cue.id}
           data-cue-track={trackIndex}
+          data-cue-density={showLabel ? "label" : "marker"}
           aria-pressed={isSelected}
           className={`absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded border bg-primary/70 px-1 text-left text-primary-foreground outline-none transition-colors active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-primary ${
             isSelected
@@ -60,24 +68,29 @@ export function ImageLane({
           }`}
           style={{ left: pct(cue.startMs / 1000), width: widthPct(cue.durationMs / 1000) }}
           onPointerDown={(event) => onBeginTimingDrag(event, cue, "move")}
-          onClick={() => onSelectCue(cue.id)}
-          title="Drag to move (up/down to change track). Hold Alt to disable media-edge snapping."
+          onClick={(event) => onSelectCue(cue.id, event)}
+          title="Drag to move. Ctrl/Cmd-click adds to the selection; Shift-click selects a range. Drag on empty track space to draw a selection box."
         >
           {/* Left-edge trim: drag the start, keeping the right edge fixed. */}
           <span
             className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize bg-black/20"
             onPointerDown={(event) => onBeginTimingDrag(event, cue, "resize-start")}
           />
-          {entrance && (
+          {entrance && blockWidthPx >= 20 && (
             <AttentionEntranceOverlay
               preset={entrance.animation.preset}
               enterMs={entrance.animation.enterMs}
               offsetMs={entrance.animation.delayMs}
               clipDurationMs={cue.durationMs}
+              showLabel={blockWidthPx * entrance.animation.enterMs / cue.durationMs >= 40}
               testId={`attention-entrance-${cue.id}`}
             />
           )}
-          {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
+          {showLabel && (
+            <span className="block truncate">
+              {cue.layers.length} image{cue.layers.length === 1 ? "" : "s"}
+            </span>
+          )}
           <span
             className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize bg-black/20"
             onPointerDown={(event) => onBeginTimingDrag(event, cue, "resize")}

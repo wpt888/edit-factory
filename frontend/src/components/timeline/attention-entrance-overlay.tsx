@@ -12,12 +12,14 @@ export function AttentionEntranceOverlay({
   enterMs,
   clipDurationMs,
   offsetMs = 0,
+  showLabel = true,
   testId,
 }: {
   preset: AttentionAnimationPreset;
   enterMs: number;
   clipDurationMs: number;
   offsetMs?: number;
+  showLabel?: boolean;
   testId?: string;
 }) {
   if (preset === "static" || enterMs <= 0 || clipDurationMs <= 0) return null;
@@ -39,7 +41,9 @@ export function AttentionEntranceOverlay({
       title={`Entrance: ${label} · ${safeEnterMs}ms`}
     >
       <Sparkles className="size-2.5 shrink-0" />
-      <span className="ml-0.5 truncate text-[8px] font-semibold">{label}</span>
+      {showLabel && (
+        <span className="ml-0.5 truncate text-[8px] font-semibold">{label}</span>
+      )}
     </span>
   );
 }

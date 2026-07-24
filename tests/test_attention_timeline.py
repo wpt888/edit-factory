@@ -4,6 +4,9 @@ from fastapi.testclient import TestClient
 from app.api import pipeline_routes
 from app.api.auth import ProfileContext, get_profile_context
 
+SCRIPT_ID = "script_attention_001"
+OUTPUT_ID = f"{SCRIPT_ID}:default"
+
 
 class _AttentionRepository:
     def __init__(self, template):
@@ -12,6 +15,9 @@ class _AttentionRepository:
 
     def get_attention_template(self, template_id):
         return self.template if self.template["id"] == template_id else None
+
+    def get_pipeline(self, _pipeline_id):
+        return None
 
     def update_pipeline(self, pipeline_id, changes):
         self.pipeline_updates.append((pipeline_id, changes))
@@ -26,7 +32,13 @@ class _AttentionRepository:
 
 def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
     profile_id = "profile-attention"
-    pipeline = {"id": "pipeline-attention", "profile_id": profile_id, "attention_timeline": {}}
+    pipeline = {
+        "id": "pipeline-attention",
+        "profile_id": profile_id,
+        "scripts": ["Attention script"],
+        "script_ids": [SCRIPT_ID],
+        "attention_timeline": {},
+    }
     template = {
         "id": "personal-stack",
         "profile_id": profile_id,
@@ -57,13 +69,15 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
 
     body = {
         "templateId": "personal-stack",
-        # Step 3 may override the template's authored "pop" without mutating it.
-        "animation": "static",
+        # Omitting an effect must stay static instead of inheriting the
+        # template's historical authored "pop".
         "assetUrls": ["https://assets.test/one.png", "https://assets.test/two.png", "https://assets.test/three.png"],
         "durationMs": 10000,
         "subtitleBoundariesMs": [4500],
         "revision": 0,
         "mode": "replace",
+        "script_id": SCRIPT_ID,
+        "output_id": OUTPUT_ID,
     }
     with TestClient(app) as client:
         response = client.post(
@@ -100,7 +114,13 @@ def test_apply_template_threads_layout_and_rejects_stale_revision(monkeypatch):
 
 def test_apply_template_start_offset_staggers_and_drops_overflow(monkeypatch):
     profile_id = "profile-attention"
-    pipeline = {"id": "pipeline-attention", "profile_id": profile_id, "attention_timeline": {}}
+    pipeline = {
+        "id": "pipeline-attention",
+        "profile_id": profile_id,
+        "scripts": ["Attention script"],
+        "script_ids": [SCRIPT_ID],
+        "attention_timeline": {},
+    }
     template = {
         "id": "personal-stack",
         "profile_id": profile_id,
@@ -131,6 +151,8 @@ def test_apply_template_start_offset_staggers_and_drops_overflow(monkeypatch):
         "durationMs": 10000,
         "revision": 0,
         "mode": "replace",
+        "script_id": SCRIPT_ID,
+        "output_id": OUTPUT_ID,
     }
     with TestClient(app) as client:
         baseline = client.post(
@@ -170,6 +192,8 @@ def test_apply_system_template_appends_and_rejects_foreign_personal_template(mon
     pipeline = {
         "id": "pipeline-attention",
         "profile_id": profile_id,
+        "scripts": ["Attention script"],
+        "script_ids": [SCRIPT_ID],
         "attention_timeline": {"0": {"revision": 4, "cues": [existing_cue]}},
     }
     foreign_template = {
@@ -199,6 +223,8 @@ def test_apply_system_template_appends_and_rejects_foreign_personal_template(mon
                 "subtitleBoundariesMs": [3000, 6000, 9000, 12000],
                 "revision": 4,
                 "mode": "append",
+                "script_id": SCRIPT_ID,
+                "output_id": OUTPUT_ID,
             },
         )
         assert appended.status_code == 200, appended.text
@@ -216,6 +242,8 @@ def test_apply_system_template_appends_and_rejects_foreign_personal_template(mon
                 "assetUrls": ["a.png"],
                 "durationMs": 10000,
                 "revision": 5,
+                "script_id": SCRIPT_ID,
+                "output_id": OUTPUT_ID,
             },
         )
         assert forbidden.status_code == 403

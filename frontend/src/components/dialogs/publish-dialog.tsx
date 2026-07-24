@@ -54,6 +54,8 @@ interface PublishDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPublished?: () => void;
+  initialPublishMode?: PublishMode;
+  initialScheduleDate?: string;
 }
 
 // Unified neutral highlight for all selected platforms
@@ -73,6 +75,8 @@ export function PublishDialog({
   open,
   onOpenChange,
   onPublished,
+  initialPublishMode = "now",
+  initialScheduleDate = "",
 }: PublishDialogProps) {
   // Unified platform list
   const [platforms, setPlatforms] = useState<UnifiedPlatform[]>([]);
@@ -113,8 +117,8 @@ export function PublishDialog({
     setPublishJobId(null);
     setCaption(initialCaption || "");
     setYoutubeTitle(initialYoutubeTitle || "");
-    setPublishMode("now");
-    setScheduleDate("");
+    setPublishMode(initialPublishMode);
+    setScheduleDate(initialScheduleDate);
     setSelectedIds(new Set());
     activeJobsRef.current = {};
     completedJobsRef.current = {};
@@ -193,7 +197,7 @@ export function PublishDialog({
 
     fetchAll();
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, initialCaption, initialYoutubeTitle, initialPublishMode, initialScheduleDate]);
 
   // Cleanup poll on unmount or when dialog closes
   useEffect(() => {
@@ -865,7 +869,7 @@ export function PublishDialog({
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     min={minScheduleDate}
                   />
-                  <PostizMonthlyCalendar title="Posts calendar" />
+                  <PostizMonthlyCalendar title="Posts calendar" allowManualCreate={false} />
                 </>
               )}
             </div>

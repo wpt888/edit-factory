@@ -34,6 +34,8 @@ type UploadedAsset = { url: string; type: "image" | "video" };
 function routeStep3(page: import("@playwright/test").Page, opts: {
   attentionSelection: Record<string, unknown> | null;
   onApply?: (key: string, body: { startOffsetMs?: number }) => void;
+  timelines?: Record<string, Record<string, unknown>>;
+  onTimelineSave?: (key: string, body: Record<string, unknown>) => void;
   media?: MediaRow[];
   mediaConnected?: boolean;
   uploadedAsset?: UploadedAsset;
@@ -61,8 +63,22 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
       await route.fulfill({ json: { revision: 1, cues: [{ id: "cue", startMs: 3000 + (body.startOffsetMs || 0), durationMs: 1200, layers: [], zone: "behind" }] } });
       return;
     }
-    if (path.match(/attention-timeline\/[^/]+$/) && request.method() === "GET") {
-      await route.fulfill({ json: { revision: 0, cues: [] } });
+    const timelineMatch = path.match(/attention-timeline\/([^/]+)$/);
+    if (timelineMatch && request.method() === "GET") {
+      await route.fulfill({
+        json: opts.timelines?.[timelineMatch[1]] ?? { revision: 0, cues: [] },
+      });
+      return;
+    }
+    if (timelineMatch && request.method() === "PUT") {
+      const body = JSON.parse(request.postData() || "{}") as Record<string, unknown>;
+      opts.onTimelineSave?.(timelineMatch[1], body);
+      await route.fulfill({
+        json: {
+          ...body,
+          revision: Number(body.revision ?? 0) + 1,
+        },
+      });
       return;
     }
     if (path.endsWith("/attention-templates")) {
@@ -146,7 +162,7 @@ function routeStep3(page: import("@playwright/test").Page, opts: {
   });
 }
 
-test("step 3 attention card exposes template layout, numbered slots, and image assignment", async ({ page }) => {
+test("step 3 content templates expose numbered slots and the shared effect library", async ({ page }) => {
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
     localStorage.setItem("editai_current_profile_id", profile.id);
@@ -173,7 +189,15 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
   // simulation consumed most of the inspector without adding useful feedback.
   await expect(card.getByTestId("attention-layout-preview")).toHaveCount(0);
   await expect(card.getByTestId("attention-stagger-seconds")).toBeVisible();
-  const transition = card.getByRole("combobox", { name: "All-slot entrance effect" });
+  const transition = card.getByRole("combobox", { name: "Template effect for next apply" });
+  await expect(transition).toContainText("Static / Classic");
+  await transition.click();
+  await expect(page.getByLabel("Search entrance effects")).toBeVisible();
+  await expect(page.getByRole("listbox", { name: "Entrance effects" })).toHaveScreenshot(
+    "attention-effect-library.png",
+    { animations: "disabled" },
+  );
+  await page.getByRole("option", { name: /^Tornado High-energy/ }).click();
   await expect(transition).toContainText("Tornado");
   await transition.click();
   await page.getByRole("option", { name: /Static \/ Classic/ }).click();
@@ -196,7 +220,7 @@ test("step 3 attention card exposes template layout, numbered slots, and image a
   await expect(page.getByAltText("Attention content 1")).toHaveAttribute("src", "https://assets.test/attention-one.png");
 
   await card.scrollIntoViewIfNeeded();
-  await expect(card.getByText("All-slot entrance effect", { exact: true }).locator("..")).toHaveScreenshot("attention-step3-transition-picker.png", {
+  await expect(card.getByText("Template effect for next apply", { exact: true }).locator("..")).toHaveScreenshot("attention-step3-transition-picker.png", {
     animations: "disabled",
   });
   await page.screenshot({ path: "screenshots/attention-step3-picker.png", fullPage: true });
@@ -359,4 +383,162 @@ test("local upload works while Blipost is disconnected and paste lands in a slot
     "src",
     /\/segments\/attention-media\/pasted\.png\?profile_id=attention-step3-profile$/,
   );
+});
+
+test("multiple selected images and the global toggle expose distinct effect scopes", async ({ page }) => {
+  await page.addInitScript(({ profile, pipelineId }) => {
+    localStorage.setItem("editai_profiles", JSON.stringify([profile]));
+    localStorage.setItem("editai_current_profile_id", profile.id);
+    localStorage.setItem(
+      `blipost.workspace.${profile.id}.pipeline.session`,
+      JSON.stringify({ pipelineId, step: 3 }),
+    );
+  }, { profile: PROFILE, pipelineId: PIPELINE_ID });
+
+  const layer = (id: string, preset: "static" | "fade" = "static") => ({
+    id,
+    assetId: `https://assets.test/${id}.png`,
+    assetUrl: `https://assets.test/${id}.png`,
+    mediaType: "image",
+    x: 0.1,
+    y: 0.1,
+    width: 0.8,
+    height: 0.8,
+    zIndex: 1,
+    fit: "contain",
+    animation: {
+      preset,
+      enterMs: 250,
+      exitMs: 200,
+      delayMs: 0,
+      intensity: 1,
+    },
+  });
+  const timelines = {
+    "0": {
+      revision: 1,
+      cues: [
+        {
+          id: "cue-zero",
+          startMs: 1000,
+          durationMs: 1800,
+          layers: [layer("zero-a")],
+          sfxVolumeDb: 0,
+          zone: "behind",
+          track: 2,
+        },
+        {
+          id: "cue-zero-b",
+          startMs: 4000,
+          durationMs: 1800,
+          layers: [layer("zero-b")],
+          sfxVolumeDb: 0,
+          zone: "behind",
+          track: 3,
+        },
+      ],
+    },
+    "1": {
+      revision: 1,
+      cues: [{
+        id: "cue-one",
+        startMs: 4000,
+        durationMs: 1800,
+        layers: [layer("one-a", "fade")],
+        sfxVolumeDb: 0,
+        zone: "behind",
+        track: 2,
+      }],
+    },
+  };
+  const saves: Array<{ key: string; body: Record<string, unknown> }> = [];
+  await routeStep3(page, {
+    attentionSelection: null,
+    timelines,
+    onTimelineSave: (key, body) => saves.push({ key, body }),
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/pipeline?step=3&id=${PIPELINE_ID}&desktopAuth=confirmed`);
+
+  const cue = page.locator('[data-cue-id="cue-zero"]').first();
+  await expect(cue).toBeVisible();
+  await cue.click();
+
+  const timelineEffects = page.getByTestId("step3-timeline-effects");
+  const scope = timelineEffects.getByRole("combobox", { name: "Timeline effect scope" });
+  await expect(scope).toContainText("Selected image");
+  const globalToggle = timelineEffects.getByRole("checkbox", { name: "Apply this effect to all images" });
+  await expect(globalToggle).not.toBeChecked();
+
+  await timelineEffects.getByRole("combobox", { name: "Entrance effect" }).click();
+  await page.getByRole("option", { name: /^Fade / }).click();
+  await expect.poll(() => {
+    const latest = [...saves].reverse().find((save) => save.key === "0");
+    const savedCues = latest?.body.cues as Array<{ layers: Array<{ animation: { preset: string } }> }> | undefined;
+    return savedCues?.flatMap((savedCue) => (
+      savedCue.layers.map((savedLayer) => savedLayer.animation.preset)
+    ));
+  }, { timeout: 10_000 }).toEqual(["fade", "static"]);
+
+  const secondCue = page.locator('[data-cue-id="cue-zero-b"]').first();
+  const firstCueBounds = await cue.boundingBox();
+  const secondCueBounds = await secondCue.boundingBox();
+  expect(firstCueBounds).not.toBeNull();
+  expect(secondCueBounds).not.toBeNull();
+  const marqueeLeft = Math.min(firstCueBounds!.x, secondCueBounds!.x) - 8;
+  const marqueeTop = Math.min(firstCueBounds!.y, secondCueBounds!.y) - 2;
+  const marqueeRight = Math.max(
+    firstCueBounds!.x + firstCueBounds!.width,
+    secondCueBounds!.x + secondCueBounds!.width,
+  ) + 8;
+  const marqueeBottom = Math.max(
+    firstCueBounds!.y + firstCueBounds!.height,
+    secondCueBounds!.y + secondCueBounds!.height,
+  ) + 2;
+  await page.mouse.move(marqueeLeft, marqueeTop);
+  await page.mouse.down();
+  await page.mouse.move(marqueeRight, marqueeBottom, { steps: 8 });
+  await expect(page.getByTestId("attention-selection-marquee")).toBeVisible();
+  await page.mouse.up();
+  await expect(page.getByTestId("attention-selection-marquee")).toBeHidden();
+  await expect(cue).toHaveAttribute("aria-pressed", "true");
+  await expect(secondCue).toHaveAttribute("aria-pressed", "true");
+  await expect(scope).toContainText("Selected images · 2");
+  await scope.scrollIntoViewIfNeeded();
+  await expect(timelineEffects).toHaveScreenshot(
+    "attention-effect-scope-inspector.png",
+    {
+      animations: "disabled",
+    },
+  );
+
+  await timelineEffects.getByRole("combobox", { name: "Entrance effect" }).click();
+  await page.getByRole("option", { name: /^Pop / }).click();
+
+  await expect.poll(() => {
+    const latest = [...saves].reverse().find((save) => save.key === "0");
+    const savedCues = latest?.body.cues as Array<{ layers: Array<{ animation: { preset: string } }> }> | undefined;
+    return savedCues?.flatMap((savedCue) => (
+      savedCue.layers.map((savedLayer) => savedLayer.animation.preset)
+    ));
+  }, { timeout: 10_000 }).toEqual(["pop", "pop"]);
+
+  await globalToggle.click();
+  await expect(globalToggle).toBeChecked();
+  await timelineEffects.getByRole("combobox", { name: "Entrance effect" }).click();
+  await page.getByRole("option", { name: /^Tornado / }).click();
+
+  await expect.poll(() => {
+    const latestByKey = Object.fromEntries(saves.map((save) => [save.key, save.body]));
+    return ["0", "1"].map((key) => {
+      const savedCues = latestByKey[key]?.cues as Array<{ layers: Array<{ animation: { preset: string } }> }> | undefined;
+      return savedCues?.every((savedCue) => (
+        savedCue.layers.every((savedLayer) => savedLayer.animation.preset === "tornado")
+      ));
+    });
+  }, { timeout: 10_000 }).toEqual([true, true]);
+
+  await cue.click();
+  await expect(globalToggle).toBeChecked();
 });

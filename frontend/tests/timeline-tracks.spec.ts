@@ -94,9 +94,11 @@ const openFullEditor = async (
   {
     maximize = true,
     attention = ATTENTION,
+    composition = COMPOSITION,
   }: {
     maximize?: boolean;
     attention?: typeof ATTENTION;
+    composition?: typeof COMPOSITION;
   } = {},
 ): Promise<{ editor: ReturnType<Page["getByTestId"]>; harness: Harness }> => {
   const harness: Harness = { attentionPuts: [], matchesPuts: [] };
@@ -170,7 +172,7 @@ const openFullEditor = async (
             available_segments: SEGMENTS,
             intro_offset_sec: 0,
             intro_segments: [],
-            video_timeline: COMPOSITION,
+            video_timeline: composition,
           },
         },
         available_segments: SEGMENTS,
@@ -615,6 +617,34 @@ test("the pipeline ruler exposes fine sub-second increments", async ({ page }) =
   expect(minorStep).toBeGreaterThan(0);
   expect(minorStep).toBeLessThanOrEqual(0.2);
   expect(await ruler.locator('[data-timeline-ruler-tick="minor"]').count()).toBeGreaterThan(10);
+
+  const labelBoxes = (await ruler.locator("[data-timeline-ruler-label]").evaluateAll((labels) =>
+    labels.map((label) => {
+      const box = label.getBoundingClientRect();
+      return { left: box.left, right: box.right };
+    })
+  )).sort((left, right) => left.left - right.left);
+  for (let index = 1; index < labelBoxes.length; index += 1) {
+    expect(labelBoxes[index].left).toBeGreaterThanOrEqual(labelBoxes[index - 1].right);
+  }
+});
+
+test("crowded video clips collapse to clean markers instead of overlapping metadata", async ({ page }) => {
+  const crowdedComposition = Array.from({ length: 24 }, (_, index) => ({
+    ...COMPOSITION[index % COMPOSITION.length],
+    id: `dense-${index}`,
+    timeline_start: index * 0.5,
+    timeline_duration: 0.5,
+  }));
+  const { editor } = await openFullEditor(page, { composition: crowdedComposition });
+  const timeline = editor.locator('[aria-label="Multi-track timeline"]');
+  const clips = timeline.locator('[data-testid^="composition-clip-dense-"]');
+
+  await expect(clips).toHaveCount(crowdedComposition.length);
+  await expect.poll(() => clips.evaluateAll((items) =>
+    items.every((item) => item.getAttribute("data-clip-density") === "marker")
+  )).toBe(true);
+  expect(await clips.locator("span.font-mono").count()).toBe(0);
 });
 
 test("card timeline stays behind the sticky Variant Previews header while scrolling", async ({ page }) => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.api import pipeline_routes
 from app.services.subtitle_rotation import NO_SUBTITLES_PRESET_ID
 
 
@@ -150,6 +151,7 @@ def test_rotation_persists_order_in_pipeline_template_state(sqlite_backend):
         json={
             "enabled": True,
             "presetIds": ["preset-two", "preset-one", NO_SUBTITLES_PRESET_ID],
+            "expected_revision": 0,
         },
     )
     assert saved.status_code == 200, saved.text
@@ -157,6 +159,7 @@ def test_rotation_persists_order_in_pipeline_template_state(sqlite_backend):
         "enabled": True,
         "presetIds": ["preset-two", "preset-one", NO_SUBTITLES_PRESET_ID],
         "variantTemplates": {},
+        "revision": 1,
     }
 
     restored = client.get(
@@ -192,7 +195,11 @@ def test_rotation_accepts_style_ids_inside_subtitle_template(sqlite_backend):
     saved = client.put(
         f"/api/v1/pipeline/{pipeline_id}/subtitle-rotation",
         headers=HEADERS,
-        json={"enabled": True, "presetIds": ["style-one", "style-two"]},
+        json={
+            "enabled": True,
+            "presetIds": ["style-one", "style-two"],
+            "expected_revision": 0,
+        },
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["presetIds"] == ["style-one", "style-two"]
@@ -210,6 +217,11 @@ def test_variant_template_selections_persist_and_drop_unknown(sqlite_backend):
         "updated_at": profile.get("updated_at"),
     })
     pipeline_id = _pipeline(client)
+    script_ids = repo.get_pipeline(pipeline_id)["script_ids"]
+    output_ids = {
+        str(index): pipeline_routes._build_output_id(script_id)
+        for index, script_id in enumerate(script_ids)
+    }
 
     # Manual pick works even with rotation disabled; the "ghost" key referencing
     # an unowned preset is silently dropped.
@@ -224,6 +236,8 @@ def test_variant_template_selections_persist_and_drop_unknown(sqlite_backend):
                 "1": "ghost-preset",
                 "2": NO_SUBTITLES_PRESET_ID,
             },
+            "output_ids": output_ids,
+            "expected_revision": 0,
         },
     )
     assert saved.status_code == 200, saved.text
@@ -240,3 +254,78 @@ def test_variant_template_selections_persist_and_drop_unknown(sqlite_backend):
         "0": "preset-two",
         "2": NO_SUBTITLES_PRESET_ID,
     }
+
+
+def test_variant_template_save_rejects_stale_output_identity(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    profile = repo.get_profile(profile_id)
+    repo.update_profile(profile_id, {
+        "user_subtitle_presets": [
+            {"id": "preset-one", "name": "One", "created_at": "", "settings": _settings()},
+        ],
+        "updated_at": profile.get("updated_at"),
+    })
+    pipeline_id = _pipeline(client)
+    pipeline = repo.get_pipeline(pipeline_id)
+    first_id, second_id, third_id = pipeline["script_ids"]
+
+    reordered = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/scripts",
+        headers=HEADERS,
+        json={
+            "scripts": ["Two", "One", "Three"],
+            "script_names": ["Variant 2", "Variant 1", "Variant 3"],
+            "script_ids": [second_id, first_id, third_id],
+            "expected_script_ids": [first_id, second_id, third_id],
+            "expected_revision": int(pipeline.get("settings_revision") or 0),
+        },
+    )
+    assert reordered.status_code == 200, reordered.text
+
+    stale = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/subtitle-rotation",
+        headers=HEADERS,
+        json={
+            "enabled": False,
+            "presetIds": [],
+            "variantTemplates": {"0": "preset-one"},
+            "output_ids": {
+                "0": pipeline_routes._build_output_id(first_id),
+            },
+            "expected_revision": 0,
+        },
+    )
+
+    assert stale.status_code == 409, stale.text
+    restored = client.get(
+        f"/api/v1/pipeline/{pipeline_id}/subtitle-rotation",
+        headers=HEADERS,
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["variantTemplates"] == {}
+
+
+def test_output_subtitle_override_requires_stable_identity(sqlite_backend):
+    client, repo, _profile_id = sqlite_backend
+    pipeline_id = _pipeline(client)
+    first_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
+
+    missing_identity = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/subtitle-overrides",
+        headers=HEADERS,
+        json={"overrides": {"0": {"fontSize": 60}}},
+    )
+    assert missing_identity.status_code == 409, missing_identity.text
+
+    saved = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/subtitle-overrides",
+        headers=HEADERS,
+        json={
+            "overrides": {"0": {"fontSize": 60}},
+            "output_ids": {
+                "0": pipeline_routes._build_output_id(first_id),
+            },
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["overrides"] == {"0": {"fontSize": 60}}

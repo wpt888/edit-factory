@@ -97,6 +97,18 @@ def test_all_attention_transitions_are_accepted_by_template_and_timeline_apis():
         assert AttentionAnimation(preset=preset).preset == preset
 
 
+def test_content_templates_and_track_slots_are_static_by_default():
+    from app.api.attention_routes import AttentionTemplateBody
+
+    assert AttentionTemplateBody(name="Static default").animation == "static"
+    cues = template_track_cues(
+        template={"tracks": [[{"id": "slot-1", "startMs": 0, "durationMs": 1000}]]},
+        asset_ids=["asset-1"],
+        duration_ms=5000,
+    )
+    assert cues[0]["layers"][0]["animation"]["preset"] == "static"
+
+
 def test_template_size_and_zone_thread_into_cues():
     tmpl = {**SYSTEM_TEMPLATES[2], "size": 0.5, "zone": "front"}
     cues = distribute_attention_cues(

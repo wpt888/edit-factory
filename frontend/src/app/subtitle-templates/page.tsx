@@ -190,13 +190,13 @@ export default function SubtitleTemplatesPage() {
     });
   }, []);
 
-  const startEditSession = (templateId: string, persisted = true) => {
+  const startEditSession = useCallback((templateId: string, persisted = true) => {
     const session = editSessionRef.current + 1;
     editSessionRef.current = session;
     selectedTemplateIdRef.current = templateId;
     if (persisted) persistedRevisionsRef.current.set(session, draftRevisionRef.current);
     return session;
-  };
+  }, []);
 
   // Settings shown/edited for the active tab. "A"/"B" fall back to the shared
   // style until the user explicitly edits them (then the override is created).
@@ -216,12 +216,19 @@ export default function SubtitleTemplatesPage() {
         const next: UserSubtitleTemplate[] = Array.isArray(data?.templates) ? data.templates : [];
         setTemplates(next);
         const preferred = next.find((template) => template.id === preferredTemplateId);
-        if (preferred) {
-          const styleIndex = Math.max(0, preferred.styles.findIndex((style) => style.id === preferredStyleId));
-          setSelectedTemplateId(preferred.id);
+        const templateToSelect = preferred ?? next[0];
+        if (templateToSelect) {
+          const styleIndex = preferred
+            ? Math.max(0, preferred.styles.findIndex((style) => style.id === preferredStyleId))
+            : 0;
+          startEditSession(templateToSelect.id);
+          setSelectedTemplateId(templateToSelect.id);
           setSelectedStyleIndex(styleIndex);
-          setDraft(toDraft(preferred));
-          setExpandedTemplateIds((current) => current.includes(preferred.id) ? current : [...current, preferred.id]);
+          setDraft(toDraft(templateToSelect));
+          setExpandedTemplateIds((current) => (
+            current.includes(templateToSelect.id) ? current : [...current, templateToSelect.id]
+          ));
+          setSaveState("saved");
         }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Could not load subtitle templates");
@@ -229,7 +236,7 @@ export default function SubtitleTemplatesPage() {
         setLoading(false);
       }
     },
-    [profileId],
+    [profileId, startEditSession],
   );
 
   useEffect(() => {
@@ -693,7 +700,7 @@ export default function SubtitleTemplatesPage() {
         ))}
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-1 p-2">
-            {isNew && (
+            {isNew && !loading && (
               <div className="ml-5 space-y-1 border-l border-border pl-2" data-testid="subtitle-template-draft-styles">
                 {draft.styles.map((style, index) => (
                   styleNameEdit?.templateId === "new" && styleNameEdit.styleIndex === index ? (

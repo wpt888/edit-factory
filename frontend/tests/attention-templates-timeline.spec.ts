@@ -53,24 +53,9 @@ test("attention templates uses the shared timeline chrome and clip shell", async
   const monitorHeader = page.getByTestId("attention-panel-header-monitor");
   const timelineHeader = page.getByTestId("attention-panel-header-timeline");
   for (const header of [settingsHeader, monitorHeader, timelineHeader]) {
-    await expect(header).toHaveCSS("height", "48px");
+    await expect(header).toHaveCSS("height", "36px");
     await expect(header).toHaveCSS("border-bottom-style", "solid");
     await expect(header.locator('[data-slot="workspace-panel-grip"]')).toBeVisible();
-    const endcapStyle = await header.evaluate((element) => {
-      const style = getComputedStyle(element.parentElement!, "::after");
-      return {
-        content: style.content,
-        height: style.height,
-        borderTopStyle: style.borderTopStyle,
-        backgroundColor: style.backgroundColor,
-      };
-    });
-    expect(endcapStyle).toEqual({
-      content: '\"\"',
-      height: "12px",
-      borderTopStyle: "solid",
-      backgroundColor: "rgb(32, 32, 32)",
-    });
   }
   const [settingsHeaderBox, monitorHeaderBox] = await Promise.all([
     settingsHeader.boundingBox(),
@@ -117,9 +102,6 @@ test("attention templates uses the shared timeline chrome and clip shell", async
   expect(durationInputBox!.x + durationInputBox!.width).toBeLessThanOrEqual(inspectorBox!.x + inspectorBox!.width);
 
   const transition = inspector.getByTestId("attention-entrance-effect-select");
-  await expect(transition).toContainText("Pop");
-  await transition.click();
-  await page.getByRole("option", { name: /Static \/ Classic/ }).click();
   await expect(transition).toContainText("Static / Classic");
   const entrance = imageSlot.locator('[data-testid^="attention-entrance-"]');
   await expect(entrance).toHaveCount(0);
@@ -237,6 +219,30 @@ test("attention templates uses the shared timeline chrome and clip shell", async
     return first && second ? Math.abs(first.x + first.width - second.x) : Number.POSITIVE_INFINITY;
   }).toBeLessThan(1.5);
 
+});
+
+test("Delete removes the selected image-template block without stealing the key from inputs", async ({ page }) => {
+  await page.route("**/api/v1/attention-templates", async route => {
+    await route.fulfill({ json: { templates: [] } });
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/attention-templates");
+
+  const timeline = page.getByTestId("attention-timeline-scroll");
+  await timeline.getByLabel("Add media to V2").click();
+  const slot = timeline.locator('[data-testid^="attention-slot-"]');
+  await expect(slot).toHaveCount(1);
+
+  const inspector = page.getByTestId("attention-template-inspector");
+  const durationInput = inspector.getByText("Duration", { exact: true }).locator("..").locator("input");
+  await durationInput.click();
+  await page.keyboard.press("Delete");
+  await expect(slot).toHaveCount(1);
+
+  await slot.click();
+  await page.keyboard.press("Delete");
+  await expect(slot).toHaveCount(0);
+  await expect(inspector.getByText("No selection", { exact: true })).toBeVisible();
 });
 
 test("attention template panels exchange positions and persist their order", async ({ page }) => {

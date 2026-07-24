@@ -74,7 +74,7 @@ def template_track_cues(
     """
     tracks = template.get("tracks") or []
     zone = template.get("zone", "behind")
-    animation = template.get("animation", "pop")
+    animation = template.get("animation", "static")
     enter_ms = max(0, min(10_000, int(template.get("enterMs", 250))))
     assets = _normalize_assets(asset_ids)
     cues: List[Dict[str, Any]] = []

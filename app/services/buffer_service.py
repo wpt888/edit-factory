@@ -3,7 +3,7 @@ Buffer Social Media Publishing Service.
 Uses Buffer GraphQL API to publish videos (primarily TikTok).
 Videos are uploaded to MinIO via HTTP PUT through the Kong API gateway,
 which provides a public URL that Buffer can download from.
-After Buffer ingests the video, it is deleted from MinIO.
+The URL remains available through publication, then the video is deleted.
 """
 import logging
 import threading
@@ -54,7 +54,7 @@ class BufferPostResult:
     scheduled_date: Optional[str] = None
     channel_name: Optional[str] = None
     error: Optional[str] = None
-    storage_path: Optional[str] = None  # Supabase Storage path for cleanup
+    storage_path: Optional[str] = None  # MinIO object key for cleanup
 
 
 class BufferPublisher:
@@ -64,8 +64,8 @@ class BufferPublisher:
     Flow:
         1. Upload video to MinIO/S3 (public URL)
         2. Create post via Buffer GraphQL with that URL
-        3. Poll post status until sent
-        4. Delete video from MinIO/S3
+        3. Keep scheduled media public until publication
+        4. Delete video from MinIO/S3 after publication
     """
 
     def __init__(
@@ -271,7 +271,6 @@ class BufferPublisher:
         caption: str,
         schedule_date: Optional[datetime] = None,
         tiktok_title: Optional[str] = None,
-        thumbnail_url: Optional[str] = None,
     ) -> BufferPostResult:
         """
         Create a post on Buffer with a video.
@@ -282,7 +281,6 @@ class BufferPublisher:
             caption: Post text/caption
             schedule_date: When to publish (None = add to queue)
             tiktok_title: Optional TikTok-specific title
-            thumbnail_url: Optional thumbnail URL
         """
         # Build mode and timing
         if schedule_date:
@@ -295,55 +293,41 @@ class BufferPublisher:
             mode = "shareNow"
             due_at = None
 
-        # Build metadata
-        metadata_parts = []
+        video_asset: Dict[str, Any] = {"url": video_url}
         if tiktok_title:
-            metadata_parts.append(f'tiktok: {{ title: "{tiktok_title}" }}')
+            video_asset["metadata"] = {"title": tiktok_title}
 
-        metadata_str = ""
-        if metadata_parts:
-            metadata_str = f"metadata: {{ {', '.join(metadata_parts)} }},"
+        post_input: Dict[str, Any] = {
+            "text": caption,
+            "channelId": channel_id,
+            "schedulingType": "automatic",
+            "mode": mode,
+            # Buffer's current API expects an ordered AssetInput list. The
+            # former {videos: [...]} wrapper was removed on 2026-05-25.
+            "assets": [{"video": video_asset}],
+        }
+        if due_at:
+            post_input["dueAt"] = due_at
 
-        # Build video asset
-        video_asset = f'{{ url: "{video_url}"'
-        if thumbnail_url:
-            video_asset += f', thumbnailUrl: "{thumbnail_url}"'
-        video_asset += " }"
-
-        # Build dueAt param
-        due_at_str = f', dueAt: "{due_at}"' if due_at else ""
-
-        query = f"""
-        mutation CreatePost {{
-            createPost(input: {{
-                text: {_gql_string(caption)},
-                channelId: "{channel_id}",
-                schedulingType: automatic,
-                mode: {mode}
-                {due_at_str}
-                {metadata_str}
-                assets: {{
-                    videos: [{video_asset}]
-                }}
-            }}) {{
-                ... on PostActionSuccess {{
-                    post {{
+        query = """
+        mutation CreatePost($input: CreatePostInput!) {
+            createPost(input: $input) {
+                ... on PostActionSuccess {
+                    post {
                         id
                         text
                         status
                         dueAt
-                    }}
-                }}
-                ... on InvalidInputError {{ message }}
-                ... on LimitReachedError {{ message }}
-                ... on UnauthorizedError {{ message }}
-                ... on UnexpectedError {{ message }}
-                ... on NotFoundError {{ message }}
-            }}
-        }}
+                    }
+                }
+                ... on MutationError {
+                    message
+                }
+            }
+        }
         """
 
-        data = await self._graphql(query, timeout=60.0)
+        data = await self._graphql(query, {"input": post_input}, timeout=60.0)
         result = data.get("createPost", {})
 
         # Check for error types
@@ -373,13 +357,6 @@ class BufferPublisher:
                 error {
                     message
                 }
-                assets {
-                    ... on VideoAsset {
-                        video {
-                            isVideoProcessing
-                        }
-                    }
-                }
             }
         }
         """
@@ -392,24 +369,17 @@ class BufferPublisher:
             "due_at": post.get("dueAt"),
             "sent_at": post.get("sentAt"),
             "error": error.get("message") if error else None,
-            "is_processing": any(
-                a.get("video", {}).get("isVideoProcessing", False)
-                for a in post.get("assets", [])
-                if isinstance(a, dict) and "video" in a
-            ),
         }
 
     async def wait_and_cleanup(self, post_id: str, storage_path: str, max_wait: int = 600, poll_interval: int = 15):
         """
-        Best-effort early cleanup: poll post status and delete video once Buffer
-        has ingested it. If the app shuts down before this completes, the MinIO
-        lifecycle policy (7-day auto-expiry) handles cleanup on the server side.
+        Best-effort cleanup for an immediate post.
 
-        Waits at least INITIAL_GRACE_PERIOD seconds before considering cleanup,
-        giving Buffer time to download the video from the public URL.
+        Buffer requires the public media URL to remain available until the post
+        publishes. Processing completion alone is therefore not a safe deletion
+        signal; only a final sent/error status permits early cleanup.
         """
         INITIAL_GRACE_PERIOD = 180  # 3 minutes — Buffer needs time to download
-        saw_processing = False
         elapsed = 0
 
         # Wait the grace period before polling — Buffer needs to download the
@@ -422,21 +392,9 @@ class BufferPublisher:
             try:
                 status = await self.get_post_status(post_id)
                 post_status = status.get("status", "")
-                is_processing = status.get("is_processing", False)
-
-                if is_processing:
-                    saw_processing = True
 
                 if post_status in ("sent", "error"):
                     logger.info(f"Post {post_id} reached final status '{post_status}', cleaning up storage")
-                    self.delete_from_storage(storage_path)
-                    return
-
-                # Only treat "scheduled + not processing" as safe to clean up if
-                # we actually saw is_processing=True at some point (meaning Buffer
-                # downloaded and finished processing the video).
-                if post_status in ("scheduled", "sending") and not is_processing and saw_processing:
-                    logger.info(f"Post {post_id} is '{post_status}' and video processed (confirmed), cleaning up storage")
                     self.delete_from_storage(storage_path)
                     return
 
@@ -446,17 +404,33 @@ class BufferPublisher:
             await _async_sleep(poll_interval)
             elapsed += poll_interval
 
-        # Timeout — don't force-delete; the video might still be needed for a
-        # scheduled post days from now. MinIO lifecycle will clean it up in 7 days.
-        logger.info(f"Post {post_id} cleanup timeout after {max_wait}s (saw_processing={saw_processing}) — MinIO lifecycle will handle expiry")
+        # Timeout: retain the object. The publication-aware server cleanup job
+        # removes it only after the publish timestamp has passed.
+        logger.info(f"Post {post_id} cleanup timeout after {max_wait}s; retaining Buffer media URL")
 
 
-    def schedule_cleanup_monitor(self, post_id: str, storage_path: str, max_wait: int = 7200, poll_interval: int = 30):
+    def schedule_cleanup_monitor(
+        self,
+        post_id: str,
+        storage_path: str,
+        schedule_date: Optional[datetime] = None,
+        max_wait: int = 7200,
+        poll_interval: int = 30,
+    ):
         """
-        Start a best-effort monitor that deletes the storage object only after
-        Buffer indicates the media finished processing.
+        Start an early-cleanup monitor for immediate posts only.
+
+        Scheduled posts deliberately keep their public object until the
+        publication-aware cleanup job runs after ``scheduled_at``.
         """
         if not post_id or not storage_path:
+            return
+        if schedule_date is not None:
+            logger.info(
+                "Post %s is scheduled for %s; retaining Buffer media URL until after publication",
+                post_id,
+                schedule_date.isoformat(),
+            )
             return
 
         def _runner():
@@ -477,12 +451,6 @@ class BufferPublisher:
         )
         thread.start()
         logger.info(f"Started Buffer cleanup monitor for post {post_id}")
-
-
-def _gql_string(s: str) -> str:
-    """Escape a string for inline GraphQL."""
-    escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
-    return f'"{escaped}"'
 
 
 async def _async_sleep(seconds: int):

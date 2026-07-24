@@ -13,12 +13,14 @@ import {
   Square,
   Trash2,
   X,
+  Plus,
 } from "lucide-react";
 import { apiGet, apiPost, API_URL } from "@/lib/api";
 import { PostDetailModal } from "@/components/post-detail-modal";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { friendlyPlatformName } from "@/lib/platforms";
+import { CalendarManualPostDialog } from "@/components/schedule/calendar-manual-post-dialog";
 import {
   Dialog,
   DialogContent,
@@ -98,6 +100,8 @@ interface PostizMonthlyCalendarProps {
   onDataLoaded?: (data: CalendarData) => void;
   /** Unconfirmed preview clips to overlay as ghost chips (Smart Schedule). */
   previewEntries?: PreviewEntry[];
+  /** Show Postiz-style manual creation controls on future calendar days. */
+  allowManualCreate?: boolean;
 }
 
 /* ---------- Constants ---------- */
@@ -165,7 +169,12 @@ const LEGEND: { label: string; state: string }[] = [
   { label: "Failed", state: "ERROR" },
 ];
 
-export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoaded, previewEntries }: PostizMonthlyCalendarProps) {
+export function PostizMonthlyCalendar({
+  title = "Publishing Calendar",
+  onDataLoaded,
+  previewEntries,
+  allowManualCreate = true,
+}: PostizMonthlyCalendarProps) {
   // Store callback in ref to avoid re-fetch loops
   const onDataLoadedRef = useRef(onDataLoaded);
   onDataLoadedRef.current = onDataLoaded;
@@ -182,6 +191,7 @@ export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoa
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [previewVideo, setPreviewVideo] = useState<PreviewEntry | null>(null);
+  const [composerDate, setComposerDate] = useState<string | null>(null);
 
   const monthDays = useMemo(() => getMonthCalendarDays(viewYear, viewMonth), [viewYear, viewMonth]);
 
@@ -434,7 +444,18 @@ export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoa
             <Button variant="outline" size="icon" className="size-8" onClick={goToNextMonth}>
               <ChevronRight className="size-4" />
             </Button>
-            <Button variant="outline" size="sm" onClick={fetchCalendar} disabled={loadingCalendar} className="ml-2">
+            {allowManualCreate && !selectionMode && (
+              <Button
+                type="button"
+                size="sm"
+                className="ml-2"
+                onClick={() => setComposerDate(todayStr)}
+              >
+                <Plus className="mr-1.5 size-3.5" />
+                Create post
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={fetchCalendar} disabled={loadingCalendar}>
               <RefreshCw className={`size-3.5 mr-1.5 ${loadingCalendar ? "animate-spin" : ""}`} />
               Sync
             </Button>
@@ -543,11 +564,12 @@ export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoa
                   const items = scheduleItemsByDate[dateStr] || [];
                   const ghosts = previewByDate[dateStr] || [];
                   const totalItems = posts.length + items.length + ghosts.length;
+                  const canCreate = allowManualCreate && !selectionMode && dateStr >= todayStr;
 
                   return (
                     <div
                       key={dateStr}
-                      className={`min-h-[90px] flex flex-col ${
+                      className={`group/day min-h-[90px] flex flex-col ${
                         dayIdx < 6 ? "border-r" : ""
                       } ${weekIdx < weeks.length - 1 ? "border-b" : ""} ${
                         !isCurrentMonth ? "bg-muted/10" : ""
@@ -579,11 +601,26 @@ export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoa
                             {dayNum}
                           </span>
                         </div>
-                        {totalItems > 0 && (
-                          <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">
-                            {totalItems}
-                          </Badge>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {totalItems > 0 && (
+                            <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">
+                              {totalItems}
+                            </Badge>
+                          )}
+                          {canCreate && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="size-7 bg-card text-foreground"
+                              aria-label={`Create post on ${dateStr}`}
+                              title={`Create post on ${dateStr}`}
+                              onClick={() => setComposerDate(dateStr)}
+                            >
+                              <Plus className="size-4" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Posts & items in this day */}
@@ -713,6 +750,17 @@ export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoa
         onClose={() => setSelectedPost(null)}
         onDeleted={handlePostDeleted}
       />
+
+      {allowManualCreate && (
+        <CalendarManualPostDialog
+          open={Boolean(composerDate)}
+          date={composerDate}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setComposerDate(null);
+          }}
+          onScheduled={fetchCalendar}
+        />
+      )}
 
       {/* Preview clip playback (ghost chips, before confirming a schedule) */}
       <Dialog open={!!previewVideo} onOpenChange={(open) => { if (!open) setPreviewVideo(null); }}>

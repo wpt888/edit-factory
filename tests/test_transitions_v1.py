@@ -273,6 +273,8 @@ def test_preview_request_rejects_unknown_kind():
     with pytest.raises(ValidationError):
         PreviewRenderRequest(
             match_overrides=[],
+            script_id="script_test_0001",
+            output_id="script_test_0001:default",
             composition_override=[
                 {"kind": "body", "transitionIn": {"kind": "nope", "durationMs": 300}}
             ],
@@ -297,6 +299,8 @@ def test_preview_request_clamps_and_strips_intro():
 
     req = PreviewRenderRequest(
         match_overrides=[],
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
         composition_override=[
             {"kind": "body", "transitionIn": {"kind": "dip_black", "durationMs": 5000}},
             {"kind": "intro", "transitionIn": {"kind": "flash_white", "durationMs": 300}},
@@ -317,6 +321,8 @@ def _profile():
 def _pipeline_with_preview():
     return {
         "profile_id": "profile-1",
+        "scripts": ["test script"],
+        "script_ids": ["script_test_0001"],
         "previews": {"0": {"preview_data": {"matches": [{"segment_id": "s1"}]}}},
     }
 
@@ -325,7 +331,11 @@ def _save(video_timeline):
     from app.api.pipeline_routes import SaveCompositionRequest, save_composition
 
     pipeline = _pipeline_with_preview()
-    body = SaveCompositionRequest(video_timeline=video_timeline)
+    body = SaveCompositionRequest(
+        video_timeline=video_timeline,
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
+    )
     with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
          patch("app.api.pipeline_routes._db_save_pipeline"):
         asyncio.run(save_composition("pipeline-1", 0, body, _profile()))
@@ -376,6 +386,8 @@ def test_save_and_restore_round_trip_default_transition():
     body = SaveCompositionRequest(
         video_timeline=[_body_clip()],
         default_transition={"kind": "flash_white", "durationMs": 5000},  # clamped
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
     )
     with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
          patch("app.api.pipeline_routes._db_save_pipeline"):
@@ -402,6 +414,8 @@ def test_save_composition_rejects_bad_default_transition():
     body = SaveCompositionRequest(
         video_timeline=[_body_clip()],
         default_transition={"kind": "wipe", "durationMs": 300},
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
     )
     with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
          patch("app.api.pipeline_routes._db_save_pipeline"):

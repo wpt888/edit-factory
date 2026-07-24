@@ -74,7 +74,7 @@ const allNavGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "Studio",
     items: [
       { label: "Video Pipeline", href: "/pipeline", icon: Clapperboard },
-      { label: "Image Templates", href: "/attention-templates", icon: LayoutTemplate },
+      { label: "Content Templates", href: "/attention-templates", icon: LayoutTemplate },
       { label: "Subtitle Templates", href: "/subtitle-templates", icon: Captions },
       { label: "Footage & Segments", href: "/segments", icon: ListVideo },
       { label: "Clipping", href: "/clipping", icon: Scissors },

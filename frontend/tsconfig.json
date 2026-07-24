@@ -84,7 +84,9 @@
     ".next-codex-endcap-check/types/**/*.ts",
     ".next-codex-endcap-check/dev/types/**/*.ts",
     ".next-subtitle-color-verify/types/**/*.ts",
-    ".next-subtitle-color-verify/dev/types/**/*.ts"
+    ".next-subtitle-color-verify/dev/types/**/*.ts",
+    ".next-codex-delete-blocks/types/**/*.ts",
+    ".next-codex-delete-blocks/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

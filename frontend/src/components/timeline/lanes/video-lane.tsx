@@ -33,6 +33,8 @@ import type {
 export interface VideoLaneProps {
   clips: CompositionClip[];
   mediaApiUrl: string;
+  axisWidth: number;
+  timelineDuration: number;
   pct: (sec: number) => string;
   widthPct: (sec: number) => string;
   selectedClipId: string | null;
@@ -63,6 +65,8 @@ export interface VideoClipDragPreviewState {
 export function VideoLane({
   clips,
   mediaApiUrl,
+  axisWidth,
+  timelineDuration,
   pct,
   widthPct,
   selectedClipId,
@@ -88,12 +92,21 @@ export function VideoLane({
       {clips.map((clip, idx) => {
         const isSelected = selectedClipId === clip.id;
         const isHighlighted = isPreviewActive && previewActiveIndex === idx;
+        const blockWidthPx = clip.timeline_duration / Math.max(0.001, timelineDuration) * axisWidth;
+        const density = blockWidthPx < 32
+          ? "marker"
+          : blockWidthPx < 56
+            ? "compact"
+            : blockWidthPx < 96
+              ? "standard"
+              : "detailed";
         const blockLabel = clip.segment_keywords?.slice(0, 2).join(", ")
           || `${clip.kind === "intro" ? "Intro" : "Clip"} ${idx + 1}`;
         return (
           <TimelineClipShell
             key={clip.id}
             testId={`composition-clip-${clip.id}`}
+            dataDensity={density}
             className={`${clip.kind === "intro"
               ? "border-violet-300/75 bg-violet-400/15"
               : "border-lime-300/60 bg-lime-300/10"} overflow-visible ${isSelected || isHighlighted
@@ -114,8 +127,8 @@ export function VideoLane({
             }}
             onPointerDown={(event) => onClipPointerDown(event, clip)}
           >
-            <div className="absolute inset-0 flex items-center justify-center bg-black/20 text-white/25">
-              <Film className="size-4" />
+            <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-black/20 text-white/25">
+              {density !== "marker" && <Film className="size-4" />}
             </div>
             {clip.thumbnail_path && (
               <img
@@ -127,24 +140,37 @@ export function VideoLane({
                 onError={(event) => { event.currentTarget.style.display = "none"; }}
               />
             )}
-            <span className="absolute left-1 top-1 z-10 flex items-center gap-1 text-[8px] font-semibold uppercase tracking-wide text-white/80">
-              <GripVertical className="size-3" />
-              {clip.kind === "intro" ? "Intro" : `V${idx + 1}`}
-            </span>
-            {clip.pinned && (
+            {density === "compact" && (
+              <span className="absolute inset-0 z-10 grid place-items-center text-[8px] font-semibold uppercase text-white/85 drop-shadow">
+                {clip.kind === "intro" ? "I" : `V${idx + 1}`}
+              </span>
+            )}
+            {(density === "standard" || density === "detailed") && (
+              <span className="absolute left-1 top-1 z-10 flex items-center gap-1 text-[8px] font-semibold uppercase tracking-wide text-white/80">
+                <GripVertical className="size-3" />
+                {clip.kind === "intro" ? "Intro" : `V${idx + 1}`}
+              </span>
+            )}
+            {clip.pinned && density !== "marker" && (
               <Pin className="absolute right-1 top-1 z-10 size-3 fill-current text-lime-200" />
             )}
-            <span className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between gap-1 text-[9px] font-medium text-white">
-              <span className="truncate drop-shadow">{blockLabel}</span>
-              <span className="shrink-0 font-mono text-[8px] text-white/70">
-                {clip.timeline_duration.toFixed(2)}s
+            {(density === "standard" || density === "detailed") && (
+              <span className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between gap-1 text-[9px] font-medium text-white">
+                <span className="truncate drop-shadow">{blockLabel}</span>
+                {density === "detailed" && (
+                  <span className="shrink-0 font-mono text-[8px] text-white/70">
+                    {clip.timeline_duration.toFixed(2)}s
+                  </span>
+                )}
               </span>
-            </span>
+            )}
             {idx < clips.length - 1 && (
               <span
                 role="separator"
                 aria-label={`Trim boundary after ${blockLabel}`}
-                className="absolute inset-y-0 right-0 z-30 w-2 translate-x-1/2 cursor-col-resize border-x border-white/25 bg-white/20 opacity-70 transition hover:bg-white/70 group-hover:opacity-100"
+                className={`absolute inset-y-0 right-0 z-30 translate-x-1/2 cursor-col-resize border-x border-white/25 bg-white/20 opacity-70 transition hover:bg-white/70 group-hover:opacity-100 ${
+                  density === "marker" ? "w-1" : "w-2"
+                }`}
                 onPointerDown={(event) => onRollPointerDown(event, idx)}
               />
             )}
@@ -152,7 +178,9 @@ export function VideoLane({
               <span
                 role="separator"
                 aria-label={`Trim right edge of ${blockLabel}`}
-                className="absolute inset-y-0 right-0 z-30 w-2 translate-x-1/2 cursor-col-resize border-x border-lime-100/45 bg-lime-100/25 opacity-80 transition hover:bg-lime-100/80 group-hover:opacity-100"
+                className={`absolute inset-y-0 right-0 z-30 translate-x-1/2 cursor-col-resize border-x border-lime-100/45 bg-lime-100/25 opacity-80 transition hover:bg-lime-100/80 group-hover:opacity-100 ${
+                  density === "marker" ? "w-1" : "w-2"
+                }`}
                 onPointerDown={onEndResizePointerDown}
               />
             )}

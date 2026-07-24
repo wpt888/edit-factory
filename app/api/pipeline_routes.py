@@ -3166,6 +3166,13 @@ def _job_owned_by_live_foreign_instance(job: Any) -> bool:
     """Keep a recent job owned by another container alive on DB cache load."""
     if not isinstance(job, dict):
         return False
+    # Electron runs exactly one local backend.  A different instance id can
+    # therefore only belong to a backend process that has already stopped.
+    # Preserving that job for the multi-container grace period leaves desktop
+    # renders apparently running at their last persisted progress (often 70%)
+    # after an app/backend restart.
+    if get_settings().desktop_mode:
+        return False
     owner = str(job.get("worker_instance_id") or "")
     if not owner or owner == _BACKEND_INSTANCE_ID:
         return False

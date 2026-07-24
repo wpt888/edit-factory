@@ -22,6 +22,7 @@ import {
   attentionAssetPreviewUrl,
 } from "@/components/dialogs/attention-asset-picker-dialog";
 import { AttentionEffectControls } from "@/components/attention-effect-controls";
+import { AttentionEffectLibrary } from "@/components/attention-effect-library";
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { MusicAssetPickerDialog } from "@/components/dialogs/music-asset-picker-dialog";
 import { EditorHeader } from "@/components/editor-header";
@@ -50,13 +51,16 @@ import { TimelineClipShell, TimelineWaveform } from "@/components/timeline/timel
 import { TimelineTrackControls } from "@/components/timeline/timeline-track-controls";
 import { apiDelete, apiGetWithRetry, apiPost, apiPut } from "@/lib/api";
 import {
+  isEditorDeleteShortcutBlocked,
+  isEditorModalShortcutBlocked,
+} from "@/lib/editor-keyboard";
+import {
   alignedTimelineRangeEdge,
   snapTimelineRange,
   snapTimelineTime,
   timelineRangeEdges,
 } from "@/lib/timeline-snapping";
 import {
-  ATTENTION_ANIMATION_OPTIONS,
   attentionAnimationLabel,
   type AttentionAnimationPreset,
 } from "@/types/attention-timeline";
@@ -142,7 +146,7 @@ export default function AttentionTemplatesPage() {
       const preferred = next.find(template => template.id === preferredId);
       if (preferred) selectTemplate(preferred);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load attention templates");
+      toast.error(error instanceof Error ? error.message : "Could not load content templates");
     } finally { setLoading(false); }
   }, [selectTemplate]);
 
@@ -166,17 +170,9 @@ export default function AttentionTemplatesPage() {
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [playing, endMs]);
-  useEffect(() => {
-    const clearSelection = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedImageId("");
-    };
-    window.addEventListener("keydown", clearSelection);
-    return () => window.removeEventListener("keydown", clearSelection);
-  }, []);
-
   const beginCreate = () => {
     setSelectedId("new");
-    setDraft({ ...DEFAULT_ATTENTION_TEMPLATE, name: "My attention template", tracks: [[]] });
+    setDraft({ ...DEFAULT_ATTENTION_TEMPLATE, name: "My content template", tracks: [[]] });
     setSelectedImageId(""); setPreviewMs(0); setTimelineRangeMs(INITIAL_TIMELINE_MS); setLibraryOpen(false);
   };
   const setTracks = (tracks: AttentionTemplateImage[][]) => setDraft(current => ({ ...current, tracks }));
@@ -204,10 +200,38 @@ export default function AttentionTemplatesPage() {
       }),
     };
   });
-  const removeImage = (id: string) => {
-    setTracks(draft.tracks.map(track => track.filter(image => image.id !== id)));
-    if (selectedImageId === id) setSelectedImageId("");
-  };
+  const removeImage = useCallback((id: string) => {
+    setDraft(current => ({
+      ...current,
+      tracks: current.tracks.map(track => track.filter(image => image.id !== id)),
+    }));
+    setSelectedImageId(current => current === id ? "" : current);
+  }, []);
+  useEffect(() => {
+    const handleEditorKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedImageId("");
+        return;
+      }
+      if (
+        event.key !== "Delete"
+        || event.defaultPrevented
+        || event.repeat
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || !editable
+        || !selectedImageId
+        || isEditorDeleteShortcutBlocked(event.target)
+        || isEditorModalShortcutBlocked(event.target)
+      ) return;
+
+      event.preventDefault();
+      removeImage(selectedImageId);
+    };
+    window.addEventListener("keydown", handleEditorKeyDown);
+    return () => window.removeEventListener("keydown", handleEditorKeyDown);
+  }, [editable, removeImage, selectedImageId]);
   const addSlot = (trackIndex: number) => {
     const image = newTemplateImage({ startMs: Math.round(previewMs / 100) * 100 });
     setTracks(draft.tracks.map((track, index) => index === trackIndex ? [...track, image] : track));
@@ -270,6 +294,7 @@ export default function AttentionTemplatesPage() {
     mode: "move" | "nw" | "ne" | "sw" | "se",
   ) => {
     if (!editable || !previewCanvasRef.current) return;
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     event.preventDefault();
     event.stopPropagation();
     setSelectedImageId(image.id);
@@ -326,7 +351,7 @@ export default function AttentionTemplatesPage() {
       <EditorHeader
         className="relative z-50"
         icon={<Layers3 className="size-4 text-primary" />}
-        title="Image Templates"
+        title="Content Templates"
         breadcrumb={draft.name}
         subtitle="Template editor"
         actions={<>
@@ -358,19 +383,24 @@ export default function AttentionTemplatesPage() {
             </InspectorSection>
             <InspectorSection title="Template effect default" summary={draft.animation === "static" ? "None" : attentionAnimationLabel(draft.animation)} defaultOpen>
               <Field label="Default effect">
-                <Select value={draft.animation} onValueChange={value => setDraft(current => ({ ...current, animation: value as AttentionAnimationPreset }))}>
-                  <SelectTrigger size="sm" className="w-full text-xs" data-testid="attention-entrance-effect-select"><SelectValue>{attentionAnimationLabel(draft.animation)}</SelectValue></SelectTrigger>
-                  <SelectContent>{ATTENTION_ANIMATION_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}<span className="ml-2 text-[11px] text-muted-foreground">{option.description}</span></SelectItem>)}</SelectContent>
-                </Select>
+                <AttentionEffectLibrary
+                  value={draft.animation}
+                  onValueChange={animation => setDraft(current => ({
+                    ...current,
+                    animation: animation ?? "static",
+                  }))}
+                  ariaLabel="Default effect"
+                  testId="attention-entrance-effect-select"
+                />
               </Field>
               {draft.animation === "static" ? (
-                <p className="text-[11px] leading-relaxed text-muted-foreground">No entrance animation is applied. Images appear instantly at the start of their slots.</p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">No entrance animation is applied. Content appears instantly at the start of its slots.</p>
               ) : (
                 <NumberField label="Entrance duration" value={draft.enterMs / 1000} unit="s" step={.05} onChange={value => setDraft(current => ({ ...current, enterMs: clamp(Math.round(value * 1000), 50, 10000) }))} />
               )}
               <p className="text-[11px] leading-relaxed text-muted-foreground">New and inherited slots use this default. A selected slot can override both the effect and its entrance duration.</p>
             </InspectorSection>
-            <InspectorSection title="Image slot" summary={selectedImage ? "Selected" : "No selection"} defaultOpen>
+            <InspectorSection title="Content slot" summary={selectedImage ? "Selected" : "No selection"} defaultOpen>
               {selectedImage ? <>
                 <AttentionEffectControls
                   animation={selectedImage.animation}
@@ -384,13 +414,13 @@ export default function AttentionTemplatesPage() {
                   onEnterMsChange={enterMs => updateImage(selectedImage.id, { enterMs })}
                   onReset={() => updateImage(selectedImage.id, { animation: undefined, enterMs: undefined })}
                   effectLabel="Slot entrance effect"
-                  helper="Overrides only this image slot. Other slots keep their own settings."
+                  helper="Overrides only this content slot. Other slots keep their own settings."
                   testIdPrefix={`attention-slot-${selectedImage.id}`}
                 />
                 <div className="border-t border-border/70 pt-3" />
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Position X" value={selectedImage.x * 100} unit="%" onChange={value => updateImage(selectedImage.id, { x: clamp(value / 100, 0, 1) })} /><NumberField label="Position Y" value={selectedImage.y * 100} unit="%" onChange={value => updateImage(selectedImage.id, { y: clamp(value / 100, 0, 1) })} /><NumberField label="Width" value={selectedImage.width * 100} unit="%" onChange={value => updateImage(selectedImage.id, { width: clamp(value / 100, .01, 1) })} /><NumberField label="Height" value={selectedImage.height * 100} unit="%" onChange={value => updateImage(selectedImage.id, { height: clamp(value / 100, .01, 1) })} /></div>
                 <Field label="Media fit"><Select value={selectedImage.fit} onValueChange={value => updateImage(selectedImage.id, { fit: value as AttentionTemplateImage["fit"] })}><SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="contain">Contain · show the whole image</SelectItem><SelectItem value="cover">Cover · fill and crop</SelectItem></SelectContent></Select></Field>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">The pipeline supplies the real image. Contain safely handles portrait and landscape media; Cover fills the slot and may crop it.</p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">The pipeline supplies an image or video. Contain shows the whole asset; Cover fills the slot and may crop it.</p>
                 <Field label={`Opacity · ${Math.round(selectedImage.opacity * 100)}%`}><Slider min={0} max={100} step={1} value={[Math.round(selectedImage.opacity * 100)]} onValueChange={([value]) => updateImage(selectedImage.id, { opacity: value / 100 })} /></Field>
                 <div className="grid grid-cols-2 gap-2"><NumberField label="Start" value={selectedImage.startMs / 1000} unit="s" step={.1} onChange={value => { const ms = Math.max(0, Math.round(value * 1000)); updateImage(selectedImage.id, { startMs: ms }); setPreviewMs(ms); }} /><NumberField label="Duration" value={selectedImage.durationMs / 1000} unit="s" step={.1} onChange={value => updateImage(selectedImage.id, { durationMs: Math.max(100, Math.round(value * 1000)) })} /></div>
                 <div className="border-t border-border/70 pt-3">
@@ -480,8 +510,12 @@ export default function AttentionTemplatesPage() {
                   return (
                     <div
                       key={image.id}
+                      role="button"
+                      tabIndex={editable ? 0 : -1}
                       data-preview-image
                       data-active={active ? "true" : "false"}
+                      aria-label={`Edit image slot ${image.id}`}
+                      aria-pressed={selectedImageId === image.id}
                       className={`group absolute cursor-move touch-none ${selectedImageId === image.id ? "z-50" : ""}`}
                       style={{ left: `${image.x * 100}%`, top: `${image.y * 100}%`, width: `${image.width * 100}%`, height: `${image.height * 100}%`, zIndex: selectedImageId === image.id ? 70 : (active ? (draft.zone === "front" ? 40 : 10) : 2) + trackIndex }}
                       onPointerDown={event => beginCanvasInteraction(event, image, "move")}
@@ -502,10 +536,10 @@ export default function AttentionTemplatesPage() {
                             ? image.defaultAsset.type === "video"
                               ? <video src={attentionAssetPreviewUrl(image.defaultAsset.url)} muted playsInline autoPlay loop className={`pointer-events-none size-full ${image.fit === "cover" ? "object-cover" : "object-contain"}`} />
                               : <img src={attentionAssetPreviewUrl(image.defaultAsset.url)} alt="Slot default preview" className={`pointer-events-none size-full ${image.fit === "cover" ? "object-cover" : "object-contain"}`} />
-                            : <div className="flex size-full flex-col items-center justify-center gap-1 bg-[linear-gradient(135deg,#333a33,#1b201b)] text-white/35"><ImagePlus className="size-7" /><span className="text-[9px] font-medium uppercase tracking-wider">Pipeline image slot</span><span className="absolute bottom-2 right-2 bg-black/60 px-1.5 py-0.5 text-[9px]">V{trackIndex + 2} · {image.fit}</span></div>
+                            : <div className="flex size-full flex-col items-center justify-center gap-1 bg-[linear-gradient(135deg,#333a33,#1b201b)] text-white/35"><ImagePlus className="size-7" /><span className="text-[9px] font-medium uppercase tracking-wider">Pipeline content slot</span><span className="absolute bottom-2 right-2 bg-black/60 px-1.5 py-0.5 text-[9px]">V{trackIndex + 2} · {image.fit}</span></div>
                           : <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[8px] text-white/70">V{trackIndex + 2} · inactive</span>}
                       </div>
-                      {(["nw", "ne", "sw", "se"] as const).map(corner => <button key={corner} type="button" aria-label={`Resize image slot from ${corner} corner`} className={`absolute size-3 rounded-full border-2 border-[#0b0d0b] bg-primary shadow transition-opacity ${selectedImageId === image.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"} ${corner === "nw" ? "-left-1.5 -top-1.5 cursor-nwse-resize" : corner === "ne" ? "-right-1.5 -top-1.5 cursor-nesw-resize" : corner === "sw" ? "-bottom-1.5 -left-1.5 cursor-nesw-resize" : "-bottom-1.5 -right-1.5 cursor-nwse-resize"}`} onPointerDown={event => beginCanvasInteraction(event, image, corner)} />)}
+                      {(["nw", "ne", "sw", "se"] as const).map(corner => <button key={corner} type="button" aria-label={`Resize content slot from ${corner} corner`} className={`absolute size-3 rounded-full border-2 border-[#0b0d0b] bg-primary shadow transition-opacity ${selectedImageId === image.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"} ${corner === "nw" ? "-left-1.5 -top-1.5 cursor-nwse-resize" : corner === "ne" ? "-right-1.5 -top-1.5 cursor-nesw-resize" : corner === "sw" ? "-bottom-1.5 -left-1.5 cursor-nesw-resize" : "-bottom-1.5 -right-1.5 cursor-nwse-resize"}`} onPointerDown={event => beginCanvasInteraction(event, image, corner)} />)}
                     </div>
                   );
                 })}
@@ -542,7 +576,7 @@ export default function AttentionTemplatesPage() {
           setAudioPickerTarget(null);
         }}
       />
-      <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Delete personal attention template?" description={`This removes “${selectedTemplate?.name ?? "this template"}” from your profile. Existing timelines keep their applied images.`} confirmLabel="Delete template" variant="destructive" loading={deleting} onConfirm={() => void deleteTemplate()} />
+      <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Delete personal content template?" description={`This removes “${selectedTemplate?.name ?? "this template"}” from your profile. Existing timelines keep their applied content.`} confirmLabel="Delete template" variant="destructive" loading={deleting} onConfirm={() => void deleteTemplate()} />
     </div>
   );
 }
@@ -855,6 +889,9 @@ function Timeline({
     sourceTrackIndex?: number,
   ) => {
     if (!editable) return;
+    (event.currentTarget as HTMLElement)
+      .closest<HTMLElement>("[data-timeline-block]")
+      ?.focus({ preventScroll: true });
     event.preventDefault();
     event.stopPropagation();
     onSelect(image.id);
@@ -1057,7 +1094,7 @@ function Timeline({
           monitored={!muted}
           onMonitorChange={() => toggleAudioTrack(trackNumber)}
           addMedia={selectedImage ? () => onChooseSoundEffect(selectedImage.id, trackNumber) : undefined}
-          addMediaUnavailable="Select an image slot before choosing its sound effect"
+          addMediaUnavailable="Select a content slot before choosing its sound effect"
           onAddTrack={onAddAudioTrack}
           canDelete={canDelete}
           deleteUnavailable="Only the highest empty audio track can be deleted"
@@ -1106,7 +1143,7 @@ function Timeline({
     <section className="flex min-h-0 min-w-0 flex-col bg-surface-canvas" data-workspace-pane data-testid="attention-track-list">
       <WorkspacePanelHeader
         title="Timeline"
-        titleAccessory={<span className="truncate text-[11px] font-normal text-muted-foreground">Add image slots from V tracks; add optional sound effects separately on A tracks</span>}
+        titleAccessory={<span className="truncate text-[11px] font-normal text-muted-foreground">Add image or video slots from V tracks; add optional sound effects separately on A tracks</span>}
         data-testid="attention-panel-header-timeline"
       />
       <MultiTrackTimeline
@@ -1114,7 +1151,7 @@ function Timeline({
         className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
         containerProps={{
           "data-testid": "attention-timeline-scroll",
-          "aria-label": "Attention template multi-track timeline",
+          "aria-label": "Content template multi-track timeline",
           tabIndex: 0,
           onScroll: extendNearEdge,
         }}

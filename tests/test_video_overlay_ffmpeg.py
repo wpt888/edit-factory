@@ -260,6 +260,8 @@ def _profile():
 def _pipeline_with_preview():
     return {
         "profile_id": "profile-1",
+        "scripts": ["test script"],
+        "script_ids": ["script_test_0001"],
         "previews": {"0": {"preview_data": {"matches": [{"segment_id": "s1"}]}}},
     }
 
@@ -268,7 +270,11 @@ def _save(video_timeline):
     from app.api.pipeline_routes import SaveCompositionRequest, save_composition
 
     pipeline = _pipeline_with_preview()
-    body = SaveCompositionRequest(video_timeline=video_timeline)
+    body = SaveCompositionRequest(
+        video_timeline=video_timeline,
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
+    )
     with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
          patch("app.api.pipeline_routes._db_save_pipeline"):
         asyncio.run(save_composition("pipeline-1", 0, body, _profile()))

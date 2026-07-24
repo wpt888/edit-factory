@@ -34,6 +34,24 @@ const previewFor = (offset: number) => ({
   available_segments: [],
 });
 
+const spinningLayer = (id: string) => ({
+  id,
+  assetId: `https://assets.test/${id}.png`,
+  x: 0.1,
+  y: 0.1,
+  width: 0.8,
+  height: 0.8,
+  zIndex: 1,
+  fit: "contain",
+  animation: {
+    preset: "spin",
+    enterMs: 300,
+    exitMs: 200,
+    delayMs: 0,
+    intensity: 1,
+  },
+});
+
 test("Step 3 picks and applies an attention template to all variants with overwrite confirmation", async ({ page }) => {
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
@@ -46,6 +64,7 @@ test("Step 3 picks and applies an attention template to all variants with overwr
 
   const timelineGets = new Set<string>();
   const applyPosts: Array<{ key: string; body: Record<string, unknown> }> = [];
+  const timelinePuts: Array<{ key: string; body: Record<string, unknown> }> = [];
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -62,6 +81,17 @@ test("Step 3 picks and applies an attention template to all variants with overwr
     }
 
     const timelineMatch = path.match(/attention-timeline\/([^/]+)$/);
+    if (timelineMatch && request.method() === "PUT") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      timelinePuts.push({ key: timelineMatch[1], body });
+      await route.fulfill({
+        json: {
+          ...body,
+          revision: Number(body.revision) + 1,
+        },
+      });
+      return;
+    }
     if (timelineMatch && request.method() === "GET") {
       const key = timelineMatch[1];
       timelineGets.add(key);
@@ -69,8 +99,8 @@ test("Step 3 picks and applies an attention template to all variants with overwr
       // effect (empty timelines only) skips them and the manual overwrite
       // confirmation is what drives the apply.
       await route.fulfill({ json: key === "0"
-        ? { revision: 3, cues: [{ id: "existing-0", startMs: 1000, durationMs: 1200, layers: [], zone: "behind" }] }
-        : { revision: 5, cues: [{ id: "existing-1", startMs: 2000, durationMs: 1200, layers: [], zone: "behind" }] }
+        ? { revision: 3, cues: [{ id: "existing-0", startMs: 1000, durationMs: 1200, layers: [spinningLayer("layer-0")], zone: "behind" }] }
+        : { revision: 5, cues: [{ id: "existing-1", startMs: 2000, durationMs: 1200, layers: [spinningLayer("layer-1")], zone: "behind" }] }
       });
       return;
     }
@@ -165,11 +195,27 @@ test("Step 3 picks and applies an attention template to all variants with overwr
   await page.getByLabel("Media URL").fill("https://assets.test/step3-attention.png");
   await page.getByRole("button", { name: "Use media URL" }).click();
 
-  await applyCard.getByRole("combobox", { name: "All-slot entrance effect" }).click();
+  const timelineEffects = applyCard.getByTestId("step3-timeline-effects");
+  const globalToggle = timelineEffects.getByRole("checkbox", { name: "Apply this effect to all images" });
+  await globalToggle.click();
+  await expect(globalToggle).toBeChecked();
+  const existingEffect = timelineEffects.getByRole("combobox", { name: "Entrance effect" });
+  await expect(existingEffect).toContainText("Spin");
+  await existingEffect.click();
+  await page.getByRole("option", { name: /Static \/ Classic/ }).click();
+  await expect(existingEffect).toContainText("Static / Classic");
+  await expect.poll(() => timelinePuts.length).toBe(2);
+  expect(timelinePuts.map(({ body }) => (
+    ((body.cues as Array<{ layers: Array<{ animation: { preset: string } }> }>)[0])
+      .layers[0].animation.preset
+  ))).toEqual(["static", "static"]);
+
+  const templateEffect = applyCard.getByRole("combobox", { name: "Template effect for next apply" });
+  await templateEffect.click();
   await page.getByRole("option", { name: /Slide from right/ }).click();
   await applyCard.getByTestId("step3-attention-enter-duration").fill("0.45");
 
-  await expect(applyCard.getByRole("combobox", { name: "Attention template apply scope", exact: true })).toHaveText(/All variants/);
+  await expect(applyCard.getByRole("combobox", { name: "Image template apply scope", exact: true })).toHaveText(/All variants/);
   await applyCard.scrollIntoViewIfNeeded();
   await applyCard.screenshot({ path: "screenshots/attention-apply-step3.png" });
 
@@ -189,10 +235,10 @@ test("Step 3 picks and applies an attention template to all variants with overwr
     assets: [{ url: "https://assets.test/step3-attention.png", type: "image" }],
     durationMs: 12000,
     subtitleBoundariesMs: [0, 6000, 12000],
-    revision: 3,
+    revision: 4,
     mode: "replace",
     startOffsetMs: 0,
   });
-  expect(byKey["1"]).toMatchObject({ revision: 5, mode: "replace" });
+  expect(byKey["1"]).toMatchObject({ revision: 6, mode: "replace" });
   await expect(applyCard.getByTestId("attention-apply-result")).toHaveText("Applied to 2 variants.");
 });

@@ -45,10 +45,20 @@ def test_explicit_render_dimensions_override_named_preset():
 
 
 def test_preview_request_dimensions_are_even_and_default_to_portrait():
-    request = PreviewRenderRequest(match_overrides=[])
+    request = PreviewRenderRequest(
+        match_overrides=[],
+        script_id="script_test_0001",
+        output_id="script_test_0001:default",
+    )
     assert (request.output_width, request.output_height) == (1080, 1920)
     with pytest.raises(ValidationError):
-        PreviewRenderRequest(match_overrides=[], output_width=1919, output_height=1080)
+        PreviewRenderRequest(
+            match_overrides=[],
+            script_id="script_test_0001",
+            output_id="script_test_0001:default",
+            output_width=1919,
+            output_height=1080,
+        )
 
 
 def test_preview_preset_preserves_selected_landscape_canvas():

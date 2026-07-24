@@ -119,6 +119,7 @@ def test_create_template_with_empty_image_slots_persists(monkeypatch):
     assert response.status_code == 201, response.text
     assert response.json()["name"] == "Slots only"
     assert repo.created["profile_id"] == "profile-attention"
+    assert repo.created["config"]["animation"] == "static"
     assert repo.created["config"]["tracks"][0][0]["defaultAsset"] is None
 
 

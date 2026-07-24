@@ -15,6 +15,8 @@ import type { CueTimingEdge } from "@/components/timeline/lanes/image-lane";
 export interface OverlayLaneProps {
   clips: CompositionClip[];
   mediaApiUrl: string;
+  axisWidth: number;
+  timelineDuration: number;
   pct: (sec: number) => string;
   widthPct: (sec: number) => string;
   selectedClipId: string | null;
@@ -25,6 +27,8 @@ export interface OverlayLaneProps {
 export function OverlayLane({
   clips,
   mediaApiUrl,
+  axisWidth,
+  timelineDuration,
   pct,
   widthPct,
   selectedClipId,
@@ -35,6 +39,8 @@ export function OverlayLane({
     <>
       {clips.map((clip) => {
         const isSelected = selectedClipId === clip.id;
+        const blockWidthPx = clip.timeline_duration / Math.max(0.001, timelineDuration) * axisWidth;
+        const showLabel = blockWidthPx >= 44;
         const label = clip.segment_keywords?.slice(0, 2).join(", ") || "Overlay";
         return (
           <button
@@ -43,6 +49,7 @@ export function OverlayLane({
             data-timeline-block
             data-testid={`overlay-clip-${clip.id}`}
             data-overlay-clip-id={clip.id}
+            data-overlay-density={showLabel ? "label" : "marker"}
             className={`absolute inset-y-1 min-w-3 cursor-grab overflow-hidden rounded border text-left text-white active:cursor-grabbing ${
               isSelected
                 ? "z-10 border-sky-200 ring-2 ring-sky-300/80"
@@ -64,7 +71,7 @@ export function OverlayLane({
               />
             ) : (
               <span className="absolute inset-0 flex items-center justify-center text-sky-100/40">
-                <Film className="size-3" />
+                {showLabel && <Film className="size-3" />}
               </span>
             )}
             {/* Left-edge trim: drag the start, keeping the right edge fixed. */}
@@ -73,9 +80,11 @@ export function OverlayLane({
               className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize bg-black/25"
               onPointerDown={(event) => onBeginTimingDrag(event, clip, "resize-start")}
             />
-            <span className="pointer-events-none absolute inset-x-2 bottom-0.5 z-10 truncate text-[8px] font-medium text-sky-50 drop-shadow">
-              {label}
-            </span>
+            {showLabel && (
+              <span className="pointer-events-none absolute inset-x-2 bottom-0.5 z-10 truncate text-[8px] font-medium text-sky-50 drop-shadow">
+                {label}
+              </span>
+            )}
             <span
               data-testid={`overlay-end-handle-${clip.id}`}
               className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize bg-black/25"

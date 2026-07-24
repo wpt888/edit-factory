@@ -18,7 +18,7 @@ router = APIRouter(prefix="/attention-templates", tags=["Attention Hooks"])
 logger = logging.getLogger(__name__)
 
 _STORAGE_UNAVAILABLE_DETAIL = (
-    "Attention template storage is unavailable. "
+    "Content template storage is unavailable. "
     "Ask an administrator to apply the latest database migrations."
 )
 
@@ -62,7 +62,7 @@ class AttentionTemplateBody(BaseModel):
     animation: Literal[
         "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
         "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
-    ] = "pop"
+    ] = "static"
     enterMs: int = Field(default=250, ge=0, le=10000)
     variantGapMs: int = Field(default=1000, ge=0, le=30000)
     sfx: Optional[str] = Field(default=None, max_length=500)
@@ -73,7 +73,7 @@ class AttentionTemplateBody(BaseModel):
 def _owned(repo, template_id: str, profile_id: str) -> Dict[str, Any]:
     row = repo.get_attention_template(template_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Attention template not found")
+        raise HTTPException(status_code=404, detail="Content template not found")
     if row.get("profile_id") != profile_id:
         raise HTTPException(status_code=403, detail="Access denied")
     return row

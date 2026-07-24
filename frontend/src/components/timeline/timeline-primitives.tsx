@@ -5,17 +5,32 @@ import type { CSSProperties, DragEvent, MouseEvent, PointerEvent, ReactNode } fr
 import { ZoomIn, ZoomOut } from "lucide-react";
 import { cn, formatTimeShort } from "@/lib/utils";
 
-const majorStepFor = (duration: number) => {
+const fallbackMajorStepFor = (duration: number) => {
   if (duration > 300) return 30;
   if (duration > 120) return 10;
   if (duration > 45) return 5;
   return 1;
 };
 
-const MINOR_TICK_STEPS = [
+const TIMELINE_TICK_STEPS = [
   0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
   1, 2, 5, 10, 15, 30, 60, 120, 300,
 ] as const;
+
+const RULER_LABEL_MIN_SPACING_PX = 48;
+
+/**
+ * Choose a labelled ruler interval from both time and available pixels.
+ * Fine tick marks can remain dense for accurate scrubbing, while timestamp
+ * labels never collapse into an unreadable run of digits.
+ */
+export function timelineMajorStepFor(duration: number, axisWidth: number): number {
+  const safeDuration = Math.max(0.001, duration);
+  const pixelsPerSecond = Math.max(1, axisWidth) / safeDuration;
+  const desiredStep = RULER_LABEL_MIN_SPACING_PX / pixelsPerSecond;
+  return TIMELINE_TICK_STEPS.find((step) => step >= desiredStep)
+    ?? Math.ceil(desiredStep / 300) * 300;
+}
 
 /**
  * Keep ruler subdivisions roughly 6px apart. The clock therefore becomes
@@ -26,7 +41,7 @@ export function timelineMinorStepFor(duration: number, axisWidth: number): numbe
   const safeDuration = Math.max(0.001, duration);
   const pixelsPerSecond = Math.max(1, axisWidth) / safeDuration;
   const desiredStep = 6 / pixelsPerSecond;
-  return MINOR_TICK_STEPS.find((step) => step >= desiredStep)
+  return TIMELINE_TICK_STEPS.find((step) => step >= desiredStep)
     ?? Math.ceil(desiredStep / 300) * 300;
 }
 
@@ -46,9 +61,11 @@ export function TimelineRuler({
   onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
 }) {
   const safeDuration = Math.max(0.001, duration);
-  const majorStep = majorStepFor(safeDuration);
   const resolvedAxisWidth = axisWidth
     ?? (typeof style?.width === "number" ? style.width : 0);
+  const majorStep = resolvedAxisWidth > 0
+    ? timelineMajorStepFor(safeDuration, resolvedAxisWidth)
+    : fallbackMajorStepFor(safeDuration);
   const minorStep = resolvedAxisWidth > 0
     ? timelineMinorStepFor(safeDuration, resolvedAxisWidth)
     : majorStep >= 10 ? majorStep / 5 : majorStep >= 5 ? 1 : 0.5;
@@ -66,9 +83,14 @@ export function TimelineRuler({
       data-timeline-axis
       data-timeline-ruler
       data-timeline-ruler-minor-step={minorStep}
+      data-timeline-ruler-major-step={majorStep}
     >
       {ticks.map((value) => {
         const isMajor = Math.abs(value / majorStep - Math.round(value / majorStep)) < 0.001;
+        const distanceFromEndPx = resolvedAxisWidth > 0
+          ? (safeDuration - value) / safeDuration * resolvedAxisWidth
+          : Number.POSITIVE_INFINITY;
+        const showLabel = isMajor && distanceFromEndPx >= RULER_LABEL_MIN_SPACING_PX;
         return (
           <span
             key={value.toFixed(3)}
@@ -80,8 +102,11 @@ export function TimelineRuler({
             data-timeline-ruler-tick={isMajor ? "major" : "minor"}
             data-timeline-time={value}
           >
-            {isMajor && (
-              <span className="absolute bottom-3 left-1 whitespace-nowrap font-mono text-[9px] text-white/55">
+            {showLabel && (
+              <span
+                className="absolute bottom-3 left-1 whitespace-nowrap font-mono text-[9px] text-white/55"
+                data-timeline-ruler-label
+              >
                 {formatTimeShort(startTime + value)}
               </span>
             )}
@@ -278,6 +303,7 @@ export function TimelineClipShell({
   onDragEnd,
   dataSegmentId,
   testId,
+  dataDensity,
 }: {
   children: ReactNode;
   className?: string;
@@ -293,6 +319,7 @@ export function TimelineClipShell({
   onDragEnd?: (event: DragEvent<HTMLDivElement>) => void;
   dataSegmentId?: string;
   testId?: string;
+  dataDensity?: "marker" | "compact" | "standard" | "detailed";
 }) {
   return (
     <div
@@ -301,6 +328,7 @@ export function TimelineClipShell({
       data-timeline-block
       data-segment-id={dataSegmentId}
       data-testid={testId}
+      data-clip-density={dataDensity}
       className={cn(
         "group absolute inset-y-1 overflow-hidden rounded-sm border border-lime-300/55 bg-lime-300/10 text-left text-white shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-lime-300/80",
         className,

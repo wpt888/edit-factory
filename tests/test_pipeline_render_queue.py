@@ -238,10 +238,69 @@ def test_load_preserves_recent_job_owned_by_another_backend(monkeypatch):
 
     repo = _Repo()
     monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repo)
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_settings",
+        lambda: type("Settings", (), {"desktop_mode": False})(),
+    )
     pipeline_routes._pipelines.pop(pipeline_id, None)
 
     restored = pipeline_routes._db_load_pipeline(pipeline_id)
 
     assert restored["render_jobs"][0]["status"] == "processing"
     assert not any("render_jobs" in update for _, update in repo.updates)
+    pipeline_routes._pipelines.pop(pipeline_id, None)
+
+
+def test_desktop_load_interrupts_recent_job_from_previous_backend(monkeypatch):
+    pipeline_id = "desktop-previous-worker-render"
+    script_id = "script_22222222"
+    row = {
+        "id": pipeline_id,
+        "profile_id": "profile-1",
+        "provider": "gemini",
+        "scripts": ["Test script"],
+        "script_ids": [script_id],
+        "render_jobs": {
+            "0": {
+                "attempt_id": "previous-desktop-attempt",
+                "worker_instance_id": "studio_previous",
+                "script_id": script_id,
+                "output_id": pipeline_routes._build_output_id(script_id),
+                "status": "processing",
+                "progress": 70,
+                "current_step": "Assembling video segments",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        "previews": {},
+        "tts_previews": {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    class _Repo:
+        def __init__(self):
+            self.updates = []
+
+        def get_pipeline(self, _pipeline_id):
+            return deepcopy(row)
+
+        def update_pipeline(self, requested_id, updates):
+            self.updates.append((requested_id, deepcopy(updates)))
+
+    repo = _Repo()
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repo)
+    monkeypatch.setattr(
+        pipeline_routes,
+        "get_settings",
+        lambda: type("Settings", (), {"desktop_mode": True})(),
+    )
+    pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    restored = pipeline_routes._db_load_pipeline(pipeline_id)
+
+    assert restored["render_jobs"][0]["status"] == "failed"
+    assert restored["render_jobs"][0]["progress"] == 0
+    assert restored["render_jobs"][0]["interrupted"] is True
+    assert repo.updates[-1][1]["render_jobs"]["0"]["status"] == "failed"
     pipeline_routes._pipelines.pop(pipeline_id, None)

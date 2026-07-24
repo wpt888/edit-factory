@@ -82,7 +82,11 @@ const DURATION_INVARIANT_ATTENTION_TIMELINE = {
 };
 
 type Clip = { id: string; track?: number; overlay_box?: unknown; timeline_start: number; timeline_duration: number };
-type Harness = { compositionPuts: Array<{ video_timeline: Clip[] }> };
+type AttentionWrite = { cues: Array<{ id: string }> };
+type Harness = {
+  attentionPuts: AttentionWrite[];
+  compositionPuts: Array<{ video_timeline: Clip[] }>;
+};
 
 const makeSilentWav = () => {
   const sampleRate = 8_000;
@@ -107,7 +111,7 @@ const openFullEditor = async (
   page: Page,
   attentionTimeline: typeof ATTENTION_TIMELINE | { revision: number; cues: [] } = { revision: 0, cues: [] },
 ): Promise<{ editor: ReturnType<Page["getByTestId"]>; harness: Harness }> => {
-  const harness: Harness = { compositionPuts: [] };
+  const harness: Harness = { attentionPuts: [], compositionPuts: [] };
 
   await page.addInitScript(({ profile, pipelineId }) => {
     localStorage.setItem("editai_profiles", JSON.stringify([profile]));
@@ -199,6 +203,9 @@ const openFullEditor = async (
       return;
     }
     if (path.endsWith(`/pipeline/${PIPELINE_ID}/attention-timeline/0`)) {
+      if (request.method() === "PUT") {
+        harness.attentionPuts.push(request.postDataJSON() as AttentionWrite);
+      }
       await route.fulfill({ json: attentionTimeline });
       return;
     }
@@ -250,6 +257,48 @@ test("a track-2 clip renders as an overlay block on V2, not in the V1 sequence",
   // The overlay is NOT a V1 clip block.
   await expect(editor.getByTestId("composition-clip-ov-1")).toHaveCount(0);
   await expect(editor.getByTestId("composition-clip-body-a")).toBeVisible();
+});
+
+test("Delete removes the selected attention block from the pipeline timeline", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page, ATTENTION_TIMELINE);
+  const cue = editor.locator('[data-cue-id="attention-at-second-segment"]');
+  await cue.focus();
+  await page.keyboard.press("Enter");
+  await expect(cue).toHaveAttribute("aria-pressed", "true");
+  const writesBeforeDelete = harness.attentionPuts.length;
+
+  await page.keyboard.press("Delete");
+
+  await expect(cue).toHaveCount(0);
+  await expect.poll(() => harness.attentionPuts.length).toBeGreaterThan(writesBeforeDelete);
+  expect(harness.attentionPuts.at(-1)?.cues.map((item) => item.id))
+    .not.toContain("attention-at-second-segment");
+});
+
+test("Delete removes the selected overlay block from the pipeline timeline", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const overlay = editor.getByTestId("overlay-clip-ov-1");
+  await overlay.click();
+  const writesBeforeDelete = harness.compositionPuts.length;
+
+  await page.keyboard.press("Delete");
+
+  await expect.poll(() => harness.compositionPuts.length).toBeGreaterThan(writesBeforeDelete);
+  expect(lastPut(harness)?.map((clip) => clip.id)).not.toContain("ov-1");
+  await expect(overlay).toHaveCount(0);
+});
+
+test("Delete removes the selected magnetic video block from the pipeline timeline", async ({ page }) => {
+  const { editor, harness } = await openFullEditor(page);
+  const clip = editor.getByTestId("composition-clip-body-a");
+  await clip.click();
+  const writesBeforeDelete = harness.compositionPuts.length;
+
+  await page.keyboard.press("Delete");
+
+  await expect.poll(() => harness.compositionPuts.length).toBeGreaterThan(writesBeforeDelete);
+  expect(lastPut(harness)?.map((item) => item.id)).not.toContain("body-a");
+  await expect(clip).toHaveCount(0);
 });
 
 test("a paused segment jump does not play the attention image entrance", async ({ page }) => {

@@ -131,9 +131,12 @@ test('lists a template with child styles, autosaves create and edits, and delete
   await expect(page.getByTestId('subtitle-template-row')).toHaveText(/Launch captions.*2 styles/);
   await expect(page.getByText('New template', { exact: true })).toHaveCount(1);
   await expect(page.getByText('Add style', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('subtitle-template-draft-styles')).toHaveCount(0);
+  await expect(page.getByTestId('subtitle-style-row')).toHaveText([/Bold Yellow/, /Clean White/]);
 
   // Create: the first valid edit persists automatically; there is no Save CTA.
   await expect(page.getByRole('button', { name: 'Save template' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'New template' }).first().click();
   await page.getByTestId('subtitle-template-name').fill('Always saved captions');
   await expect.poll(() => recorded(page).some((request) => request.method === 'POST')).toBe(true);
   await expect(page.getByTestId('subtitle-template-save-status')).toHaveText('Saved');

@@ -18,6 +18,7 @@ const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const { autoUpdater } = require("electron-updater");
+const { mergeBundledDesktopEnv, readEnvFile } = require("./desktop-env");
 
 // ---------- Path resolution ----------
 const isDev = !app.isPackaged;
@@ -243,12 +244,11 @@ function cleanupOrphans() {
   });
 }
 
-// ---------- DATA-01: Seed Supabase credentials on first packaged run ----------
+// ---------- DATA-01: Merge desktop-safe cloud configuration ----------
 // Packaged desktop ships no .env. The backend reads %APPDATA%\EditFactory\.env as
 // its highest-priority config source (config.py settings_customise_sources), so we
-// copy the bundled credentials.env there once. This is what points the app at the
-// same Supabase cloud as the web app. Idempotent: never overwrites an existing .env,
-// so Settings-wizard edits (desktop/routes.py _write_env_keys) are preserved.
+// merge the bundled credentials.env into it. Missing safe keys are added on every
+// version, while non-empty existing values and Settings-wizard edits are preserved.
 function seedDesktopEnv() {
   if (isDev) return; // dev loads the project-root .env directly — nothing to seed
   try {
@@ -259,10 +259,6 @@ function seedDesktopEnv() {
     }
     const baseDir = path.join(appData, "EditFactory");
     const target = path.join(baseDir, ".env");
-    if (fs.existsSync(target)) {
-      logLine("launcher", "AppData .env already present — leaving as-is");
-      return;
-    }
     const source = path.join(process.resourcesPath, "credentials.env");
     if (!fs.existsSync(source)) {
       logLine(
@@ -271,9 +267,15 @@ function seedDesktopEnv() {
       );
       return;
     }
-    fs.mkdirSync(baseDir, { recursive: true });
-    fs.copyFileSync(source, target);
-    logLine("launcher", `Seeded credentials.env -> ${target}`);
+    const addedKeys = mergeBundledDesktopEnv(target, source);
+    if (addedKeys.length > 0) {
+      logLine(
+        "launcher",
+        `Added missing desktop config keys to ${target}: ${addedKeys.join(", ")}`,
+      );
+    } else {
+      logLine("launcher", "AppData .env already contains the desktop cloud configuration");
+    }
   } catch (err) {
     logLine("launcher", `Credential seed failed (non-fatal): ${err.message}`);
   }
@@ -288,9 +290,9 @@ function desktopCredentialsPresent() {
   try {
     const envPath = path.join(process.env.APPDATA || "", "EditFactory", ".env");
     if (!fs.existsSync(envPath)) return false;
-    const txt = fs.readFileSync(envPath, "utf-8");
-    const has = (k) => new RegExp(`^\\s*${k}\\s*=\\s*\\S`, "m").test(txt);
-    return has("SUPABASE_URL") && has("SUPABASE_KEY");
+    const env = readEnvFile(envPath);
+    const has = (key) => Boolean(env[key]?.trim());
+    return has("SUPABASE_URL") && has("SUPABASE_KEY") && has("MINIO_PUBLIC_URL");
   } catch {
     return false;
   }
@@ -442,7 +444,11 @@ function startFrontend() {
   logLine("launcher", `Node: ${nodeExe}`);
 
   frontendProcess = spawn(nodeExe, [NEXT_SERVER], {
-    cwd: NEXT_STANDALONE_DIR,
+    // Do not make the running process use the generated bundle as its CWD.
+    // On Windows a process CWD keeps that directory locked, so the next
+    // `next build` cannot replace `.next/standalone` and fails with EBUSY.
+    // The generated server resolves its assets relative to server.js.
+    cwd: path.dirname(NEXT_STANDALONE_DIR),
     env: {
       ...process.env,
       PORT: String(FRONTEND_PORT),
@@ -1043,6 +1049,22 @@ function setupAutoUpdater() {
 
 // ---------- App lifecycle ----------
 
+let signalQuitStarted = false;
+
+function quitFromTerminalSignal(signal) {
+  if (signalQuitStarted) return;
+  signalQuitStarted = true;
+  isQuitting = true;
+  logLine("launcher", `Received ${signal}; quitting desktop services`);
+  app.quit();
+}
+
+// In development Electron remains alive in the tray when its window closes.
+// Treat terminal Ctrl+C / process termination as an explicit full quit so npm
+// does not leave the standalone server and backend orphaned.
+process.on("SIGINT", () => quitFromTerminalSignal("SIGINT"));
+process.on("SIGTERM", () => quitFromTerminalSignal("SIGTERM"));
+
 // Prevent app from quitting when window closes — tray keeps it alive
 app.on("window-all-closed", () => {
   // Do NOT call app.quit() — tray icon keeps the app running
@@ -1088,14 +1110,14 @@ app.whenReady().then(async () => {
     if (!desktopCredentialsPresent()) {
       logLine(
         "launcher",
-        "WARNING: no SUPABASE_URL/KEY in %APPDATA%\\EditFactory\\.env — data features will not work until configured",
+        "WARNING: incomplete SUPABASE_URL/SUPABASE_KEY/MINIO_PUBLIC_URL in %APPDATA%\\EditFactory\\.env",
       );
       dialog
         .showMessageBox(undefined, {
           type: "warning",
           title: "Configuration Needed",
-          message: "Blipost could not find its cloud credentials.",
-          detail: `Projects, clips and rendering need a Supabase connection. Open Settings → Cloud after the app loads to configure it.\n\nLog: ${LOG_FILE}`,
+          message: "Blipost could not find its complete cloud configuration.",
+          detail: `Projects, clips and Buffer scheduling need Supabase plus a public media URL. Reinstall or update Blipost to restore the bundled configuration.\n\nLog: ${LOG_FILE}`,
           buttons: ["Continue Anyway"],
         })
         .catch(() => {

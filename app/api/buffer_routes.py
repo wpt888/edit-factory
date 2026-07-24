@@ -1,7 +1,7 @@
 """
 Buffer Social Media Publishing Routes.
 Publishes videos to TikTok (and other platforms) via Buffer GraphQL API.
-Videos are temporarily uploaded to Supabase Storage for public URL access.
+Videos are temporarily uploaded to MinIO for public URL access.
 """
 import asyncio
 import re
@@ -235,7 +235,7 @@ async def publish_clip(
     """
     Publish a rendered clip via Buffer.
 
-    Flow: upload to Supabase Storage → create Buffer post → cleanup after posting.
+    Flow: upload to MinIO → create Buffer post → cleanup after posting.
     """
     logger.info(f"[Profile {profile.profile_id}] Buffer publish clip {request.clip_id} to channel {request.channel_id}")
     repo = get_repository()
@@ -422,7 +422,7 @@ async def _publish_clip_task(
     schedule_date: Optional[datetime],
     tiktok_title: Optional[str] = None,
 ):
-    """Background task: upload to Supabase Storage → post via Buffer → cleanup."""
+    """Background task: upload to MinIO → post via Buffer → cleanup."""
     from app.services.buffer_service import get_buffer_publisher
 
     logger.info(f"[Profile {profile_id}] Buffer publish clip {clip_id} (job {job_id})")
@@ -432,7 +432,7 @@ async def _publish_clip_task(
     try:
         publisher = get_buffer_publisher(profile_id)
 
-        # Step 1: Upload to Supabase Storage
+        # Step 1: Upload to MinIO
         update_progress(job_id, "Uploading video...", 10, profile_id=profile_id)
         storage_path, public_url = await asyncio.to_thread(
             publisher.upload_to_storage, Path(video_path)
@@ -481,11 +481,12 @@ async def _publish_clip_task(
                 publisher.schedule_cleanup_monitor(
                     post_id=result.post_id,
                     storage_path=storage_path,
+                    schedule_date=schedule_date,
                 )
 
             # Cleanup is handled by the server-side cron job (minio-cleanup.sh)
-            # which deletes videos 20 min after scheduled_at. No eager deletion —
-            # Buffer needs time to download the video asynchronously.
+            # after the publish timestamp. Scheduled media must remain publicly
+            # reachable until Buffer publishes it.
 
             msg = f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}" if schedule_date else "Published!"
             update_progress(job_id, msg, 100, "completed", profile_id=profile_id)
@@ -619,6 +620,7 @@ async def _bulk_publish_task(
                         publisher.schedule_cleanup_monitor(
                             post_id=result.post_id,
                             storage_path=storage_path,
+                            schedule_date=clip_schedule,
                         )
 
                     # Cleanup handled by server-side cron (minio-cleanup.sh)
