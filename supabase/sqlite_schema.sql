@@ -147,6 +147,10 @@ CREATE TABLE IF NOT EXISTS editai_clips (
     -- Visual version for Meta multiplication (from 040)
     visual_version    TEXT,
 
+    -- Stable pipeline identities (migration 059 parity)
+    script_id         TEXT,
+    output_id         TEXT,
+
     -- Caption for smart schedule (from 041)
     caption           TEXT,
 
@@ -159,6 +163,8 @@ CREATE TABLE IF NOT EXISTS editai_clips (
 
 CREATE INDEX IF NOT EXISTS idx_clips_project_id ON editai_clips(project_id);
 CREATE INDEX IF NOT EXISTS idx_clips_profile_id ON editai_clips(profile_id);
+-- Stable-output indexes are created by SQLiteRepository._ensure_clip_columns
+-- after legacy databases receive the additive script_id/output_id columns.
 CREATE INDEX IF NOT EXISTS idx_editai_clips_deleted_at ON editai_clips(deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- =====================================================
@@ -441,12 +447,14 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     variant_count   INTEGER NOT NULL DEFAULT 3,
     keyword_count   INTEGER NOT NULL DEFAULT 0,
     scripts         TEXT NOT NULL DEFAULT '[]',
+    script_ids      TEXT NOT NULL DEFAULT '[]',
     script_names    TEXT NOT NULL DEFAULT '[]',
     previews        TEXT NOT NULL DEFAULT '{}',
     render_jobs     TEXT NOT NULL DEFAULT '{}',
     tts_previews    TEXT NOT NULL DEFAULT '{}',
     generation_job  TEXT NOT NULL DEFAULT '{}',
     tts_jobs        TEXT NOT NULL DEFAULT '{}',
+    preview_jobs    TEXT NOT NULL DEFAULT '{}',
     preview_renders TEXT NOT NULL DEFAULT '{}',
     segment_usage   TEXT NOT NULL DEFAULT '{}',
     captions        TEXT NOT NULL DEFAULT '{}',
@@ -469,6 +477,8 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
 
     -- Complete, versioned export/import configuration for this pipeline.
     template_settings TEXT NOT NULL DEFAULT '{}',
+    settings_revision INTEGER NOT NULL DEFAULT 0,
+    jobs_revision INTEGER NOT NULL DEFAULT 0,
 
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',
@@ -570,6 +580,8 @@ CREATE TABLE IF NOT EXISTS editai_tts_assets (
     tts_provider    TEXT NOT NULL DEFAULT 'elevenlabs',
     tts_model       TEXT DEFAULT 'eleven_flash_v2_5',
     tts_voice_id    TEXT,
+    tts_voice_settings TEXT,
+    audio_sha256    TEXT,
     audio_duration  REAL DEFAULT 0.0,
     char_count      INTEGER DEFAULT 0,
     tts_timestamps  TEXT,

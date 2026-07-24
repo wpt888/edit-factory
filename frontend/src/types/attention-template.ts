@@ -3,7 +3,7 @@ import {
   type AttentionAnimationPreset,
 } from "@/types/attention-timeline";
 
-/** One authored image slot on a template track. Coordinates are 0..1 frame fractions. */
+/** One authored image-or-video content slot. Coordinates are 0..1 frame fractions. */
 export type AttentionTemplateImage = {
   id: string;
   x: number;
@@ -67,9 +67,9 @@ export type AttentionTemplate = Partial<AttentionTemplatePayload> &
   };
 
 export const DEFAULT_ATTENTION_TEMPLATE: AttentionTemplatePayload = {
-  name: "New attention template",
+  name: "New content template",
   zone: "behind",
-  animation: "pop",
+  animation: "static",
   enterMs: DEFAULT_ATTENTION_ENTER_MS,
   canvasWidth: 1080,
   canvasHeight: 1920,
@@ -112,7 +112,7 @@ export function normalizeAttentionTemplate(
   template?: Partial<AttentionTemplate>,
 ): AttentionTemplatePayload {
   const zone = template?.zone === "front" ? "front" : "behind";
-  const animation = template?.animation ?? "pop";
+  const animation = template?.animation ?? "static";
   const enterMs = Math.max(0, Math.min(10_000, Math.round(
     template?.enterMs ?? DEFAULT_ATTENTION_ENTER_MS,
   )));

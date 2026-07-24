@@ -20,7 +20,7 @@ import threading
 import time as _time_mod
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Literal, Optional, Dict, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
@@ -72,10 +72,746 @@ def _stable_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _clamp_min_segment_duration(value: Optional[float]) -> float:
-    """Keep pacing within the supported 1â€“8 second range."""
+_SCRIPT_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,99}$")
+_PREVIEW_KEY_PATTERN = _re.compile(r"^(\d+)(?:_([A-J]))?$")
+_OUTPUT_ID_PATTERN = _re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_-]{7,99}):(default|[A-J])$"
+)
+
+
+def _new_script_id() -> str:
+    """Return an opaque identity that survives script reorder/delete operations."""
+    return f"script_{uuid.uuid4().hex}"
+
+
+def _legacy_script_id(pipeline_id: str, index: int) -> str:
+    value = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"edit-factory.pipeline:{pipeline_id}:script:{index}",
+    )
+    return f"script_{value.hex}"
+
+
+def _parse_preview_key(raw_key: Any) -> Optional[Tuple[int, Optional[str]]]:
+    match = _PREVIEW_KEY_PATTERN.fullmatch(str(raw_key))
+    if not match:
+        return None
+    return int(match.group(1)), match.group(2)
+
+
+def _build_output_id(script_id: str, visual_version: Optional[str] = None) -> str:
+    """Return the durable identity for one final output."""
+    return f"{script_id}:{visual_version or 'default'}"
+
+
+def _parse_output_id(raw_output_id: Any) -> Optional[Tuple[str, Optional[str]]]:
+    match = _OUTPUT_ID_PATTERN.fullmatch(str(raw_output_id or ""))
+    if not match:
+        return None
+    return match.group(1), None if match.group(2) == "default" else match.group(2)
+
+
+def _script_index_for_id(pipeline: dict, script_id: str) -> Optional[int]:
+    """Resolve a ScriptId at the last responsible moment before a state write."""
+    script_ids = _ensure_pipeline_script_ids(pipeline)
     try:
-        return max(1.0, min(8.0, float(value)))
+        return script_ids.index(script_id)
+    except ValueError:
+        return None
+
+
+def _identity_for_variant(
+    pipeline: dict,
+    variant_index: int,
+    visual_version: Optional[str] = None,
+) -> Tuple[str, str]:
+    script_ids = _ensure_pipeline_script_ids(pipeline)
+    if variant_index < 0 or variant_index >= len(script_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="The requested script no longer exists in this pipeline.",
+        )
+    script_id = script_ids[variant_index]
+    return script_id, _build_output_id(script_id, visual_version)
+
+
+def _validate_requested_identity(
+    pipeline: dict,
+    variant_index: int,
+    *,
+    script_id: Optional[str] = None,
+    output_id: Optional[str] = None,
+    visual_version: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Reject stale index-based requests instead of attaching them to a new owner."""
+    current_script_id, current_output_id = _identity_for_variant(
+        pipeline,
+        variant_index,
+        visual_version,
+    )
+    if script_id is not None and script_id != current_script_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Script identity changed while this request was pending.",
+                "expected_script_id": script_id,
+                "current_script_id": current_script_id,
+            },
+        )
+    if output_id is not None and output_id != current_output_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Output identity does not match the requested script and visual version.",
+                "expected_output_id": output_id,
+                "current_output_id": current_output_id,
+            },
+        )
+    return current_script_id, current_output_id
+
+
+def _job_matches_output_identity(
+    job: Any,
+    script_id: str,
+    output_id: str,
+) -> bool:
+    """Return True only for a job explicitly owned by this stable output."""
+    return (
+        isinstance(job, dict)
+        and str(job.get("script_id") or "") == script_id
+        and str(job.get("output_id") or "") == output_id
+    )
+
+
+def _find_identity_owned_entry(
+    raw_state: Any,
+    *,
+    script_id: str,
+    output_id: str,
+    fallback_keys: Iterable[Any] = (),
+    script_level: bool = False,
+) -> Optional[dict]:
+    """Find state by stable identity, with a narrow legacy-key fallback.
+
+    Entries carrying a conflicting ID are never returned merely because their
+    numeric key matches. The fallback exists only for rows that have not yet
+    received the lazy metadata backfill.
+    """
+    if not isinstance(raw_state, dict):
+        return None
+
+    for value in raw_state.values():
+        if not isinstance(value, dict):
+            continue
+        recorded_script_id = str(value.get("script_id") or "")
+        recorded_output_id = str(value.get("output_id") or "")
+        if recorded_script_id != script_id:
+            continue
+        if recorded_output_id == output_id or (
+            script_level and not recorded_output_id
+        ):
+            return value
+
+    for key in fallback_keys:
+        value = raw_state.get(key)
+        if not isinstance(value, dict):
+            continue
+        recorded_script_id = str(value.get("script_id") or "")
+        recorded_output_id = str(value.get("output_id") or "")
+        if recorded_script_id or recorded_output_id:
+            continue
+        return value
+    return None
+
+
+def _resolve_render_job_identity(
+    pipeline: dict,
+    job: Any,
+) -> Optional[Tuple[int, Optional[str], str, str]]:
+    """Resolve a render job by its durable IDs, never by its JSON map key.
+
+    The numeric key remains display metadata for backwards-compatible storage.
+    A job without a complete, internally consistent identity is deliberately
+    ignored so a delete/reorder cannot make it appear under another script.
+    """
+    if not isinstance(job, dict):
+        return None
+    script_id = str(job.get("script_id") or "")
+    output_id = str(job.get("output_id") or "")
+    parsed = _parse_output_id(output_id)
+    if parsed is None or parsed[0] != script_id:
+        return None
+    variant_index = _script_index_for_id(pipeline, script_id)
+    if variant_index is None:
+        return None
+    visual_version = parsed[1]
+    recorded_version = job.get("visual_version")
+    if recorded_version not in (None, "") and recorded_version != visual_version:
+        return None
+    return variant_index, visual_version, script_id, output_id
+
+
+def _validate_authoritative_output_identity(
+    pipeline_id: str,
+    *,
+    script_id: str,
+    output_id: Optional[str] = None,
+    expected_script_fingerprint: Optional[str] = None,
+    cleaned_script: bool = False,
+) -> int:
+    """Validate a slow job against the latest database row before committing.
+
+    Process-local locks cannot coordinate two backend instances. This final
+    read prevents a worker with a stale in-memory index from persisting output
+    after its script was deleted, replaced, or reassigned elsewhere.
+    """
+    row = get_repository().get_pipeline(pipeline_id) or {}
+    script_ids = [str(value) for value in (row.get("script_ids") or [])]
+    if not script_ids and get_settings().desktop_mode:
+        # Desktop has one backend process. During the additive migration
+        # rollout, keep its already-running render usable by validating against
+        # the owned in-memory snapshot plus the latest persisted script text.
+        # Web mode remains fail-closed because multiple workers need DB-backed
+        # ScriptId coordination.
+        with _pipelines_lock:
+            cached = _pipelines.get(pipeline_id)
+        if isinstance(cached, dict):
+            script_ids = list(_ensure_pipeline_script_ids(cached))
+    if not script_ids:
+        raise HTTPException(
+            status_code=503,
+            detail="Stable ScriptId persistence is unavailable; run migration 058.",
+        )
+    try:
+        variant_index = script_ids.index(script_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The job owner was deleted before the result could be saved.",
+        ) from exc
+
+    if output_id is not None:
+        parsed_output = _parse_output_id(output_id)
+        if parsed_output is None or parsed_output[0] != script_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The job result has an invalid stable output identity.",
+            )
+
+    if expected_script_fingerprint is not None:
+        scripts = list(row.get("scripts") or [])
+        if variant_index >= len(scripts):
+            raise HTTPException(
+                status_code=409,
+                detail="The job owner has no current script content.",
+            )
+        script_text = str(scripts[variant_index])
+        if cleaned_script:
+            script_text = strip_product_group_tags(script_text)
+        if _stable_hash(script_text) != expected_script_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="The script changed while this job was running.",
+            )
+    return variant_index
+
+
+def _validate_authoritative_render_attempt(
+    pipeline_id: str,
+    *,
+    output_id: str,
+    attempt_id: str,
+) -> dict:
+    """Reject a late worker result after cancellation or attempt replacement."""
+    row = get_repository().get_pipeline(pipeline_id) or {}
+    matching_jobs = [
+        job
+        for job in (row.get("render_jobs") or {}).values()
+        if isinstance(job, dict)
+        and str(job.get("output_id") or "") == output_id
+    ]
+    if not matching_jobs and get_settings().desktop_mode:
+        with _pipelines_lock:
+            cached = _pipelines.get(pipeline_id) or {}
+        matching_jobs = [
+            job
+            for job in (cached.get("render_jobs") or {}).values()
+            if isinstance(job, dict)
+            and str(job.get("output_id") or "") == output_id
+        ]
+    if not matching_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="The render attempt is no longer authoritative.",
+        )
+    exact_attempt = next(
+        (
+            job
+            for job in matching_jobs
+            if str(job.get("attempt_id") or "") == attempt_id
+        ),
+        None,
+    )
+    if exact_attempt is None:
+        raise HTTPException(
+            status_code=409,
+            detail="A newer render attempt replaced this worker.",
+        )
+    if exact_attempt.get("status") in {
+        "cancelled",
+        "failed",
+        _STALE_RENDER_STATUS,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="The render attempt was cancelled or invalidated.",
+        )
+    return exact_attempt
+
+
+def _file_sha256(path: Optional[Path]) -> Optional[str]:
+    """Hash a durable media file without loading it entirely into memory."""
+    if path is None:
+        return None
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _ensure_pipeline_script_ids(pipeline: dict) -> List[str]:
+    """Attach one durable ScriptId to every script.
+
+    IDs are persisted separately from the portable template document. During
+    rollout we still accept IDs found in a complete snapshot, but never mutate
+    template contents just to store runtime identity.
+    """
+    scripts = list(pipeline.get("scripts") or [])
+    raw_ids = list(pipeline.get("script_ids") or [])
+
+    settings = pipeline.get("template_settings")
+    snapshot_scripts: List[Any] = []
+    if isinstance(settings, dict):
+        content = settings.get("content")
+        if isinstance(content, dict) and isinstance(content.get("scripts"), list):
+            snapshot_scripts = list(content["scripts"])
+            if len(raw_ids) != len(scripts):
+                raw_ids = [
+                    str(item.get("id") or "") if isinstance(item, dict) else ""
+                    for item in snapshot_scripts
+                ]
+
+    used: set[str] = set()
+    script_ids: List[str] = []
+    for index in range(len(scripts)):
+        candidate = str(raw_ids[index]) if index < len(raw_ids) else ""
+        if not _SCRIPT_ID_PATTERN.fullmatch(candidate) or candidate in used:
+            candidate = _legacy_script_id(str(pipeline.get("pipeline_id") or ""), index)
+        used.add(candidate)
+        script_ids.append(candidate)
+    pipeline["script_ids"] = script_ids
+
+    return script_ids
+
+
+def _sync_pipeline_snapshot_scripts(pipeline: dict) -> None:
+    """Update snapshot script rows only when scripts are explicitly edited."""
+    settings = pipeline.get("template_settings")
+    if not isinstance(settings, dict):
+        return
+    content = settings.get("content")
+    if not isinstance(content, dict):
+        return
+    settings = copy.deepcopy(settings)
+    content = settings["content"]
+    existing_rows = content.get("scripts")
+    if not isinstance(existing_rows, list):
+        existing_rows = []
+    scripts = list(pipeline.get("scripts") or [])
+    names = list(pipeline.get("script_names") or [])
+    script_ids = _ensure_pipeline_script_ids(pipeline)
+    content["scripts"] = [
+        {
+            **(
+                existing_rows[index]
+                if index < len(existing_rows) and isinstance(existing_rows[index], dict)
+                else {}
+            ),
+            "id": script_ids[index],
+            "name": names[index] if index < len(names) and names[index] else f"Script {index + 1}",
+            "text": script,
+        }
+        for index, script in enumerate(scripts)
+    ]
+    pipeline["template_settings"] = settings
+
+
+def _remap_indexed_state(
+    raw_state: Any,
+    old_script_ids: List[str],
+    new_script_ids: List[str],
+    *,
+    prefer_embedded_identity: bool = False,
+) -> dict:
+    """Move index-keyed state by ScriptId instead of by array position.
+
+    Non-output keys (for example ``_selection``, ``default``, or clip IDs) are
+    retained verbatim. State owned by a deliberately removed script is omitted.
+    """
+    if not isinstance(raw_state, dict):
+        return {}
+    new_index_by_id = {script_id: index for index, script_id in enumerate(new_script_ids)}
+    remapped: dict = {}
+    for raw_key, value in raw_state.items():
+        parsed = _parse_preview_key(raw_key)
+        embedded_script_id: Optional[str] = None
+        embedded_visual_version: Optional[str] = None
+        if prefer_embedded_identity and isinstance(value, dict):
+            candidate_script_id = str(value.get("script_id") or "")
+            raw_output_id = value.get("output_id")
+            candidate_output_id = _parse_output_id(raw_output_id)
+            if _SCRIPT_ID_PATTERN.fullmatch(candidate_script_id):
+                if raw_output_id and candidate_output_id is None:
+                    continue
+                if (
+                    candidate_output_id is not None
+                    and candidate_output_id[0] != candidate_script_id
+                ):
+                    # An internally inconsistent identity is corruption, not a
+                    # signal to fall back to the numeric key.
+                    continue
+                embedded_script_id = candidate_script_id
+                if candidate_output_id is not None:
+                    embedded_visual_version = candidate_output_id[1]
+
+        if embedded_script_id is not None:
+            new_index = new_index_by_id.get(embedded_script_id)
+            if new_index is None:
+                # The stable owner was deliberately deleted.
+                continue
+            raw_visual_version = parsed[1] if parsed is not None else None
+            visual_version = (
+                embedded_visual_version
+                if value.get("output_id")
+                else raw_visual_version
+            )
+            if visual_version:
+                new_key = f"{new_index}_{visual_version}"
+            else:
+                new_key = new_index if isinstance(raw_key, int) else str(new_index)
+            remapped[new_key] = value
+            continue
+
+        if parsed is None:
+            remapped[raw_key] = value
+            continue
+        old_index, visual_version = parsed
+        if old_index >= len(old_script_ids):
+            # Preserve unknown legacy entries rather than guessing ownership.
+            remapped[raw_key] = value
+            continue
+        new_index = new_index_by_id.get(old_script_ids[old_index])
+        if new_index is None:
+            continue
+        if visual_version:
+            new_key: Any = f"{new_index}_{visual_version}"
+        else:
+            new_key = new_index if isinstance(raw_key, int) else str(new_index)
+        remapped[new_key] = value
+    return remapped
+
+
+def _remap_pipeline_script_state(
+    pipeline: dict,
+    old_script_ids: List[str],
+    new_script_ids: List[str],
+) -> None:
+    """Atomically keep every script/output-owned map attached to its owner."""
+    for field in (
+        "previews",
+        "render_jobs",
+        "tts_previews",
+        "tts_jobs",
+        "preview_renders",
+        "segment_usage",
+        "captions",
+        "selected_captions",
+        "subtitle_settings_by_key",
+        "attention_timeline",
+    ):
+        if field in pipeline:
+            pipeline[field] = _remap_indexed_state(
+                pipeline.get(field),
+                old_script_ids,
+                new_script_ids,
+                prefer_embedded_identity=field in {
+                    "previews",
+                    "render_jobs",
+                    "tts_previews",
+                    "tts_jobs",
+                    "preview_renders",
+                },
+            )
+
+    surviving_ids = set(new_script_ids)
+    preview_jobs = pipeline.get("preview_jobs")
+    if isinstance(preview_jobs, dict):
+        pipeline["preview_jobs"] = {
+            output_id: job
+            for output_id, job in preview_jobs.items()
+            if (
+                isinstance(output_id, str)
+                and (parsed := _parse_output_id(output_id)) is not None
+                and parsed[0] in surviving_ids
+            )
+        }
+
+    settings = pipeline.get("template_settings")
+    if not isinstance(settings, dict):
+        return
+    settings = copy.deepcopy(settings)
+    timeline = settings.get("timeline")
+    if isinstance(timeline, dict):
+        for field in (
+            "matches",
+            "compositions",
+            "defaultTransitions",
+            "music",
+            "interstitialSlides",
+            "attentionTimelines",
+            "variantThumbnails",
+            "pipOverlays",
+        ):
+            if field in timeline:
+                timeline[field] = _remap_indexed_state(
+                    timeline.get(field), old_script_ids, new_script_ids
+                )
+        selected = timeline.get("selectedVariantIndices")
+        if isinstance(selected, list):
+            old_selected_ids = {
+                old_script_ids[index]
+                for index in selected
+                if isinstance(index, int) and 0 <= index < len(old_script_ids)
+            }
+            timeline["selectedVariantIndices"] = [
+                index
+                for index, script_id in enumerate(new_script_ids)
+                if script_id in old_selected_ids
+            ]
+        selected_outputs = timeline.get("selectedOutputIds")
+        if isinstance(selected_outputs, list):
+            timeline["selectedOutputIds"] = [
+                value
+                for value in selected_outputs
+                if isinstance(value, str)
+                and value.rsplit(":", 1)[0] in surviving_ids
+            ]
+        active_output = timeline.get("activeOutputId")
+        if (
+            isinstance(active_output, str)
+            and active_output.rsplit(":", 1)[0] not in surviving_ids
+        ):
+            timeline["activeOutputId"] = None
+    subtitles = settings.get("subtitles")
+    if isinstance(subtitles, dict):
+        for field in ("variantOverrides", "variantTemplates"):
+            if field in subtitles:
+                subtitles[field] = _remap_indexed_state(
+                    subtitles.get(field), old_script_ids, new_script_ids
+                )
+    pipeline["template_settings"] = settings
+
+
+def _backfill_pipeline_output_identities(pipeline: dict) -> set[str]:
+    """Attach durable IDs to legacy index-keyed state and canonicalize its keys.
+
+    The migration is deliberately lazy and metadata-only: a legacy row's
+    current stored order is used once, while entries that already carry an ID
+    keep that ID as the authority even if their numeric JSON key is stale.
+    """
+    script_ids = _ensure_pipeline_script_ids(pipeline)
+    changed_fields: set[str] = set()
+    script_level_fields = {"tts_previews", "tts_jobs"}
+    identity_fields = (
+        "previews",
+        "render_jobs",
+        "tts_previews",
+        "tts_jobs",
+        "preview_renders",
+    )
+
+    for field in identity_fields:
+        raw_state = pipeline.get(field)
+        if not isinstance(raw_state, dict):
+            continue
+        field_changed = False
+        for raw_key, value in list(raw_state.items()):
+            if not isinstance(value, dict):
+                continue
+            parsed_key = _parse_preview_key(raw_key)
+            parsed_output = _parse_output_id(value.get("output_id"))
+            recorded_script_id = str(value.get("script_id") or "")
+
+            if not _SCRIPT_ID_PATTERN.fullmatch(recorded_script_id):
+                if parsed_output is not None:
+                    recorded_script_id = parsed_output[0]
+                elif parsed_key is not None and parsed_key[0] < len(script_ids):
+                    recorded_script_id = script_ids[parsed_key[0]]
+                else:
+                    continue
+                value["script_id"] = recorded_script_id
+                field_changed = True
+
+            if not value.get("output_id"):
+                visual_version = None
+                if field not in script_level_fields and parsed_key is not None:
+                    visual_version = parsed_key[1]
+                value["output_id"] = _build_output_id(
+                    recorded_script_id,
+                    visual_version,
+                )
+                field_changed = True
+
+        canonical = _remap_indexed_state(
+            raw_state,
+            script_ids,
+            script_ids,
+            prefer_embedded_identity=True,
+        )
+        if canonical != raw_state:
+            pipeline[field] = canonical
+            field_changed = True
+        if field_changed:
+            changed_fields.add(field)
+
+    return changed_fields
+
+
+def _drop_previews_for_variant(pipeline: dict, variant_index: int) -> None:
+    """Invalidate every output preview that shares one script-level TTS asset."""
+    previews = pipeline.setdefault("previews", {})
+    previews.pop(variant_index, None)
+    previews.pop(str(variant_index), None)
+    for visual_version in "ABCDEFGHIJ":
+        previews.pop(f"{variant_index}_{visual_version}", None)
+
+
+def _preserve_manual_preview_layers(
+    existing_preview_data: dict,
+    preview_data: dict,
+    source_video_ids: Optional[List[str]] = None,
+) -> Tuple[bool, bool]:
+    """Merge a fresh auto-assembly with durable user-owned editor layers."""
+    manual_matches_preserved = False
+    old_matches = existing_preview_data.get("matches") or []
+    has_manual_matches = bool(
+        existing_preview_data.get("manual_matches")
+        or any(
+            isinstance(item, dict) and item.get("pinned")
+            for item in old_matches
+        )
+    )
+    if has_manual_matches:
+        fresh_matches = preview_data.get("matches") or []
+        manual_by_signature = {
+            (item.get("srt_index"), item.get("srt_text")): item
+            for item in old_matches
+            if isinstance(item, dict)
+        }
+        pinned_by_index = {
+            item.get("srt_index"): item
+            for item in old_matches
+            if isinstance(item, dict) and item.get("pinned")
+        }
+        protected_srt_fields = {"srt_index", "srt_text", "srt_start", "srt_end"}
+        merged_matches = []
+        preserved_any_match = False
+        for fresh_item in fresh_matches:
+            if not isinstance(fresh_item, dict):
+                merged_matches.append(fresh_item)
+                continue
+            old_item = manual_by_signature.get(
+                (fresh_item.get("srt_index"), fresh_item.get("srt_text"))
+            )
+            if old_item is None:
+                old_item = pinned_by_index.get(fresh_item.get("srt_index"))
+            if (
+                old_item is not None
+                and source_video_ids
+                and old_item.get("source_video_id") not in source_video_ids
+            ):
+                old_item = None
+            if old_item is None:
+                merged_matches.append(fresh_item)
+                continue
+            merged_item = copy.deepcopy(fresh_item)
+            merged_item.update({
+                key: copy.deepcopy(value)
+                for key, value in old_item.items()
+                if key not in protected_srt_fields
+            })
+            merged_matches.append(merged_item)
+            preserved_any_match = True
+        if preserved_any_match:
+            preview_data["matches"] = merged_matches
+            manual_matches_preserved = True
+
+        if manual_matches_preserved:
+            preview_data["manual_matches"] = True
+            matched_count = sum(
+                1
+                for item in preview_data["matches"]
+                if isinstance(item, dict) and item.get("segment_id")
+            )
+            preview_data["matched_count"] = matched_count
+            preview_data["unmatched_count"] = (
+                len(preview_data["matches"]) - matched_count
+            )
+
+    old_timeline = (
+        existing_preview_data.get("video_timeline")
+        or existing_preview_data.get("timeline")
+        or []
+    )
+    has_manual_composition = bool(
+        existing_preview_data.get("manual_composition")
+        or "default_transition" in existing_preview_data
+        or "music" in existing_preview_data
+    )
+    manual_composition_preserved = False
+    if has_manual_composition and old_timeline:
+        preview_data["video_timeline"] = copy.deepcopy(old_timeline)
+        preview_data["timeline"] = copy.deepcopy(old_timeline)
+        preview_data["intro_segments"] = [
+            clip
+            for clip in old_timeline
+            if isinstance(clip, dict) and clip.get("kind") == "intro"
+        ]
+        preview_data["intro_offset_sec"] = sum(
+            float(clip.get("timeline_duration") or 0)
+            for clip in preview_data["intro_segments"]
+        )
+        preview_data["manual_composition"] = True
+        manual_composition_preserved = True
+
+    if "default_transition" in existing_preview_data:
+        preview_data["default_transition"] = copy.deepcopy(
+            existing_preview_data.get("default_transition")
+        )
+    if "music" in existing_preview_data:
+        preview_data["music"] = copy.deepcopy(existing_preview_data.get("music"))
+
+    return manual_matches_preserved, manual_composition_preserved
+
+
+def _clamp_min_segment_duration(value: Optional[float]) -> float:
+    """Keep pacing within the Studio's supported 0.5–8 second range."""
+    try:
+        return max(0.5, min(8.0, float(value)))
     except (TypeError, ValueError):
         return 3.0
 
@@ -323,8 +1059,8 @@ def _restore_missing_tts_audio_paths(
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
         tts_previews = pipeline.setdefault("tts_previews", {})
-        previews = pipeline.get("previews", {})
-        missing_audio_texts: Dict[int, str] = {}
+        previews = copy.deepcopy(pipeline.get("previews", {}))
+        missing_audio_entries: Dict[int, Dict[str, Any]] = {}
 
         for raw_key, raw_value in list(tts_previews.items()):
             if not isinstance(raw_value, dict):
@@ -343,9 +1079,12 @@ def _restore_missing_tts_audio_paths(
             raw_value["audio_path"] = None
             cleaned_text = strip_product_group_tags(scripts[idx]).strip()
             if cleaned_text:
-                missing_audio_texts[idx] = cleaned_text
+                missing_audio_entries[idx] = {
+                    "text": cleaned_text,
+                    "entry": copy.deepcopy(raw_value),
+                }
 
-    if not missing_audio_texts:
+    if not missing_audio_entries:
         return 0
 
     restored_entries: Dict[int, Dict[str, Any]] = {}
@@ -358,17 +1097,49 @@ def _restore_missing_tts_audio_paths(
                 profile_id,
                 QueryFilters(
                     eq={"status": "ready"},
-                    select="id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps",
+                    select=(
+                        "id, tts_text, mp3_path, audio_duration, srt_content, "
+                        "tts_timestamps, tts_model, tts_voice_id, "
+                        "tts_voice_settings, audio_sha256"
+                    ),
                 ),
             )
             if lib_result.data:
-                lib_lookup = {}
+                lib_lookup: Dict[str, List[Dict[str, Any]]] = {}
+                assets_by_id: Dict[str, Dict[str, Any]] = {}
+
+                def _register_asset(
+                    text: str,
+                    asset: Dict[str, Any],
+                ) -> bool:
+                    resolved_path = _existing_pipeline_audio_path(
+                        asset.get("mp3_path")
+                    )
+                    if not resolved_path:
+                        return False
+                    actual_hash = _file_sha256(resolved_path)
+                    if not actual_hash:
+                        return False
+                    recorded_hash = str(asset.get("audio_sha256") or "")
+                    if recorded_hash and recorded_hash != actual_hash:
+                        logger.warning(
+                            f"Pipeline {pipeline_id}: library asset "
+                            f"{asset.get('id')} failed audio integrity verification"
+                        )
+                        return False
+                    asset["mp3_path"] = str(resolved_path)
+                    asset["_actual_hash"] = actual_hash
+                    lib_lookup.setdefault(text, []).append(asset)
+                    if asset.get("id"):
+                        assets_by_id[str(asset["id"])] = asset
+                    return True
+
                 for asset in lib_result.data:
                     text = (asset.get("tts_text") or "").strip()
                     path = asset.get("mp3_path")
                     if text and path:
                         if _existing_pipeline_audio_path(path):
-                            lib_lookup[text] = asset
+                            _register_asset(text, asset)
                         else:
                             # DB record exists but file missing — check fallback
                             # location (direct copy from previous generation)
@@ -377,7 +1148,7 @@ def _restore_missing_tts_audio_paths(
                                 for _fb_file in _fb_dir.glob("*.mp3"):
                                     if _fb_file.name.startswith(asset["id"]):
                                         asset["mp3_path"] = str(_fb_file)
-                                        lib_lookup[text] = asset
+                                        _register_asset(text, asset)
                                         break
                             if text not in lib_lookup:
                                 logger.warning(
@@ -389,24 +1160,100 @@ def _restore_missing_tts_audio_paths(
                 # case differences don't prevent restore.
                 def _norm_text(t: str) -> str:
                     return " ".join((t or "").split()).casefold()
-                norm_lookup = {_norm_text(t): a for t, a in lib_lookup.items()}
+                norm_lookup: Dict[str, List[Dict[str, Any]]] = {}
+                for text, assets in lib_lookup.items():
+                    norm_lookup.setdefault(_norm_text(text), []).extend(assets)
 
-                for idx, text in missing_audio_texts.items():
-                    match = lib_lookup.get(text) or norm_lookup.get(_norm_text(text))
+                def _candidate_matches(
+                    candidate: Dict[str, Any],
+                    expected_text: str,
+                    expected_entry: Dict[str, Any],
+                ) -> bool:
+                    actual_hash = str(candidate.get("_actual_hash") or "")
+                    expected_hash = str(expected_entry.get("audio_sha256") or "")
+                    if expected_hash and actual_hash != expected_hash:
+                        return False
+
+                    expected_asset_id = str(
+                        expected_entry.get("library_asset_id") or ""
+                    )
+                    candidate_id = str(candidate.get("id") or "")
+                    if (
+                        expected_entry.get("asset_provenance")
+                        == "library_adopted"
+                    ):
+                        return bool(
+                            expected_asset_id
+                            and candidate_id == expected_asset_id
+                        )
+
+                    if _norm_text(candidate.get("tts_text") or "") != _norm_text(
+                        expected_text
+                    ):
+                        return False
+                    if not any(
+                        key in expected_entry
+                        for key in (
+                            "elevenlabs_model",
+                            "voice_id",
+                            "voice_settings",
+                        )
+                    ):
+                        return False
+                    return (
+                        str(candidate.get("tts_model") or "")
+                        == str(expected_entry.get("elevenlabs_model") or "")
+                        and (candidate.get("tts_voice_id") or None)
+                        == (expected_entry.get("voice_id") or None)
+                        and _voice_settings_match(
+                            candidate.get("tts_voice_settings"),
+                            expected_entry.get("voice_settings"),
+                        )
+                    )
+
+                for idx, missing in missing_audio_entries.items():
+                    text = missing["text"]
+                    expected_entry = missing["entry"]
+                    candidates: List[Dict[str, Any]] = []
+                    expected_asset_id = str(
+                        expected_entry.get("library_asset_id") or ""
+                    )
+                    if expected_asset_id in assets_by_id:
+                        candidates.append(assets_by_id[expected_asset_id])
+                    for candidate in norm_lookup.get(_norm_text(text), []):
+                        if candidate not in candidates:
+                            candidates.append(candidate)
+                    match = next(
+                        (
+                            candidate
+                            for candidate in candidates
+                            if _candidate_matches(
+                                candidate,
+                                text,
+                                expected_entry,
+                            )
+                        ),
+                        None,
+                    )
                     if not match:
                         continue
                     restored_entries[idx] = {
                         "audio_path": match["mp3_path"],
                         "library_asset_id": match["id"],
+                        "audio_sha256": match["_actual_hash"],
                     }
                     if match.get("audio_duration"):
                         restored_entries[idx]["audio_duration"] = match["audio_duration"]
                     if match.get("srt_content"):
                         restored_entries[idx]["srt_content"] = match["srt_content"]
+                    if match.get("tts_timestamps"):
+                        restored_entries[idx]["tts_timestamps"] = match[
+                            "tts_timestamps"
+                        ]
     except Exception as lib_err:
         logger.warning(f"Pipeline {pipeline_id}: TTS library restore failed: {lib_err}")
 
-    for idx in missing_audio_texts:
+    for idx, missing in missing_audio_entries.items():
         if idx in restored_entries:
             continue
         preview = previews.get(idx) or previews.get(str(idx))
@@ -414,10 +1261,17 @@ def _restore_missing_tts_audio_paths(
             continue
         preview_data = preview.get("preview_data", {})
         preview_audio_path = preview_data.get("audio_path")
-        if not _existing_pipeline_audio_path(preview_audio_path):
+        resolved_preview_audio = _existing_pipeline_audio_path(preview_audio_path)
+        expected_hash = str(missing["entry"].get("audio_sha256") or "")
+        if (
+            not resolved_preview_audio
+            or not expected_hash
+            or _file_sha256(resolved_preview_audio) != expected_hash
+        ):
             continue
         restored_entries[idx] = {
-            "audio_path": preview_audio_path,
+            "audio_path": str(resolved_preview_audio),
+            "audio_sha256": expected_hash,
         }
         if preview_data.get("audio_duration"):
             restored_entries[idx]["audio_duration"] = preview_data["audio_duration"]
@@ -440,13 +1294,28 @@ def _restore_missing_tts_audio_paths(
 
     restored_count = len(restored_entries)
     logger.info(
-        f"Pipeline {pipeline_id}: restored {restored_count}/{len(missing_audio_texts)} "
+        f"Pipeline {pipeline_id}: restored {restored_count}/{len(missing_audio_entries)} "
         f"missing TTS audio paths"
     )
 
     if persist:
         try:
-            _db_save_pipeline(pipeline_id, pipeline)
+            _db_save_pipeline(
+                pipeline_id,
+                pipeline,
+                fields={"tts_previews"},
+                runtime_map_updates={
+                    "tts_previews": {
+                        idx: copy.deepcopy(
+                            _indexed_tts_job(
+                                pipeline.get("tts_previews"),
+                                idx,
+                            )
+                        )
+                        for idx in restored_entries
+                    },
+                },
+            )
         except Exception as persist_err:
             logger.warning(f"Pipeline {pipeline_id}: failed to persist restored TTS paths: {persist_err}")
 
@@ -462,6 +1331,7 @@ def _persist_tts_audio(
     model: str,
     duration: float,
     voice_id: Optional[str] = None,
+    voice_settings: Optional[dict] = None,
     deduplicate: bool = True,
 ) -> Tuple[str, Optional[str]]:
     """
@@ -485,6 +1355,7 @@ def _persist_tts_audio(
             model=model,
             duration=duration,
             voice_id=voice_id,
+            voice_settings=voice_settings,
             deduplicate=deduplicate,
         )
         if saved_asset_id:
@@ -502,14 +1373,34 @@ def _persist_tts_audio(
                 _existing = _repo.list_tts_assets(
                     profile_id,
                     QueryFilters(
-                        eq={"status": "ready", "tts_text": cleaned_text},
-                        select="id, mp3_path",
-                        limit=1,
+                        eq={
+                            "status": "ready",
+                            "tts_text": cleaned_text,
+                            "tts_model": model,
+                            "tts_provider": "elevenlabs",
+                        },
+                        select=(
+                            "id, mp3_path, tts_voice_id, "
+                            "tts_voice_settings, audio_sha256"
+                        ),
+                        limit=100,
                     ),
                 )
-                if _existing.data and _existing.data[0].get("mp3_path"):
-                    _lib_path = _existing.data[0]["mp3_path"]
-                    _lib_asset_id = _existing.data[0]["id"]
+                _matching = next(
+                    (
+                        asset
+                        for asset in (_existing.data or [])
+                        if (asset.get("tts_voice_id") or None) == (voice_id or None)
+                        and _voice_settings_match(
+                            asset.get("tts_voice_settings"),
+                            voice_settings,
+                        )
+                    ),
+                    None,
+                )
+                if _matching and _matching.get("mp3_path"):
+                    _lib_path = _matching["mp3_path"]
+                    _lib_asset_id = _matching["id"]
                     _lib_full_path = _resolve_pipeline_audio_path(_lib_path)
                     if _lib_full_path.exists():
                         logger.info(
@@ -619,6 +1510,7 @@ _MAX_CANCELLED_PIPELINES = 200
 # Render jobs stuck in "processing" older than this are treated as orphans
 # from a crashed/restarted run and eligible to be re-queued.
 STALE_PROCESSING_THRESHOLD_SEC = 30 * 60  # 30 minutes
+_BACKEND_INSTANCE_ID = f"studio_{uuid.uuid4().hex}"
 
 # Per-job cancellation: "pipeline_id:job_key" -> monotonic timestamp
 # job_key is a string form of either the integer variant_index ("0") for
@@ -1063,6 +1955,12 @@ def _promote_temp_audio_paths_to_library(pipeline_id: str, pipeline_dict: dict) 
 
 _PIPELINE_SCHEMA_FALLBACKS = (
     (
+        ("script_ids",),
+        ("script_ids",),
+        "script_ids column missing; run migration 058. "
+        "Falling back to deterministic legacy identities.",
+    ),
+    (
         ("template_settings",),
         ("template_settings",),
         "template_settings column missing; run migration 056. "
@@ -1073,6 +1971,12 @@ _PIPELINE_SCHEMA_FALLBACKS = (
         ("generation_job", "tts_jobs"),
         "Async pipeline job columns missing; run migration 054. "
         "Retrying without persisted job state.",
+    ),
+    (
+        ("preview_jobs", "settings_revision", "jobs_revision"),
+        ("preview_jobs", "settings_revision", "jobs_revision"),
+        "Pipeline integrity columns missing; run migration 059. "
+        "Retrying without durable preview/CAS/job state.",
     ),
     (
         ("attention_timeline",),
@@ -1097,14 +2001,38 @@ _PIPELINE_SCHEMA_FALLBACKS = (
 )
 
 
-def _upsert_pipeline_with_schema_fallback(repo, row: dict) -> None:
-    """Persist core history despite multiple unapplied additive migrations."""
+def _upsert_pipeline_with_schema_fallback(
+    repo,
+    row: dict,
+    *,
+    update_existing: bool = False,
+) -> None:
+    """Persist core history despite multiple unapplied additive migrations.
+
+    Supabase validates an UPSERT as an INSERT before resolving its conflict.
+    A partial row therefore violates required columns such as ``profile_id``
+    even when the pipeline already exists. Existing rows must use UPDATE;
+    UPSERT remains reserved for the complete initial snapshot.
+    """
     pending = dict(row)
     removed_groups: set[tuple[str, ...]] = set()
 
     while True:
         try:
-            repo.upsert_pipeline(pending)
+            if update_existing and hasattr(repo, "update_pipeline"):
+                pipeline_id = str(pending["id"])
+                repo.update_pipeline(
+                    pipeline_id,
+                    {
+                        key: value
+                        for key, value in pending.items()
+                        if key != "id"
+                    },
+                )
+            else:
+                # Minimal repositories in isolated unit tests may only expose
+                # the historical upsert seam.
+                repo.upsert_pipeline(pending)
             return
         except Exception as upsert_err:
             error_text = str(upsert_err)
@@ -1127,8 +2055,21 @@ def _upsert_pipeline_with_schema_fallback(repo, row: dict) -> None:
                 raise
 
 
-def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
-    """Upsert full pipeline state to editai_pipelines. Graceful degradation with retry."""
+def _db_save_pipeline(
+    pipeline_id: str,
+    pipeline_dict: dict,
+    *,
+    fields: Optional[set[str]] = None,
+    allow_structural_update: bool = False,
+    runtime_map_updates: Optional[Dict[str, Dict[Any, Any]]] = None,
+):
+    """Persist pipeline state without overwriting unrelated concurrent edits.
+
+    New rows are written in full. Existing rows may be patched with an explicit
+    set of columns; script order/content is reserved for the structural CAS
+    path unless ``allow_structural_update`` is used by initial generation.
+    """
+    _ensure_pipeline_script_ids(pipeline_dict)
     expires_at = _refresh_pipeline_expiry(pipeline_dict)
     # PRE-PERSIST INVARIANT: no audio_path under temp/ may be persisted in DB.
     # This is a safety net on top of upstream fixes (assembly_service persists
@@ -1149,6 +2090,10 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             tts_previews_json = {str(k): v for k, v in dict(pipeline_dict.get("tts_previews", {})).items()}
             generation_job_json = dict(pipeline_dict.get("generation_job") or {})
             tts_jobs_json = {str(k): v for k, v in dict(pipeline_dict.get("tts_jobs", {})).items()}
+            preview_jobs_json = {
+                str(k): v
+                for k, v in dict(pipeline_dict.get("preview_jobs", {})).items()
+            }
             # PIP-14: Include preview render paths in serialization
             preview_renders_json = {str(k): v for k, v in dict(pipeline_dict.get("preview_renders", {})).items()}
             segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
@@ -1177,12 +2122,14 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "variant_count": pipeline_dict.get("variant_count", 0),
                 "keyword_count": pipeline_dict.get("keyword_count", 0),
                 "scripts": pipeline_dict.get("scripts", []),
+                "script_ids": pipeline_dict.get("script_ids", []),
                 "script_names": pipeline_dict.get("script_names", []),
                 "previews": previews_json,
                 "render_jobs": render_jobs_json,
                 "tts_previews": tts_previews_json,
                 "generation_job": generation_job_json,
                 "tts_jobs": tts_jobs_json,
+                "preview_jobs": preview_jobs_json,
                 "preview_renders": preview_renders_json,
                 "segment_usage": segment_usage_json,
                 "source_video_ids": pipeline_dict.get("source_video_ids", []),
@@ -1196,20 +2143,80 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "subtitle_settings_by_key": subtitle_overrides_json,
                 "attention_timeline": attention_timeline_json,
                 "template_settings": copy.deepcopy(pipeline_dict.get("template_settings") or {}),
+                "settings_revision": int(
+                    pipeline_dict.get("settings_revision") or 0
+                ),
+                "jobs_revision": int(pipeline_dict.get("jobs_revision") or 0),
                 "expires_at": expires_at,
             }
+            # Template settings have their own database CAS endpoint. A normal
+            # preview/render/job save must never overwrite a newer snapshot
+            # produced by another tab or backend instance.
+            existing_row = repo.get_pipeline(pipeline_id)
+            job_updates: Dict[str, Any] = {}
+            if existing_row:
+                row.pop("template_settings", None)
+                row.pop("settings_revision", None)
+                row.pop("jobs_revision", None)
+                if not allow_structural_update:
+                    for structural_field in (
+                        "scripts",
+                        "script_ids",
+                        "script_names",
+                        "variant_count",
+                    ):
+                        row.pop(structural_field, None)
+                if fields is not None:
+                    allowed_fields = {"id", "expires_at", *fields}
+                    row = {
+                        key: value
+                        for key, value in row.items()
+                        if key in allowed_fields
+                    }
+                for job_field in (
+                    "generation_job",
+                    "tts_jobs",
+                    "preview_jobs",
+                    "preview_renders",
+                    "render_jobs",
+                ):
+                    if job_field in row:
+                        job_updates[job_field] = row.pop(job_field)
+                for runtime_field in (
+                    "previews",
+                    "tts_previews",
+                    "segment_usage",
+                ):
+                    if (
+                        runtime_field in row
+                        and runtime_map_updates
+                        and runtime_field in runtime_map_updates
+                    ):
+                        row.pop(runtime_field, None)
+                        job_updates[runtime_field] = copy.deepcopy(
+                            runtime_map_updates[runtime_field]
+                        )
             try:
-                _upsert_pipeline_with_schema_fallback(repo, row)
+                _upsert_pipeline_with_schema_fallback(
+                    repo,
+                    row,
+                    update_existing=bool(existing_row),
+                )
             except Exception as upsert_err:
                 err_str = str(upsert_err)
                 # Graceful degradation for pre-migration databases
-                if "generation_job" in err_str or "tts_jobs" in err_str:
+                if (
+                    "generation_job" in err_str
+                    or "tts_jobs" in err_str
+                    or "preview_jobs" in err_str
+                ):
                     logger.warning(
                         "Async pipeline job columns missing; run migration 054. "
                         "Retrying without persisted job state."
                     )
                     row.pop("generation_job", None)
                     row.pop("tts_jobs", None)
+                    row.pop("preview_jobs", None)
                     repo.upsert_pipeline(row)
                 elif "attention_timeline" in err_str:
                     logger.warning("attention_timeline column missing; retrying without it")
@@ -1236,6 +2243,8 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 else:
                     raise
             logger.debug(f"Pipeline {pipeline_id} saved to DB")
+            if job_updates:
+                _cas_persist_job_updates(pipeline_id, job_updates)
             return  # success
         except Exception as e:
             if attempt == 0:
@@ -1245,22 +2254,888 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 logger.error(f"Pipeline {pipeline_id} DB save FAILED after 2 attempts: {e}")
 
 
-def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
-    """Update only render_jobs column for a pipeline. Graceful degradation."""
+def _script_snapshot_update_payload(
+    pipeline: dict,
+    *,
+    include_script_state: bool = True,
+) -> Dict[str, Any]:
+    """Serialize every script-owned map for one atomic script/snapshot CAS."""
+
+    def _string_keyed(value: Any) -> dict:
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): item for key, item in value.items()}
+
+    base_payload: Dict[str, Any] = {
+        "script_names": list(pipeline.get("script_names") or []),
+        "template_settings": copy.deepcopy(
+            pipeline.get("template_settings") or {}
+        ),
+        "settings_revision": int(pipeline.get("settings_revision") or 0),
+        "jobs_revision": int(pipeline.get("jobs_revision") or 0),
+        "expires_at": _pipeline_expiry_timestamp(),
+    }
+    if not include_script_state:
+        return base_payload
+
+    subtitle_overrides = pipeline.get("subtitle_settings_by_key")
+    return {
+        **base_payload,
+        "scripts": list(pipeline.get("scripts") or []),
+        "script_ids": list(pipeline.get("script_ids") or []),
+        "variant_count": int(pipeline.get("variant_count") or 0),
+        "keyword_count": int(pipeline.get("keyword_count") or 0),
+        "previews": _string_keyed(pipeline.get("previews")),
+        "render_jobs": _string_keyed(pipeline.get("render_jobs")),
+        "tts_previews": _string_keyed(pipeline.get("tts_previews")),
+        "tts_jobs": _string_keyed(pipeline.get("tts_jobs")),
+        "preview_jobs": _string_keyed(pipeline.get("preview_jobs")),
+        "preview_renders": _string_keyed(pipeline.get("preview_renders")),
+        "segment_usage": _string_keyed(pipeline.get("segment_usage")),
+        "captions": _string_keyed(pipeline.get("captions")),
+        "selected_captions": dict(pipeline.get("selected_captions") or {}),
+        "subtitle_settings_by_key": (
+            _string_keyed(subtitle_overrides) if subtitle_overrides else None
+        ),
+        "attention_timeline": _string_keyed(pipeline.get("attention_timeline")),
+    }
+
+
+def _commit_script_snapshot_cas(
+    pipeline_id: str,
+    profile_id: str,
+    pipeline: dict,
+    *,
+    expected_script_ids: List[str],
+    expected_revision: int,
+    include_script_state: bool = True,
+    allowed_generation_attempt_id: Optional[str] = None,
+    allowed_regeneration_attempt_id: Optional[str] = None,
+) -> int:
+    """Atomically persist script order/content and its matching full snapshot."""
+    repo = get_repository()
+    fresh_row = repo.get_pipeline(pipeline_id)
+    if not fresh_row or fresh_row.get("profile_id") != profile_id:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    fresh_script_ids = [
+        str(value) for value in (fresh_row.get("script_ids") or [])
+    ]
+    if not fresh_script_ids and fresh_row.get("scripts"):
+        raise HTTPException(
+            status_code=503,
+            detail="Stable ScriptId persistence is unavailable; run migration 058.",
+        )
+    if fresh_script_ids != expected_script_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Script list changed in another tab or backend instance.",
+                "expected_script_ids": expected_script_ids,
+                "current_script_ids": fresh_script_ids,
+            },
+        )
+
+    current_revision = int(fresh_row.get("settings_revision") or 0)
+    if current_revision != expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pipeline settings changed in another tab or backend instance.",
+                "current_revision": current_revision,
+                "current_settings": fresh_row.get("template_settings") or {},
+            },
+        )
+
+    active_jobs = _active_identity_sensitive_jobs(
+        fresh_row,
+        ignore_generation_attempt_id=allowed_generation_attempt_id,
+        ignore_regeneration_attempt_id=allowed_regeneration_attempt_id,
+    )
+    if include_script_state and active_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Scripts cannot be edited, deleted, or reordered while "
+                    "identity-sensitive jobs are active on another backend instance."
+                ),
+                "active_jobs": sorted(set(active_jobs)),
+            },
+        )
+
+    if include_script_state:
+        # Rebase runtime maps from the authoritative row before serializing the
+        # structural snapshot. A backend instance may have an old/empty local
+        # cache even though another instance already persisted a terminal
+        # render or preview for an unchanged ScriptId.
+        new_script_ids = [
+            str(value) for value in (pipeline.get("script_ids") or [])
+        ]
+        fresh_runtime_state = copy.deepcopy(fresh_row)
+        _remap_pipeline_script_state(
+            fresh_runtime_state,
+            fresh_script_ids,
+            new_script_ids,
+        )
+        for field in ("render_jobs", "tts_jobs", "preview_renders"):
+            pipeline[field] = _merge_identity_job_maps(
+                field,
+                fresh_runtime_state.get(field),
+                pipeline.get(field),
+                new_script_ids,
+            )
+        pipeline["preview_jobs"] = _merge_preview_job_maps(
+            fresh_runtime_state.get("preview_jobs"),
+            pipeline.get("preview_jobs"),
+            new_script_ids,
+        )
+        for field in ("previews", "tts_previews"):
+            pipeline[field] = _merge_runtime_output_map(
+                field,
+                fresh_runtime_state.get(field),
+                pipeline.get(field),
+                new_script_ids,
+            )
+
+        fresh_text_by_id = {
+            script_id: str((fresh_row.get("scripts") or [])[index])
+            for index, script_id in enumerate(fresh_script_ids)
+            if index < len(fresh_row.get("scripts") or [])
+        }
+        changed_indices = {
+            index
+            for index, script_id in enumerate(new_script_ids)
+            if (
+                index >= len(pipeline.get("scripts") or [])
+                or script_id not in fresh_text_by_id
+                or _stable_hash(fresh_text_by_id[script_id])
+                != _stable_hash(str(pipeline["scripts"][index]))
+            )
+        }
+        for index in changed_indices:
+            pipeline["tts_previews"].pop(index, None)
+            pipeline["tts_previews"].pop(str(index), None)
+            _drop_previews_for_variant(pipeline, index)
+        if changed_indices:
+            _invalidate_render_jobs(
+                pipeline,
+                reason="Script changed",
+                variant_indices=changed_indices,
+            )
+
+    next_revision = current_revision + 1
+    current_jobs_revision = int(fresh_row.get("jobs_revision") or 0)
+    next_jobs_revision = current_jobs_revision + 1
+    settings = copy.deepcopy(pipeline.get("template_settings") or {})
+    if settings:
+        settings.setdefault("snapshot", {})["revision"] = next_revision
+    pipeline["template_settings"] = settings
+    pipeline["settings_revision"] = next_revision
+    pipeline["jobs_revision"] = next_jobs_revision
+    payload = _script_snapshot_update_payload(
+        pipeline,
+        include_script_state=include_script_state,
+    )
+
     try:
-        repo = get_repository()
-        render_jobs_json = {str(k): v for k, v in render_jobs.items()}
+        update_result = repo.table_query(
+            "editai_pipelines",
+            "update",
+            data=payload,
+            filters=QueryFilters(
+                eq={
+                    "id": pipeline_id,
+                    "profile_id": profile_id,
+                    "settings_revision": current_revision,
+                    "jobs_revision": current_jobs_revision,
+                },
+            ),
+        )
+    except Exception as exc:
+        if _is_missing_column_error(
+            exc,
+            "settings_revision",
+        ) or _is_missing_column_error(exc, "jobs_revision"):
+            raise HTTPException(
+                status_code=503,
+                detail="Pipeline snapshot CAS is unavailable; run migration 059.",
+            ) from exc
+        raise
+
+    if update_result.count != 1:
+        winning_row = repo.get_pipeline(pipeline_id) or {}
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pipeline settings changed while this save was in flight.",
+                "current_revision": int(
+                    winning_row.get("settings_revision") or current_revision
+                ),
+                "current_settings": winning_row.get("template_settings") or {},
+            },
+        )
+    return next_revision
+
+
+_JOB_TIMESTAMP_FIELDS = (
+    "updated_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+    "invalidated_at",
+    "started_at",
+    "queued_at",
+    "created_at",
+)
+_TERMINAL_JOB_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", _STALE_RENDER_STATUS}
+)
+
+
+def _job_event_time(job: Any) -> str:
+    if not isinstance(job, dict):
+        return ""
+    return max(
+        (str(job.get(field) or "") for field in _JOB_TIMESTAMP_FIELDS),
+        default="",
+    )
+
+
+def _job_attempt_token(job: Any) -> str:
+    if not isinstance(job, dict):
+        return ""
+    attempt_id = str(job.get("attempt_id") or "")
+    if attempt_id:
+        return attempt_id
+    metering = job.get("metering")
+    if isinstance(metering, dict):
+        idempotency_key = str(metering.get("idempotency_key") or "")
+        if idempotency_key:
+            return idempotency_key
+    return str(
+        job.get("queued_at")
+        or job.get("created_at")
+        or job.get("started_at")
+        or ""
+    )
+
+
+def _job_attempt_time(job: Any) -> str:
+    if not isinstance(job, dict):
+        return ""
+    return str(
+        job.get("queued_at")
+        or job.get("created_at")
+        or job.get("started_at")
+        or _job_event_time(job)
+    )
+
+
+def _metering_state_rank(record: Any) -> int:
+    if not isinstance(record, dict):
+        return -1
+    state = str(record.get("state") or "")
+    ranks = {
+        "pending": 0,
+        "reserve_pending": 1,
+        "reserved": 2,
+        "provider_started": 3,
+        "output_persisted": 4,
+        "capture_pending": 5,
+        "refund_pending": 5,
+        "captured": 6,
+        "released": 6,
+        "refunded": 6,
+        "denied": 6,
+    }
+    return ranks.get(state, 0)
+
+
+def _merge_job_records(current: Any, incoming: Any) -> dict:
+    """Choose one causally newer job without resurrecting a cancelled attempt."""
+    if not isinstance(current, dict):
+        return copy.deepcopy(incoming) if isinstance(incoming, dict) else {}
+    if not isinstance(incoming, dict):
+        return copy.deepcopy(current)
+
+    current_attempt = _job_attempt_token(current)
+    incoming_attempt = _job_attempt_token(incoming)
+    if (
+        current_attempt
+        and incoming_attempt
+        and current_attempt != incoming_attempt
+    ):
+        chosen, other = (
+            (incoming, current)
+            if _job_attempt_time(incoming) >= _job_attempt_time(current)
+            else (current, incoming)
+        )
+    else:
+        current_status = str(current.get("status") or "")
+        incoming_status = str(incoming.get("status") or "")
+        if current_status == "cancelled" and incoming_status != "cancelled":
+            chosen, other = current, incoming
+        elif incoming_status == "cancelled" and current_status != "cancelled":
+            chosen, other = incoming, current
+        elif (
+            current_status in _TERMINAL_JOB_STATUSES
+            and incoming_status not in _TERMINAL_JOB_STATUSES
+        ):
+            chosen, other = current, incoming
+        elif (
+            incoming_status in _TERMINAL_JOB_STATUSES
+            and current_status not in _TERMINAL_JOB_STATUSES
+        ):
+            chosen, other = incoming, current
+        else:
+            status_rank = {
+                "queued": 1,
+                "pending": 1,
+                "processing": 2,
+                _STALE_RENDER_STATUS: 3,
+                "failed": 3,
+                "completed": 3,
+                "cancelled": 4,
+            }
+            current_order = (
+                status_rank.get(current_status, 0),
+                int(current.get("progress") or 0),
+                _job_event_time(current),
+            )
+            incoming_order = (
+                status_rank.get(incoming_status, 0),
+                int(incoming.get("progress") or 0),
+                _job_event_time(incoming),
+            )
+            chosen, other = (
+                (incoming, current)
+                if incoming_order >= current_order
+                else (current, incoming)
+            )
+
+    merged = copy.deepcopy(chosen)
+    chosen_metering = merged.get("metering")
+    other_metering = other.get("metering")
+    # Metering belongs to one provider attempt.  Carrying a terminal
+    # reservation from an older attempt onto a newer retry can capture/refund
+    # the wrong request even when the job status itself was merged correctly.
+    same_attempt = (
+        not current_attempt
+        or not incoming_attempt
+        or current_attempt == incoming_attempt
+    )
+    if (
+        same_attempt
+        and _metering_state_rank(other_metering)
+        > _metering_state_rank(chosen_metering)
+    ):
+        merged["metering"] = copy.deepcopy(other_metering)
+    return merged
+
+
+def _canonical_identity_job_map(
+    field: str,
+    raw_state: Any,
+    script_ids: List[str],
+) -> Dict[str, dict]:
+    """Canonicalize a job map by embedded OutputId against current DB order."""
+    scratch = {
+        "pipeline_id": "job-cas",
+        "scripts": [""] * len(script_ids),
+        "script_ids": list(script_ids),
+        field: copy.deepcopy(raw_state) if isinstance(raw_state, dict) else {},
+    }
+    _backfill_pipeline_output_identities(scratch)
+    return {
+        str(key): value
+        for key, value in (scratch.get(field) or {}).items()
+        if isinstance(value, dict)
+    }
+
+
+def _merge_identity_job_maps(
+    field: str,
+    current: Any,
+    incoming: Any,
+    script_ids: List[str],
+) -> Dict[str, dict]:
+    current_map = _canonical_identity_job_map(field, current, script_ids)
+    incoming_map = _canonical_identity_job_map(field, incoming, script_ids)
+    merged = copy.deepcopy(current_map)
+    for key, incoming_job in incoming_map.items():
+        merged[key] = _merge_job_records(merged.get(key), incoming_job)
+    return merged
+
+
+def _runtime_entry_output_id(
+    field: str,
+    key: Any,
+    value: Any,
+    script_ids: List[str],
+) -> str:
+    if isinstance(value, dict):
+        embedded = str(value.get("output_id") or "")
+        if _parse_output_id(embedded) is not None:
+            return embedded
+        embedded_script_id = str(value.get("script_id") or "")
+        if embedded_script_id:
+            if field == "tts_previews":
+                return _build_output_id(embedded_script_id)
+            parsed_key = _parse_preview_key(str(key))
+            return _build_output_id(
+                embedded_script_id,
+                parsed_key[1] if parsed_key else None,
+            )
+    parsed_key = _parse_preview_key(str(key))
+    if parsed_key is None:
+        return ""
+    index, visual_version = parsed_key
+    if index < 0 or index >= len(script_ids):
+        return ""
+    return _build_output_id(
+        script_ids[index],
+        None if field == "tts_previews" else visual_version,
+    )
+
+
+def _merge_runtime_output_map(
+    field: str,
+    current: Any,
+    incoming_patch: Any,
+    script_ids: List[str],
+) -> Dict[str, Any]:
+    """Apply per-OutputId runtime patches without replacing sibling results."""
+    merged = {
+        str(key): copy.deepcopy(value)
+        for key, value in (
+            current.items() if isinstance(current, dict) else []
+        )
+    }
+    if not isinstance(incoming_patch, dict):
+        return merged
+    for raw_key, raw_value in incoming_patch.items():
+        key = str(raw_key)
+        output_id = _runtime_entry_output_id(
+            field,
+            raw_key,
+            raw_value,
+            script_ids,
+        )
+        if raw_value is None:
+            merged.pop(key, None)
+            if output_id:
+                for existing_key, existing_value in list(merged.items()):
+                    if _runtime_entry_output_id(
+                        field,
+                        existing_key,
+                        existing_value,
+                        script_ids,
+                    ) == output_id:
+                        merged.pop(existing_key, None)
+            continue
+        matching_existing: List[Tuple[str, Any]] = []
+        if output_id:
+            for existing_key, existing_value in list(merged.items()):
+                if _runtime_entry_output_id(
+                    field,
+                    existing_key,
+                    existing_value,
+                    script_ids,
+                ) == output_id:
+                    matching_existing.append((existing_key, existing_value))
+        incoming_time = (
+            str(raw_value.get("timestamp") or raw_value.get("updated_at") or "")
+            if isinstance(raw_value, dict)
+            else ""
+        )
+        newest_existing_time = max(
+            (
+                str(
+                    existing_value.get("timestamp")
+                    or existing_value.get("updated_at")
+                    or ""
+                )
+                for _, existing_value in matching_existing
+                if isinstance(existing_value, dict)
+            ),
+            default="",
+        )
+        if (
+            incoming_time
+            and newest_existing_time
+            and incoming_time < newest_existing_time
+        ):
+            continue
+        for existing_key, _ in matching_existing:
+            merged.pop(existing_key, None)
+        merged[key] = copy.deepcopy(raw_value)
+    return merged
+
+
+def _merge_preview_job_maps(
+    current: Any,
+    incoming: Any,
+    script_ids: List[str],
+) -> Dict[str, dict]:
+    surviving_ids = set(script_ids)
+    merged_by_output: Dict[str, dict] = {}
+    for raw_state in (current, incoming):
+        if not isinstance(raw_state, dict):
+            continue
+        for raw_key, raw_job in raw_state.items():
+            if not isinstance(raw_job, dict):
+                continue
+            job = copy.deepcopy(raw_job)
+            output_id = str(job.get("output_id") or raw_key)
+            parsed = _parse_output_id(output_id)
+            if parsed is None or parsed[0] not in surviving_ids:
+                continue
+            job["script_id"] = parsed[0]
+            job["output_id"] = output_id
+            merged_by_output[output_id] = _merge_job_records(
+                merged_by_output.get(output_id),
+                job,
+            )
+    return merged_by_output
+
+
+def _cas_persist_job_updates(
+    pipeline_id: str,
+    requested_updates: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge job maps by stable identity and persist them with a DB CAS."""
+    repo = get_repository()
+    if not hasattr(repo, "get_pipeline"):
+        # Compatibility for pre-migration repository shims. The caller keeps
+        # the historical missing-column handling; no production repository
+        # takes this branch.
         repo.update_pipeline(
             pipeline_id,
-            {"render_jobs": render_jobs_json, "expires_at": _pipeline_expiry_timestamp()},
+            {
+                **copy.deepcopy(requested_updates),
+                "expires_at": _pipeline_expiry_timestamp(),
+            },
         )
-        logger.debug(f"Pipeline {pipeline_id} render_jobs updated in DB")
-    except Exception as e:
-        logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
+        return copy.deepcopy(requested_updates)
+    for _attempt in range(4):
+        fresh_row = repo.get_pipeline(pipeline_id)
+        if not fresh_row:
+            logger.warning(
+                "Cannot persist jobs for missing pipeline %s",
+                pipeline_id,
+            )
+            return {}
+        script_ids = [
+            str(value) for value in (fresh_row.get("script_ids") or [])
+        ]
+        if not script_ids:
+            with _pipelines_lock:
+                cached = _pipelines.get(pipeline_id) or {}
+                script_ids = [
+                    str(value)
+                    for value in (cached.get("script_ids") or [])
+                ]
+        merged_updates: Dict[str, Any] = {}
+        for field, incoming in requested_updates.items():
+            if field in {"render_jobs", "tts_jobs", "preview_renders"}:
+                merged_updates[field] = _merge_identity_job_maps(
+                    field,
+                    fresh_row.get(field),
+                    incoming,
+                    script_ids,
+                )
+            elif field == "preview_jobs":
+                merged_updates[field] = _merge_preview_job_maps(
+                    fresh_row.get(field),
+                    incoming,
+                    script_ids,
+                )
+            elif field in {"previews", "tts_previews", "segment_usage"}:
+                incoming_runtime = incoming
+                if field == "tts_previews" and isinstance(incoming, dict):
+                    incoming_runtime = {}
+                    for key, value in incoming.items():
+                        if not isinstance(value, dict):
+                            incoming_runtime[key] = value
+                            continue
+                        entry_attempt = str(value.get("attempt_id") or "")
+                        if not entry_attempt:
+                            incoming_runtime[key] = value
+                            continue
+                        script_id = str(value.get("script_id") or "")
+                        index = (
+                            _script_index_for_id(fresh_row, script_id)
+                            if script_id
+                            else None
+                        )
+                        if index is None:
+                            try:
+                                index = int(key)
+                            except (TypeError, ValueError):
+                                continue
+                        live_job = _indexed_tts_job(
+                            fresh_row.get("tts_jobs"),
+                            index,
+                        )
+                        if _job_attempt_token(live_job) == entry_attempt:
+                            incoming_runtime[key] = value
+                merged_updates[field] = _merge_runtime_output_map(
+                    field,
+                    fresh_row.get(field),
+                    incoming_runtime,
+                    script_ids,
+                )
+            elif field == "generation_job":
+                merged_updates[field] = _merge_job_records(
+                    fresh_row.get(field),
+                    incoming,
+                )
+            else:
+                merged_updates[field] = copy.deepcopy(incoming)
+
+        current_revision = int(fresh_row.get("jobs_revision") or 0)
+        next_revision = current_revision + 1
+        payload = {
+            **merged_updates,
+            "jobs_revision": next_revision,
+            "expires_at": _pipeline_expiry_timestamp(),
+        }
+        if not hasattr(repo, "table_query"):
+            # Minimal repositories used by isolated unit tests do not expose the
+            # generic CAS primitive. Production repositories always do.
+            repo.update_pipeline(pipeline_id, payload)
+            return merged_updates
+        try:
+            result = repo.table_query(
+                "editai_pipelines",
+                "update",
+                data=payload,
+                filters=QueryFilters(
+                    eq={
+                        "id": pipeline_id,
+                        "jobs_revision": current_revision,
+                    },
+                ),
+            )
+        except Exception as exc:
+            if _is_missing_column_error(exc, "jobs_revision"):
+                if get_settings().desktop_mode:
+                    # A desktop app has a single backend writer. Preserve
+                    # render visibility and completion on databases that have
+                    # not received migration 059 yet, while web deployments
+                    # continue to require cross-worker CAS.
+                    legacy_payload = {
+                        **merged_updates,
+                        "expires_at": _pipeline_expiry_timestamp(),
+                    }
+                    repo.update_pipeline(pipeline_id, legacy_payload)
+                    logger.warning(
+                        "Pipeline %s is using single-process desktop job "
+                        "persistence; apply migration 059 to enable CAS.",
+                        pipeline_id,
+                    )
+                    return merged_updates
+                logger.error(
+                    "Pipeline job CAS is unavailable for %s; run migration 059.",
+                    pipeline_id,
+                )
+                return {}
+            logger.warning(
+                "Failed to persist job state for %s: %s",
+                pipeline_id,
+                exc,
+            )
+            return {}
+        if result.count == 1:
+            with _pipelines_lock:
+                cached = _pipelines.get(pipeline_id)
+                if isinstance(cached, dict):
+                    cached["jobs_revision"] = next_revision
+            return merged_updates
+    logger.warning(
+        "Pipeline %s job CAS conflicted repeatedly; state was not overwritten.",
+        pipeline_id,
+    )
+    return {}
+
+
+def _db_update_render_jobs(pipeline_id: str, render_jobs: dict) -> Dict[str, dict]:
+    """Persist render jobs by OutputId without clobbering another worker."""
+    merged = _cas_persist_job_updates(
+        pipeline_id,
+        {"render_jobs": dict(render_jobs)},
+    )
+    if merged:
+        logger.debug("Pipeline %s render_jobs updated in DB", pipeline_id)
+    return dict(merged.get("render_jobs") or {})
+
+
+def _refresh_render_jobs_from_db(pipeline_id: str, pipeline: dict) -> None:
+    """Merge durable render state into a process-local cache by OutputId."""
+    try:
+        row = get_repository().get_pipeline(pipeline_id)
+        if not row:
+            return
+        script_ids = [
+            str(value) for value in (row.get("script_ids") or [])
+        ]
+        if not script_ids:
+            # Migration 058 is additive. Until it is present, the current
+            # process still owns valid embedded ScriptId/OutputId metadata.
+            # Using the live IDs prevents an empty DB column from erasing every
+            # active render card on the next status poll.
+            script_ids = list(_ensure_pipeline_script_ids(pipeline))
+        merged = _merge_identity_job_maps(
+            "render_jobs",
+            row.get("render_jobs"),
+            pipeline.get("render_jobs"),
+            script_ids,
+        )
+        with _get_pipeline_state_lock(pipeline_id):
+            pipeline["render_jobs"] = merged
+            pipeline["jobs_revision"] = int(row.get("jobs_revision") or 0)
+    except Exception as exc:
+        logger.warning(
+            "Pipeline %s render state refresh failed: %s",
+            pipeline_id,
+            exc,
+        )
 
 
 _ACTIVE_ASYNC_JOB_STATUSES = frozenset({"queued", "processing"})
 _TERMINAL_ASYNC_JOB_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _active_identity_sensitive_jobs(
+    pipeline: dict,
+    *,
+    ignore_generation_attempt_id: Optional[str] = None,
+    ignore_regeneration_attempt_id: Optional[str] = None,
+) -> List[str]:
+    """Describe jobs that make script delete/reorder unsafe.
+
+    Numeric keys remain as a compatibility index, but the operation is rejected
+    while a worker could still commit against that index. Current workers also
+    validate ScriptId before their final write; this guard keeps the UI and job
+    status maps stable during the request.
+    """
+    active: List[str] = []
+    generation = pipeline.get("generation_job")
+    if (
+        isinstance(generation, dict)
+        and generation.get("status") in _ACTIVE_ASYNC_JOB_STATUSES
+        and not (
+            ignore_generation_attempt_id
+            and str(generation.get("attempt_id") or "")
+            == ignore_generation_attempt_id
+        )
+    ):
+        active.append("script generation")
+    if isinstance(generation, dict):
+        attempts = generation.get("regenerations") or {}
+        if any(
+            key != ignore_regeneration_attempt_id
+            and
+            isinstance(attempt, dict)
+            and attempt.get("status") in {"pending", "reserved", "processing", "persisting", "settling"}
+            for key, attempt in attempts.items()
+        ):
+            active.append("script regeneration")
+    for label, field in (
+        ("voice-over", "tts_jobs"),
+        ("preview", "preview_jobs"),
+        ("preview render", "preview_renders"),
+        ("render", "render_jobs"),
+    ):
+        for job in (pipeline.get(field) or {}).values():
+            if isinstance(job, dict) and job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+                active.append(label)
+                break
+    return active
+
+
+def _active_voice_generation_jobs(pipeline: Any) -> List[dict]:
+    """Return active TTS attempts that make preview/render settings unstable."""
+    if not isinstance(pipeline, dict):
+        return []
+    return [
+        job
+        for job in (pipeline.get("tts_jobs") or {}).values()
+        if isinstance(job, dict)
+        and job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES
+    ]
+
+
+def _require_voice_generation_idle(
+    pipeline_id: str,
+    pipeline: dict,
+    *,
+    action: str,
+) -> None:
+    """Fail closed when an authoritative voice-over attempt is still active."""
+    active_jobs = _active_voice_generation_jobs(pipeline)
+    if not active_jobs:
+        try:
+            fresh_row = get_repository().get_pipeline(pipeline_id)
+        except Exception as exc:
+            logger.exception(
+                "Could not refresh voice-over jobs before %s for pipeline %s",
+                action,
+                pipeline_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "voice_regeneration_state_unavailable",
+                    "message": (
+                        f"Cannot safely start {action} because the current voice-over "
+                        "regeneration state is unavailable. Please retry."
+                    ),
+                },
+            ) from exc
+        if (
+            not isinstance(fresh_row, dict)
+            or not isinstance(fresh_row.get("tts_jobs"), dict)
+        ):
+            logger.error(
+                "Repository returned invalid pipeline state before %s for pipeline %s",
+                action,
+                pipeline_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "voice_regeneration_state_unavailable",
+                    "message": (
+                        f"Cannot safely start {action} because the current voice-over "
+                        "regeneration state is unavailable. Please retry."
+                    ),
+                },
+            )
+        active_jobs = _active_voice_generation_jobs(fresh_row)
+
+    if not active_jobs:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "voice_regeneration_active",
+            "message": (
+                f"Cannot start {action} while voice-over regeneration is active. "
+                "Wait for it to finish or cancel it first."
+            ),
+            "active_output_ids": sorted(
+                {
+                    str(job.get("output_id") or "")
+                    for job in active_jobs
+                    if job.get("output_id")
+                }
+            ),
+        },
+    )
+
+
 _TERMINAL_METERING_STATES = frozenset({"captured", "released", "refunded", "denied"})
 _ACTIVE_REGENERATION_STATUSES = frozenset(
     {"pending", "reserved", "processing", "persisting", "settling"}
@@ -1274,6 +3149,8 @@ def _job_timestamp() -> str:
 def _new_async_job(current_step: str = "Queued") -> dict:
     now = _job_timestamp()
     return {
+        "attempt_id": uuid.uuid4().hex,
+        "worker_instance_id": _BACKEND_INSTANCE_ID,
         "status": "queued",
         "progress": 0,
         "current_step": current_step,
@@ -1283,6 +3160,25 @@ def _new_async_job(current_step: str = "Queued") -> dict:
         "completed_at": None,
         "error": None,
     }
+
+
+def _job_owned_by_live_foreign_instance(job: Any) -> bool:
+    """Keep a recent job owned by another container alive on DB cache load."""
+    if not isinstance(job, dict):
+        return False
+    owner = str(job.get("worker_instance_id") or "")
+    if not owner or owner == _BACKEND_INSTANCE_ID:
+        return False
+    heartbeat = _job_event_time(job)
+    if not heartbeat:
+        return False
+    try:
+        heartbeat_at = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        datetime.now(timezone.utc) - heartbeat_at
+    ).total_seconds() <= STALE_PROCESSING_THRESHOLD_SEC
 
 
 def _metering_http_exception(error: StudioMeteringBlocked) -> HTTPException:
@@ -1304,14 +3200,79 @@ def _replace_generation_metering(pipeline_id: str, record: dict) -> dict:
     return snapshot
 
 
-def _replace_tts_metering(pipeline_id: str, variant_index: int, record: dict) -> dict:
+def _indexed_tts_job(jobs: Any, variant_index: int) -> dict:
+    if not isinstance(jobs, dict):
+        return {}
+    job = jobs.get(variant_index)
+    if job is None:
+        job = jobs.get(str(variant_index))
+    return job if isinstance(job, dict) else {}
+
+
+def _authoritative_tts_job(
+    pipeline_id: str,
+    variant_index: int,
+    *,
+    attempt_id: Optional[str] = None,
+) -> dict:
+    """Read the current TTS attempt from persistent state when available."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    local_job = _indexed_tts_job(
+        (pipeline or {}).get("tts_jobs"),
+        variant_index,
+    )
+    try:
+        fresh_row = get_repository().get_pipeline(pipeline_id)
+    except Exception:
+        fresh_row = None
+    if isinstance(fresh_row, dict) and isinstance(
+        fresh_row.get("tts_jobs"),
+        dict,
+    ):
+        job = _indexed_tts_job(fresh_row.get("tts_jobs"), variant_index)
+    else:
+        job = local_job
+    if attempt_id and _job_attempt_token(job) != attempt_id:
+        return {}
+    return copy.deepcopy(job)
+
+
+def _replace_tts_metering(
+    pipeline_id: str,
+    variant_index: int,
+    record: dict,
+    *,
+    attempt_id: Optional[str] = None,
+) -> dict:
     """Persist one TTS settlement without allowing a late status resurrection."""
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         return {}
+    authoritative = (
+        _authoritative_tts_job(pipeline_id, variant_index)
+        if attempt_id
+        else {}
+    )
+    if attempt_id and _job_attempt_token(authoritative) != attempt_id:
+        with _get_pipeline_state_lock(pipeline_id):
+            jobs = pipeline.setdefault("tts_jobs", {})
+            jobs.pop(str(variant_index), None)
+            if authoritative:
+                jobs[variant_index] = copy.deepcopy(authoritative)
+            else:
+                jobs.pop(variant_index, None)
+        return copy.deepcopy(authoritative)
     with _get_pipeline_state_lock(pipeline_id):
         jobs = pipeline.setdefault("tts_jobs", {})
-        job = jobs.setdefault(variant_index, _new_async_job())
+        job = _indexed_tts_job(jobs, variant_index)
+        if attempt_id and _job_attempt_token(job) != attempt_id:
+            if authoritative:
+                jobs.pop(str(variant_index), None)
+                jobs[variant_index] = authoritative
+            return copy.deepcopy(authoritative)
+        if not job:
+            job = _new_async_job()
+            jobs[variant_index] = job
         job["metering"] = dict(record)
         job["updated_at"] = _job_timestamp()
         snapshot = dict(job)
@@ -1363,8 +3324,14 @@ def _regeneration_output_is_persisted(pipeline: dict, attempt: dict) -> bool:
         return True
     output_fingerprint = attempt.get("output_fingerprint")
     variant_index = attempt.get("variant_index")
+    script_id = attempt.get("script_id")
     if not isinstance(output_fingerprint, str) or not output_fingerprint:
         return False
+    if isinstance(script_id, str):
+        resolved_index = _script_index_for_id(pipeline, script_id)
+        if resolved_index is None:
+            return False
+        variant_index = resolved_index
     if not isinstance(variant_index, int):
         return False
     scripts = pipeline.get("scripts") or []
@@ -1513,7 +3480,10 @@ async def _reconcile_regeneration_metering(
         if delivered:
             result_metadata = {
                 "studio_job_id": pipeline_id,
-                "output_id": f"script-{live_attempt.get('variant_index')}",
+                "output_id": str(
+                    live_attempt.get("script_id")
+                    or f"script-{live_attempt.get('variant_index')}"
+                ),
             }
         settled = await settle_metering_record(
             identity,
@@ -1562,10 +3532,19 @@ async def _settle_tts_metering(
     *,
     delivered: bool,
     result_metadata: Optional[Dict[str, Any]] = None,
+    attempt_id: Optional[str] = None,
 ) -> dict:
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    jobs = (pipeline or {}).get("tts_jobs") or {}
-    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    job = (
+        _authoritative_tts_job(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        )
+        if attempt_id
+        else _authoritative_tts_job(pipeline_id, variant_index)
+    )
+    if attempt_id and not job:
+        return {}
     record = job.get("metering")
     if not isinstance(record, dict):
         return job
@@ -1575,7 +3554,12 @@ async def _settle_tts_metering(
         delivered=delivered,
         result_metadata=result_metadata,
     )
-    return _replace_tts_metering(pipeline_id, variant_index, settled)
+    return _replace_tts_metering(
+        pipeline_id,
+        variant_index,
+        settled,
+        attempt_id=attempt_id,
+    )
 
 
 async def _recover_generation_reservation_for_settlement(
@@ -1618,11 +3602,21 @@ async def _recover_tts_reservation_for_settlement(
     pipeline_id: str,
     variant_index: int,
     fallback_user_id: Optional[str] = None,
+    *,
+    attempt_id: Optional[str] = None,
 ) -> dict:
     """Replay one lost TTS reserve response without ever restarting its provider."""
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    jobs = (pipeline or {}).get("tts_jobs") or {}
-    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+    job = (
+        _authoritative_tts_job(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        )
+        if attempt_id
+        else _authoritative_tts_job(pipeline_id, variant_index)
+    )
+    if attempt_id and not job:
+        return {}
     record = job.get("metering")
     if not isinstance(record, dict) or record.get("reservation_id"):
         return job
@@ -1648,8 +3642,18 @@ async def _recover_tts_reservation_for_settlement(
             ),
             "last_error": error.as_http_detail(),
         }
-        return _replace_tts_metering(pipeline_id, variant_index, pending)
-    return _replace_tts_metering(pipeline_id, variant_index, recovered)
+        return _replace_tts_metering(
+            pipeline_id,
+            variant_index,
+            pending,
+            attempt_id=attempt_id,
+        )
+    return _replace_tts_metering(
+        pipeline_id,
+        variant_index,
+        recovered,
+        attempt_id=attempt_id,
+    )
 
 
 def _replace_render_metering(pipeline_id: str, job_key: Any, record: dict) -> dict:
@@ -1668,6 +3672,7 @@ def _replace_render_metering(pipeline_id: str, job_key: Any, record: dict) -> di
         if not isinstance(job, dict):
             return {}
         job["metering"] = dict(record)
+        job["updated_at"] = _job_timestamp()
         snapshot = dict(job)
         _db_update_render_jobs(pipeline_id, dict(jobs))
     return snapshot
@@ -1766,15 +3771,17 @@ def _ensure_render_metering_replaceable(job: dict) -> None:
 def _render_job_is_stale(job: dict) -> bool:
     if job.get("status") != "processing":
         return False
-    started_at = job.get("started_at")
-    if not started_at:
+    heartbeat = _job_event_time(job)
+    if not heartbeat:
         return True
     try:
-        started_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        heartbeat_at = datetime.fromisoformat(
+            str(heartbeat).replace("Z", "+00:00")
+        )
     except (TypeError, ValueError):
         return True
     return (
-        datetime.now(timezone.utc) - started_dt
+        datetime.now(timezone.utc) - heartbeat_at
     ).total_seconds() > STALE_PROCESSING_THRESHOLD_SEC and not job.get("completed_at")
 
 
@@ -1783,18 +3790,27 @@ def _db_update_async_jobs(
     *,
     generation_job: Optional[dict] = None,
     tts_jobs: Optional[dict] = None,
+    preview_jobs: Optional[dict] = None,
+    preview_renders: Optional[dict] = None,
 ) -> None:
-    """Persist only async job state, avoiding a heavyweight full pipeline save."""
+    """Persist async job state with the same cross-instance CAS as renders."""
     updates: Dict[str, Any] = {}
     if generation_job is not None:
         updates["generation_job"] = dict(generation_job)
     if tts_jobs is not None:
         updates["tts_jobs"] = {str(k): v for k, v in dict(tts_jobs).items()}
+    if preview_jobs is not None:
+        updates["preview_jobs"] = {
+            str(k): v for k, v in dict(preview_jobs).items()
+        }
+    if preview_renders is not None:
+        updates["preview_renders"] = {
+            str(k): v for k, v in dict(preview_renders).items()
+        }
     if not updates:
         return
-    updates["expires_at"] = _pipeline_expiry_timestamp()
     try:
-        get_repository().update_pipeline(pipeline_id, updates)
+        _cas_persist_job_updates(pipeline_id, updates)
     except Exception as e:
         if any(_is_missing_column_error(e, column) for column in updates):
             # Migration 054 is additive, but older installations should remain
@@ -1830,13 +3846,41 @@ def _update_generation_job(pipeline_id: str, **changes: Any) -> dict:
     return snapshot
 
 
-def _update_tts_job(pipeline_id: str, variant_index: int, **changes: Any) -> dict:
+def _update_tts_job(
+    pipeline_id: str,
+    variant_index: int,
+    *,
+    attempt_id: Optional[str] = None,
+    **changes: Any,
+) -> dict:
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         return {}
+    authoritative = (
+        _authoritative_tts_job(pipeline_id, variant_index)
+        if attempt_id
+        else {}
+    )
+    if attempt_id and _job_attempt_token(authoritative) != attempt_id:
+        with _get_pipeline_state_lock(pipeline_id):
+            jobs = pipeline.setdefault("tts_jobs", {})
+            jobs.pop(str(variant_index), None)
+            if authoritative:
+                jobs[variant_index] = copy.deepcopy(authoritative)
+            else:
+                jobs.pop(variant_index, None)
+        return copy.deepcopy(authoritative)
     with _get_pipeline_state_lock(pipeline_id):
         jobs = pipeline.setdefault("tts_jobs", {})
-        job = jobs.setdefault(variant_index, _new_async_job())
+        job = _indexed_tts_job(jobs, variant_index)
+        if attempt_id and _job_attempt_token(job) != attempt_id:
+            if authoritative:
+                jobs.pop(str(variant_index), None)
+                jobs[variant_index] = authoritative
+            return copy.deepcopy(authoritative)
+        if not job:
+            job = _new_async_job()
+            jobs[variant_index] = job
         if job.get("status") in _TERMINAL_ASYNC_JOB_STATUSES:
             return dict(job)
         job.update(changes)
@@ -1857,12 +3901,19 @@ def _generation_job_cancelled(pipeline_id: str) -> bool:
     )
 
 
-def _tts_job_cancelled(pipeline_id: str, variant_index: int) -> bool:
-    pipeline = _get_pipeline_or_load(pipeline_id)
-    if not pipeline:
+def _tts_job_cancelled(
+    pipeline_id: str,
+    variant_index: int,
+    *,
+    attempt_id: Optional[str] = None,
+) -> bool:
+    job = _authoritative_tts_job(
+        pipeline_id,
+        variant_index,
+        attempt_id=attempt_id,
+    )
+    if attempt_id and not job:
         return True
-    jobs = pipeline.get("tts_jobs") or {}
-    job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
     return job.get("status") == "cancelled"
 
 
@@ -2101,17 +4152,73 @@ async def _save_clip_to_library(
     job_key=None,
     visual_version: Optional[str] = None,
     voice_settings: Optional[dict] = None,
-) -> None:
+) -> bool:
     """Save or update a rendered clip in the library.
 
     Handles: project creation, thumbnail generation, duration probe,
     clip upsert, clip_content save, segment usage_count increment.
     Shared by do_render and do_remake to avoid duplication.
+    Returns True only after the stable clip row has been persisted.
     """
     _jk = job_key if job_key is not None else vid
     job = pipeline["render_jobs"][_jk]
+    script_id = str(job.get("script_id") or "")
+    output_id = str(job.get("output_id") or "")
+    if not script_id or not output_id:
+        with render_jobs_lock:
+            job["library_saved"] = False
+            job["library_error"] = (
+                "Rendered output has no stable ScriptId/OutputId; refusing "
+                "index-based Library association."
+            )
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        return False
+    expected_output_id = _build_output_id(script_id, visual_version)
+    resolved_vid = _script_index_for_id(pipeline, script_id)
+    if output_id != expected_output_id or resolved_vid is None:
+        with render_jobs_lock:
+            job["library_saved"] = False
+            job["library_error"] = (
+                "Rendered output identity no longer matches a live script."
+            )
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        return False
+    try:
+        authoritative_vid = _validate_authoritative_output_identity(
+            pipeline_id,
+            script_id=script_id,
+            output_id=output_id,
+            expected_script_fingerprint=str(
+                job.get("script_fingerprint") or ""
+            ),
+        )
+        _validate_authoritative_render_attempt(
+            pipeline_id,
+            output_id=output_id,
+            attempt_id=str(job.get("attempt_id") or ""),
+        )
+    except HTTPException as identity_error:
+        with render_jobs_lock:
+            job["library_saved"] = False
+            job["library_error"] = str(identity_error.detail)
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        return False
+    if authoritative_vid != resolved_vid:
+        with render_jobs_lock:
+            job["library_saved"] = False
+            job["library_error"] = (
+                "Script order changed in another backend instance; refusing "
+                "an index-based Library write."
+            )
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        return False
+    # Numeric indices are compatibility/display positions only. Resolve the
+    # current position from ScriptId immediately before every Library write.
+    vid = resolved_vid
     with render_jobs_lock:
         job["library_saved"] = False
+        job["script_id"] = script_id
+        job["output_id"] = output_id
     try:
         repo_lib = get_repository()
         # Plan 81-02 Task 2 — repo is always usable under DATA_BACKEND=sqlite (FUNC-01);
@@ -2204,27 +4311,30 @@ async def _save_clip_to_library(
             # Step D: Upsert clip row (update if already exists for this variant)
             clip_supports_visual_version = True
             _list_filters_eq: Dict[str, Any] = {
-                "variant_index": vid,
-                "is_deleted": False,
+                "output_id": output_id,
             }
-            if visual_version:
-                _list_filters_eq["visual_version"] = visual_version
             try:
                 _list_result = repo_lib.list_clips(
                     library_project_id,
-                    QueryFilters(eq=dict(_list_filters_eq), select="id, visual_version", limit=10),
+                    QueryFilters(
+                        eq=dict(_list_filters_eq),
+                        select="id, output_id, visual_version",
+                        limit=1,
+                    ),
                 )
                 # When visual_version is None, the original PostgREST query used `.is_("visual_version", "null")`.
                 # list_clips eq does not honor IS NULL — filter client-side here.
-                if visual_version:
-                    existing_clip_data = (_list_result.data or [])[:1]
-                else:
-                    existing_clip_data = [
-                        r for r in (_list_result.data or [])
-                        if r.get("visual_version") is None
-                    ][:1]
+                existing_clip_data = (_list_result.data or [])[:1]
             except Exception as clip_query_err:
-                if _is_missing_column_error(clip_query_err, "visual_version"):
+                if (
+                    _is_missing_column_error(clip_query_err, "output_id")
+                    or _is_missing_column_error(clip_query_err, "script_id")
+                ):
+                    raise RuntimeError(
+                        "Stable clip identity is unavailable; run migration 059 "
+                        "before saving pipeline renders to Library."
+                    ) from clip_query_err
+                elif _is_missing_column_error(clip_query_err, "visual_version"):
                     clip_supports_visual_version = False
                     logger.warning("visual_version column missing, retrying clip lookup without it")
                     _list_filters_eq.pop("visual_version", None)
@@ -2235,6 +4345,32 @@ async def _save_clip_to_library(
                     existing_clip_data = (_list_result.data or [])[:1]
                 else:
                     raise
+
+            # Thumbnail/probe/project lookup may take several seconds. Re-read
+            # the pipeline and render attempt immediately before the clip
+            # upsert so a deleted/replaced output cannot be attached late.
+            final_authoritative_vid = _validate_authoritative_output_identity(
+                pipeline_id,
+                script_id=script_id,
+                output_id=output_id,
+                expected_script_fingerprint=str(
+                    job.get("script_fingerprint") or ""
+                ),
+            )
+            _validate_authoritative_render_attempt(
+                pipeline_id,
+                output_id=output_id,
+                attempt_id=str(job.get("attempt_id") or ""),
+            )
+            if final_authoritative_vid != vid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Script order changed before the Library write; "
+                        "the rendered clip was not persisted."
+                    ),
+                )
+
             if not existing_clip_data:
                 insert_payload = {
                     "project_id": library_project_id,
@@ -2249,6 +4385,8 @@ async def _save_clip_to_library(
                     "is_deleted": False,
                     "final_status": "completed",
                 }
+                insert_payload["script_id"] = script_id
+                insert_payload["output_id"] = output_id
                 if clip_supports_visual_version:
                     insert_payload["visual_version"] = visual_version
                 try:
@@ -2265,12 +4403,19 @@ async def _save_clip_to_library(
                         created_clip = repo_lib.create_clip(insert_payload)
                     else:
                         raise
-                if created_clip and created_clip.get("id"):
-                    with render_jobs_lock:
-                        job["clip_id"] = created_clip["id"]
+                if not (created_clip and created_clip.get("id")):
+                    raise RuntimeError(
+                        "Library clip creation returned no persistent clip id"
+                    )
+                with render_jobs_lock:
+                    job["clip_id"] = created_clip["id"]
             else:
                 # Existing clip — UPDATE with new video path and metadata
                 existing_id = existing_clip_data[0].get("id")
+                if not existing_id:
+                    raise RuntimeError(
+                        "Library clip lookup returned no persistent clip id"
+                    )
                 with render_jobs_lock:
                     job["clip_id"] = existing_id
                 update_payload = {
@@ -2281,6 +4426,8 @@ async def _save_clip_to_library(
                     "final_status": "completed",
                     "is_deleted": False,
                 }
+                update_payload["script_id"] = script_id
+                update_payload["output_id"] = output_id
                 try:
                     update_payload["render_fingerprint"] = render_fingerprint
                     repo_lib.update_clip(existing_id, update_payload)
@@ -2380,6 +4527,7 @@ async def _save_clip_to_library(
 
     # Persist library_saved/library_error/clip_id to DB after library save attempt
     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+    return bool(job.get("library_saved"))
 
 
 def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
@@ -2430,6 +4578,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             if not isinstance(_rj, dict):
                 continue
             if _rj.get("status") in ("queued", "processing"):
+                if _job_owned_by_live_foreign_instance(_rj):
+                    continue
                 _rj["status"] = "failed"
                 _rj["progress"] = 0
                 _rj["current_step"] = "Render întrerupt — apasă Render din nou"
@@ -2476,10 +4626,18 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 tts_jobs[int(k)] = v
             except (ValueError, TypeError):
                 logger.warning(f"Skipping invalid tts_jobs key: {k}")
+        preview_jobs = {
+            str(k): v
+            for k, v in (row.get("preview_jobs") or {}).items()
+            if isinstance(v, dict)
+        }
 
         interrupted_async_jobs = False
         interrupted_at = _job_timestamp()
-        if generation_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+        if (
+            generation_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES
+            and not _job_owned_by_live_foreign_instance(generation_job)
+        ):
             generation_metering = generation_job.get("metering")
             delivered = bool(
                 isinstance(generation_metering, dict)
@@ -2515,6 +4673,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         for tts_job in tts_jobs.values():
             if not isinstance(tts_job, dict) or tts_job.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES:
                 continue
+            if _job_owned_by_live_foreign_instance(tts_job):
+                continue
             tts_metering = tts_job.get("metering")
             delivered = bool(
                 isinstance(tts_metering, dict)
@@ -2547,6 +4707,22 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             ):
                 tts_metering["state"] = "reserve_pending"
             interrupted_async_jobs = True
+        for preview_job in preview_jobs.values():
+            if preview_job.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES:
+                continue
+            if _job_owned_by_live_foreign_instance(preview_job):
+                continue
+            preview_job.update(
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Preview interrupted — try again",
+                    "error": "Preview generation did not survive a backend restart.",
+                    "completed_at": interrupted_at,
+                    "updated_at": interrupted_at,
+                }
+            )
+            interrupted_async_jobs = True
 
         # PIP-14: Load preview_renders from DB. Same meta-multiplication
         # key handling as `previews` above.
@@ -2560,6 +4736,25 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 except (ValueError, TypeError):
                     logger.warning(f"Skipping invalid preview_renders key: {k}")
                     continue
+        for preview_render in preview_renders.values():
+            if (
+                not isinstance(preview_render, dict)
+                or preview_render.get("status") not in _ACTIVE_ASYNC_JOB_STATUSES
+            ):
+                continue
+            if _job_owned_by_live_foreign_instance(preview_render):
+                continue
+            preview_render.update(
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "current_step": "Preview render interrupted — try again",
+                    "error": "Preview render did not survive a backend restart.",
+                    "completed_at": interrupted_at,
+                    "updated_at": interrupted_at,
+                }
+            )
+            interrupted_async_jobs = True
 
         # Load segment_usage from DB
         segment_usage = {}
@@ -2570,10 +4765,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 logger.warning(f"Skipping invalid segment_usage key: {k}")
                 continue
 
-        # Load per-Meta-version subtitle overrides (keyed by StyleKey: "A",
-        # "B", or "default"). Legacy data may contain per-script-variant keys
-        # like "0_A"/"1_B" — _normalize_overrides collapses these to the
-        # canonical shape (last-wins). Tolerant: non-dict entries are dropped.
+        # Load inherited layers (A/B/default) plus explicit output overrides
+        # such as 0_A. Tolerant: malformed entries are dropped.
         raw_overrides = row.get("subtitle_settings_by_key") or {}
         subtitle_settings_by_key = _normalize_overrides(
             {str(k): v for k, v in raw_overrides.items()}
@@ -2589,12 +4782,14 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "variant_count": row.get("variant_count", 0),
             "keyword_count": row.get("keyword_count", 0),
             "scripts": row.get("scripts") or [],
+            "script_ids": row.get("script_ids") or [],
             "script_names": row.get("script_names") or [],
             "previews": previews,
             "render_jobs": render_jobs,
             "tts_previews": tts_previews,
             "generation_job": generation_job,
             "tts_jobs": tts_jobs,
+            "preview_jobs": preview_jobs,
             "preview_renders": preview_renders,
             "segment_usage": segment_usage,
             "source_video_ids": row.get("source_video_ids") or [],
@@ -2610,7 +4805,28 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "subtitle_settings_by_key": subtitle_settings_by_key,
             "attention_timeline": row.get("attention_timeline") or {},
             "template_settings": row.get("template_settings") or {},
+            "settings_revision": int(row.get("settings_revision") or 0),
+            "jobs_revision": int(row.get("jobs_revision") or 0),
         }
+        stable_script_ids = _ensure_pipeline_script_ids(pipeline)
+        identity_fields_changed = _backfill_pipeline_output_identities(pipeline)
+        identity_updates: Dict[str, Any] = {}
+        if list(row.get("script_ids") or []) != stable_script_ids:
+            identity_updates["script_ids"] = stable_script_ids
+        for field in identity_fields_changed:
+            identity_updates[field] = {
+                str(key): value
+                for key, value in (pipeline.get(field) or {}).items()
+            }
+        if identity_updates:
+            try:
+                repo.update_pipeline(pipeline_id, identity_updates)
+            except Exception as identity_error:
+                logger.warning(
+                    "Pipeline %s: stable identity backfill could not be persisted: %s",
+                    pipeline_id,
+                    identity_error,
+                )
 
         if _mark_interrupted_regeneration_attempts(pipeline):
             interrupted_async_jobs = True
@@ -2627,6 +4843,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 pipeline_id,
                 generation_job=generation_job,
                 tts_jobs=tts_jobs,
+                preview_jobs=preview_jobs,
+                preview_renders=preview_renders,
             )
         logger.info(f"Pipeline {pipeline_id} loaded from DB")
         return pipeline
@@ -2698,6 +4916,50 @@ def _voice_settings_match(a: Optional[dict], b: Optional[dict]) -> bool:
     return True
 
 
+def _tts_asset_matches_config(
+    entry: dict,
+    model: str,
+    voice_id: Optional[str],
+    voice_settings: Optional[dict],
+) -> bool:
+    """Require generated audio to match the complete voice configuration."""
+    # Library adoption is an explicit per-script choice. Auto-persisting a
+    # generated file to the Library does not change its provenance and must not
+    # bypass voice verification.
+    if entry.get("asset_provenance") == "library_adopted":
+        return bool(entry.get("library_asset_id"))
+    has_stored_config = any(
+        key in entry
+        for key in ("elevenlabs_model", "voice_id", "voice_settings")
+    )
+    if not has_stored_config:
+        return False
+    stored_model = str(entry.get("elevenlabs_model") or "")
+    stored_voice_id = entry.get("voice_id") or None
+    requested_voice_id = voice_id or None
+    return (
+        stored_model == model
+        and stored_voice_id == requested_voice_id
+        and _voice_settings_match(entry.get("voice_settings"), voice_settings)
+    )
+
+
+def _tts_audio_integrity_matches(
+    entry: dict,
+    resolved_audio_path: Optional[Path] = None,
+) -> bool:
+    """Verify that the durable file is the exact asset recorded in pipeline state."""
+    expected_hash = str(entry.get("audio_sha256") or "")
+    if not expected_hash:
+        return False
+    path = resolved_audio_path or _existing_pipeline_audio_path(
+        entry.get("audio_path"),
+        min_bytes=100,
+    )
+    actual_hash = _file_sha256(path)
+    return bool(actual_hash and actual_hash == expected_hash)
+
+
 # ============== PYDANTIC MODELS ==============
 
 class ContextProductItem(BaseModel):
@@ -2736,6 +4998,7 @@ class PipelineGenerateResponse(BaseModel):
     """Response model for pipeline generation."""
     pipeline_id: str                    # Unique pipeline identifier
     scripts: List[str]                  # Generated script texts
+    script_ids: List[str] = Field(default_factory=list)
     provider: str                       # Which AI provider was used
     keyword_count: int                  # How many keywords were available
     variant_count: int                  # Number of variants generated
@@ -2783,6 +5046,12 @@ class PipelinePreviewResponse(BaseModel):
     intro_offset_sec: float = 0.0
     intro_segments: List[dict] = []
     video_timeline: List[dict] = []
+    defaultTransition: Optional[dict] = None
+    music: Optional[dict] = None
+    manual_matches_preserved: bool = False
+    manual_composition_preserved: bool = False
+    script_id: Optional[str] = None
+    output_id: Optional[str] = None
 
 
 def _validate_composition_transitions(clips):
@@ -2893,6 +5162,14 @@ class MusicSettings(BaseModel):
 class PipelineRenderRequest(BaseModel):
     """Request model for batch render."""
     variant_indices: List[int] = Field(..., min_length=1, max_length=10)  # Which variants to render (BUG-PR-13)
+    # Exact output targets. With Meta enabled these are versioned PreviewKeys
+    # such as ``0_A`` or ``0_B``; omitting the field preserves the legacy
+    # behavior of expanding every selected script to both outputs.
+    output_keys: Optional[List[str]] = Field(default=None, min_length=1, max_length=20)
+    # Stable identity for every requested PreviewKey. The numeric output key is
+    # only a display position; this mapping lets the server reject a stale tab
+    # after delete/reorder before any render job is queued.
+    output_ids: Optional[Dict[str, str]] = None
     preset_name: str = "TikTok"
     output_width: Optional[int] = Field(default=None, ge=64, le=8192, multiple_of=2)
     output_height: Optional[int] = Field(default=None, ge=64, le=8192, multiple_of=2)
@@ -3006,6 +5283,7 @@ class PipelineRenderRequest(BaseModel):
 
     # Skip re-render: variants that already have a valid render with matching fingerprint
     skip_variants: Optional[List[int]] = None
+    skip_output_keys: Optional[List[str]] = Field(default=None, max_length=20)
 
     # Meta render multiplication: render each variant twice for Instagram/Facebook
     meta_multiplication: bool = False
@@ -3021,6 +5299,143 @@ class PipelineRenderRequest(BaseModel):
     # the flat fields above are used as default, and Meta profile overrides
     # (if meta_multiplication) apply on top as today.
     subtitle_settings_by_key: Optional[Dict[str, Dict[str, Any]]] = None
+
+    @field_validator("output_keys", "skip_output_keys")
+    @classmethod
+    def _validate_output_keys(cls, values: Optional[List[str]]) -> Optional[List[str]]:
+        if values is None:
+            return values
+        if len(values) != len(set(values)):
+            raise ValueError("output keys must be unique")
+        for value in values:
+            if not _PREVIEW_KEY_PATTERN.fullmatch(str(value)):
+                raise ValueError(f"Invalid output key: {value!r}")
+        return [str(value) for value in values]
+
+    @field_validator("output_ids")
+    @classmethod
+    def _validate_output_ids(
+        cls,
+        values: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        if values is None:
+            return values
+        normalized: Dict[str, str] = {}
+        for raw_key, raw_output_id in values.items():
+            key = str(raw_key)
+            output_id = str(raw_output_id)
+            if not _PREVIEW_KEY_PATTERN.fullmatch(key):
+                raise ValueError(f"Invalid output identity key: {key!r}")
+            if not _OUTPUT_ID_PATTERN.fullmatch(output_id):
+                raise ValueError(f"Invalid output id: {output_id!r}")
+            normalized[key] = output_id
+        return normalized
+
+
+def _render_tasks_for_request(
+    render_request: PipelineRenderRequest,
+) -> List[Tuple[int, Optional[int], Any]]:
+    """Resolve the exact outputs requested by the client."""
+    requested_indices = set(render_request.variant_indices)
+    if not render_request.output_keys:
+        tasks: List[Tuple[int, Optional[int], Any]] = []
+        for variant_index in render_request.variant_indices:
+            if render_request.meta_multiplication:
+                for version_index in range(len(META_PROFILES)):
+                    tasks.append(
+                        (
+                            variant_index,
+                            version_index,
+                            f"{variant_index}_{get_version_label(version_index)}",
+                        )
+                    )
+            else:
+                tasks.append((variant_index, None, variant_index))
+        return tasks
+
+    tasks = []
+    for output_key in render_request.output_keys:
+        parsed = _parse_preview_key(output_key)
+        if parsed is None:
+            raise HTTPException(status_code=400, detail=f"Invalid output key: {output_key}")
+        variant_index, visual_version = parsed
+        if variant_index not in requested_indices:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Output {output_key} is not represented in variant_indices",
+            )
+        if render_request.meta_multiplication:
+            if visual_version is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Meta output {output_key} must include a visual version",
+                )
+            version_index = next(
+                (
+                    index
+                    for index in range(len(META_PROFILES))
+                    if get_version_label(index) == visual_version
+                ),
+                None,
+            )
+            if version_index is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported visual version in output {output_key}",
+                )
+            tasks.append((variant_index, version_index, output_key))
+        else:
+            if visual_version is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Output {output_key} is versioned while Meta multiplication is off",
+                )
+            tasks.append((variant_index, None, variant_index))
+    return tasks
+
+
+def _render_task_identities(
+    pipeline: dict,
+    render_request: PipelineRenderRequest,
+    tasks: List[Tuple[int, Optional[int], Any]],
+) -> Dict[str, Tuple[str, str]]:
+    """Resolve and validate durable identities before queueing render work."""
+    requested_ids = render_request.output_ids or {}
+    task_keys = {str(job_key) for _, _, job_key in tasks}
+    missing_keys = task_keys - set(requested_ids)
+    if missing_keys:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Every render target requires its stable output identity.",
+                "output_keys": sorted(missing_keys),
+            },
+        )
+    unexpected_keys = set(requested_ids) - task_keys
+    if unexpected_keys:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "output_ids contains targets that are not being rendered.",
+                "output_keys": sorted(unexpected_keys),
+            },
+        )
+
+    identities: Dict[str, Tuple[str, str]] = {}
+    for variant_index, version_index, job_key in tasks:
+        visual_version = (
+            get_version_label(version_index)
+            if version_index is not None
+            else None
+        )
+        script_id, output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            output_id=requested_ids.get(str(job_key)),
+            visual_version=visual_version,
+        )
+        identities[str(job_key)] = (script_id, output_id)
+    return identities
 
 
 class PipelineRenderResponse(BaseModel):
@@ -3050,6 +5465,9 @@ class VariantStatus(BaseModel):
     meta_platform: Optional[str] = None     # "instagram", "facebook"
     queue_position: Optional[int] = None
     eta_seconds: Optional[int] = None
+    output_key: Optional[str] = None
+    script_id: Optional[str] = None
+    output_id: Optional[str] = None
 
 
 class RenderCheckResult(BaseModel):
@@ -3058,6 +5476,8 @@ class RenderCheckResult(BaseModel):
     can_skip: bool
     reason: str  # "fingerprint_match", "no_previous_render", "file_missing", "fingerprint_mismatch", "still_processing"
     existing_video_path: Optional[str] = None
+    output_key: Optional[str] = None
+    visual_version: Optional[str] = None
 
 
 class RenderCheckResponse(BaseModel):
@@ -3142,6 +5562,24 @@ class SourceSelectionRequest(BaseModel):
 class PipelineTemplateSettingsRequest(BaseModel):
     """The one persistence boundary for every user-configurable pipeline option."""
     settings: Dict[str, Any]
+    mode: Literal["autosave", "explicit"] = "explicit"
+    expected_revision: int = Field(ge=0)
+
+
+def _snapshot_revision(settings: Any) -> Optional[int]:
+    if not isinstance(settings, dict):
+        return None
+    snapshot = settings.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    value = snapshot.get("revision")
+    if isinstance(value, bool):
+        return None
+    try:
+        revision = int(value)
+    except (TypeError, ValueError):
+        return None
+    return revision if revision >= 0 else None
 
 
 def _resolve_template_source_bindings(
@@ -3408,19 +5846,81 @@ async def update_pipeline_template_settings(
     except PipelineTemplateValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    repo = get_repository()
+    fresh_row = repo.get_pipeline(pipeline_id)
+    if not fresh_row or fresh_row.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    current_revision = int(fresh_row.get("settings_revision") or 0)
+    if request.expected_revision != current_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pipeline settings changed in another tab or backend instance.",
+                "current_revision": current_revision,
+                "current_settings": fresh_row.get("template_settings") or {},
+            },
+        )
+
+    next_revision = current_revision + 1
+    settings = copy.deepcopy(settings)
+    settings.setdefault("snapshot", {})["revision"] = next_revision
+    try:
+        update_result = repo.table_query(
+            "editai_pipelines",
+            "update",
+            data={
+                "template_settings": settings,
+                "settings_revision": next_revision,
+                "expires_at": _pipeline_expiry_timestamp(),
+            },
+            filters=QueryFilters(
+                eq={
+                    "id": pipeline_id,
+                    "profile_id": profile.profile_id,
+                    "settings_revision": current_revision,
+                },
+            ),
+        )
+    except Exception as exc:
+        if _is_missing_column_error(exc, "settings_revision"):
+            raise HTTPException(
+                status_code=503,
+                detail="Pipeline snapshot CAS is unavailable; run migration 059.",
+            ) from exc
+        raise
+
+    if update_result.count != 1:
+        winning_row = repo.get_pipeline(pipeline_id) or {}
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pipeline settings changed while this save was in flight.",
+                "current_revision": int(
+                    winning_row.get("settings_revision") or current_revision
+                ),
+                "current_settings": winning_row.get("template_settings") or {},
+            },
+        )
+
     with _get_pipeline_state_lock(pipeline_id):
         settings_changed = pipeline.get("template_settings") != settings
         pipeline["template_settings"] = settings
+        pipeline["settings_revision"] = next_revision
         invalidated_clip_ids = (
             _invalidate_render_jobs(pipeline, reason="Pipeline settings changed")
-            if settings_changed
+            if settings_changed and request.mode == "explicit"
             else set()
         )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-    _db_save_pipeline(pipeline_id, pipeline)
+    if invalidated_clip_ids:
+        _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
     _invalidate_library_clips(invalidated_clip_ids)
-    return {"status": "saved", "schema_version": 1}
+    return {
+        "status": "saved",
+        "schema_version": 1,
+        "revision": next_revision,
+    }
 
 
 @router.get("/{pipeline_id}/template")
@@ -3508,6 +6008,8 @@ async def import_pipeline_template(
         "tts_previews": {},
         "generation_job": {},
         "tts_jobs": {},
+        "preview_jobs": {},
+        "settings_revision": 0,
         "preview_renders": {},
         "segment_usage": {},
         "captions": content.get("generatedCaptions") or {},
@@ -3539,6 +6041,7 @@ async def import_pipeline_template(
         "pipeline_id": pipeline_id,
         "settings": settings,
         "scripts": scripts,
+        "script_ids": pipeline.get("script_ids", []),
         "script_names": script_names,
         "warnings": warnings,
     }
@@ -3596,6 +6099,7 @@ async def cancel_pipeline_render(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    _refresh_render_jobs_from_db(pipeline_id, pipeline)
     mark_pipeline_cancelled(pipeline_id)
     metered_job_keys = [
         job_key
@@ -3688,6 +6192,7 @@ async def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_l
 async def cancel_variant_render(
     pipeline_id: str,
     job_key: str,
+    output_id: str = Body(..., embed=True),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Cancel a single render job while letting others continue.
@@ -3696,9 +6201,8 @@ async def cancel_variant_render(
       - "0", "1", ... for standard (non-Meta) renders
       - "0_A", "0_B" for Meta-multiplication A/B versions
 
-    Sending just "0" when Meta multiplication is active cancels BOTH A and B
-    (back-compat with older frontend that didn't know about per-version keys).
-    Sending "0_A" cancels only that specific version.
+    The stable output identity is mandatory so a stale tab cannot cancel a
+    newer job that happens to reuse the same numeric display position.
     """
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -3706,6 +6210,46 @@ async def cancel_variant_render(
 
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    _refresh_render_jobs_from_db(pipeline_id, pipeline)
+    parsed_job_key = _parse_preview_key(job_key)
+    if parsed_job_key is None:
+        raise HTTPException(status_code=400, detail="Invalid render output key")
+    variant_index, visual_version = parsed_job_key
+    matching_job_keys: List[Any] = []
+    with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            output_id=output_id,
+            visual_version=visual_version,
+        )
+        render_jobs = pipeline.get("render_jobs") or {}
+        seen_jobs: set[int] = set()
+        for stored_key, stored_job in render_jobs.items():
+            if not _job_matches_output_identity(
+                stored_job,
+                target_script_id,
+                target_output_id,
+            ):
+                continue
+            object_id = id(stored_job)
+            if object_id in seen_jobs:
+                continue
+            seen_jobs.add(object_id)
+            matching_job_keys.append(stored_key)
+
+        slot_job = render_jobs.get(job_key)
+        if slot_job is None and visual_version is None:
+            slot_job = render_jobs.get(variant_index)
+        if not matching_job_keys and isinstance(slot_job, dict):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The render slot is owned by another output or lacks a "
+                    "stable identity."
+                ),
+            )
 
     pipeline_id_str = str(pipeline_id)
     with _render_locks_meta_lock:
@@ -3717,28 +6261,14 @@ async def cancel_variant_render(
 
     cancelled_keys: list = []
 
-    # Decide scope: a plain integer-looking key cancels variant N and (for
-    # back-compat) any "N_X" meta version.  A key with an underscore targets
-    # exactly that version.
-    is_bare_variant = "_" not in job_key
-    if is_bare_variant:
-        # Cancel the standard job and every meta version of this variant
-        for candidate_key in [job_key]:
-            if await _cancel_single_job(pipeline, pipeline_id, candidate_key, render_lock):
-                cancelled_keys.append(candidate_key)
-        try:
-            _int_key = int(job_key)
-            if await _cancel_single_job(pipeline, pipeline_id, _int_key, render_lock):
-                cancelled_keys.append(_int_key)
-        except (ValueError, TypeError):
-            pass
-        for suffix in ("_A", "_B", "_C", "_D", "_E"):
-            meta_key = f"{job_key}{suffix}"
-            if await _cancel_single_job(pipeline, pipeline_id, meta_key, render_lock):
-                cancelled_keys.append(meta_key)
-    else:
-        if await _cancel_single_job(pipeline, pipeline_id, job_key, render_lock):
-            cancelled_keys.append(job_key)
+    for stored_key in matching_job_keys:
+        if await _cancel_single_job(
+            pipeline,
+            pipeline_id,
+            stored_key,
+            render_lock,
+        ):
+            cancelled_keys.append(stored_key)
 
     with _pipelines_lock:
         if pipeline_id not in _pipelines:
@@ -3821,7 +6351,6 @@ async def update_source_selection(
             _pipelines[pipeline_id] = pipeline
 
     # Persist to DB — gracefully handle missing column (migration 021 not yet applied)
-    _db_save_pipeline(pipeline_id, pipeline)
     _invalidate_library_clips(invalidated_clip_ids)
     db_persisted = True
 
@@ -3832,11 +6361,25 @@ class PipelineUpdateScriptsRequest(BaseModel):
     """Request model for updating scripts in an existing pipeline."""
     scripts: List[str]
     script_names: Optional[List[str]] = None
+    script_ids: List[str]
+    expected_script_ids: List[str]
+    expected_revision: int = Field(ge=0)
+
+    @field_validator("script_ids", "expected_script_ids")
+    @classmethod
+    def validate_script_ids(cls, values: List[str]) -> List[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("script_ids must be unique")
+        if any(not _SCRIPT_ID_PATTERN.fullmatch(str(value)) for value in values):
+            raise ValueError("script_ids contains an invalid ScriptId")
+        return [str(value) for value in values]
 
 
 class PipelineUpdateScriptNamesRequest(BaseModel):
     """User-facing labels for the script variants in a pipeline."""
     script_names: List[str] = Field(..., max_length=10)
+    script_ids: List[str] = Field(..., max_length=10)
+    expected_revision: int = Field(ge=0)
 
     @field_validator("script_names")
     @classmethod
@@ -3847,6 +6390,15 @@ class PipelineUpdateScriptNamesRequest(BaseModel):
         if any(len(name) > 80 for name in cleaned):
             raise ValueError("Script names must be at most 80 characters")
         return cleaned
+
+    @field_validator("script_ids")
+    @classmethod
+    def validate_script_ids(cls, values: List[str]) -> List[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("script_ids must be unique")
+        if any(not _SCRIPT_ID_PATTERN.fullmatch(str(value)) for value in values):
+            raise ValueError("script_ids contains an invalid ScriptId")
+        return [str(value) for value in values]
 
 
 class MetaMultiplicationRequest(BaseModel):
@@ -3862,6 +6414,8 @@ class SubtitleOverridesRequest(BaseModel):
     all overrides for this pipeline.
     """
     overrides: Dict[str, Dict[str, Any]]
+    output_ids: Dict[str, str] = Field(default_factory=dict)
+    expected_revision: int = Field(..., ge=0)
 
 
 class SubtitleRotationRequest(BaseModel):
@@ -3874,6 +6428,8 @@ class SubtitleRotationRequest(BaseModel):
     enabled: bool = False
     presetIds: List[str] = Field(default_factory=list, max_length=50)
     variantTemplates: Dict[str, str] = Field(default_factory=dict)
+    output_ids: Dict[str, str] = Field(default_factory=dict)
+    expected_revision: int = Field(ge=0)
 
     @field_validator("presetIds")
     @classmethod
@@ -3928,6 +6484,8 @@ class AttentionCue(BaseModel):
 class AttentionTimelineRequest(BaseModel):
     revision: int = Field(ge=0)
     cues: List[AttentionCue] = Field(default_factory=list, max_length=500)
+    script_id: str
+    output_id: str
 
 
 class AttentionAssetRef(BaseModel):
@@ -3955,7 +6513,7 @@ class ApplyAttentionTemplateRequest(BaseModel):
     animation: Optional[Literal[
         "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
         "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
-    ]] = None
+    ]] = "static"
     enterMs: Optional[int] = Field(default=None, ge=0, le=10000)
     # New typed form; assetUrls kept for backward compatibility (flat = images).
     assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
@@ -3967,6 +6525,8 @@ class ApplyAttentionTemplateRequest(BaseModel):
     # Per-variant stagger: shift every cue later by this much so variant N's
     # images never land on the same second as variant N-1's.
     startOffsetMs: int = Field(default=0, ge=0, le=60_000)
+    script_id: str
+    output_id: str
 
     @model_validator(mode="after")
     def _require_some_asset(self) -> "ApplyAttentionTemplateRequest":
@@ -3981,7 +6541,7 @@ class AttentionSelectionRequest(BaseModel):
     animation: Optional[Literal[
         "static", "fade", "pop", "zoom", "bounce", "slide", "slide-right",
         "slide-up", "slide-down", "wipe-left", "wipe-right", "spin", "tornado",
-    ]] = None
+    ]] = "static"
     enterMs: Optional[int] = Field(default=None, ge=0, le=10000)
     # New typed form; assetUrls kept for backward compatibility (flat = images).
     assets: Optional[List[AttentionAssetRef]] = Field(default=None, max_length=100)
@@ -4002,10 +6562,57 @@ def _validate_preview_key(preview_key: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid preview key")
 
 
+def _validate_preview_key_identity(
+    pipeline: dict,
+    preview_key: str,
+    *,
+    script_id: Optional[str] = None,
+    output_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    parsed = _parse_preview_key(preview_key)
+    if parsed is None:
+        raise HTTPException(status_code=400, detail="Invalid preview key")
+    variant_index, visual_version = parsed
+    return _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=script_id,
+        output_id=output_id,
+        visual_version=visual_version,
+    )
+
+
+def _validate_preview_key_output_ids(
+    pipeline: dict,
+    preview_keys: Iterable[str],
+    output_ids: Dict[str, str],
+) -> None:
+    """Require stable ownership for every numeric PreviewKey in a state write."""
+    expected_keys = set(preview_keys)
+    provided_keys = set(output_ids)
+    if provided_keys != expected_keys:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Output identity mapping is incomplete or stale.",
+                "missing_output_keys": sorted(expected_keys - provided_keys),
+                "unexpected_output_keys": sorted(provided_keys - expected_keys),
+            },
+        )
+    for preview_key in sorted(expected_keys):
+        _validate_preview_key_identity(
+            pipeline,
+            preview_key,
+            output_id=output_ids[preview_key],
+        )
+
+
 @router.get("/{pipeline_id}/attention-timeline/{preview_key}")
 async def get_attention_timeline(
     pipeline_id: str,
     preview_key: str,
+    script_id: str,
+    output_id: str,
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Load one versioned, non-destructive overlay timeline."""
@@ -4015,7 +6622,14 @@ async def get_attention_timeline(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
-    document = (pipeline.get("attention_timeline") or {}).get(preview_key)
+    with _get_pipeline_state_lock(pipeline_id):
+        _validate_preview_key_identity(
+            pipeline,
+            preview_key,
+            script_id=script_id,
+            output_id=output_id,
+        )
+        document = (pipeline.get("attention_timeline") or {}).get(preview_key)
     return document or {"revision": 0, "cues": []}
 
 
@@ -4035,6 +6649,12 @@ async def update_attention_timeline(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_preview_key_identity(
+            pipeline,
+            preview_key,
+            script_id=request.script_id,
+            output_id=request.output_id,
+        )
         timelines = dict(pipeline.get("attention_timeline") or {})
         current = timelines.get(preview_key) or {"revision": 0, "cues": []}
         current_revision = int(current.get("revision", 0))
@@ -4046,6 +6666,8 @@ async def update_attention_timeline(
         document = {
             "revision": current_revision + 1,
             "cues": [cue.model_dump(exclude_none=True) for cue in request.cues],
+            "script_id": target_script_id,
+            "output_id": target_output_id,
         }
         timelines[preview_key] = document
         pipeline["attention_timeline"] = timelines
@@ -4056,7 +6678,11 @@ async def update_attention_timeline(
         )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"attention_timeline", "render_jobs"},
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return document
 
@@ -4122,6 +6748,12 @@ async def apply_attention_template(
         ]
 
     with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_preview_key_identity(
+            pipeline,
+            preview_key,
+            script_id=request.script_id,
+            output_id=request.output_id,
+        )
         timelines = dict(pipeline.get("attention_timeline") or {})
         current = timelines.get(preview_key) or {"revision": 0, "cues": []}
         current_revision = int(current.get("revision", 0))
@@ -4131,7 +6763,12 @@ async def apply_attention_template(
                 detail={"message": "Attention timeline revision conflict", "current": current},
             )
         cues = new_cues if request.mode == "replace" else [*current.get("cues", []), *new_cues]
-        document = {"revision": current_revision + 1, "cues": cues}
+        document = {
+            "revision": current_revision + 1,
+            "cues": cues,
+            "script_id": target_script_id,
+            "output_id": target_output_id,
+        }
         timelines[preview_key] = document
         pipeline["attention_timeline"] = timelines
         invalidated_clip_ids = _invalidate_render_jobs(
@@ -4141,7 +6778,11 @@ async def apply_attention_template(
         )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"attention_timeline", "render_jobs"},
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return document
 
@@ -4179,7 +6820,11 @@ async def update_attention_selection(
         )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"attention_timeline", "render_jobs"},
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return selection
 
@@ -4211,6 +6856,12 @@ async def update_meta_multiplication(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    _require_voice_generation_idle(
+        pipeline_id,
+        pipeline,
+        action="Meta multiplication changes",
+    )
+
     with _get_pipeline_state_lock(pipeline_id):
         meta_changed = bool(pipeline.get("meta_multiplication", True)) != bool(request.enabled)
         pipeline["meta_multiplication"] = bool(request.enabled)
@@ -4222,7 +6873,11 @@ async def update_meta_multiplication(
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
 
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"meta_multiplication", "render_jobs"},
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return {"meta_multiplication": bool(request.enabled)}
 
@@ -4268,6 +6923,7 @@ async def get_subtitle_rotation(
         "presetIds": list(rotation.get("presetIds") or []),
         # Unknown/deleted presetIds are ignored gracefully client-side.
         "variantTemplates": dict(variant_templates) if isinstance(variant_templates, dict) else {},
+        "revision": int(pipeline.get("settings_revision") or 0),
     }
 
 
@@ -4283,6 +6939,9 @@ async def update_subtitle_rotation(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    for key in request.variantTemplates:
+        _validate_preview_key(str(key))
 
     profile_row = get_repository().get_profile(profile.profile_id) or {}
     owned_ids = set()
@@ -4314,27 +6973,37 @@ async def update_subtitle_rotation(
         if str(preset_id) == NO_SUBTITLES_PRESET_ID or str(preset_id) in owned_ids
     }
 
-    rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
     with _get_pipeline_state_lock(pipeline_id):
-        settings = copy.deepcopy(pipeline.get("template_settings") or {})
-        subtitles = settings.setdefault("subtitles", {})
-        subtitle_selection_changed = (
-            subtitles.get("rotation") != rotation
-            or subtitles.get("variantTemplates") != variant_templates
+        _validate_preview_key_output_ids(
+            pipeline,
+            request.variantTemplates.keys(),
+            request.output_ids,
         )
-        subtitles["rotation"] = rotation
-        subtitles["variantTemplates"] = variant_templates
-        pipeline["template_settings"] = settings
-        invalidated_clip_ids = (
-            _invalidate_render_jobs(pipeline, reason="Subtitle template selection changed")
-            if subtitle_selection_changed
-            else set()
-        )
-        with _pipelines_lock:
-            _pipelines[pipeline_id] = pipeline
-    _db_save_pipeline(pipeline_id, pipeline)
-    _invalidate_library_clips(invalidated_clip_ids)
-    return {**rotation, "variantTemplates": variant_templates}
+
+    repo = get_repository()
+    fresh_row = repo.get_pipeline(pipeline_id) or {}
+    settings = copy.deepcopy(
+        fresh_row.get("template_settings")
+        or fallback_pipeline_template_settings(pipeline)
+    )
+    rotation = {"enabled": request.enabled, "presetIds": request.presetIds}
+    subtitles = settings.setdefault("subtitles", {})
+    subtitles["rotation"] = rotation
+    subtitles["variantTemplates"] = variant_templates
+    cas_result = await update_pipeline_template_settings(
+        pipeline_id,
+        PipelineTemplateSettingsRequest(
+            settings=settings,
+            mode="explicit",
+            expected_revision=request.expected_revision,
+        ),
+        profile,
+    )
+    return {
+        **rotation,
+        "variantTemplates": variant_templates,
+        "revision": cas_result["revision"],
+    }
 
 
 @router.put("/{pipeline_id}/subtitle-overrides")
@@ -4363,22 +7032,109 @@ async def update_subtitle_overrides(
         if not isinstance(key, str) or not _key_pattern.match(key):
             raise HTTPException(status_code=400, detail=f"Invalid override key: {key!r}")
 
-    with _get_pipeline_state_lock(pipeline_id):
-        # Empty dict from the client means "clear all overrides"
-        overrides = dict(request.overrides) if request.overrides else {}
-        overrides_changed = pipeline.get("subtitle_settings_by_key", {}) != overrides
-        pipeline["subtitle_settings_by_key"] = overrides
-        invalidated_clip_ids = (
-            _invalidate_render_jobs(pipeline, reason="Subtitle styling changed")
-            if overrides_changed
-            else set()
+    repo = get_repository()
+    fresh_row = repo.get_pipeline(pipeline_id)
+    if not fresh_row or fresh_row.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    current_revision = int(fresh_row.get("settings_revision") or 0)
+    if request.expected_revision != current_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Pipeline settings changed in another tab or backend "
+                    "instance."
+                ),
+                "current_revision": current_revision,
+                "current_settings": fresh_row.get("template_settings") or {},
+            },
         )
+
+    output_override_keys = [
+        key
+        for key in request.overrides
+        if _parse_preview_key(key) is not None
+    ]
+    _validate_preview_key_output_ids(
+        fresh_row,
+        output_override_keys,
+        request.output_ids,
+    )
+    overrides = dict(request.overrides) if request.overrides else {}
+    overrides_changed = (
+        fresh_row.get("subtitle_settings_by_key") or {}
+    ) != overrides
+    next_revision = current_revision + 1
+    settings = copy.deepcopy(fresh_row.get("template_settings") or {})
+    if settings:
+        settings.setdefault("snapshot", {})["revision"] = next_revision
+    try:
+        update_result = repo.table_query(
+            "editai_pipelines",
+            "update",
+            data={
+                "subtitle_settings_by_key": overrides or None,
+                "template_settings": settings,
+                "settings_revision": next_revision,
+                "expires_at": _pipeline_expiry_timestamp(),
+            },
+            filters=QueryFilters(
+                eq={
+                    "id": pipeline_id,
+                    "profile_id": profile.profile_id,
+                    "settings_revision": current_revision,
+                },
+            ),
+        )
+    except Exception as exc:
+        if _is_missing_column_error(exc, "settings_revision"):
+            raise HTTPException(
+                status_code=503,
+                detail="Pipeline snapshot CAS is unavailable; run migration 059.",
+            ) from exc
+        raise
+    if update_result.count != 1:
+        winning_row = repo.get_pipeline(pipeline_id) or {}
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pipeline settings changed while this save was in flight.",
+                "current_revision": int(
+                    winning_row.get("settings_revision") or current_revision
+                ),
+                "current_settings": winning_row.get("template_settings") or {},
+            },
+        )
+
+    fresh_runtime = copy.deepcopy(fresh_row)
+    invalidated_clip_ids = (
+        _invalidate_render_jobs(
+            fresh_runtime,
+            reason="Subtitle styling changed",
+        )
+        if overrides_changed
+        else set()
+    )
+    with _get_pipeline_state_lock(pipeline_id):
+        pipeline["subtitle_settings_by_key"] = overrides
+        pipeline["template_settings"] = settings
+        pipeline["settings_revision"] = next_revision
+        if overrides_changed:
+            pipeline["render_jobs"] = copy.deepcopy(
+                fresh_runtime.get("render_jobs") or {}
+            )
         with _pipelines_lock:
             _pipelines[pipeline_id] = pipeline
-
-    _db_save_pipeline(pipeline_id, pipeline)
+    if overrides_changed:
+        _db_update_render_jobs(
+            pipeline_id,
+            fresh_runtime.get("render_jobs") or {},
+        )
     _invalidate_library_clips(invalidated_clip_ids)
-    return {"overrides": pipeline["subtitle_settings_by_key"]}
+    return {
+        "overrides": pipeline["subtitle_settings_by_key"],
+        "revision": next_revision,
+    }
 
 
 @router.put("/{pipeline_id}/scripts")
@@ -4405,74 +7161,116 @@ async def update_pipeline_scripts(
             raise HTTPException(status_code=400, detail="script_names must contain one name for each script")
         if any(not name.strip() or len(name.strip()) > 80 for name in request.script_names):
             raise HTTPException(status_code=400, detail="Script names must contain 1 to 80 characters")
+    if len(request.script_ids) != len(request.scripts):
+        raise HTTPException(
+            status_code=400,
+            detail="script_ids must contain one stable ID for each script",
+        )
 
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     # M1: Acquire pipeline state lock to prevent races with concurrent preview/render tasks
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
+        working_pipeline = copy.deepcopy(pipeline)
         # Invalidate TTS and preview caches for scripts that changed
         # Compare cleaned text (tags stripped) — tag-only changes don't invalidate TTS
-        old_scripts = pipeline.get("scripts", [])
+        old_scripts = list(working_pipeline.get("scripts", []))
+        old_script_ids = _ensure_pipeline_script_ids(working_pipeline)
+        if request.expected_script_ids != old_script_ids:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Script list changed in another tab.",
+                    "expected_script_ids": request.expected_script_ids,
+                    "current_script_ids": old_script_ids,
+                },
+            )
+        new_script_ids = list(request.script_ids)
+        active_jobs = _active_identity_sensitive_jobs(working_pipeline)
+        if active_jobs and (
+            old_scripts != list(request.scripts)
+            or old_script_ids != new_script_ids
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Scripts cannot be edited, deleted, or reordered while "
+                        "identity-sensitive jobs are active."
+                    ),
+                    "active_jobs": sorted(set(active_jobs)),
+                },
+            )
+        old_text_by_id = {
+            script_id: old_scripts[index]
+            for index, script_id in enumerate(old_script_ids)
+            if index < len(old_scripts)
+        }
         changed_render_variants = {
             index
-            for index in range(max(len(old_scripts), len(request.scripts)))
-            if index >= len(old_scripts)
-            or index >= len(request.scripts)
-            or _stable_hash(str(old_scripts[index])) != _stable_hash(str(request.scripts[index]))
+            for index, script_id in enumerate(new_script_ids)
+            if script_id not in old_text_by_id
+            or _stable_hash(str(old_text_by_id[script_id]))
+            != _stable_hash(str(request.scripts[index]))
         }
-        tts_previews = pipeline.setdefault("tts_previews", {})
-        previews = pipeline.setdefault("previews", {})
-        for i, new_script in enumerate(request.scripts):
-            if i < len(old_scripts):
-                old_cleaned = strip_product_group_tags(old_scripts[i])
-                new_cleaned = strip_product_group_tags(new_script)
+        _remap_pipeline_script_state(
+            working_pipeline,
+            old_script_ids,
+            new_script_ids,
+        )
+        tts_previews = working_pipeline.setdefault("tts_previews", {})
+        previews = working_pipeline.setdefault("previews", {})
+        for i in changed_render_variants:
+            script_id = new_script_ids[i]
+            old_script = old_text_by_id.get(script_id)
+            if old_script is not None:
+                old_cleaned = strip_product_group_tags(old_script)
+                new_cleaned = strip_product_group_tags(request.scripts[i])
                 if _stable_hash(new_cleaned) != _stable_hash(old_cleaned):
                     tts_previews.pop(str(i), None)
                     tts_previews.pop(i, None)
                     # Also invalidate Step 3 preview — stale audio/timeline
                     previews.pop(str(i), None)
                     previews.pop(i, None)
-                    logger.info(f"Invalidated TTS + preview cache for pipeline {pipeline_id} variant {i} (script changed)")
+                    for visual_version in "ABCDEFGHIJ":
+                        previews.pop(f"{i}_{visual_version}", None)
+                    logger.info(
+                        "Invalidated TTS + preview cache for pipeline %s ScriptId %s",
+                        pipeline_id,
+                        script_id,
+                    )
 
         # Update scripts in memory
-        pipeline["scripts"] = request.scripts
-        pipeline["variant_count"] = len(request.scripts)
+        working_pipeline["scripts"] = list(request.scripts)
+        working_pipeline["script_ids"] = new_script_ids
+        working_pipeline["variant_count"] = len(request.scripts)
         if request.script_names is not None:
-            pipeline["script_names"] = [name.strip() for name in request.script_names]
+            working_pipeline["script_names"] = [
+                name.strip() for name in request.script_names
+            ]
 
-        # Clean up orphan TTS entries for removed script indices
-        new_count = len(request.scripts)
-        orphan_keys = []
-        for k in list(tts_previews.keys()):
-            try:
-                if int(str(k)) >= new_count:
-                    orphan_keys.append(k)
-            except (ValueError, TypeError):
-                orphan_keys.append(k)  # Remove invalid keys
-        for k in orphan_keys:
-            tts_previews.pop(k, None)
-
-        # Clean up orphan segment_usage entries for removed script indices
-        segment_usage = pipeline.get("segment_usage", {})
-        orphan_seg_keys = []
-        for k in list(segment_usage.keys()):
-            try:
-                if int(str(k)) >= new_count:
-                    orphan_seg_keys.append(k)
-            except (ValueError, TypeError):
-                orphan_seg_keys.append(k)
-        for k in orphan_seg_keys:
-            segment_usage.pop(k, None)
+        _ensure_pipeline_script_ids(working_pipeline)
+        _sync_pipeline_snapshot_scripts(working_pipeline)
 
         invalidated_clip_ids = _invalidate_render_jobs(
-            pipeline,
+            working_pipeline,
             reason="Script changed",
             variant_indices=changed_render_variants,
         )
+        next_revision = _commit_script_snapshot_cas(
+            pipeline_id,
+            profile.profile_id,
+            working_pipeline,
+            expected_script_ids=request.expected_script_ids,
+            expected_revision=request.expected_revision,
+        )
+        pipeline.clear()
+        pipeline.update(working_pipeline)
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
 
     # Persist to DB — convert int keys to strings for JSONB compatibility
-    _db_save_pipeline(pipeline_id, pipeline)
     _invalidate_library_clips(invalidated_clip_ids)
 
     logger.info(
@@ -4480,7 +7278,13 @@ async def update_pipeline_scripts(
         f"({len(request.scripts)} scripts)"
     )
 
-    return {"status": "updated", "pipeline_id": pipeline_id, "script_count": len(request.scripts)}
+    return {
+        "status": "updated",
+        "pipeline_id": pipeline_id,
+        "script_count": len(request.scripts),
+        "script_ids": pipeline.get("script_ids", []),
+        "revision": next_revision,
+    }
 
 
 @router.patch("/{pipeline_id}/script-names")
@@ -4492,29 +7296,52 @@ async def update_pipeline_script_names(
     """Rename script variants without invalidating their audio or previews."""
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
-    scripts = pipeline.get("scripts", [])
-    if len(request.script_names) != len(scripts):
-        raise HTTPException(
-            status_code=400,
-            detail="script_names must contain one name for each script",
+    with _get_pipeline_state_lock(pipeline_id):
+        working_pipeline = copy.deepcopy(pipeline)
+        scripts = working_pipeline.get("scripts", [])
+        current_script_ids = _ensure_pipeline_script_ids(working_pipeline)
+        if len(request.script_names) != len(scripts):
+            raise HTTPException(
+                status_code=400,
+                detail="script_names must contain one name for each script",
+            )
+        if request.script_ids != current_script_ids:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Script list changed while names were being saved.",
+                    "expected_script_ids": request.script_ids,
+                    "current_script_ids": current_script_ids,
+                },
+            )
+
+        working_pipeline["script_names"] = request.script_names
+        _sync_pipeline_snapshot_scripts(working_pipeline)
+        next_revision = _commit_script_snapshot_cas(
+            pipeline_id,
+            profile.profile_id,
+            working_pipeline,
+            expected_script_ids=request.script_ids,
+            expected_revision=request.expected_revision,
+            include_script_state=False,
         )
-
-    pipeline["script_names"] = request.script_names
-    with _pipelines_lock:
-        _pipelines[pipeline_id] = pipeline
-
-    _db_save_pipeline(pipeline_id, pipeline)
+        pipeline.clear()
+        pipeline.update(working_pipeline)
+        with _pipelines_lock:
+            _pipelines[pipeline_id] = pipeline
 
     return {
         "status": "updated",
         "pipeline_id": pipeline_id,
         "script_names": request.script_names,
+        "revision": next_revision,
     }
 
 
 class PipelineRegenerateScriptRequest(BaseModel):
     """Request model for regenerating a single script via AI."""
     provider: str = "gemini"  # "gemini", "claude", or desktop-only "codex"
+    script_id: str
     codex_model: str = Field(
         default=DEFAULT_CODEX_MODEL,
         min_length=1,
@@ -4522,12 +7349,20 @@ class PipelineRegenerateScriptRequest(BaseModel):
         pattern=_CODEX_MODEL_PATTERN,
     )
 
+    @field_validator("script_id")
+    @classmethod
+    def validate_script_id(cls, value: str) -> str:
+        if not _SCRIPT_ID_PATTERN.fullmatch(value):
+            raise ValueError("script_id is invalid")
+        return value
+
 
 class PipelineRegenerateScriptResponse(BaseModel):
     """Response model for single script regeneration."""
     status: str
     script: str
     variant_index: int
+    script_id: str
 
 
 @router.post("/regenerate-script/{pipeline_id}/{variant_index}",
@@ -4557,6 +7392,45 @@ async def regenerate_script(
             status_code=400,
             detail=f"variant_index {variant_index} out of range (0-{len(scripts) - 1})"
         )
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=body.script_id,
+    )
+    repo = get_repository()
+    authoritative_pipeline = repo.get_pipeline(pipeline_id) or {}
+    regeneration_expected_script_ids = [
+        str(value)
+        for value in (authoritative_pipeline.get("script_ids") or [])
+    ]
+    if not regeneration_expected_script_ids:
+        raise HTTPException(
+            status_code=503,
+            detail="Stable ScriptId persistence is unavailable; run migration 058.",
+        )
+    current_script_ids = _ensure_pipeline_script_ids(pipeline)
+    if regeneration_expected_script_ids != current_script_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="The script list changed in another backend instance. Reload and try again.",
+        )
+    regeneration_expected_revision = int(
+        authoritative_pipeline.get("settings_revision") or 0
+    )
+    authoritative_scripts = list(authoritative_pipeline.get("scripts") or [])
+    if variant_index >= len(authoritative_scripts):
+        raise HTTPException(
+            status_code=409,
+            detail="The requested script no longer exists in persistent pipeline state.",
+        )
+    prior_script_fingerprint = _stable_hash(
+        str(authoritative_scripts[variant_index])
+    )
+    if prior_script_fingerprint != _stable_hash(str(scripts[variant_index])):
+        raise HTTPException(
+            status_code=409,
+            detail="The script changed in another backend instance. Reload and try again.",
+        )
 
     _validate_script_provider(body.provider)
 
@@ -4574,7 +7448,6 @@ async def regenerate_script(
         )
 
     # Fetch keywords and product groups, filtered by selected products if available
-    repo = get_repository()
     unique_keywords = []
     product_groups_dict = {}
 
@@ -4660,7 +7533,8 @@ async def regenerate_script(
         metering,
         status="pending",
         variant_index=variant_index,
-        prior_script_fingerprint=_stable_hash(str(scripts[variant_index])),
+        script_id=target_script_id,
+        prior_script_fingerprint=prior_script_fingerprint,
         model=body.codex_model if body.provider == "codex" else None,
         created_at=_job_timestamp(),
     )
@@ -4725,15 +7599,39 @@ async def regenerate_script(
             output_fingerprint=output_fingerprint,
         )
 
-        # Update pipeline state
+        # Update script-owned state through the same database CAS used by
+        # explicit edits. A result from a slow AI request must not overwrite a
+        # script/snapshot changed by another tab or backend instance.
         with _get_pipeline_state_lock(pipeline_id):
-            script_changed = _stable_hash(str(pipeline["scripts"][variant_index])) != output_fingerprint
-            pipeline["scripts"][variant_index] = new_script
+            working_pipeline = copy.deepcopy(pipeline)
+            live_variant_index = _script_index_for_id(
+                working_pipeline,
+                target_script_id,
+            )
+            if live_variant_index is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The regenerated script was deleted before the job completed.",
+                )
+            live_prior_fingerprint = _stable_hash(
+                str(working_pipeline["scripts"][live_variant_index])
+            )
+            if live_prior_fingerprint != prior_script_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The script changed while regeneration was running. "
+                        "The generated result was not applied."
+                    ),
+                )
+            variant_index = live_variant_index
+            script_changed = live_prior_fingerprint != output_fingerprint
+            working_pipeline["scripts"][variant_index] = new_script
             if body.provider == "codex":
-                pipeline["codex_model"] = body.codex_model
+                working_pipeline["codex_model"] = body.codex_model
 
             # Invalidate TTS for this variant (script changed)
-            tts_previews = pipeline.get("tts_previews", {})
+            tts_previews = working_pipeline.get("tts_previews", {})
             str_idx = str(variant_index)
             if str_idx in tts_previews:
                 del tts_previews[str_idx]
@@ -4741,26 +7639,31 @@ async def regenerate_script(
                 del tts_previews[variant_index]
 
             # Invalidate preview for this variant
-            previews = pipeline.get("previews", {})
-            if str_idx in previews:
-                del previews[str_idx]
-            if variant_index in previews:
-                del previews[variant_index]
+            _drop_previews_for_variant(working_pipeline, variant_index)
 
             invalidated_clip_ids = (
                 _invalidate_render_jobs(
-                    pipeline,
+                    working_pipeline,
                     reason="Script regenerated",
                     variant_indices={variant_index},
                 )
                 if script_changed
                 else set()
             )
+            _sync_pipeline_snapshot_scripts(working_pipeline)
+            _commit_script_snapshot_cas(
+                pipeline_id,
+                profile.profile_id,
+                working_pipeline,
+                expected_script_ids=regeneration_expected_script_ids,
+                expected_revision=regeneration_expected_revision,
+                allowed_regeneration_attempt_id=attempt_id,
+            )
+            pipeline.clear()
+            pipeline.update(working_pipeline)
+            with _pipelines_lock:
+                _pipelines[pipeline_id] = pipeline
 
-            pipeline_snapshot = dict(pipeline)
-
-        # Persist to DB
-        _db_save_pipeline(pipeline_id, pipeline_snapshot)
         _invalidate_library_clips(invalidated_clip_ids)
 
         metering["output_persisted"] = True
@@ -4778,7 +7681,7 @@ async def regenerate_script(
             delivered=True,
             result_metadata={
                 "studio_job_id": pipeline_id,
-                "output_id": f"script-{variant_index}",
+                "output_id": target_script_id,
             },
         )
         _replace_regeneration_metering(
@@ -4798,7 +7701,8 @@ async def regenerate_script(
         return PipelineRegenerateScriptResponse(
             status="ok",
             script=new_script,
-            variant_index=variant_index
+            variant_index=variant_index,
+            script_id=target_script_id,
         )
 
     except ValueError as e:
@@ -4809,7 +7713,7 @@ async def regenerate_script(
             result_metadata=(
                 {
                     "studio_job_id": pipeline_id,
-                    "output_id": f"script-{variant_index}",
+                    "output_id": target_script_id,
                 }
                 if output_persisted
                 else None
@@ -4832,7 +7736,7 @@ async def regenerate_script(
             result_metadata=(
                 {
                     "studio_job_id": pipeline_id,
-                    "output_id": f"script-{variant_index}",
+                    "output_id": target_script_id,
                 }
                 if output_persisted
                 else None
@@ -4856,7 +7760,7 @@ async def regenerate_script(
             result_metadata=(
                 {
                     "studio_job_id": pipeline_id,
-                    "output_id": f"script-{variant_index}",
+                    "output_id": target_script_id,
                 }
                 if output_persisted
                 else None
@@ -4895,13 +7799,14 @@ async def rename_pipeline(
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
     pipeline["name"] = request.name
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(pipeline_id, pipeline, fields={"name"})
 
     return {"status": "updated", "pipeline_id": pipeline_id, "name": request.name}
 
 
 class TtsApproveRequest(BaseModel):
     approved: bool = True
+    script_id: str
 
 
 @router.patch("/{pipeline_id}/tts-approve/{variant_index}")
@@ -4914,18 +7819,44 @@ async def approve_tts_variant(
     """Mark a variant's TTS voice-over as approved/unapproved (Step 2 verification)."""
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
 
-    tts_previews = pipeline.get("tts_previews", {})
-    key = str(variant_index)
-    if key not in tts_previews and variant_index not in tts_previews:
-        raise HTTPException(status_code=404, detail=f"No TTS data for variant {variant_index}")
+    with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=request.script_id,
+        )
+        tts_previews = pipeline.get("tts_previews", {})
+        tts_data = _find_identity_owned_entry(
+            tts_previews,
+            script_id=target_script_id,
+            output_id=target_output_id,
+            fallback_keys=(variant_index, str(variant_index)),
+            script_level=True,
+        )
+        if tts_data is None:
+            raise HTTPException(status_code=404, detail=f"No TTS data for variant {variant_index}")
+        tts_data.setdefault("script_id", target_script_id)
+        tts_data.setdefault("output_id", target_output_id)
+        tts_data["approved"] = request.approved
 
-    # Update in-memory
-    tts_data = tts_previews.get(key) or tts_previews.get(variant_index)
-    tts_data["approved"] = request.approved
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"tts_previews"},
+        runtime_map_updates={
+            "tts_previews": {
+                variant_index: copy.deepcopy(tts_data),
+            },
+        },
+    )
 
-    _db_save_pipeline(pipeline_id, pipeline)
-
-    return {"status": "updated", "pipeline_id": pipeline_id, "variant_index": variant_index, "approved": request.approved}
+    return {
+        "status": "updated",
+        "pipeline_id": pipeline_id,
+        "variant_index": variant_index,
+        "script_id": target_script_id,
+        "approved": request.approved,
+    }
 
 
 @router.post("/import", response_model=PipelineGenerateResponse)
@@ -4943,12 +7874,14 @@ async def import_pipeline(
         raise HTTPException(status_code=400, detail="scripts list cannot be empty")
 
     pipeline_id = str(uuid.uuid4())
+    script_ids = [_new_script_id() for _ in request.scripts]
 
     _evict_old_pipelines()
     with _pipelines_lock:
         _pipelines[pipeline_id] = {
             "pipeline_id": pipeline_id,
             "scripts": request.scripts,
+            "script_ids": script_ids,
             "provider": request.provider,
             "name": request.name,
             "idea": request.idea,
@@ -4977,6 +7910,7 @@ async def import_pipeline(
     return PipelineGenerateResponse(
         pipeline_id=pipeline_id,
         scripts=request.scripts,
+        script_ids=script_ids,
         provider=request.provider,
         keyword_count=0,
         variant_count=len(request.scripts)
@@ -5104,6 +8038,7 @@ async def _run_pipeline_generation_job(
             if generation_job.get("status") in _TERMINAL_ASYNC_JOB_STATUSES:
                 return
             pipeline["scripts"] = scripts
+            pipeline["script_ids"] = [_new_script_id() for _ in scripts]
             pipeline["script_names"] = [f"Script {index + 1}" for index in range(len(scripts))]
             pipeline["variant_count"] = len(scripts)
             pipeline["keyword_count"] = len(unique_keywords)
@@ -5122,7 +8057,26 @@ async def _run_pipeline_generation_job(
                 generation_metering["output_persisted"] = True
                 generation_metering["state"] = "output_persisted"
             pipeline_snapshot = dict(pipeline)
-        _db_save_pipeline(pipeline_id, pipeline_snapshot)
+        next_revision = _commit_script_snapshot_cas(
+            pipeline_id,
+            profile_id,
+            pipeline_snapshot,
+            expected_script_ids=[],
+            expected_revision=int(
+                pipeline_snapshot.get("settings_revision") or 0
+            ),
+            allowed_generation_attempt_id=str(
+                generation_job.get("attempt_id") or ""
+            ),
+        )
+        with _get_pipeline_state_lock(pipeline_id):
+            pipeline["settings_revision"] = next_revision
+            pipeline["jobs_revision"] = int(
+                pipeline_snapshot.get("jobs_revision") or 0
+            )
+            pipeline["template_settings"] = copy.deepcopy(
+                pipeline_snapshot.get("template_settings") or {}
+            )
         await _settle_generation_metering(
             pipeline_id,
             user_id,
@@ -5225,6 +8179,8 @@ async def generate_pipeline(
         "tts_previews": {},
         "generation_job": generation_job,
         "tts_jobs": {},
+        "preview_jobs": {},
+        "settings_revision": 0,
         "segment_usage": {},
         "preview_renders": {},
         "render_jobs": {},
@@ -5333,6 +8289,7 @@ async def get_generation_status(
         "pipeline_id": pipeline_id,
         "job": generation_job,
         "scripts": pipeline.get("scripts") or [],
+        "script_ids": _ensure_pipeline_script_ids(pipeline),
         "script_names": pipeline.get("script_names") or [],
     }
 
@@ -5380,10 +8337,18 @@ async def get_segment_duration(
 
 class PipelineTtsRequest(BaseModel):
     """Request model for per-script TTS generation."""
+    script_id: str
     elevenlabs_model: str = "eleven_flash_v2_5"
     voice_id: Optional[str] = None
     voice_settings: Optional[Dict[str, Any]] = None
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
+
+    @field_validator("script_id")
+    @classmethod
+    def validate_script_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not _SCRIPT_ID_PATTERN.fullmatch(value):
+            raise ValueError("script_id is invalid")
+        return value
 
 
 class PipelineTtsResponse(BaseModel):
@@ -5393,22 +8358,48 @@ class PipelineTtsResponse(BaseModel):
     srt_content: Optional[str] = None
     script_word_count: Optional[int] = None
     srt_word_count: Optional[int] = None
+    script_id: Optional[str] = None
 
 
 class PipelineTtsJobStartResponse(BaseModel):
     pipeline_id: str
     variant_index: int
+    script_id: str
     status: str
     job: Dict[str, Any]
 
 
 class PipelineTtsCancelRequest(BaseModel):
     variant_indices: Optional[List[int]] = Field(default=None, max_length=10)
+    script_ids: Dict[str, str]
+
+    @field_validator("script_ids")
+    @classmethod
+    def validate_script_ids(cls, values: Dict[str, str]) -> Dict[str, str]:
+        normalized: Dict[str, str] = {}
+        for raw_index, raw_script_id in values.items():
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("script_ids contains an invalid variant index") from exc
+            script_id = str(raw_script_id)
+            if index < 0 or not _SCRIPT_ID_PATTERN.fullmatch(script_id):
+                raise ValueError("script_ids contains an invalid ScriptId")
+            normalized[str(index)] = script_id
+        return normalized
 
 
 class PipelineTtsFromLibraryRequest(BaseModel):
     """Request model for adopting a TTS library asset into the pipeline."""
     asset_id: str
+    script_id: str
+
+    @field_validator("script_id")
+    @classmethod
+    def validate_script_id(cls, value: str) -> str:
+        if not _SCRIPT_ID_PATTERN.fullmatch(value):
+            raise ValueError("script_id is invalid")
+        return value
 
 
 @router.post("/tts-from-library/{pipeline_id}/{variant_index}", response_model=PipelineTtsResponse)
@@ -5437,6 +8428,11 @@ async def adopt_library_tts(
             status_code=400,
             detail=f"Invalid variant_index: {variant_index}"
         )
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=request.script_id,
+    )
 
     # Fetch the TTS asset from the library. Plan 81-02 cleanup: get_repository() never
     # returns None under DATA_BACKEND=sqlite (FUNC-01) so the legacy `if not repo: raise 503`
@@ -5456,15 +8452,44 @@ async def adopt_library_tts(
     ):
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
     audio_path = asset.get("mp3_path")
-    if not _existing_pipeline_audio_path(audio_path):
+    resolved_audio_path = _existing_pipeline_audio_path(audio_path)
+    if not resolved_audio_path:
         raise HTTPException(status_code=404, detail="TTS audio file no longer exists on disk")
+    actual_audio_hash = _file_sha256(resolved_audio_path)
+    recorded_audio_hash = str(asset.get("audio_sha256") or "")
+    if not actual_audio_hash or (
+        recorded_audio_hash and recorded_audio_hash != actual_audio_hash
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The selected Library audio failed integrity verification.",
+        )
 
     audio_duration = asset.get("audio_duration", 0.0)
-    script_text = pipeline["scripts"][variant_index]
+
+    authoritative_index = _validate_authoritative_output_identity(
+        pipeline_id,
+        script_id=target_script_id,
+        output_id=_build_output_id(target_script_id),
+        expected_script_fingerprint=_stable_hash(
+            str(pipeline["scripts"][variant_index])
+        ),
+    )
+    if authoritative_index != variant_index:
+        raise HTTPException(
+            status_code=409,
+            detail="The script order changed while Library audio was being adopted.",
+        )
 
     # Store into pipeline tts_previews with library flag (protected by state lock)
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
+        target_script_id, _ = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=target_script_id,
+        )
+        script_text = pipeline["scripts"][variant_index]
         if "tts_previews" not in pipeline:
             pipeline["tts_previews"] = {}
 
@@ -5473,18 +8498,26 @@ async def adopt_library_tts(
             "audio_duration": audio_duration,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "script_hash": _stable_hash(script_text),
-            "voice_settings": None,  # Not applicable for library audio
+            "script_id": target_script_id,
+            "output_id": target_output_id,
+            "asset_provenance": "library_adopted",
+            "elevenlabs_model": asset.get("tts_model"),
+            "voice_id": asset.get("tts_voice_id"),
+            "voice_settings": asset.get("tts_voice_settings"),
             "library_asset_id": request.asset_id,
+            "audio_sha256": actual_audio_hash,
             "srt_content": asset.get("srt_content"),
             "tts_timestamps": asset.get("tts_timestamps"),
         }
 
-        # Invalidate Step 3 preview cache for this variant
-        previews = pipeline.get("previews", {})
-        if variant_index in previews or str(variant_index) in previews:
-            previews.pop(variant_index, None)
-            previews.pop(str(variant_index), None)
-            logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS changed via library)")
+        # Preserve sibling editor state. Render jobs are invalidated below and
+        # each output can be reassembled against the replacement audio without
+        # discarding a concurrent A/B timeline edit.
+        logger.info(
+            "Invalidated all Step 3 output previews for variant %s "
+            "(TTS changed via library)",
+            variant_index,
+        )
         invalidated_clip_ids = _invalidate_render_jobs(
             pipeline,
             reason="Voice-over changed",
@@ -5492,7 +8525,18 @@ async def adopt_library_tts(
         )
 
     # Persist to DB (outside lock)
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"tts_previews", "render_jobs"},
+        runtime_map_updates={
+            "tts_previews": {
+                variant_index: copy.deepcopy(
+                    pipeline["tts_previews"][variant_index]
+                ),
+            },
+        },
+    )
     _invalidate_library_clips(invalidated_clip_ids)
 
     logger.info(
@@ -5502,7 +8546,8 @@ async def adopt_library_tts(
 
     return PipelineTtsResponse(
         status="ok",
-        audio_duration=audio_duration
+        audio_duration=audio_duration,
+        script_id=target_script_id,
     )
 
 
@@ -5511,6 +8556,8 @@ async def _generate_variant_tts_work(
     variant_index: int,
     request: PipelineTtsRequest,
     profile: ProfileContext,
+    *,
+    attempt_id: Optional[str] = None,
 ):
     """
     Generate TTS audio for a single script variant without segment matching.
@@ -5530,6 +8577,11 @@ async def _generate_variant_tts_work(
             status_code=400,
             detail=f"Invalid variant_index: {variant_index}. Must be between 0 and {len(pipeline['scripts']) - 1}"
         )
+    target_script_id, _ = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=request.script_id,
+    )
 
     script_text = pipeline["scripts"][variant_index]
     # Strip [ProductGroup] tags before TTS — tags must not be spoken
@@ -5543,6 +8595,7 @@ async def _generate_variant_tts_work(
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             progress=20,
             current_step="Preparing voice settings",
         )
@@ -5560,6 +8613,7 @@ async def _generate_variant_tts_work(
             profile_id=profile.profile_id
         )
         _effective_voice = request.voice_id or _tts_svc._voice_id
+        _effective_model = request.elevenlabs_model or _tts_svc.model_id
         ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
         _vs = {k: v for k, v in (request.voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
         # Build voice_settings exactly as elevenlabs.py does (using its defaults for missing keys)
@@ -5567,12 +8621,16 @@ async def _generate_variant_tts_work(
             "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
             "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
             "style": _vs.get("style", _tts_svc.voice_settings["style"]),
+            "use_speaker_boost": _vs.get(
+                "use_speaker_boost",
+                _tts_svc.voice_settings["use_speaker_boost"],
+            ),
             "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
         }
         _language_code = await _tts_svc._resolve_language_code(_effective_voice)
         _cache_key = {
             "text": cleaned_text, "voice_id": _effective_voice,
-            "model_id": request.elevenlabs_model, "provider": "elevenlabs",
+            "model_id": _effective_model, "provider": "elevenlabs",
             "type": "with_timestamps",
             "language_code": _language_code or "",
             "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
@@ -5583,16 +8641,21 @@ async def _generate_variant_tts_work(
         audio_path, audio_duration, _timestamps = await assembly_service.generate_tts_with_timestamps(
             script_text=cleaned_text,
             profile_id=profile.profile_id,
-            elevenlabs_model=request.elevenlabs_model,
-            voice_id=request.voice_id,
-            voice_settings=request.voice_settings
+            elevenlabs_model=_effective_model,
+            voice_id=_effective_voice,
+            voice_settings=_full_vs,
         )
 
-        if _tts_job_cancelled(pipeline_id, variant_index):
+        if _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             return PipelineTtsResponse(status="cancelled", audio_duration=0)
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             progress=65,
             current_step="Creating subtitles",
         )
@@ -5613,8 +8676,8 @@ async def _generate_variant_tts_work(
                 from app.services.tts_cache import srt_cache_store
                 _srt_cache_key = {
                     "text": cleaned_text,
-                    "voice_id": request.voice_id or "",
-                    "model_id": request.elevenlabs_model,
+                    "voice_id": _effective_voice or "",
+                    "model_id": _effective_model,
                     "provider": "elevenlabs_ts",
                     "wpf": wpf
                 }
@@ -5630,14 +8693,35 @@ async def _generate_variant_tts_work(
             else:
                 srt_word_count = 0
 
-        if _tts_job_cancelled(pipeline_id, variant_index):
+        if _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             return PipelineTtsResponse(status="cancelled", audio_duration=0)
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             progress=82,
             current_step="Saving voice-over",
         )
+
+        authoritative_index = _validate_authoritative_output_identity(
+            pipeline_id,
+            script_id=target_script_id,
+            output_id=_build_output_id(target_script_id),
+            expected_script_fingerprint=_stable_hash(cleaned_text),
+            cleaned_script=True,
+        )
+        if authoritative_index != variant_index:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The script order changed while voice-over generation was "
+                    "running. The generated asset was not attached."
+                ),
+            )
 
         # Store TTS preview result (protected by state lock)
         # Use cleaned_text hash so tag changes don't invalidate audio cache
@@ -5645,10 +8729,27 @@ async def _generate_variant_tts_work(
         previous_tts_preview = None
         had_previous_tts_preview = False
         with state_lock:
+            if _tts_job_cancelled(
+                pipeline_id,
+                variant_index,
+                attempt_id=attempt_id,
+            ):
+                return PipelineTtsResponse(status="cancelled", audio_duration=0)
+            _validate_requested_identity(
+                pipeline,
+                variant_index,
+                script_id=target_script_id,
+            )
             live_job = (pipeline.get("tts_jobs") or {}).get(variant_index) or (
                 pipeline.get("tts_jobs") or {}
             ).get(str(variant_index)) or {}
-            if live_job.get("status") == "cancelled":
+            if (
+                live_job.get("status") == "cancelled"
+                or (
+                    attempt_id
+                    and _job_attempt_token(live_job) != attempt_id
+                )
+            ):
                 return PipelineTtsResponse(status="cancelled", audio_duration=0)
             if "tts_previews" not in pipeline:
                 pipeline["tts_previews"] = {}
@@ -5681,7 +8782,13 @@ async def _generate_variant_tts_work(
                 "audio_duration": audio_duration,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "script_hash": _stable_hash(cleaned_text),
-                "voice_settings": request.voice_settings,
+                "script_id": target_script_id,
+                "output_id": _build_output_id(target_script_id),
+                "attempt_id": attempt_id,
+                "asset_provenance": "generated",
+                "elevenlabs_model": _effective_model,
+                "voice_id": _effective_voice,
+                "voice_settings": copy.deepcopy(_full_vs),
                 "words_per_subtitle": request.words_per_subtitle,
                 "srt_content": srt_content,
                 "tts_timestamps": _timestamps,
@@ -5689,13 +8796,13 @@ async def _generate_variant_tts_work(
                 "srt_word_count": srt_word_count,
             }
 
-            # Invalidate Step 3 preview cache for this variant so /audio/ endpoint
-            # serves the fresh TTS instead of stale Step 3 audio
-            previews = pipeline.get("previews", {})
-            if variant_index in previews or str(variant_index) in previews:
-                previews.pop(variant_index, None)
-                previews.pop(str(variant_index), None)
-                logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS regenerated)")
+            # Preserve sibling editor state while the caller rebuilds each
+            # output against the new script-level audio.
+            logger.info(
+                "Invalidated all Step 3 output previews for variant %s "
+                "(TTS regenerated)",
+                variant_index,
+            )
 
         # Auto-save to TTS Library (media/tts/ fallback) so audio persists beyond
         # temp/ cleanup. Same pattern used by assemble_and_render.
@@ -5705,29 +8812,75 @@ async def _generate_variant_tts_work(
             audio_path=str(audio_path),
             srt_content=srt_content,
             timestamps=_timestamps,
-            model=request.elevenlabs_model,
+            model=_effective_model,
             duration=audio_duration,
-            voice_id=request.voice_id,
+            voice_id=_effective_voice,
+            voice_settings=_full_vs,
             # This endpoint is an explicit regeneration request. Never swap its
             # fresh output for a prior library file that merely shares the text.
             deduplicate=False,
         )
         if _persist_path != str(audio_path) or _lib_asset_id:
             with state_lock:
+                current_entry = _indexed_tts_job(
+                    pipeline.get("tts_previews"),
+                    variant_index,
+                )
+                if (
+                    attempt_id
+                    and str(current_entry.get("attempt_id") or "") != attempt_id
+                ):
+                    return PipelineTtsResponse(
+                        status="cancelled",
+                        audio_duration=0,
+                    )
+                _validate_requested_identity(
+                    pipeline,
+                    variant_index,
+                    script_id=target_script_id,
+                )
                 pipeline["tts_previews"][variant_index]["audio_path"] = _persist_path
                 if _lib_asset_id:
                     pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
+        with state_lock:
+            persisted_entry = pipeline["tts_previews"][variant_index]
+            persisted_entry["audio_sha256"] = _file_sha256(
+                _existing_pipeline_audio_path(persisted_entry.get("audio_path"))
+            )
 
         cancelled_after_generation = False
         with state_lock:
             live_jobs = pipeline.get("tts_jobs") or {}
             live_job = live_jobs.get(variant_index) or live_jobs.get(str(variant_index)) or {}
-            if live_job.get("status") == "cancelled":
-                if had_previous_tts_preview:
-                    pipeline["tts_previews"][variant_index] = previous_tts_preview
-                else:
-                    pipeline["tts_previews"].pop(variant_index, None)
-                    pipeline["tts_previews"].pop(str(variant_index), None)
+            current_entry = _indexed_tts_job(
+                pipeline.get("tts_previews"),
+                variant_index,
+            )
+            attempt_replaced = bool(
+                attempt_id
+                and _job_attempt_token(live_job) != attempt_id
+            )
+            if (
+                live_job.get("status") == "cancelled"
+                or attempt_replaced
+                or _tts_job_cancelled(
+                    pipeline_id,
+                    variant_index,
+                    attempt_id=attempt_id,
+                )
+            ):
+                # Restore only if this attempt still owns the entry. A retry may
+                # already have attached a newer result while this worker was
+                # persisting its generated file.
+                if (
+                    not attempt_id
+                    or str(current_entry.get("attempt_id") or "") == attempt_id
+                ):
+                    if had_previous_tts_preview:
+                        pipeline["tts_previews"][variant_index] = previous_tts_preview
+                    else:
+                        pipeline["tts_previews"].pop(variant_index, None)
+                        pipeline["tts_previews"].pop(str(variant_index), None)
                 cancelled_after_generation = True
             else:
                 invalidated_clip_ids = _invalidate_render_jobs(
@@ -5740,11 +8893,11 @@ async def _generate_variant_tts_work(
                     live_metering["output_persisted"] = True
                     live_metering["state"] = "output_persisted"
         if cancelled_after_generation:
-            _db_save_pipeline(pipeline_id, pipeline)
             return PipelineTtsResponse(status="cancelled", audio_duration=0)
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             progress=94,
             current_step="Finalizing voice-over",
         )
@@ -5754,7 +8907,18 @@ async def _generate_variant_tts_work(
             f"[Profile {profile.profile_id}] Saving TTS for variant {variant_index}: "
             f"audio_path={pipeline['tts_previews'][variant_index].get('audio_path')}, duration={audio_duration:.2f}s"
         )
-        _db_save_pipeline(pipeline_id, pipeline)
+        _db_save_pipeline(
+            pipeline_id,
+            pipeline,
+            fields={"tts_previews", "render_jobs"},
+            runtime_map_updates={
+                "tts_previews": {
+                    variant_index: copy.deepcopy(
+                        pipeline["tts_previews"][variant_index]
+                    ),
+                },
+            },
+        )
         _invalidate_library_clips(invalidated_clip_ids)
 
         return PipelineTtsResponse(
@@ -5762,7 +8926,8 @@ async def _generate_variant_tts_work(
             audio_duration=audio_duration,
             srt_content=srt_content,
             script_word_count=script_word_count,
-            srt_word_count=srt_word_count
+            srt_word_count=srt_word_count,
+            script_id=target_script_id,
         )
 
     except ElevenLabsGovernanceError as e:
@@ -5770,6 +8935,8 @@ async def _generate_variant_tts_work(
             f"[Profile {profile.profile_id}] ElevenLabs policy blocked TTS: {e}"
         )
         raise HTTPException(status_code=e.status_code, detail=e.as_detail())
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] TTS generation failed for variant {variant_index}: {e}")
         raise HTTPException(status_code=500, detail="TTS generation failed")
@@ -5781,13 +8948,23 @@ async def _run_variant_tts_job(
     request_data: Dict[str, Any],
     profile_id: str,
     user_id: str,
+    attempt_id: str,
 ) -> None:
     """Execute one TTS variant in the background and persist terminal state."""
-    if _tts_job_cancelled(pipeline_id, variant_index):
+    target_script_id = str(request_data.get("script_id") or "")
+    target_output_id = (
+        _build_output_id(target_script_id) if target_script_id else ""
+    )
+    if _tts_job_cancelled(
+        pipeline_id,
+        variant_index,
+        attempt_id=attempt_id,
+    ):
         return
     _update_tts_job(
         pipeline_id,
         variant_index,
+        attempt_id=attempt_id,
         status="processing",
         progress=5,
         current_step="Starting voice-over",
@@ -5795,26 +8972,41 @@ async def _run_variant_tts_job(
         error=None,
     )
     try:
-        pipeline = _get_pipeline_or_load(pipeline_id)
-        jobs = (pipeline or {}).get("tts_jobs") or {}
-        job = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
+        job = _authoritative_tts_job(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        )
+        if not job:
+            return
         metering = dict(job.get("metering") or {})
         if metering:
             metering["provider_started"] = True
             metering["state"] = "provider_started"
-            _replace_tts_metering(pipeline_id, variant_index, metering)
+            _replace_tts_metering(
+                pipeline_id,
+                variant_index,
+                metering,
+                attempt_id=attempt_id,
+            )
         result = await _generate_variant_tts_work(
             pipeline_id,
             variant_index,
             PipelineTtsRequest.model_validate(request_data),
             ProfileContext(profile_id=profile_id, user_id=user_id),
+            attempt_id=attempt_id,
         )
-        if result.status == "cancelled" or _tts_job_cancelled(pipeline_id, variant_index):
+        if result.status == "cancelled" or _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             await _settle_tts_metering(
                 pipeline_id,
                 variant_index,
                 user_id,
                 delivered=False,
+                attempt_id=attempt_id,
             )
             return
         await _settle_tts_metering(
@@ -5822,14 +9014,16 @@ async def _run_variant_tts_job(
             variant_index,
             user_id,
             delivered=True,
+            attempt_id=attempt_id,
             result_metadata={
                 "studio_job_id": pipeline_id,
-                "output_id": f"variant-{variant_index}",
+                "output_id": target_output_id or target_script_id,
             },
         )
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             status="completed",
             progress=100,
             current_step="Voice-over ready",
@@ -5848,10 +9042,12 @@ async def _run_variant_tts_job(
             variant_index,
             user_id,
             delivered=False,
+            attempt_id=attempt_id,
         )
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             status="failed",
             current_step="Voice-over failed",
             completed_at=_job_timestamp(),
@@ -5869,10 +9065,12 @@ async def _run_variant_tts_job(
             variant_index,
             user_id,
             delivered=False,
+            attempt_id=attempt_id,
         )
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             status="failed",
             current_step="Voice-over failed",
             completed_at=_job_timestamp(),
@@ -5901,9 +9099,24 @@ async def generate_variant_tts(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
     if variant_index < 0 or variant_index >= len(pipeline.get("scripts") or []):
         raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=request.script_id,
+    )
+    request.script_id = target_script_id
 
     identity = MeteringIdentity(profile.user_id, current_user.email)
+    try:
+        fresh_row = get_repository().get_pipeline(pipeline_id)
+    except Exception:
+        fresh_row = None
     with _get_pipeline_state_lock(pipeline_id):
+        if isinstance(fresh_row, dict) and isinstance(
+            fresh_row.get("tts_jobs"),
+            dict,
+        ):
+            pipeline["tts_jobs"] = copy.deepcopy(fresh_row["tts_jobs"])
         jobs = pipeline.setdefault("tts_jobs", {})
         existing = jobs.get(variant_index) or jobs.get(str(variant_index)) or {}
         if existing.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
@@ -5913,12 +9126,15 @@ async def generate_variant_tts(
             )
 
         job = _new_async_job("Queued for voice-over generation")
+        job["script_id"] = target_script_id
+        job["output_id"] = target_output_id
         attempt_id = uuid.uuid4().hex
+        job["attempt_id"] = attempt_id
         job["metering"] = {
             **new_metering_record(
                 "studio.tts_variant",
                 1,
-                f"pipeline:{pipeline_id}:tts:{variant_index}:{attempt_id}",
+                f"pipeline:{pipeline_id}:tts:{target_script_id}:{attempt_id}",
             ),
             **identity.as_payload(),
         }
@@ -5936,6 +9152,7 @@ async def generate_variant_tts(
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             status="failed",
             current_step="Blipost credits required",
             completed_at=_job_timestamp(),
@@ -5945,7 +9162,29 @@ async def generate_variant_tts(
             metering=denied,
         )
         raise _metering_http_exception(error)
-    job = _update_tts_job(pipeline_id, variant_index, metering=reserved)
+    if not _authoritative_tts_job(
+        pipeline_id,
+        variant_index,
+        attempt_id=attempt_id,
+    ):
+        # Cancellation/retry may win while the reservation call is in flight.
+        # Settle the exact returned reservation directly; never attach it to the
+        # replacement job occupying the same variant index.
+        await settle_metering_record(
+            identity,
+            reserved,
+            delivered=False,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="The voice-over attempt was cancelled or replaced.",
+        )
+    job = _update_tts_job(
+        pipeline_id,
+        variant_index,
+        attempt_id=attempt_id,
+        metering=reserved,
+    )
     background_tasks.add_task(
         _run_variant_tts_job,
         pipeline_id,
@@ -5953,10 +9192,12 @@ async def generate_variant_tts(
         request.model_dump(),
         profile.profile_id,
         profile.user_id,
+        attempt_id,
     )
     return PipelineTtsJobStartResponse(
         pipeline_id=pipeline_id,
         variant_index=variant_index,
+        script_id=target_script_id,
         status="queued",
         job=job,
     )
@@ -5980,10 +9221,12 @@ async def get_tts_jobs_status(
             index = int(raw_index)
         except (TypeError, ValueError):
             continue
+        attempt_id = _job_attempt_token(job) or None
         job = await _recover_tts_reservation_for_settlement(
             pipeline_id,
             index,
             profile.user_id,
+            attempt_id=attempt_id,
         )
         metering = job.get("metering") or {}
         if not isinstance(metering, dict) or not metering.get("reservation_id"):
@@ -5994,9 +9237,10 @@ async def get_tts_jobs_status(
                 index,
                 profile.user_id,
                 delivered=True,
+                attempt_id=attempt_id,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": f"variant-{index}",
+                    "output_id": job.get("output_id") or f"variant-{index}",
                 },
             )
         elif job.get("status") in {"failed", "cancelled"}:
@@ -6005,6 +9249,7 @@ async def get_tts_jobs_status(
                 index,
                 profile.user_id,
                 delivered=False,
+                attempt_id=attempt_id,
             )
         latest_metering = job.get("metering") or {}
         if job.get("status") not in _TERMINAL_ASYNC_JOB_STATUSES and isinstance(
@@ -6015,6 +9260,7 @@ async def get_tts_jobs_status(
                 _update_tts_job(
                     pipeline_id,
                     index,
+                    attempt_id=attempt_id,
                     status="completed",
                     progress=100,
                     current_step="Voice-over ready",
@@ -6025,6 +9271,7 @@ async def get_tts_jobs_status(
                 _update_tts_job(
                     pipeline_id,
                     index,
+                    attempt_id=attempt_id,
                     status="failed",
                     current_step="Voice-over did not complete",
                     completed_at=_job_timestamp(),
@@ -6035,15 +9282,49 @@ async def get_tts_jobs_status(
     for raw_index, value in (pipeline.get("tts_previews") or {}).items():
         if not isinstance(value, dict):
             continue
-        results[str(raw_index)] = {
+        response_index = str(raw_index)
+        recorded_script_id = str(value.get("script_id") or "")
+        if recorded_script_id:
+            current_index = _script_index_for_id(pipeline, recorded_script_id)
+            if current_index is None:
+                continue
+            response_index = str(current_index)
+        results[response_index] = {
             "audio_duration": value.get("audio_duration", 0),
             "srt_content": value.get("srt_content"),
             "script_word_count": value.get("script_word_count"),
             "srt_word_count": value.get("srt_word_count"),
+            "script_id": value.get("script_id"),
+            "output_id": value.get("output_id"),
+            "elevenlabs_model": value.get("elevenlabs_model"),
+            "voice_id": value.get("voice_id"),
+            "voice_settings": value.get("voice_settings"),
+            "audio_sha256": value.get("audio_sha256"),
+            "asset_provenance": value.get("asset_provenance"),
         }
+    response_jobs: Dict[str, dict] = {}
+    for raw_index, job in (pipeline.get("tts_jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        recorded_script_id = str(job.get("script_id") or "")
+        recorded_output_id = str(job.get("output_id") or "")
+        if recorded_script_id:
+            current_index = _script_index_for_id(pipeline, recorded_script_id)
+            if current_index is None:
+                continue
+            if recorded_output_id and recorded_output_id != _build_output_id(
+                recorded_script_id
+            ):
+                continue
+            response_jobs[str(current_index)] = job
+            continue
+        if job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            continue
+        response_jobs[str(raw_index)] = job
+
     return {
         "pipeline_id": pipeline_id,
-        "jobs": {str(k): v for k, v in (pipeline.get("tts_jobs") or {}).items()},
+        "jobs": response_jobs,
         "results": results,
     }
 
@@ -6063,8 +9344,43 @@ async def cancel_tts_jobs(
     wanted = set(request.variant_indices or [])
     cancelled: List[int] = []
     refunds: List[int] = []
+    refund_attempts: Dict[int, Optional[str]] = {}
+    try:
+        fresh_row = get_repository().get_pipeline(pipeline_id)
+    except Exception:
+        fresh_row = None
     with _get_pipeline_state_lock(pipeline_id):
+        if isinstance(fresh_row, dict) and isinstance(
+            fresh_row.get("tts_jobs"),
+            dict,
+        ):
+            pipeline["tts_jobs"] = copy.deepcopy(fresh_row["tts_jobs"])
         jobs = pipeline.setdefault("tts_jobs", {})
+        job_indices: set[int] = set()
+        for raw_index in jobs:
+            try:
+                job_indices.add(int(raw_index))
+            except (TypeError, ValueError):
+                continue
+        target_indices = wanted or job_indices
+        provided_script_ids = {
+            int(raw_index): script_id
+            for raw_index, script_id in request.script_ids.items()
+        }
+        if set(provided_script_ids) != target_indices:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Every cancelled voice-over requires its stable ScriptId.",
+                    "variant_indices": sorted(target_indices),
+                },
+            )
+        for index in sorted(target_indices):
+            _validate_requested_identity(
+                pipeline,
+                index,
+                script_id=provided_script_ids[index],
+            )
         for raw_index, job in list(jobs.items()):
             try:
                 index = int(raw_index)
@@ -6072,6 +9388,19 @@ async def cancel_tts_jobs(
                 continue
             if wanted and index not in wanted:
                 continue
+            expected_script_id = provided_script_ids[index]
+            if isinstance(job, dict) and not _job_matches_output_identity(
+                job,
+                expected_script_id,
+                _build_output_id(expected_script_id),
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Voice-over job has no matching stable identity or "
+                        "belongs to another script."
+                    ),
+                )
             metering = job.get("metering") if isinstance(job, dict) else None
             output_persisted = isinstance(metering, dict) and bool(metering.get("output_persisted"))
             if (
@@ -6088,6 +9417,7 @@ async def cancel_tts_jobs(
                 })
                 cancelled.append(index)
                 refunds.append(index)
+                refund_attempts[index] = _job_attempt_token(job) or None
         jobs_snapshot = dict(jobs)
         _db_update_async_jobs(pipeline_id, tts_jobs=jobs_snapshot)
     for raw_index, job in jobs_snapshot.items():
@@ -6099,17 +9429,21 @@ async def cancel_tts_jobs(
             continue
         if isinstance(job, dict) and job.get("status") in {"failed", "cancelled"}:
             refunds.append(index)
+            refund_attempts[index] = _job_attempt_token(job) or None
     for index in sorted(set(refunds)):
+        attempt_id = refund_attempts.get(index)
         await _recover_tts_reservation_for_settlement(
             pipeline_id,
             index,
             profile.user_id,
+            attempt_id=attempt_id,
         )
         await _settle_tts_metering(
             pipeline_id,
             index,
             profile.user_id,
             delivered=False,
+            attempt_id=attempt_id,
         )
     jobs_snapshot = dict((pipeline.get("tts_jobs") or {}))
     return {"pipeline_id": pipeline_id, "cancelled": cancelled, "jobs": jobs_snapshot}
@@ -6119,6 +9453,7 @@ async def cancel_tts_jobs(
 async def get_variant_tts_audio(
     pipeline_id: str,
     variant_index: int,
+    script_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -6138,7 +9473,19 @@ async def get_variant_tts_audio(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    tts_preview = pipeline.get("tts_previews", {}).get(variant_index)
+    with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=script_id,
+        )
+    tts_preview = _find_identity_owned_entry(
+        pipeline.get("tts_previews", {}),
+        script_id=target_script_id,
+        output_id=target_output_id,
+        fallback_keys=(variant_index, str(variant_index)),
+        script_level=True,
+    )
     if not tts_preview:
         raise HTTPException(status_code=404, detail="No TTS preview available for this variant")
 
@@ -6173,7 +9520,15 @@ async def preview_variant(
     preset: str = Body("balanced", embed=True),  # F8: scoring preset
     segment_proximity: str = Body("separate", embed=True),  # near-adjacent same-source clips: separate|merge
     visual_version: Optional[str] = Body(None, embed=True),
+    script_id: str = Body(..., embed=True),
+    output_id: str = Body(..., embed=True),
     force_regenerate_tts: bool = Body(False, embed=True),
+    editor_matches: Optional[List[dict]] = Body(None, embed=True),
+    editor_composition: Optional[List[dict]] = Body(None, embed=True),
+    editor_default_transition: Optional[dict] = Body(None, embed=True),
+    editor_music: Optional[dict] = Body(None, embed=True),
+    editor_default_transition_set: bool = Body(False, embed=True),
+    editor_music_set: bool = Body(False, embed=True),
     current_user: AuthUser = Depends(get_current_user),
 ):
     """
@@ -6191,6 +9546,12 @@ async def preview_variant(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    _require_voice_generation_idle(
+        pipeline_id,
+        pipeline,
+        action="preview generation",
+    )
+
     # Validate variant index
     if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
         raise HTTPException(
@@ -6202,10 +9563,83 @@ async def preview_variant(
         variant_index,
         visual_version,
     )
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=script_id,
+        output_id=output_id,
+        visual_version=normalized_visual_version,
+    )
+    existing_preview_entry = (pipeline.get("previews") or {}).get(preview_key)
+    if existing_preview_entry is None and normalized_visual_version is None:
+        existing_preview_entry = (pipeline.get("previews") or {}).get(variant_index)
+    existing_preview_data = (
+        copy.deepcopy(existing_preview_entry.get("preview_data") or {})
+        if isinstance(existing_preview_entry, dict)
+        else {}
+    )
+    persisted_preview_data_at_start = copy.deepcopy(existing_preview_data)
+    # The editor autosaves with a short debounce. Carry its current local
+    # snapshot in the reassembly request so a just-finished drag/edit cannot
+    # lose a race against the persistence request.
+    if isinstance(editor_matches, list):
+        existing_preview_data["matches"] = copy.deepcopy(editor_matches)
+        existing_preview_data["manual_matches"] = True
+    if isinstance(editor_composition, list):
+        existing_preview_data["video_timeline"] = copy.deepcopy(editor_composition)
+        existing_preview_data["manual_composition"] = True
+    if editor_default_transition_set or isinstance(editor_default_transition, dict):
+        existing_preview_data["default_transition"] = copy.deepcopy(
+            editor_default_transition
+        )
+    if editor_music_set or isinstance(editor_music, dict):
+        existing_preview_data["music"] = copy.deepcopy(editor_music)
     script_text = pipeline["scripts"][variant_index]
     cleaned_text = strip_product_group_tags(script_text)
     min_segment_duration = _clamp_min_segment_duration(min_segment_duration)
     segment_proximity = _sanitize_segment_proximity(segment_proximity)
+    from app.services.tts.elevenlabs import ElevenLabsTTSService
+    _tts_svc = ElevenLabsTTSService(
+        output_dir=Path("."),
+        model_id=elevenlabs_model,
+        profile_id=profile.profile_id,
+    )
+    effective_voice_id = voice_id or _tts_svc._voice_id
+    effective_model = elevenlabs_model or _tts_svc.model_id
+    allowed_voice_keys = {
+        "stability",
+        "similarity_boost",
+        "style",
+        "use_speaker_boost",
+        "speed",
+    }
+    requested_voice_settings = {
+        key: value
+        for key, value in (voice_settings or {}).items()
+        if key in allowed_voice_keys
+    }
+    effective_voice_settings = {
+        "stability": requested_voice_settings.get(
+            "stability",
+            _tts_svc.voice_settings["stability"],
+        ),
+        "similarity_boost": requested_voice_settings.get(
+            "similarity_boost",
+            _tts_svc.voice_settings["similarity_boost"],
+        ),
+        "style": requested_voice_settings.get(
+            "style",
+            _tts_svc.voice_settings["style"],
+        ),
+        "use_speaker_boost": requested_voice_settings.get(
+            "use_speaker_boost",
+            _tts_svc.voice_settings["use_speaker_boost"],
+        ),
+        "speed": requested_voice_settings.get(
+            "speed",
+            _tts_svc.voice_settings.get("speed", 1.0),
+        ),
+    }
 
     logger.info(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
@@ -6221,7 +9655,13 @@ async def preview_variant(
 
     # Normalize key lookup: prefer int key, fall back to str for legacy entries
     _tts_previews = pipeline.get("tts_previews", {})
-    stored_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
+    stored_tts = _find_identity_owned_entry(
+        _tts_previews,
+        script_id=target_script_id,
+        output_id=_build_output_id(target_script_id),
+        fallback_keys=(variant_index, str(variant_index)),
+        script_level=True,
+    )
     previous_tts = copy.deepcopy(stored_tts) if isinstance(stored_tts, dict) else None
     existing_tts = None if force_regenerate_tts else stored_tts
     reuse_audio_path = None
@@ -6243,7 +9683,18 @@ async def preview_variant(
         # so preview must use it regardless of voice_settings differences.
         # Voice_settings check was causing false negatives and making the preview
         # fall back to file cache which returned stale audio.
-        if script_match:
+        settings_match = _tts_asset_matches_config(
+            existing_tts,
+            effective_model,
+            effective_voice_id,
+            effective_voice_settings,
+        )
+        if not settings_match:
+            logger.info(
+                f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
+                "voice configuration mismatch"
+            )
+        if script_match and settings_match:
             audio_path_str = existing_tts.get("audio_path")
             resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
             if not resolved_audio_path:
@@ -6251,10 +9702,19 @@ async def preview_variant(
                 # copy usually exists — reattach it instead of regenerating TTS.
                 if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
                     _tts_previews = pipeline.get("tts_previews", {})
-                    existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index)) or existing_tts
+                    existing_tts = _find_identity_owned_entry(
+                        _tts_previews,
+                        script_id=target_script_id,
+                        output_id=_build_output_id(target_script_id),
+                        fallback_keys=(variant_index, str(variant_index)),
+                        script_level=True,
+                    ) or existing_tts
                     audio_path_str = existing_tts.get("audio_path")
                     resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
-            if resolved_audio_path:
+            if resolved_audio_path and _tts_audio_integrity_matches(
+                existing_tts,
+                resolved_audio_path,
+            ):
                 reuse_audio_path = str(resolved_audio_path)
                 reuse_audio_duration = existing_tts.get("audio_duration")
                 # Also grab SRT content from Step 2 to avoid TTS regeneration
@@ -6270,12 +9730,13 @@ async def preview_variant(
             else:
                 logger.info(
                     f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
-                    f"audio_path missing or not on disk (path={audio_path_str})"
+                    f"audio missing or failed integrity verification (path={audio_path_str})"
                 )
 
     # Preview matching can synthesize TTS when Step 2 audio is missing, stale,
     # or explicitly regenerated. That is the same billable per-variant
     # operation as POST /pipeline/tts; persisted Step 2 reuse remains free.
+    state_lock = _get_pipeline_state_lock(pipeline_id)
     preview_tts_metered = reuse_audio_path is None
     if preview_tts_metered:
         identity = MeteringIdentity(
@@ -6296,6 +9757,9 @@ async def preview_variant(
             preview_job.update(
                 {
                     "source": "pipeline_preview",
+                    "attempt_id": attempt_id,
+                    "script_id": target_script_id,
+                    "output_id": target_output_id,
                     "metering": {
                         **new_metering_record(
                             "studio.tts_variant",
@@ -6320,6 +9784,7 @@ async def preview_variant(
             _update_tts_job(
                 pipeline_id,
                 variant_index,
+                attempt_id=attempt_id,
                 status="failed",
                 current_step="Blipost credits required",
                 completed_at=_job_timestamp(),
@@ -6329,9 +9794,24 @@ async def preview_variant(
                 metering=denied,
             )
             raise _metering_http_exception(error)
+        if not _authoritative_tts_job(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
+            await settle_metering_record(
+                identity,
+                reserved,
+                delivered=False,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="The preview voice-over attempt was cancelled or replaced.",
+            )
         _update_tts_job(
             pipeline_id,
             variant_index,
+            attempt_id=attempt_id,
             status="processing",
             progress=5,
             current_step="Starting preview voice-over",
@@ -6343,12 +9823,21 @@ async def preview_variant(
         if not preview_tts_metered:
             return
         await _settle_tts_metering(
-            pipeline_id, variant_index, profile.user_id, delivered=False
+            pipeline_id,
+            variant_index,
+            profile.user_id,
+            delivered=False,
+            attempt_id=attempt_id,
         )
-        if not _tts_job_cancelled(pipeline_id, variant_index):
+        if not _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             _update_tts_job(
                 pipeline_id,
                 variant_index,
+                attempt_id=attempt_id,
                 status="failed",
                 current_step="Preview voice-over failed",
                 completed_at=_job_timestamp(),
@@ -6358,8 +9847,64 @@ async def preview_variant(
             with _get_pipeline_state_lock(pipeline_id):
                 pipeline.setdefault("tts_previews", {})[variant_index] = previous_tts
 
+    preview_attempt_id = uuid.uuid4().hex
+    with state_lock:
+        preview_jobs = pipeline.setdefault("preview_jobs", {})
+        active_preview = preview_jobs.get(target_output_id) or {}
+        if active_preview.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview reassembly is already running for this output",
+            )
+        preview_jobs[target_output_id] = {
+            **_new_async_job("Reassembling preview"),
+            "status": "processing",
+            "progress": 10,
+            "attempt_id": preview_attempt_id,
+            "script_id": target_script_id,
+            "output_id": target_output_id,
+            "preview_key": preview_key,
+            "started_at": _job_timestamp(),
+        }
+        preview_jobs_snapshot = copy.deepcopy(preview_jobs)
+    _db_update_async_jobs(
+        pipeline_id,
+        preview_jobs=preview_jobs_snapshot,
+    )
+
+    def _finish_preview_job(
+        status: str,
+        current_step: str,
+        *,
+        error: Optional[str] = None,
+    ) -> None:
+        with state_lock:
+            jobs = pipeline.setdefault("preview_jobs", {})
+            job = jobs.get(target_output_id)
+            if not isinstance(job, dict) or job.get("attempt_id") != preview_attempt_id:
+                return
+            job.update(
+                {
+                    "status": status,
+                    "progress": 100 if status == "completed" else 0,
+                    "current_step": current_step,
+                    "error": error,
+                    "completed_at": _job_timestamp(),
+                    "updated_at": _job_timestamp(),
+                }
+            )
+            jobs_snapshot = copy.deepcopy(jobs)
+        _db_update_async_jobs(
+            pipeline_id,
+            preview_jobs=jobs_snapshot,
+        )
+
     try:
-        if preview_tts_metered and _tts_job_cancelled(pipeline_id, variant_index):
+        if preview_tts_metered and _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             raise HTTPException(status_code=409, detail="Voice-over generation was cancelled")
 
         if preview_tts_metered and force_regenerate_tts:
@@ -6369,25 +9914,18 @@ async def preview_variant(
             _tts_previews_dict.pop(str(variant_index), None)
 
             from app.services.tts_cache import cache_delete
-            from app.services.tts.elevenlabs import ElevenLabsTTSService
-            _tts_svc = ElevenLabsTTSService(
-                output_dir=Path("."), model_id=elevenlabs_model,
-                profile_id=profile.profile_id
-            )
-            _effective_voice = voice_id or _tts_svc._voice_id
-            ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
-            _vs = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
-            _full_vs = {
-                "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
-                "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
-                "style": _vs.get("style", _tts_svc.voice_settings["style"]),
-                "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
-            }
             _cache_key = {
-                "text": cleaned_text, "voice_id": _effective_voice,
-                "model_id": elevenlabs_model, "provider": "elevenlabs",
+                "text": cleaned_text,
+                "voice_id": effective_voice_id,
+                "model_id": effective_model,
+                "provider": "elevenlabs",
                 "type": "with_timestamps",
-                "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
+                "vs": (
+                    f"{effective_voice_settings['stability']:.2f}_"
+                    f"{effective_voice_settings['similarity_boost']:.2f}_"
+                    f"{effective_voice_settings['style']:.2f}_"
+                    f"{effective_voice_settings['speed']:.2f}"
+                ),
             }
             if cache_delete(_cache_key, "elevenlabs"):
                 logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
@@ -6399,7 +9937,12 @@ async def preview_variant(
             metering = dict(live_job.get("metering") or {})
             metering["provider_started"] = True
             metering["state"] = "provider_started"
-            _replace_tts_metering(pipeline_id, variant_index, metering)
+            _replace_tts_metering(
+                pipeline_id,
+                variant_index,
+                metering,
+                attempt_id=attempt_id,
+            )
 
         assembly_service = get_assembly_service()
 
@@ -6453,13 +9996,13 @@ async def preview_variant(
         preview_data = await assembly_service.preview_matches(
             script_text=script_text,
             profile_id=profile.profile_id,
-            elevenlabs_model=elevenlabs_model,
-            voice_id=voice_id,
+            elevenlabs_model=effective_model,
+            voice_id=effective_voice_id,
             source_video_ids=source_video_ids,
             variant_index=effective_variant_index,
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
-            voice_settings=voice_settings,
+            voice_settings=effective_voice_settings,
             max_words_per_phrase=words_per_subtitle,
             min_segment_duration=min_segment_duration,
             avoid_segment_ids=avoid_ids if avoid_ids else None,
@@ -6470,7 +10013,19 @@ async def preview_variant(
             segment_proximity=segment_proximity,
         )
 
-        if preview_tts_metered and _tts_job_cancelled(pipeline_id, variant_index):
+        manual_matches_preserved, manual_composition_preserved = (
+            _preserve_manual_preview_layers(
+                existing_preview_data,
+                preview_data,
+                source_video_ids,
+            )
+        )
+
+        if preview_tts_metered and _tts_job_cancelled(
+            pipeline_id,
+            variant_index,
+            attempt_id=attempt_id,
+        ):
             raise HTTPException(status_code=409, detail="Voice-over generation was cancelled")
 
         # Track which segments this variant used (for cross-variant deprioritization)
@@ -6492,15 +10047,66 @@ async def preview_variant(
                 audio_path=str(_fresh_audio_path),
                 srt_content=preview_data.get("srt_content"),
                 timestamps=preview_data.get("tts_timestamps"),
-                model=elevenlabs_model,
+                model=effective_model,
                 duration=preview_data.get("audio_duration", 0.0),
-                voice_id=voice_id,
+                voice_id=effective_voice_id,
+                voice_settings=effective_voice_settings,
             )
         if preview_tts_metered and not (_persisted_audio_path or _fresh_audio_path):
             raise RuntimeError("Preview TTS returned no persistent audio output")
 
+        authoritative_index = _validate_authoritative_output_identity(
+            pipeline_id,
+            script_id=target_script_id,
+            output_id=target_output_id,
+            expected_script_fingerprint=_stable_hash(str(script_text)),
+        )
+        if authoritative_index != variant_index:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The script order changed while preview assembly was "
+                    "running. The result was not attached."
+                ),
+            )
+
         # BUG-PR-20: Reuse state_lock from above (already obtained), single acquisition for all writes
         with state_lock:
+            _validate_requested_identity(
+                pipeline,
+                variant_index,
+                script_id=target_script_id,
+                output_id=target_output_id,
+                visual_version=normalized_visual_version,
+            )
+            live_preview_entry = (pipeline.get("previews") or {}).get(preview_key)
+            if live_preview_entry is None and normalized_visual_version is None:
+                live_preview_entry = (pipeline.get("previews") or {}).get(
+                    variant_index
+                )
+            live_preview_data = (
+                copy.deepcopy(live_preview_entry.get("preview_data") or {})
+                if isinstance(live_preview_entry, dict)
+                else {}
+            )
+            if live_preview_data != persisted_preview_data_at_start:
+                live_matches_preserved, live_composition_preserved = (
+                    _preserve_manual_preview_layers(
+                        live_preview_data,
+                        preview_data,
+                        source_video_ids,
+                    )
+                )
+                manual_matches_preserved = (
+                    manual_matches_preserved or live_matches_preserved
+                )
+                manual_composition_preserved = (
+                    manual_composition_preserved
+                    or live_composition_preserved
+                )
+            # A/B/default share one script-level voice-over, but sibling
+            # previews may contain concurrent manual edits. Their render jobs
+            # are invalidated; keep editor layers for subsequent reassembly.
             pipeline["min_segment_duration"] = min_segment_duration
             pipeline.setdefault("segment_usage", {})[preview_key] = used_segment_ids
 
@@ -6514,18 +10120,28 @@ async def preview_variant(
             )
             pipeline["previews"][preview_key] = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "elevenlabs_model": elevenlabs_model,
+                "elevenlabs_model": effective_model,
                 "visual_version": normalized_visual_version,
                 "meta_platform": meta_platform,
+                "script_id": target_script_id,
+                "output_id": target_output_id,
                 "preview_data": preview_data
             }
             invalidated_clip_ids = (
                 _invalidate_render_jobs(
                     pipeline,
-                    reason="Preview composition changed",
-                    preview_keys={preview_key},
+                    reason=(
+                        "Voice-over changed"
+                        if preview_tts_metered
+                        else "Preview composition changed"
+                    ),
+                    **(
+                        {"variant_indices": {variant_index}}
+                        if preview_tts_metered
+                        else {"preview_keys": {preview_key}}
+                    ),
                 )
-                if preview_changed
+                if preview_changed or preview_tts_metered
                 else set()
             )
 
@@ -6537,6 +10153,17 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index] = {}
             pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
             pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
+            pipeline["tts_previews"][variant_index]["elevenlabs_model"] = effective_model
+            pipeline["tts_previews"][variant_index]["voice_id"] = effective_voice_id
+            pipeline["tts_previews"][variant_index]["voice_settings"] = copy.deepcopy(
+                effective_voice_settings
+            )
+            if preview_tts_metered:
+                pipeline["tts_previews"][variant_index]["attempt_id"] = attempt_id
+            pipeline["tts_previews"][variant_index]["script_id"] = target_script_id
+            pipeline["tts_previews"][variant_index]["output_id"] = _build_output_id(
+                target_script_id
+            )
             if preview_data.get("tts_timestamps"):
                 pipeline["tts_previews"][variant_index]["tts_timestamps"] = preview_data["tts_timestamps"]
             # Freshly billed audio replaces stale/forced audio even when an old
@@ -6546,6 +10173,14 @@ async def preview_variant(
                 pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
                 pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
                 pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
+                pipeline["tts_previews"][variant_index]["asset_provenance"] = "generated"
+                persisted_audio = _existing_pipeline_audio_path(
+                    pipeline["tts_previews"][variant_index]["audio_path"],
+                    min_bytes=100,
+                )
+                pipeline["tts_previews"][variant_index]["audio_sha256"] = (
+                    _file_sha256(persisted_audio)
+                )
                 if _persisted_asset_id:
                     pipeline["tts_previews"][variant_index]["library_asset_id"] = _persisted_asset_id
                 live_jobs = pipeline.get("tts_jobs") or {}
@@ -6559,7 +10194,39 @@ async def preview_variant(
                     live_metering["state"] = "output_persisted"
 
         # Persist to DB (outside lock — DB I/O should not hold the state lock)
-        _db_save_pipeline(pipeline_id, pipeline)
+        _db_save_pipeline(
+            pipeline_id,
+            pipeline,
+            fields={
+                "previews",
+                "tts_previews",
+                "render_jobs",
+                "segment_usage",
+            },
+            runtime_map_updates={
+                "previews": {
+                    preview_key: copy.deepcopy(
+                        pipeline["previews"][preview_key]
+                    ),
+                },
+                "tts_previews": {
+                    variant_index: copy.deepcopy(
+                        _indexed_tts_job(
+                            pipeline.get("tts_previews"),
+                            variant_index,
+                        )
+                    ),
+                },
+                "segment_usage": {
+                    preview_key: copy.deepcopy(
+                        (pipeline.get("segment_usage") or {}).get(
+                            preview_key,
+                            [],
+                        )
+                    ),
+                },
+            },
+        )
         _invalidate_library_clips(invalidated_clip_ids)
 
         if preview_tts_metered:
@@ -6568,14 +10235,16 @@ async def preview_variant(
                 variant_index,
                 profile.user_id,
                 delivered=True,
+                attempt_id=attempt_id,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": f"preview-variant-{variant_index}",
+                    "output_id": target_output_id,
                 },
             )
             _update_tts_job(
                 pipeline_id,
                 variant_index,
+                attempt_id=attempt_id,
                 status="completed",
                 progress=100,
                 current_step="Preview voice-over ready",
@@ -6611,6 +10280,7 @@ async def preview_variant(
             for m in preview_data.get("matches", [])
         ]
 
+        _finish_preview_job("completed", "Preview ready")
         return PipelinePreviewResponse(
             audio_duration=preview_data.get("audio_duration", 0.0),
             srt_content=preview_data.get("srt_content", ""),
@@ -6622,16 +10292,33 @@ async def preview_variant(
             intro_offset_sec=preview_data.get("intro_offset_sec", 0.0),
             intro_segments=preview_data.get("intro_segments", []),
             video_timeline=preview_data.get("video_timeline", preview_data.get("timeline", [])),
+            defaultTransition=preview_data.get("default_transition"),
+            music=preview_data.get("music"),
+            manual_matches_preserved=manual_matches_preserved,
+            manual_composition_preserved=manual_composition_preserved,
+            script_id=target_script_id,
+            output_id=target_output_id,
         )
 
     except ValueError as e:
+        _finish_preview_job("failed", "Preview failed", error=str(e))
         await _refund_preview_tts(str(e))
         logger.warning(f"[Profile {profile.profile_id}] Preview bad request for variant {variant_index}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException as error:
+        _finish_preview_job(
+            "failed",
+            "Preview failed",
+            error=str(error.detail),
+        )
         await _refund_preview_tts(str(error.detail))
         raise
     except Exception as e:
+        _finish_preview_job(
+            "failed",
+            "Preview failed",
+            error="Preview service unavailable",
+        )
         await _refund_preview_tts("Preview voice-over generation failed")
         # Log the full traceback server-side — a bare message masked a NameError
         # here once and surfaced only as an opaque "Preview service unavailable".
@@ -6668,13 +10355,25 @@ async def check_render_skip(
         if render_request.min_segment_duration is not None
         else pipeline.get("min_segment_duration", 3.0)
     )
+    _check_render_tasks = _render_tasks_for_request(render_request)
+    _check_render_identities = _render_task_identities(
+        pipeline,
+        render_request,
+        _check_render_tasks,
+    )
 
     # Build a set of soft-deleted clip IDs so we don't offer skip for deleted clips
     _deleted_clip_ids: set = set()
     repo_chk = get_repository()
     _render_jobs = pipeline.get("render_jobs", {})
+    _render_jobs_by_output: Dict[str, dict] = {}
+    for _stored_job in _render_jobs.values():
+        _resolved_job = _resolve_render_job_identity(pipeline, _stored_job)
+        if _resolved_job is None:
+            continue
+        _render_jobs_by_output[_resolved_job[3]] = _stored_job
     _clip_ids_to_check = [
-        j.get("clip_id") for j in _render_jobs.values()
+        j.get("clip_id") for j in _render_jobs_by_output.values()
         if isinstance(j, dict) and j.get("clip_id")
     ]
     if _clip_ids_to_check:
@@ -6694,6 +10393,131 @@ async def check_render_skip(
         except Exception as _del_err:
             logger.warning(f"Failed to check deleted clips: {_del_err}")
 
+    # New clients send an exact output list, so A and B are evaluated
+    # independently. Keep the legacy script-level branch below for older tabs.
+    if render_request.output_keys:
+        exact_results: List[RenderCheckResult] = []
+        for vid, version_index, job_key in _check_render_tasks:
+            output_key = str(job_key)
+            expected_script_id, expected_output_id = _check_render_identities[
+                output_key
+            ]
+            visual_version = (
+                get_version_label(version_index)
+                if version_index is not None
+                else None
+            )
+            if vid < 0 or vid >= len(pipeline["scripts"]):
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="invalid_index",
+                ))
+                continue
+
+            existing_job = _render_jobs_by_output.get(expected_output_id)
+            if not existing_job:
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="no_previous_render",
+                ))
+                continue
+            if not _job_matches_output_identity(
+                existing_job,
+                expected_script_id,
+                expected_output_id,
+            ):
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="identity_mismatch",
+                ))
+                continue
+            if existing_job.get("status") in {"queued", "processing"}:
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="still_processing",
+                ))
+                continue
+            if existing_job.get("status") != "completed":
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="no_previous_render",
+                ))
+                continue
+
+            video_path = existing_job.get("final_video_path")
+            if not video_path or not Path(video_path).exists():
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="file_missing",
+                ))
+                continue
+            clip_id = existing_job.get("clip_id")
+            if clip_id and clip_id in _deleted_clip_ids:
+                exact_results.append(RenderCheckResult(
+                    variant_index=vid,
+                    output_key=output_key,
+                    visual_version=visual_version,
+                    can_skip=False,
+                    reason="clip_deleted",
+                ))
+                continue
+
+            fingerprint = _compute_render_fingerprint(
+                render_request,
+                vid,
+                pipeline["scripts"][vid],
+                job_key=job_key,
+                visual_version=visual_version,
+            )
+            if version_index is not None:
+                fingerprint = hashlib.sha256(
+                    (
+                        f"{fingerprint}:meta_ver={visual_version}:"
+                        f"offset={META_PROFILES[version_index].segment_offset}"
+                    ).encode()
+                ).hexdigest()[:32]
+            old_fingerprint = existing_job.get("render_fingerprint")
+            safe_path = _safe_relative_path(video_path)
+            if old_fingerprint == fingerprint:
+                reason = "fingerprint_match"
+                can_skip = True
+            elif not old_fingerprint or len(old_fingerprint) < 32:
+                reason = "render_exists_unverified"
+                can_skip = True
+            else:
+                reason = "fingerprint_mismatch"
+                can_skip = False
+            exact_results.append(RenderCheckResult(
+                variant_index=vid,
+                output_key=output_key,
+                visual_version=visual_version,
+                can_skip=can_skip,
+                reason=reason,
+                existing_video_path=safe_path,
+            ))
+        return RenderCheckResponse(
+            results=exact_results,
+            any_skippable=any(result.can_skip for result in exact_results),
+        )
+
     results: List[RenderCheckResult] = []
     for vid in render_request.variant_indices:
         if vid < 0 or vid >= len(pipeline["scripts"]):
@@ -6712,16 +10536,29 @@ async def check_render_skip(
         # For meta multiplication, check ALL versions (A and B must both exist and match)
         if render_request.meta_multiplication:
             _all_meta_ok = True
+            _first_meta_video_path: Optional[str] = None
             for _chk_ver_idx in range(len(META_PROFILES)):
                 _chk_key = f"{vid}_{get_version_label(_chk_ver_idx)}"
-                _chk_job = pipeline.get("render_jobs", {}).get(_chk_key)
+                _expected_script_id, _expected_output_id = (
+                    _check_render_identities[_chk_key]
+                )
+                _chk_job = _render_jobs_by_output.get(_expected_output_id)
                 if not _chk_job or _chk_job.get("status") != "completed":
+                    _all_meta_ok = False
+                    break
+                if not _job_matches_output_identity(
+                    _chk_job,
+                    _expected_script_id,
+                    _expected_output_id,
+                ):
                     _all_meta_ok = False
                     break
                 _chk_video = _chk_job.get("final_video_path")
                 if not _chk_video or not Path(_chk_video).exists():
                     _all_meta_ok = False
                     break
+                if _first_meta_video_path is None:
+                    _first_meta_video_path = _chk_video
                 # BUG-FIX: Check if the library clip was soft-deleted
                 _chk_clip_id = _chk_job.get("clip_id")
                 if _chk_clip_id and _chk_clip_id in _deleted_clip_ids:
@@ -6747,9 +10584,7 @@ async def check_render_skip(
             if _all_meta_ok:
                 results.append(RenderCheckResult(
                     variant_index=vid, can_skip=True, reason="fingerprint_match",
-                    existing_video_path=_safe_relative_path(
-                        pipeline["render_jobs"][f"{vid}_A"]["final_video_path"]
-                    )
+                    existing_video_path=_safe_relative_path(_first_meta_video_path)
                 ))
             else:
                 results.append(RenderCheckResult(
@@ -6758,10 +10593,20 @@ async def check_render_skip(
             continue
 
         # Standard (non-meta) flow: check integer key
-        existing_job = pipeline.get("render_jobs", {}).get(vid)
+        _expected_script_id, _expected_output_id = _check_render_identities[str(vid)]
+        existing_job = _render_jobs_by_output.get(_expected_output_id)
         if not existing_job:
             results.append(RenderCheckResult(
                 variant_index=vid, can_skip=False, reason="no_previous_render"
+            ))
+            continue
+        if not _job_matches_output_identity(
+            existing_job,
+            _expected_script_id,
+            _expected_output_id,
+        ):
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="identity_mismatch"
             ))
             continue
 
@@ -6851,6 +10696,13 @@ async def render_variants(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    _require_voice_generation_idle(
+        pipeline_id,
+        pipeline,
+        action="rendering",
+    )
+
+    _refresh_render_jobs_from_db(pipeline_id, pipeline)
     render_request.min_segment_duration = _clamp_min_segment_duration(
         render_request.min_segment_duration
         if render_request.min_segment_duration is not None
@@ -6911,9 +10763,10 @@ async def render_variants(
     _evict_stale_render_locks()
     with _render_locks_meta_lock:
         if pipeline_id_str not in _render_locks:
-            _render_locks[pipeline_id_str] = threading.Lock()
+            _render_locks[pipeline_id_str] = (
+                threading.Lock()
+            )
         render_jobs_lock = _render_locks[pipeline_id_str]
-
     # PIP-12: Snapshot script count for bound checks inside do_render
     _script_count_snapshot = len(pipeline["scripts"])
 
@@ -6921,15 +10774,12 @@ async def render_variants(
     _meta_mul = render_request.meta_multiplication
     # Persist meta_multiplication flag in pipeline state so it survives reload/sync
     pipeline["meta_multiplication"] = bool(_meta_mul)
-    _render_tasks = []  # List of (variant_index, version_index, job_key)
-
-    for vid in render_request.variant_indices:
-        if _meta_mul:
-            for ver_idx in range(len(META_PROFILES)):
-                job_key = f"{vid}_{get_version_label(ver_idx)}"
-                _render_tasks.append((vid, ver_idx, job_key))
-        else:
-            _render_tasks.append((vid, None, vid))
+    _render_tasks = _render_tasks_for_request(render_request)
+    _render_identities = _render_task_identities(
+        pipeline,
+        render_request,
+        _render_tasks,
+    )
 
     # The rate card bills exact started output minutes. In enforced web mode a
     # durable Step-2 voice-over is therefore required before queue entry; its
@@ -6938,8 +10788,18 @@ async def render_variants(
     _metering_desktop = StudioMeteringClient().desktop_mode
     _render_units_by_variant: Dict[int, int] = {}
     for vid in set(item[0] for item in _render_tasks):
+        render_script_id, render_audio_output_id = _identity_for_variant(
+            pipeline,
+            vid,
+        )
         tts_entries = pipeline.get("tts_previews") or {}
-        tts_entry = tts_entries.get(vid) or tts_entries.get(str(vid)) or {}
+        tts_entry = _find_identity_owned_entry(
+            tts_entries,
+            script_id=render_script_id,
+            output_id=render_audio_output_id,
+            fallback_keys=(vid, str(vid)),
+            script_level=True,
+        ) or {}
         audio_path = tts_entry.get("audio_path") if isinstance(tts_entry, dict) else None
         try:
             audio_duration = float((tts_entry or {}).get("audio_duration") or 0)
@@ -6950,12 +10810,21 @@ async def render_variants(
         script_text = pipeline.get("scripts", [])[vid]
         cleaned_script = strip_product_group_tags(script_text)
         script_matches = tts_entry.get("script_hash") == _stable_hash(cleaned_script)
-        is_library_audio = bool(tts_entry.get("library_asset_id"))
-        settings_match = is_library_audio or _voice_settings_match(
-            tts_entry.get("voice_settings"), render_request.voice_settings
+        settings_match = _tts_asset_matches_config(
+            tts_entry,
+            render_request.elevenlabs_model,
+            render_request.voice_id,
+            render_request.voice_settings,
+        )
+        integrity_match = _tts_audio_integrity_matches(
+            tts_entry,
+            resolved_audio_path,
         )
         if not _metering_desktop and not (
-            has_durable_audio and script_matches and settings_match
+            has_durable_audio
+            and script_matches
+            and settings_match
+            and integrity_match
         ):
             raise HTTPException(
                 status_code=409,
@@ -6975,11 +10844,27 @@ async def render_variants(
     # durable record with a new idempotency key.
     state_lock = _get_pipeline_state_lock(pipeline_id)
     _skip_set = set(render_request.skip_variants or [])
+    _skip_output_set = set(render_request.skip_output_keys or [])
     for vid, _, job_key in _render_tasks:
-        if vid in _skip_set:
+        if vid in _skip_set or str(job_key) in _skip_output_set:
             continue
         existing_job = pipeline.get("render_jobs", {}).get(job_key)
         if not isinstance(existing_job, dict):
+            continue
+        expected_script_id, expected_output_id = _render_identities[str(job_key)]
+        if not _job_matches_output_identity(
+            existing_job,
+            expected_script_id,
+            expected_output_id,
+        ):
+            if existing_job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Render slot {job_key} is still owned by another "
+                        "stable output."
+                    ),
+                )
             continue
         existing_metering = existing_job.get("metering")
         if not isinstance(existing_metering, dict):
@@ -7018,7 +10903,7 @@ async def render_variants(
                 delivered=True,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": str(job_key),
+                    "output_id": str(existing_job.get("output_id") or job_key),
                 },
             )
         elif existing_job.get("status") in {"failed", "cancelled"}:
@@ -7034,12 +10919,25 @@ async def render_variants(
         if render_request.source_video_ids:
             pipeline["source_video_ids"] = render_request.source_video_ids
         for vid, ver_idx, job_key in _render_tasks:
+            script_id, output_id = _render_identities[str(job_key)]
             # Skip variants that user chose to keep from previous render
-            if vid in _skip_set:
+            if vid in _skip_set or str(job_key) in _skip_output_set:
                 continue
 
             existing_job = pipeline["render_jobs"].get(job_key)
             if existing_job and existing_job.get("status") in ("queued", "processing"):
+                if not _job_matches_output_identity(
+                    existing_job,
+                    script_id,
+                    output_id,
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Render slot {job_key} is still owned by another "
+                            "stable output."
+                        ),
+                    )
                 if existing_job.get("status") == "queued":
                     logger.info(
                         f"Pipeline {pipeline_id}: skipping {job_key} — already queued"
@@ -7073,12 +10971,19 @@ async def render_variants(
                 )
 
             _init_job: dict = {
+                "attempt_id": uuid.uuid4().hex,
+                "worker_instance_id": _BACKEND_INSTANCE_ID,
                 "status": "queued",
                 "progress": 0,
                 "current_step": "Queued for render",
                 "final_video_path": None,
                 "error": None,
                 "queued_at": datetime.now(timezone.utc).isoformat(),
+                "script_id": script_id,
+                "output_id": output_id,
+                "script_fingerprint": _stable_hash(
+                    str(pipeline["scripts"][vid])
+                ),
                 "metering": {
                     **new_metering_record(
                         "studio.render_output_minute",
@@ -7336,19 +11241,35 @@ async def render_variants(
             cleaned_render_text = strip_product_group_tags(script_text)
             # Normalize key lookup: prefer int key, fall back to str for legacy entries
             _tts_previews_render = pipeline.get("tts_previews", {})
-            existing_tts = _tts_previews_render.get(vid) or _tts_previews_render.get(str(vid))
+            existing_tts = _find_identity_owned_entry(
+                _tts_previews_render,
+                script_id=str(job.get("script_id") or ""),
+                output_id=_build_output_id(str(job.get("script_id") or "")),
+                fallback_keys=(vid, str(vid)),
+                script_level=True,
+            )
             if existing_tts:
                 script_match = existing_tts.get("script_hash") == _stable_hash(cleaned_render_text)
                 if script_match:
-                    # For library audio: skip voice_settings check
-                    # For generated audio: compare voice_settings
-                    is_library = bool(existing_tts.get("library_asset_id"))
-                    settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), render_request.voice_settings)
+                    # Library audio is intentionally independent from pipeline
+                    # voice controls. Generated audio must match model, voice,
+                    # and settings before it can be reused.
+                    is_library = existing_tts.get("asset_provenance") == "library_adopted"
+                    settings_match = _tts_asset_matches_config(
+                        existing_tts,
+                        render_request.elevenlabs_model,
+                        render_request.voice_id,
+                        render_request.voice_settings,
+                    )
 
                     if settings_match:
                         audio_path_str = existing_tts.get("audio_path")
                         resolved_audio_path = _existing_pipeline_audio_path(audio_path_str, min_bytes=100)
-                        if resolved_audio_path:
+                        integrity_match = _tts_audio_integrity_matches(
+                            existing_tts,
+                            resolved_audio_path,
+                        )
+                        if resolved_audio_path and integrity_match:
                             reuse_audio_path = str(resolved_audio_path)
                             reuse_audio_duration = existing_tts.get("audio_duration")
                             reuse_timestamps = existing_tts.get("tts_timestamps")
@@ -7380,10 +11301,15 @@ async def render_variants(
                             with render_jobs_lock:
                                 job["current_step"] = "Matching segments"
                                 job["progress"] = 30
+                        elif resolved_audio_path:
+                            logger.info(
+                                f"[RENDER {_render_fingerprint}] TTS reuse BLOCKED: "
+                                f"audio integrity mismatch for variant {vid}"
+                            )
                     else:
                         logger.info(
                             f"[RENDER {_render_fingerprint}] TTS reuse BLOCKED: "
-                            f"voice_settings mismatch"
+                            f"voice configuration mismatch"
                         )
                 else:
                     logger.info(
@@ -7404,6 +11330,7 @@ async def render_variants(
                 with render_jobs_lock:
                     job["current_step"] = step_name
                     job["progress"] = pct
+                    job["updated_at"] = _job_timestamp()
                 # Wave 2.3: persist progress DURING the long encode (throttled to
                 # ~once/5s) so a crash mid-render leaves an accurate last-known
                 # progress instead of a frozen/vanishing bar. Stage boundaries
@@ -7659,14 +11586,40 @@ async def render_variants(
                     pipeline_id, job_key, _user_id, delivered=False
                 )
                 return
+            _validate_authoritative_output_identity(
+                pipeline_id,
+                script_id=str(job.get("script_id") or ""),
+                output_id=str(job.get("output_id") or ""),
+                expected_script_fingerprint=str(
+                    job.get("script_fingerprint") or ""
+                ),
+            )
+            _validate_authoritative_render_attempt(
+                pipeline_id,
+                output_id=str(job.get("output_id") or ""),
+                attempt_id=str(job.get("attempt_id") or ""),
+            )
             with render_jobs_lock:
-                job["status"] = "completed"
-                job["progress"] = 100
-                job["current_step"] = "Render complete"
+                # Keep the job identity-sensitive until its Library write has
+                # finished. Structural edits consult active render jobs using
+                # jobs_revision CAS, so a script cannot disappear in the gap
+                # between final encoding and clip persistence.
+                job["status"] = "processing"
+                job["progress"] = 99
+                job["current_step"] = "Saving render to Library"
                 job["final_video_path"] = str(final_video_path)
                 job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _render_fingerprint
-                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                job["render_completed_at"] = datetime.now(timezone.utc).isoformat()
+                # Persist the exact resolved values used by this output. A
+                # recovery sync must not reconstruct them from later profile
+                # or pipeline defaults.
+                job["subtitle_settings"] = copy.deepcopy(
+                    _effective_subtitle_settings
+                )
+                job["voice_settings"] = copy.deepcopy(
+                    render_request.voice_settings
+                )
                 # Store visual version label and segment composition for cross-version diversity
                 if version_index is not None:
                     job["visual_version"] = get_version_label(version_index)
@@ -7698,7 +11651,7 @@ async def render_variants(
             _visual_ver = get_version_label(version_index) if version_index is not None else None
             # Use the per-variant effective settings so editai_clip_content
             # records the actual style rendered (not the global default).
-            await _save_clip_to_library(
+            _library_saved = await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _render_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
@@ -7708,12 +11661,41 @@ async def render_variants(
                 visual_version=_visual_ver,
                 voice_settings=render_request.voice_settings,
             )
+            if not _library_saved or job.get("library_saved") is not True:
+                raise RuntimeError(
+                    "Render output was not persisted to Library: "
+                    f"{job.get('library_error') or 'unknown Library error'}"
+                )
+
+            _validate_authoritative_output_identity(
+                pipeline_id,
+                script_id=str(job.get("script_id") or ""),
+                output_id=str(job.get("output_id") or ""),
+                expected_script_fingerprint=str(
+                    job.get("script_fingerprint") or ""
+                ),
+            )
+            _validate_authoritative_render_attempt(
+                pipeline_id,
+                output_id=str(job.get("output_id") or ""),
+                attempt_id=str(job.get("attempt_id") or ""),
+            )
+            with render_jobs_lock:
+                job["status"] = "completed"
+                job["progress"] = 100
+                job["current_step"] = "Render complete"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             completed_job = pipeline.get("render_jobs", {}).get(job_key)
             completed_metering = (
                 completed_job.get("metering") if isinstance(completed_job, dict) else None
             )
-            if isinstance(completed_metering, dict):
+            if (
+                isinstance(completed_metering, dict)
+                and isinstance(completed_job, dict)
+                and completed_job.get("library_saved") is True
+            ):
                 completed_metering = dict(completed_metering)
                 completed_metering["output_persisted"] = True
                 completed_metering["state"] = "output_persisted"
@@ -7725,7 +11707,9 @@ async def render_variants(
                 delivered=True,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": str(job_key),
+                    "output_id": str(
+                        (completed_job or {}).get("output_id") or job_key
+                    ),
                 },
             )
 
@@ -7944,7 +11928,15 @@ async def render_variants(
         rendering_variants=_rendering_variant_indices,
         total_variants=len(pipeline["scripts"]),
         meta_multiplication=_meta_mul,
-        visual_versions=[get_version_label(i) for i in range(len(META_PROFILES))] if _meta_mul else None,
+        visual_versions=(
+            sorted({
+                get_version_label(version_index)
+                for _, version_index, _ in _render_tasks
+                if version_index is not None
+            })
+            if _meta_mul
+            else None
+        ),
         message="All requested variants are already rendering" if not _render_tasks_to_run else None
     )
 
@@ -7979,6 +11971,7 @@ async def remake_variant(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    _refresh_render_jobs_from_db(pipeline_id, pipeline)
     render_request.min_segment_duration = _clamp_min_segment_duration(
         render_request.min_segment_duration
         if render_request.min_segment_duration is not None
@@ -7997,6 +11990,12 @@ async def remake_variant(
     scripts = pipeline.get("scripts", [])
     if vid < 0 or vid >= len(scripts):
         raise HTTPException(status_code=400, detail=f"Variant index {vid} out of range (0-{len(scripts)-1})")
+    remake_identities = _render_task_identities(
+        pipeline,
+        render_request,
+        [(vid, version_index, job_key)],
+    )
+    target_script_id, target_output_id = remake_identities[str(job_key)]
 
     # 2. Check variant is not currently processing
     existing_job = pipeline.get("render_jobs", {}).get(job_key)
@@ -8005,7 +12004,13 @@ async def remake_variant(
 
     # 3. Read TTS data for reuse
     _tts_previews = pipeline.get("tts_previews", {})
-    existing_tts = _tts_previews.get(vid) or _tts_previews.get(str(vid))
+    existing_tts = _find_identity_owned_entry(
+        _tts_previews,
+        script_id=target_script_id,
+        output_id=_build_output_id(target_script_id),
+        fallback_keys=(vid, str(vid)),
+        script_level=True,
+    )
 
     reuse_audio_path = None
     reuse_audio_duration = None
@@ -8061,7 +12066,7 @@ async def remake_variant(
                 delivered=True,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": str(job_key),
+                    "output_id": str(existing_job.get("output_id") or job_key),
                 },
             )
         elif existing_job.get("status") in {"failed", "cancelled"}:
@@ -8162,9 +12167,14 @@ async def remake_variant(
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
         pipeline["render_jobs"][job_key] = {
+            "attempt_id": uuid.uuid4().hex,
+            "worker_instance_id": _BACKEND_INSTANCE_ID,
             "status": "queued",
             "progress": 0,
             "current_step": "Queued for remake",
+            "script_id": target_script_id,
+            "output_id": target_output_id,
+            "script_fingerprint": _stable_hash(str(scripts[vid])),
             "final_video_path": None,
             "error": None,
             "queued_at": datetime.now(timezone.utc).isoformat(),
@@ -8228,7 +12238,20 @@ async def remake_variant(
         _ctx_token = _active_job_key_ctx.set(_registry_scope)
         try:
             assembly_service = get_assembly_service()
-            job = pipeline["render_jobs"][job_key]
+            with state_lock:
+                _validate_requested_identity(
+                    pipeline,
+                    vid,
+                    script_id=target_script_id,
+                    output_id=target_output_id,
+                    visual_version=normalized_visual_version,
+                )
+                job = pipeline["render_jobs"][job_key]
+                if job.get("output_id") != target_output_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Remake job belongs to another output.",
+                    )
 
             # Check for cancellation
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _remake_scope):
@@ -8249,6 +12272,7 @@ async def remake_variant(
                 with render_jobs_lock:
                     job["current_step"] = step_name
                     job["progress"] = pct
+                    job["updated_at"] = _job_timestamp()
 
             # Extract overlay params
             variant_interstitial_slides = None
@@ -8366,14 +12390,57 @@ async def remake_variant(
                 f"remake_{job_key}_{datetime.now(timezone.utc).isoformat()}".encode()
             ).hexdigest()[:32]
 
+            authoritative_index = _validate_authoritative_output_identity(
+                pipeline_id,
+                script_id=target_script_id,
+                output_id=target_output_id,
+                expected_script_fingerprint=str(
+                    job.get("script_fingerprint") or ""
+                ),
+            )
+            _validate_authoritative_render_attempt(
+                pipeline_id,
+                output_id=target_output_id,
+                attempt_id=str(job.get("attempt_id") or ""),
+            )
+            if authoritative_index != vid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The script order changed while the remake was running."
+                    ),
+                )
+
+            with state_lock:
+                _validate_requested_identity(
+                    pipeline,
+                    vid,
+                    script_id=target_script_id,
+                    output_id=target_output_id,
+                    visual_version=normalized_visual_version,
+                )
+                if job.get("output_id") != target_output_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Remake result no longer belongs to this output.",
+                    )
+
             with render_jobs_lock:
-                job["status"] = "completed"
-                job["progress"] = 100
-                job["current_step"] = "Remake complete"
+                # Keep remake identity-sensitive until Library persistence
+                # finishes, matching the normal render completion contract.
+                job["status"] = "processing"
+                job["progress"] = 99
+                job["current_step"] = "Saving remake to Library"
                 job["final_video_path"] = str(final_video_path)
                 job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _remake_fingerprint
-                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                job["render_completed_at"] = datetime.now(timezone.utc).isoformat()
+                job["subtitle_settings"] = copy.deepcopy(
+                    _remake_effective_subtitle_settings
+                )
+                job["voice_settings"] = copy.deepcopy(
+                    render_request.voice_settings
+                )
                 if normalized_visual_version:
                     job["visual_version"] = normalized_visual_version
                     if version_index is not None:
@@ -8382,7 +12449,7 @@ async def remake_variant(
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             # Save/update clip in library
-            await _save_clip_to_library(
+            _library_saved = await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _remake_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
@@ -8392,12 +12459,62 @@ async def remake_variant(
                 visual_version=normalized_visual_version,
                 voice_settings=render_request.voice_settings,
             )
+            if not _library_saved or job.get("library_saved") is not True:
+                raise RuntimeError(
+                    "Remake output was not persisted to Library: "
+                    f"{job.get('library_error') or 'unknown Library error'}"
+                )
+
+            authoritative_index = _validate_authoritative_output_identity(
+                pipeline_id,
+                script_id=target_script_id,
+                output_id=target_output_id,
+                expected_script_fingerprint=str(
+                    job.get("script_fingerprint") or ""
+                ),
+            )
+            _validate_authoritative_render_attempt(
+                pipeline_id,
+                output_id=target_output_id,
+                attempt_id=str(job.get("attempt_id") or ""),
+            )
+            if authoritative_index != vid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The script order changed before remake completion."
+                    ),
+                )
+            with state_lock:
+                _validate_requested_identity(
+                    pipeline,
+                    vid,
+                    script_id=target_script_id,
+                    output_id=target_output_id,
+                    visual_version=normalized_visual_version,
+                )
+                if job.get("output_id") != target_output_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Remake result no longer belongs to this output.",
+                    )
+
+            with render_jobs_lock:
+                job["status"] = "completed"
+                job["progress"] = 100
+                job["current_step"] = "Remake complete"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             completed_job = pipeline.get("render_jobs", {}).get(job_key)
             completed_metering = (
                 completed_job.get("metering") if isinstance(completed_job, dict) else None
             )
-            if isinstance(completed_metering, dict):
+            if (
+                isinstance(completed_metering, dict)
+                and isinstance(completed_job, dict)
+                and completed_job.get("library_saved") is True
+            ):
                 completed_metering = dict(completed_metering)
                 completed_metering["output_persisted"] = True
                 completed_metering["state"] = "output_persisted"
@@ -8409,7 +12526,9 @@ async def remake_variant(
                 delivered=True,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": str(job_key),
+                    "output_id": str(
+                        (completed_job or {}).get("output_id") or job_key
+                    ),
                 },
             )
 
@@ -8570,14 +12689,7 @@ def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
     for job in (pipeline.get("render_jobs") or {}).values():
         if not isinstance(job, dict) or job.get("status") != "processing":
             continue
-        stale = True
-        started_at = job.get("started_at")
-        if started_at:
-            try:
-                started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-                stale = (datetime.now(timezone.utc) - started_dt).total_seconds() > STALE_PROCESSING_THRESHOLD_SEC
-            except (ValueError, TypeError):
-                pass  # unparseable timestamp → treat as stale
+        stale = _render_job_is_stale(job)
         if stale:
             job["status"] = "failed"
             job["progress"] = 0
@@ -8623,6 +12735,7 @@ async def get_pipeline_status(
     """
     # Try in-memory first, then DB fallback
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
+    _refresh_render_jobs_from_db(pipeline_id, pipeline)
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
     _mark_stale_render_jobs(pipeline_id, pipeline)
     await _reconcile_regeneration_metering(pipeline_id)
@@ -8648,7 +12761,7 @@ async def get_pipeline_status(
                 delivered=True,
                 result_metadata={
                     "studio_job_id": pipeline_id,
-                    "output_id": str(job_key),
+                    "output_id": str(job.get("output_id") or job_key),
                 },
             )
         elif job.get("status") in {"failed", "cancelled"}:
@@ -8669,20 +12782,72 @@ async def get_pipeline_status(
         except (ValueError, TypeError):
             pass  # Can't parse date, skip TTL check
 
-    # Build variants status list
+    # Build the status view from stable output identity. Numeric JSON keys are
+    # retained only so an already queued worker can still be located/cancelled.
+    # If a script moved in another backend instance, its job follows ScriptId;
+    # incomplete legacy jobs are ignored instead of being attached by index.
+    stable_render_jobs: Dict[
+        Tuple[int, Optional[str]],
+        Tuple[Any, dict, str, str],
+    ] = {}
+
+    def _status_job_recency(job: dict) -> str:
+        return max(
+            (
+                str(job.get(field) or "")
+                for field in (
+                    "updated_at",
+                    "completed_at",
+                    "failed_at",
+                    "cancelled_at",
+                    "started_at",
+                    "queued_at",
+                )
+            ),
+            default="",
+        )
+
+    for stored_key, job in (pipeline.get("render_jobs") or {}).items():
+        resolved = _resolve_render_job_identity(pipeline, job)
+        if resolved is None:
+            logger.warning(
+                "Pipeline %s: ignoring render job %s without a current stable identity",
+                pipeline_id,
+                stored_key,
+            )
+            continue
+        current_index, visual_version, script_id, output_id = resolved
+        location = (current_index, visual_version)
+        incumbent = stable_render_jobs.get(location)
+        if (
+            incumbent is None
+            or _status_job_recency(job) >= _status_job_recency(incumbent[1])
+        ):
+            stable_render_jobs[location] = (
+                stored_key,
+                job,
+                script_id,
+                output_id,
+            )
+
     variants = []
     queued_job_ids = {
-        job_key: _render_queue_job_id(pipeline_id, job_key)
-        for job_key, job in pipeline.get("render_jobs", {}).items()
-        if isinstance(job, dict) and job.get("status") == "queued"
+        stored_key: _render_queue_job_id(pipeline_id, stored_key)
+        for stored_key, job, _, _ in stable_render_jobs.values()
+        if job.get("status") == "queued"
     }
     queue_snapshots = await get_render_queue().snapshots(list(queued_job_ids.values()))
-    # Recovery: collect variant indices that need clip_id lookup
-    _clip_id_recovery_needed: list[int] = []
+    # Recovery retains the stored key while looking up clips by OutputId.
+    _clip_id_recovery_needed: list[Tuple[int, Any, str]] = []
     for idx in range(len(pipeline["scripts"])):
-        if idx in pipeline["render_jobs"]:
+        _status_script_id, _status_output_id = _identity_for_variant(
+            pipeline,
+            idx,
+        )
+        status_entry = stable_render_jobs.get((idx, None))
+        if status_entry is not None:
             # Variant has a render job
-            job = pipeline["render_jobs"][idx]
+            stored_key, job, job_script_id, job_output_id = status_entry
             # Sanitize error details for public endpoint
             sanitized_error = "Processing failed. Check server logs for details." if job.get("error") else None
             sanitized_lib_error = "Library save failed. Check server logs for details." if job.get("library_error") else None
@@ -8691,17 +12856,22 @@ async def get_pipeline_status(
             raw_thumb_path = job.get("thumbnail_path")
             safe_video_path = _safe_relative_path(raw_video_path)
             safe_thumb_path = _safe_relative_path(raw_thumb_path)
-            queue_snapshot = queue_snapshots.get(queued_job_ids.get(idx, ""))
+            queue_snapshot = queue_snapshots.get(
+                queued_job_ids.get(stored_key, "")
+            )
             # Recovery: if completed but no clip_id, try to recover from editai_clips
             clip_id = job.get("clip_id")
-            if job["status"] == "completed" and not clip_id:
-                _clip_id_recovery_needed.append(idx)
+            if job.get("status") == "completed" and not clip_id:
+                _clip_id_recovery_needed.append(
+                    (idx, stored_key, job_output_id)
+                )
             # BUG-PR-11: Sanitize public status — omit internal metadata (render_fingerprint, lock info)
             variants.append(VariantStatus(
                 variant_index=idx,
-                status=job["status"],
-                progress=job["progress"],
-                current_step=job["current_step"],
+                output_key=str(idx),
+                status=job.get("status", "not_started"),
+                progress=job.get("progress", 0),
+                current_step=job.get("current_step", ""),
                 final_video_path=safe_video_path,
                 thumbnail_path=safe_thumb_path,
                 clip_id=clip_id,
@@ -8711,41 +12881,44 @@ async def get_pipeline_status(
                 render_fingerprint=job.get("render_fingerprint"),
                 queue_position=queue_snapshot.position if queue_snapshot else None,
                 eta_seconds=queue_snapshot.eta_seconds if queue_snapshot else None,
+                script_id=job_script_id,
+                output_id=job_output_id,
             ))
         else:
             # Variant not yet rendered
             variants.append(VariantStatus(
                 variant_index=idx,
+                output_key=str(idx),
                 status="not_started",
                 progress=0,
                 current_step="Not started",
                 final_video_path=None,
-                error=None
+                error=None,
+                script_id=_status_script_id,
+                output_id=_status_output_id,
             ))
 
     # Meta multiplication: also include version-specific render entries (e.g. "0_A", "0_B")
     meta_variants = []
-    for jk, job in pipeline.get("render_jobs", {}).items():
-        if isinstance(jk, str) and "_" in jk:
+    for (meta_index, meta_version), status_entry in stable_render_jobs.items():
+        if meta_version is not None:
+            stored_key, job, job_script_id, job_output_id = status_entry
             # Parse "0_A" → variant_index=0, visual_version="A"
-            parts = str(jk).rsplit("_", 1)
-            try:
-                _meta_vid = int(parts[0])
-            except (ValueError, TypeError):
-                continue
-            _meta_ver = parts[1] if len(parts) > 1 else None
             sanitized_error = "Processing failed. Check server logs for details." if job.get("error") else None
             sanitized_lib_error = "Library save failed. Check server logs for details." if job.get("library_error") else None
             raw_video_path = job.get("final_video_path")
             raw_thumb_path = job.get("thumbnail_path")
             safe_video_path = _safe_relative_path(raw_video_path)
             safe_thumb_path = _safe_relative_path(raw_thumb_path)
-            queue_snapshot = queue_snapshots.get(queued_job_ids.get(jk, ""))
+            queue_snapshot = queue_snapshots.get(
+                queued_job_ids.get(stored_key, "")
+            )
             meta_variants.append(VariantStatus(
-                variant_index=_meta_vid,
-                status=job["status"],
-                progress=job["progress"],
-                current_step=job["current_step"],
+                variant_index=meta_index,
+                output_key=f"{meta_index}_{meta_version}",
+                status=job.get("status", "not_started"),
+                progress=job.get("progress", 0),
+                current_step=job.get("current_step", ""),
                 final_video_path=safe_video_path,
                 thumbnail_path=safe_thumb_path,
                 clip_id=job.get("clip_id"),
@@ -8753,10 +12926,12 @@ async def get_pipeline_status(
                 library_saved=job.get("library_saved"),
                 library_error=sanitized_lib_error,
                 render_fingerprint=job.get("render_fingerprint"),
-                visual_version=job.get("visual_version"),
+                visual_version=meta_version,
                 meta_platform=job.get("meta_platform"),
                 queue_position=queue_snapshot.position if queue_snapshot else None,
                 eta_seconds=queue_snapshot.eta_seconds if queue_snapshot else None,
+                script_id=job_script_id,
+                output_id=job_output_id,
             ))
 
     # Force pair-by-pair order so the Step 4 grid renders A on the left and
@@ -8774,24 +12949,20 @@ async def get_pipeline_status(
         if library_project_id:
             try:
                 repo_status = get_repository()
-                for vid in _clip_id_recovery_needed:
+                for vid, stored_key, recovery_output_id in _clip_id_recovery_needed:
                     try:
-                        # Query with visual_version=NULL for standard (non-meta) clips.
-                        # list_clips eq does not natively support IS NULL, so we filter
-                        # client-side for visual_version is None after fetching matching
-                        # rows by project_id + variant_index + is_deleted=False.
                         _clip_result = repo_status.list_clips(
                             library_project_id,
                             QueryFilters(
-                                eq={"variant_index": vid, "is_deleted": False},
-                                select="id, visual_version",
-                                limit=10,
+                                eq={
+                                    "output_id": recovery_output_id,
+                                    "is_deleted": False,
+                                },
+                                select="id, output_id",
+                                limit=1,
                             ),
                         )
-                        _matching = [
-                            r for r in (_clip_result.data or [])
-                            if r.get("visual_version") is None
-                        ]
+                        _matching = _clip_result.data or []
                         if _matching:
                             recovered_id = _matching[0]["id"]
                             # Update the variant in the response
@@ -8800,8 +12971,11 @@ async def get_pipeline_status(
                                     v.clip_id = recovered_id
                                     break
                             # Persist recovery to render_jobs so future calls don't need lookup
-                            if vid in pipeline.get("render_jobs", {}):
-                                pipeline["render_jobs"][vid]["clip_id"] = recovered_id
+                            stored_job = (pipeline.get("render_jobs") or {}).get(
+                                stored_key
+                            )
+                            if isinstance(stored_job, dict):
+                                stored_job["clip_id"] = recovered_id
                             logger.info(f"Recovered clip_id {recovered_id} for variant {vid}")
                     except Exception as clip_err:
                         logger.warning(f"clip_id recovery failed for variant {vid}: {clip_err}")
@@ -8814,20 +12988,25 @@ async def get_pipeline_status(
                                 library_project_id,
                                 QueryFilters(
                                     eq={
-                                        "variant_index": mv.variant_index,
-                                        "visual_version": mv.visual_version,
+                                        "output_id": mv.output_id,
                                         "is_deleted": False,
                                     },
-                                    select="id",
+                                    select="id, output_id",
                                     limit=1,
                                 ),
                             )
                             if _meta_clip_result.data:
                                 _recovered_meta_id = _meta_clip_result.data[0]["id"]
                                 mv.clip_id = _recovered_meta_id
-                                _meta_jk = f"{mv.variant_index}_{mv.visual_version}"
-                                if _meta_jk in pipeline.get("render_jobs", {}):
-                                    pipeline["render_jobs"][_meta_jk]["clip_id"] = _recovered_meta_id
+                                meta_entry = stable_render_jobs.get(
+                                    (mv.variant_index, mv.visual_version)
+                                )
+                                if meta_entry is not None:
+                                    meta_stored_job = (
+                                        pipeline.get("render_jobs") or {}
+                                    ).get(meta_entry[0])
+                                    if isinstance(meta_stored_job, dict):
+                                        meta_stored_job["clip_id"] = _recovered_meta_id
                                 logger.info(f"Recovered meta clip_id {_recovered_meta_id} for variant {mv.variant_index} ver={mv.visual_version}")
                         except Exception as meta_clip_err:
                             logger.warning(f"Meta clip_id recovery failed for {mv.variant_index}_{mv.visual_version}: {meta_clip_err}")
@@ -8840,12 +13019,31 @@ async def get_pipeline_status(
     # Build preview_info from stored previews
     preview_info: Dict[str, VariantPreviewInfo] = {}
     for idx_key, preview_data in pipeline.get("previews", {}).items():
+        if not isinstance(preview_data, dict):
+            continue
+        response_key = str(idx_key)
+        recorded_script_id = str(preview_data.get("script_id") or "")
+        recorded_output_id = str(preview_data.get("output_id") or "")
+        if recorded_script_id or recorded_output_id:
+            parsed_output = _parse_output_id(recorded_output_id)
+            current_index = _script_index_for_id(pipeline, recorded_script_id)
+            if (
+                parsed_output is None
+                or parsed_output[0] != recorded_script_id
+                or current_index is None
+            ):
+                continue
+            response_key = (
+                f"{current_index}_{parsed_output[1]}"
+                if parsed_output[1]
+                else str(current_index)
+            )
         pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
         audio_path_str = pd.get("audio_path")
         has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
         audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
         has_srt = bool(pd.get("srt_content"))
-        preview_info[str(idx_key)] = VariantPreviewInfo(
+        preview_info[response_key] = VariantPreviewInfo(
             has_audio=has_audio,
             audio_duration=audio_duration,
             has_srt=has_srt
@@ -8855,10 +13053,20 @@ async def get_pipeline_status(
     tts_info: Dict[str, VariantTtsInfo] = {}
     for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
         if isinstance(tts_data, dict):
+            response_key = str(idx_key)
+            recorded_script_id = str(tts_data.get("script_id") or "")
+            if recorded_script_id:
+                current_index = _script_index_for_id(
+                    pipeline,
+                    recorded_script_id,
+                )
+                if current_index is None:
+                    continue
+                response_key = str(current_index)
             audio_path_str = tts_data.get("audio_path")
             has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
             audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
-            tts_info[str(idx_key)] = VariantTtsInfo(
+            tts_info[response_key] = VariantTtsInfo(
                 has_audio=has_audio,
                 audio_duration=audio_duration,
                 approved=bool(tts_data.get("approved", False)),
@@ -8891,17 +13099,49 @@ async def get_pipeline_scripts(
     acts as capability token.
     """
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
+    # Snapshot settings use database CAS and may have been updated by another
+    # tab or backend instance after this process cached the pipeline.
+    authoritative_row = get_repository().get_pipeline(pipeline_id) or {}
+    authoritative_revision = int(
+        authoritative_row.get("settings_revision") or 0
+    )
+    if authoritative_revision >= int(pipeline.get("settings_revision") or 0):
+        with _get_pipeline_state_lock(pipeline_id):
+            pipeline["settings_revision"] = authoritative_revision
+            pipeline["template_settings"] = copy.deepcopy(
+                authoritative_row.get("template_settings") or {}
+            )
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
+    script_ids = _ensure_pipeline_script_ids(pipeline)
 
     # Build preview_info from stored previews (needed for history restore)
     preview_info: Dict[str, dict] = {}
     for idx_key, preview_data in pipeline.get("previews", {}).items():
+        if not isinstance(preview_data, dict):
+            continue
+        response_key = str(idx_key)
+        recorded_script_id = str(preview_data.get("script_id") or "")
+        recorded_output_id = str(preview_data.get("output_id") or "")
+        if recorded_script_id or recorded_output_id:
+            parsed_output = _parse_output_id(recorded_output_id)
+            current_index = _script_index_for_id(pipeline, recorded_script_id)
+            if (
+                parsed_output is None
+                or parsed_output[0] != recorded_script_id
+                or current_index is None
+            ):
+                continue
+            response_key = (
+                f"{current_index}_{parsed_output[1]}"
+                if parsed_output[1]
+                else str(current_index)
+            )
         pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
         audio_path_str = pd.get("audio_path")
         has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
         audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
         has_srt = bool(pd.get("srt_content"))
-        preview_info[str(idx_key)] = {
+        preview_info[response_key] = {
             "has_audio": has_audio,
             "audio_duration": audio_duration,
             "has_srt": has_srt,
@@ -8911,21 +13151,62 @@ async def get_pipeline_scripts(
     tts_info: Dict[str, dict] = {}
     for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
         if isinstance(tts_data, dict):
+            response_key = str(idx_key)
+            recorded_script_id = str(tts_data.get("script_id") or "")
+            if recorded_script_id:
+                current_index = _script_index_for_id(
+                    pipeline,
+                    recorded_script_id,
+                )
+                if current_index is None:
+                    continue
+                response_key = str(current_index)
             audio_path_str = tts_data.get("audio_path")
             has_audio = bool(_existing_pipeline_audio_path(audio_path_str))
             audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
-            tts_info[str(idx_key)] = {
+            tts_info[response_key] = {
                 "has_audio": has_audio,
                 "audio_duration": audio_duration,
                 "approved": bool(tts_data.get("approved", False)),
                 "srt_content": tts_data.get("srt_content"),
                 "script_word_count": tts_data.get("script_word_count"),
                 "srt_word_count": tts_data.get("srt_word_count"),
+                "elevenlabs_model": tts_data.get("elevenlabs_model"),
+                "voice_id": tts_data.get("voice_id"),
+                "voice_settings": tts_data.get("voice_settings"),
             }
+
+    tts_jobs_response: Dict[str, dict] = {}
+    for raw_index, job in (pipeline.get("tts_jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        recorded_script_id = str(job.get("script_id") or "")
+        recorded_output_id = str(job.get("output_id") or "")
+        if recorded_script_id:
+            current_index = _script_index_for_id(pipeline, recorded_script_id)
+            if current_index is None:
+                continue
+            if recorded_output_id and recorded_output_id != _build_output_id(
+                recorded_script_id
+            ):
+                continue
+            tts_jobs_response[str(current_index)] = job
+            continue
+        # Legacy terminal rows remain visible for audit. An active row without
+        # ScriptId cannot safely own a newly indexed script.
+        if job.get("status") in _ACTIVE_ASYNC_JOB_STATUSES:
+            continue
+        try:
+            current_index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= current_index < len(script_ids):
+            tts_jobs_response[str(current_index)] = job
 
     return {
         "pipeline_id": pipeline_id,
         "scripts": pipeline.get("scripts", []),
+        "script_ids": script_ids,
         "script_names": pipeline.get("script_names", []),
         "context_products": pipeline.get("context_products", []),
         "preview_info": preview_info,
@@ -8945,9 +13226,10 @@ async def get_pipeline_scripts(
         "meta_multiplication": bool(pipeline.get("meta_multiplication", True)),
         "attention_selection": (pipeline.get("attention_timeline") or {}).get(ATTENTION_SELECTION_KEY) or {},
         "template_settings": pipeline.get("template_settings") or {},
+        "settings_revision": int(pipeline.get("settings_revision") or 0),
         "library_project_id": pipeline.get("library_project_id"),
         "generation_job": pipeline.get("generation_job") or {},
-        "tts_jobs": {str(k): v for k, v in (pipeline.get("tts_jobs") or {}).items()},
+        "tts_jobs": tts_jobs_response,
     }
 
 
@@ -9078,31 +13360,56 @@ async def sync_pipeline_to_library(
                     raise HTTPException(status_code=500, detail="Failed to create library project")
                 library_project_id = created_proj["id"]
 
-    # Check which clips already exist (fetch id + variant_index + visual_version for update)
+    # Check which clips already exist. Stable OutputId is the only safe upsert
+    # key: an index can be reassigned after script delete/reorder.
     # Plan 81-02 Task 3.C — repo.list_clips composes project_id + eq(is_deleted=False).
     clip_supports_visual_version = True
     try:
         existing_clips_result = repo.list_clips(
             library_project_id,
-            QueryFilters(eq={"is_deleted": False}, select="id, variant_index, visual_version"),
+            QueryFilters(
+                eq={"is_deleted": False},
+                select="id, variant_index, visual_version, script_id, output_id",
+            ),
         )
         existing_clips_data = existing_clips_result.data or []
     except Exception as existing_clips_err:
-        if _is_missing_column_error(existing_clips_err, "visual_version"):
+        if (
+            _is_missing_column_error(existing_clips_err, "output_id")
+            or _is_missing_column_error(existing_clips_err, "script_id")
+        ):
+            logger.error(
+                "Stable clip identity columns are missing; refusing index-based "
+                "Library sync for pipeline %s.",
+                pipeline_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Stable Library output identity is unavailable. "
+                    "Apply migration 059 before syncing this pipeline."
+                ),
+            )
+        elif _is_missing_column_error(existing_clips_err, "visual_version"):
             clip_supports_visual_version = False
             logger.warning("visual_version column missing, retrying sync lookup without it")
             existing_clips_result = repo.list_clips(
                 library_project_id,
-                QueryFilters(eq={"is_deleted": False}, select="id, variant_index"),
+                QueryFilters(
+                    eq={"is_deleted": False},
+                    select="id, variant_index, script_id, output_id",
+                ),
             )
             existing_clips_data = existing_clips_result.data or []
         else:
             raise
-    # Key by (variant_index, visual_version) to differentiate A/B versions
-    existing_map = {}
+    # Legacy rows without OutputId are deliberately ignored. Reusing one by
+    # index would risk overwriting a clip that belongs to another ScriptId.
+    existing_map: dict[str, str] = {}
     for c in existing_clips_data:
-        _em_key = (c["variant_index"], c.get("visual_version") if clip_supports_visual_version else None)
-        existing_map[_em_key] = c["id"]
+        existing_output_id = str(c.get("output_id") or "")
+        if existing_output_id:
+            existing_map[existing_output_id] = c["id"]
 
     synced = 0
     for job_key, job in sorted(completed_variants.items(), key=lambda x: str(x[0])):
@@ -9118,6 +13425,52 @@ async def sync_pipeline_to_library(
                 _visual_ver = parts[1] if len(parts) > 1 else None
         else:
             vid = int(job_key) if not isinstance(job_key, int) else job_key
+
+        script_id = str(job.get("script_id") or "")
+        output_id = str(job.get("output_id") or "")
+        parsed_output_id = _parse_output_id(output_id)
+        if (
+            not script_id
+            or parsed_output_id is None
+            or parsed_output_id[0] != script_id
+        ):
+            logger.warning(
+                "Pipeline %s job %s has no valid stable identity; skipping sync",
+                pipeline_id,
+                job_key,
+            )
+            continue
+
+        output_visual_version = parsed_output_id[1]
+        if _visual_ver is not None:
+            try:
+                job_visual_version = _normalize_meta_version_label(_visual_ver)
+            except HTTPException:
+                logger.warning(
+                    "Pipeline %s job %s has an invalid visual version; skipping sync",
+                    pipeline_id,
+                    job_key,
+                )
+                continue
+            if job_visual_version != output_visual_version:
+                logger.warning(
+                    "Pipeline %s job %s has mismatched OutputId/visual version; "
+                    "skipping sync",
+                    pipeline_id,
+                    job_key,
+                )
+                continue
+        _visual_ver = output_visual_version
+
+        current_variant_index = _script_index_for_id(pipeline, script_id)
+        if current_variant_index is None:
+            logger.warning(
+                "Pipeline %s job %s belongs to a deleted ScriptId; skipping sync",
+                pipeline_id,
+                job_key,
+            )
+            continue
+        vid = current_variant_index
 
         final_video_path = Path(job["final_video_path"])
         if not final_video_path.exists():
@@ -9161,20 +13514,26 @@ async def sync_pipeline_to_library(
         except Exception:
             pass
 
-        # Upsert clip keyed by (variant_index, visual_version) to prevent A overwriting B
+        # Upsert only by stable OutputId. variant_index remains presentation
+        # metadata and may legitimately change after reorder.
         clip_id_to_set = None
-        _em_lookup = (vid, _visual_ver)
-        if _em_lookup in existing_map:
-            existing_id = existing_map[_em_lookup]
+        if output_id in existing_map:
+            existing_id = existing_map[output_id]
             # Plan 81-02 Task 3.D — repo.update_clip migration.
-            repo.update_clip(existing_id, {
+            _sync_update_payload = {
+                "variant_index": vid,
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
                 "duration": duration,
                 "final_status": "completed",
                 "is_deleted": False,
-            })
+                "script_id": script_id,
+                "output_id": output_id,
+            }
+            if clip_supports_visual_version:
+                _sync_update_payload["visual_version"] = _visual_ver
+            repo.update_clip(existing_id, _sync_update_payload)
             clip_id_to_set = existing_id
             logger.info(f"Pipeline {pipeline_id} variant {vid} ver={_visual_ver}: updated existing clip {existing_id}")
         else:
@@ -9189,7 +13548,9 @@ async def sync_pipeline_to_library(
                 "duration": duration,
                 "is_selected": False,
                 "is_deleted": False,
-                "final_status": "completed"
+                "final_status": "completed",
+                "script_id": script_id,
+                "output_id": output_id,
             }
             if clip_supports_visual_version:
                 clip_insert_payload["visual_version"] = _visual_ver
@@ -9206,6 +13567,7 @@ async def sync_pipeline_to_library(
                     raise
             if created_clip and created_clip.get("id"):
                 clip_id_to_set = created_clip["id"]
+                existing_map[output_id] = clip_id_to_set
 
         # BUG-PR-15: Protect render_jobs mutations under state lock
         sync_state_lock = _get_pipeline_state_lock(pipeline_id)
@@ -9236,9 +13598,19 @@ async def sync_pipeline_to_library(
                 # style that the render produced (override > profile default
                 # + Meta overlay > profile default). Mirrors the do_render
                 # path so recovery sync writes the same clip_content shape.
-                _ss_value = _resolve_sync_subtitle_settings(vid, _visual_ver)
+                _job_subtitle_settings = job.get("subtitle_settings")
+                _ss_value = (
+                    copy.deepcopy(_job_subtitle_settings)
+                    if isinstance(_job_subtitle_settings, dict)
+                    else _resolve_sync_subtitle_settings(vid, _visual_ver)
+                )
                 if isinstance(_ss_value, dict) and _ss_value:
                     _content_payload["subtitle_settings"] = _ss_value
+                _job_voice_settings = job.get("voice_settings")
+                if isinstance(_job_voice_settings, dict):
+                    _content_payload["voice_settings"] = copy.deepcopy(
+                        _job_voice_settings
+                    )
                 if len(_content_payload) > 1:
                     # Plan 81-02 Task 3.F — table_query upsert with on_conflict='clip_id'
                     # because update_clip_content is UPDATE-only on both backends (Phase 80 lesson).
@@ -9402,6 +13774,64 @@ async def restore_previews(
     )
 
     for idx_key, preview_entry in stored_previews.items():
+        parsed_preview_key = _parse_preview_key(idx_key)
+        if parsed_preview_key is None or not isinstance(preview_entry, dict):
+            logger.warning(
+                "Pipeline %s contains an invalid preview key %r; skipping restore",
+                pipeline_id,
+                idx_key,
+            )
+            continue
+
+        stored_script_id = str(preview_entry.get("script_id") or "")
+        stored_output_id = str(preview_entry.get("output_id") or "")
+        parsed_output_id = _parse_output_id(stored_output_id)
+        if (
+            stored_script_id
+            and parsed_output_id is not None
+            and parsed_output_id[0] == stored_script_id
+        ):
+            current_variant_index = _script_index_for_id(
+                pipeline,
+                stored_script_id,
+            )
+            if current_variant_index is None:
+                logger.warning(
+                    "Pipeline %s preview %s belongs to a deleted ScriptId; "
+                    "skipping restore",
+                    pipeline_id,
+                    idx_key,
+                )
+                continue
+            visual_version = parsed_output_id[1]
+            result_key = _build_preview_key(
+                current_variant_index,
+                visual_version,
+            )
+            script_id = stored_script_id
+            output_id = stored_output_id
+        else:
+            # Backward compatibility for previews saved before stable identity
+            # existed. New writes always use the branch above.
+            current_variant_index, visual_version = parsed_preview_key
+            try:
+                script_id, output_id = _identity_for_variant(
+                    pipeline,
+                    current_variant_index,
+                    visual_version,
+                )
+            except HTTPException:
+                logger.warning(
+                    "Pipeline %s preview %s has no live ScriptId; skipping restore",
+                    pipeline_id,
+                    idx_key,
+                )
+                continue
+            result_key = _build_preview_key(
+                current_variant_index,
+                visual_version,
+            )
+
         pd = preview_entry.get("preview_data", {}) if isinstance(preview_entry, dict) else {}
         if not pd or not pd.get("matches"):
             continue
@@ -9425,6 +13855,7 @@ async def restore_previews(
                 "merge_group": m.get("merge_group"),
                 "merge_group_duration": m.get("merge_group_duration"),
                 "transforms": m.get("transforms"),
+                "pinned": bool(m.get("pinned", False)),
             }
             for m in pd.get("matches", [])
         ]
@@ -9436,7 +13867,7 @@ async def restore_previews(
             logger.warning(
                 "Pipeline %s preview %s has legacy intro media without a source ID; skipping intro",
                 pipeline_id,
-                idx_key,
+                result_key,
             )
 
         raw_video_timeline = pd.get("video_timeline") or pd.get("timeline") or []
@@ -9449,14 +13880,14 @@ async def restore_previews(
             timeline_start = float(clip.get("timeline_start") or 0.0)
             clip.setdefault(
                 "id",
-                f"legacy-{idx_key}-{clip_index}-{timeline_start:.3f}",
+                f"legacy-{result_key}-{clip_index}-{timeline_start:.3f}",
             )
             clip.setdefault(
                 "kind",
                 "intro" if timeline_start < intro_offset_sec - 0.001 else "body",
             )
 
-        result_previews[str(idx_key)] = {
+        result_previews[result_key] = {
             "audio_duration": pd.get("audio_duration", 0),
             "srt_content": pd.get("srt_content", ""),
             "matches": matches,
@@ -9471,6 +13902,10 @@ async def restore_previews(
             "defaultTransition": pd.get("default_transition"),
             # Background music (A2), stored additively; lands directly in PreviewData.
             "music": pd.get("music"),
+            "manual_matches_preserved": bool(pd.get("manual_matches")),
+            "manual_composition_preserved": bool(pd.get("manual_composition")),
+            "script_id": script_id,
+            "output_id": output_id,
         }
 
         # Grab available_segments from the first preview that has them
@@ -9484,6 +13919,8 @@ class SaveMatchesRequest(BaseModel):
     """Persist Step-3 timeline edits (F3): the edited matches for one variant."""
     matches: List[dict]
     visual_version: Optional[str] = None
+    script_id: str
+    output_id: str
 
 
 @router.put("/{pipeline_id}/matches/{variant_index}")
@@ -9511,6 +13948,13 @@ async def save_matches(
     preview_key = _build_preview_key(variant_index, body.visual_version)
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=body.script_id,
+            output_id=body.output_id,
+            visual_version=body.visual_version,
+        )
         previews = pipeline.setdefault("previews", {})
         # DB-loaded plain-variant keys are ints, freshly computed ones are strings
         entry = previews.get(preview_key)
@@ -9524,10 +13968,13 @@ async def save_matches(
         pd = entry["preview_data"]
         matches_changed = pd.get("matches") != body.matches
         pd["matches"] = body.matches
+        pd["manual_matches"] = True
         matched = sum(1 for m in body.matches if m.get("segment_id"))
         pd["matched_count"] = matched
         pd["unmatched_count"] = len(body.matches) - matched
         entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        entry["script_id"] = target_script_id
+        entry["output_id"] = target_output_id
         invalidated_clip_ids = (
             _invalidate_render_jobs(
                 pipeline,
@@ -9539,11 +13986,22 @@ async def save_matches(
         )
 
     # Persist outside the lock (DB I/O should not hold the state lock)
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"previews", "render_jobs"},
+        runtime_map_updates={
+            "previews": {
+                preview_key: copy.deepcopy(entry),
+            },
+        },
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return {
         "status": "saved",
         "preview_key": preview_key,
+        "script_id": target_script_id,
+        "output_id": target_output_id,
         "match_count": len(body.matches),
     }
 
@@ -9558,6 +14016,8 @@ class SaveCompositionRequest(BaseModel):
     # Background music (A2). Additive: stored in preview_data['music'], no DB
     # migration. Absent key leaves any existing music untouched; explicit null clears it.
     music: Optional[MusicSettings] = None
+    script_id: str
+    output_id: str
 
 
 @router.put("/{pipeline_id}/composition/{variant_index}")
@@ -9698,6 +14158,13 @@ async def save_composition(
     preview_key = _build_preview_key(variant_index, body.visual_version)
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=body.script_id,
+            output_id=body.output_id,
+            visual_version=body.visual_version,
+        )
         previews = pipeline.setdefault("previews", {})
         entry = previews.get(preview_key)
         if entry is None and body.visual_version is None:
@@ -9717,6 +14184,7 @@ async def save_composition(
         ))
         preview_data["video_timeline"] = normalized_timeline
         preview_data["timeline"] = normalized_timeline
+        preview_data["manual_composition"] = True
         preview_data["default_transition"] = default_transition
         # Music travels with every composition save (like default_transition).
         preview_data["music"] = music_settings
@@ -9728,6 +14196,8 @@ async def save_composition(
             float(clip["timeline_duration"]) for clip in intro_segments
         )
         entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        entry["script_id"] = target_script_id
+        entry["output_id"] = target_output_id
         invalidated_clip_ids = (
             _invalidate_render_jobs(
                 pipeline,
@@ -9738,11 +14208,22 @@ async def save_composition(
             else set()
         )
 
-    _db_save_pipeline(pipeline_id, pipeline)
+    _db_save_pipeline(
+        pipeline_id,
+        pipeline,
+        fields={"previews", "render_jobs"},
+        runtime_map_updates={
+            "previews": {
+                preview_key: copy.deepcopy(entry),
+            },
+        },
+    )
     _invalidate_library_clips(invalidated_clip_ids)
     return {
         "status": "saved",
         "preview_key": preview_key,
+        "script_id": target_script_id,
+        "output_id": target_output_id,
         "clip_count": len(normalized_timeline),
         "duration": cursor,
     }
@@ -9752,6 +14233,7 @@ async def save_composition(
 async def get_pipeline_audio(
     pipeline_id: str,
     variant_index: int,
+    script_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -9771,12 +14253,28 @@ async def get_pipeline_audio(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    with _get_pipeline_state_lock(pipeline_id):
+        target_script_id, target_output_id = _validate_requested_identity(
+            pipeline,
+            variant_index,
+            script_id=script_id,
+        )
     # Look up audio path from preview data
-    preview = pipeline.get("previews", {}).get(variant_index)
+    preview = _find_identity_owned_entry(
+        pipeline.get("previews", {}),
+        script_id=target_script_id,
+        output_id=target_output_id,
+        fallback_keys=(variant_index, str(variant_index)),
+    )
     if not preview:
         # Fall back to Step 2 TTS preview audio
-        tts_preview = pipeline.get("tts_previews", {}).get(variant_index) or \
-                      pipeline.get("tts_previews", {}).get(str(variant_index))
+        tts_preview = _find_identity_owned_entry(
+            pipeline.get("tts_previews", {}),
+            script_id=target_script_id,
+            output_id=target_output_id,
+            fallback_keys=(variant_index, str(variant_index)),
+            script_level=True,
+        )
         if tts_preview:
             audio_path_str = tts_preview.get("audio_path")
             audio_path = _existing_pipeline_audio_path(audio_path_str)
@@ -9785,7 +14283,6 @@ async def get_pipeline_audio(
                     content_disposition_type="inline",
                     headers={"Cache-Control": "no-cache"})
         raise HTTPException(status_code=404, detail="No preview available for this variant")
-
     preview_data = preview.get("preview_data", {})
     audio_path_str = preview_data.get("audio_path")
 
@@ -9809,6 +14306,8 @@ async def get_pipeline_audio(
 class PreviewRenderRequest(BaseModel):
     """Request model for server-side FFmpeg preview render."""
     match_overrides: List[dict]
+    script_id: str
+    output_id: str
     output_width: int = Field(default=1080, ge=64, le=8192, multiple_of=2)
     output_height: int = Field(default=1920, ge=64, le=8192, multiple_of=2)
     composition_override: Optional[List[dict]] = None
@@ -9868,6 +14367,8 @@ class PreviewRenderStatusResponse(BaseModel):
     matches_fingerprint: Optional[str] = None
     error: Optional[str] = None
     preview_limitations: Optional[List[str]] = None
+    script_id: Optional[str] = None
+    output_id: Optional[str] = None
 
 
 def _normalize_meta_version_label(visual_version: Optional[str]) -> Optional[str]:
@@ -9931,6 +14432,12 @@ async def render_preview(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    _require_voice_generation_idle(
+        pipeline_id,
+        pipeline,
+        action="preview rendering",
+    )
+
     render_request.min_segment_duration = _clamp_min_segment_duration(
         render_request.min_segment_duration
         if render_request.min_segment_duration is not None
@@ -9944,12 +14451,25 @@ async def render_preview(
         variant_index,
         render_request.visual_version,
     )
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=render_request.script_id,
+        output_id=render_request.output_id,
+        visual_version=normalized_visual_version,
+    )
     if not render_request.apply_meta_subtitle_style:
         subtitle_style_override = None
 
     # Validate TTS audio exists
     _tts = pipeline.get("tts_previews", {})
-    tts_data = _tts.get(variant_index) or _tts.get(str(variant_index))
+    tts_data = _find_identity_owned_entry(
+        _tts,
+        script_id=target_script_id,
+        output_id=_build_output_id(target_script_id),
+        fallback_keys=(variant_index, str(variant_index)),
+        script_level=True,
+    )
     if not tts_data:
         raise HTTPException(
             status_code=400,
@@ -9962,7 +14482,13 @@ async def render_preview(
         # Self-heal: temp file may be gone but a persistent library copy usually exists
         if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
             _tts = pipeline.get("tts_previews", {})
-            tts_data = _tts.get(variant_index) or _tts.get(str(variant_index)) or tts_data
+            tts_data = _find_identity_owned_entry(
+                _tts,
+                script_id=target_script_id,
+                output_id=_build_output_id(target_script_id),
+                fallback_keys=(variant_index, str(variant_index)),
+                script_level=True,
+            ) or tts_data
             audio_path_str = tts_data.get("audio_path")
             resolved_audio_path = _existing_pipeline_audio_path(audio_path_str)
     if not resolved_audio_path:
@@ -10040,10 +14566,21 @@ async def render_preview(
     existing = pipeline["preview_renders"].get(preview_key)
     if existing:
         if (existing.get("matches_fingerprint") == matches_fingerprint
-                and existing.get("status") == "completed"
-                and existing.get("preview_video_path")
-                and Path(existing["preview_video_path"]).exists()):
-            return {"status": "completed", "matches_fingerprint": matches_fingerprint}
+            and existing.get("status") == "completed"
+            and existing.get("preview_video_path")
+            and Path(existing["preview_video_path"]).exists()
+            and _job_matches_output_identity(
+                existing,
+                target_script_id,
+                target_output_id,
+            )
+        ):
+            return {
+                "status": "completed",
+                "matches_fingerprint": matches_fingerprint,
+                "script_id": target_script_id,
+                "output_id": target_output_id,
+            }
 
         # Clean up old preview file before starting new render
         old_path = existing.get("preview_video_path")
@@ -10064,7 +14601,21 @@ async def render_preview(
     if preview_lock.locked():
         existing_state = pipeline.get("preview_renders", {}).get(preview_key)
         if existing_state and existing_state.get("status") == "processing":
-            return {"status": "processing", "matches_fingerprint": existing_state.get("matches_fingerprint")}
+            if not _job_matches_output_identity(
+                existing_state,
+                target_script_id,
+                target_output_id,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Active preview render belongs to another output.",
+                )
+            return {
+                "status": "processing",
+                "matches_fingerprint": existing_state.get("matches_fingerprint"),
+                "script_id": target_script_id,
+                "output_id": target_output_id,
+            }
         # Lock held but no processing state — a previous request died between
         # acquire and its background task's finally. Reclaim the orphan lock
         # instead of returning a permanent 409.
@@ -10081,6 +14632,8 @@ async def render_preview(
 
     # Initialize render state (we hold the lock — released inside background task)
     pipeline["preview_renders"][preview_key] = {
+        "attempt_id": uuid.uuid4().hex,
+        "worker_instance_id": _BACKEND_INSTANCE_ID,
         "status": "processing",
         "progress": 0,
         "current_step": "Starting preview render",
@@ -10088,7 +14641,15 @@ async def render_preview(
         "matches_fingerprint": matches_fingerprint,
         "error": None,
         "visual_version": normalized_visual_version,
+        "script_id": target_script_id,
+        "output_id": target_output_id,
+        "started_at": _job_timestamp(),
+        "updated_at": _job_timestamp(),
     }
+    _db_update_async_jobs(
+        pipeline_id,
+        preview_renders=copy.deepcopy(pipeline["preview_renders"]),
+    )
 
     script_text = pipeline["scripts"][variant_index]
     # SRT reuse guard: only reuse cached SRT if words_per_subtitle hasn't changed
@@ -10118,6 +14679,7 @@ async def render_preview(
                 def on_progress(step_name: str, pct: int):
                     render_state["current_step"] = step_name
                     render_state["progress"] = pct
+                    render_state["updated_at"] = _job_timestamp()
 
                 preview_path = await asyncio.wait_for(
                     assembly_service.assemble_and_render_preview(
@@ -10160,12 +14722,36 @@ async def render_preview(
                     timeout=300  # 5-minute timeout for preview
                 )
 
+                authoritative_index = _validate_authoritative_output_identity(
+                    pipeline_id,
+                    script_id=target_script_id,
+                    output_id=target_output_id,
+                    expected_script_fingerprint=_stable_hash(str(script_text)),
+                )
+                if authoritative_index != variant_index:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "The script order changed while the preview render "
+                            "was running."
+                        ),
+                    )
+
                 # BUG-PR-18: Group state updates under single lock acquisition
                 with _pr_state_lock:
+                    _validate_requested_identity(
+                        pipeline,
+                        variant_index,
+                        script_id=target_script_id,
+                        output_id=target_output_id,
+                        visual_version=normalized_visual_version,
+                    )
                     render_state["status"] = "completed"
                     render_state["progress"] = 100
                     render_state["current_step"] = "Preview ready"
                     render_state["preview_video_path"] = str(preview_path)
+                    render_state["completed_at"] = _job_timestamp()
+                    render_state["updated_at"] = _job_timestamp()
                     render_state["preview_limitations"] = [
                         "Audio volume may differ from export (loudness normalization disabled)",
                         (
@@ -10181,25 +14767,44 @@ async def render_preview(
                 render_state["status"] = "failed"
                 render_state["error"] = "Preview render timed out after 5 minutes"
                 render_state["current_step"] = "Failed"
+                render_state["completed_at"] = _job_timestamp()
+                render_state["updated_at"] = _job_timestamp()
             logger.error(f"Preview render timeout for pipeline {pipeline_id} variant {preview_key}")
         except Exception as e:
             with _pr_state_lock:
                 render_state["status"] = "failed"
                 render_state["error"] = str(e)
                 render_state["current_step"] = "Failed"
+                render_state["completed_at"] = _job_timestamp()
+                render_state["updated_at"] = _job_timestamp()
             logger.error(f"Preview render failed for pipeline {pipeline_id} variant {preview_key}: {e}")
         finally:
+            with _pr_state_lock:
+                preview_renders_snapshot = copy.deepcopy(
+                    pipeline.get("preview_renders") or {}
+                )
+            _db_update_async_jobs(
+                pipeline_id,
+                preview_renders=preview_renders_snapshot,
+            )
             preview_lock.release()
 
     background_tasks.add_task(_do_preview_render)
 
-    return {"status": "processing", "matches_fingerprint": matches_fingerprint}
+    return {
+        "status": "processing",
+        "matches_fingerprint": matches_fingerprint,
+        "script_id": target_script_id,
+        "output_id": target_output_id,
+    }
 
 
 @router.get("/preview-status/{pipeline_id}/{variant_index}", response_model=PreviewRenderStatusResponse)
 async def get_preview_status(
     pipeline_id: str,
     variant_index: int,
+    script_id: str,
+    output_id: str,
     visual_version: Optional[str] = None,
     profile: ProfileContext = Depends(get_profile_context),
 ):
@@ -10209,7 +14814,13 @@ async def get_preview_status(
     The active profile must own the pipeline.
     """
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
-
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=script_id,
+        output_id=output_id,
+        visual_version=visual_version,
+    )
     preview_key = _build_preview_key(variant_index, visual_version)
     render_state = pipeline.get("preview_renders", {}).get(preview_key)
     if not render_state:
@@ -10217,6 +14828,17 @@ async def get_preview_status(
             status="not_started",
             progress=0,
             current_step="Not started",
+            script_id=target_script_id,
+            output_id=target_output_id,
+        )
+    if not _job_matches_output_identity(
+        render_state,
+        target_script_id,
+        target_output_id,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Preview render state belongs to another output identity.",
         )
 
     return PreviewRenderStatusResponse(
@@ -10226,6 +14848,8 @@ async def get_preview_status(
         matches_fingerprint=render_state.get("matches_fingerprint"),
         error=render_state.get("error"),
         preview_limitations=render_state.get("preview_limitations"),
+        script_id=target_script_id,
+        output_id=target_output_id,
     )
 
 
@@ -10233,6 +14857,8 @@ async def get_preview_status(
 async def stream_preview_progress(
     pipeline_id: str,
     variant_index: int,
+    script_id: str,
+    output_id: str,
     visual_version: Optional[str] = None,
     profile: ProfileContext = Depends(get_profile_context),
 ):
@@ -10246,8 +14872,25 @@ async def stream_preview_progress(
     from sse_starlette.sse import EventSourceResponse
 
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=script_id,
+        output_id=output_id,
+        visual_version=visual_version,
+    )
 
     preview_key = _build_preview_key(variant_index, visual_version)
+    initial_render_state = pipeline.get("preview_renders", {}).get(preview_key)
+    if initial_render_state and not _job_matches_output_identity(
+        initial_render_state,
+        target_script_id,
+        target_output_id,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Preview render state belongs to another output identity.",
+        )
 
     async def _events():
         last_payload = None
@@ -10262,6 +14905,8 @@ async def stream_preview_progress(
                 "matches_fingerprint": render_state.get("matches_fingerprint"),
                 "error": render_state.get("error"),
                 "preview_limitations": render_state.get("preview_limitations"),
+                "script_id": render_state.get("script_id") or target_script_id,
+                "output_id": render_state.get("output_id") or target_output_id,
             }
             if payload != last_payload:
                 last_payload = payload
@@ -10279,6 +14924,8 @@ async def get_preview_video(
     pipeline_id: str,
     variant_index: int,
     request: Request,
+    script_id: str,
+    output_id: str,
     visual_version: Optional[str] = None,
     profile: ProfileContext = Depends(get_profile_context),
 ):
@@ -10288,11 +14935,24 @@ async def get_preview_video(
     Supports HTTP Range requests for seeking and requires pipeline ownership.
     """
     pipeline = _require_owned_pipeline(pipeline_id, profile.profile_id)
+    target_script_id, target_output_id = _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=script_id,
+        output_id=output_id,
+        visual_version=visual_version,
+    )
 
     preview_key = _build_preview_key(variant_index, visual_version)
     render_state = pipeline.get("preview_renders", {}).get(preview_key)
     if not render_state or render_state.get("status") != "completed":
         raise HTTPException(status_code=404, detail="Preview not ready")
+    if not _job_matches_output_identity(
+        render_state,
+        target_script_id,
+        target_output_id,
+    ):
+        raise HTTPException(status_code=409, detail="Preview belongs to another output")
 
     video_path_str = normalize_path(render_state.get("preview_video_path", ""))
     video_path = Path(video_path_str)
@@ -10498,7 +15158,11 @@ async def generate_video_captions(
             merged_yt = {**existing_yt, **{str(k): v for k, v in yt_titles.items()}}
             pipeline["youtube_titles"] = merged_yt
 
-        _db_save_pipeline(req.pipeline_id, pipeline)
+        _db_save_pipeline(
+            req.pipeline_id,
+            pipeline,
+            fields={"captions"},
+        )
 
     response_data: Dict[str, Any] = {
         "captions": {str(k): v for k, v in results.items()},
@@ -10558,7 +15222,11 @@ async def save_selected_captions(
     pipeline["selected_captions"] = normalized_captions
     if legacy_captions:
         pipeline["selected_captions_legacy"] = legacy_captions
-    _db_save_pipeline(req.pipeline_id, pipeline)
+    _db_save_pipeline(
+        req.pipeline_id,
+        pipeline,
+        fields={"selected_captions"},
+    )
 
     # Keep existing library clips in sync so Smart Schedule V2 uses the latest
     # user-edited caption even when the clip was saved before this edit.
@@ -10744,6 +15412,8 @@ async def delete_video_caption_template(
 # ============== SUBTITLE FRAME PREVIEW ==============
 
 class SubtitleFrameRequest(BaseModel):
+    script_id: str
+    output_id: str
     subtitle_settings: dict
     timestamp: float = 2.0
     sample_text: str = "Sample subtitle text"
@@ -10784,8 +15454,15 @@ async def subtitle_frame_preview(
     # glow/shadow/opacity are replaced. Validation is shared with /render-preview
     # via _normalize_meta_version_label, which raises 400 on invalid values
     # instead of silently ignoring them.
-    effective_subtitle_settings = dict(request.subtitle_settings or {})
     normalized_version = _normalize_meta_version_label(visual_version)
+    _validate_requested_identity(
+        pipeline,
+        variant_index,
+        script_id=request.script_id,
+        output_id=request.output_id,
+        visual_version=normalized_version,
+    )
+    effective_subtitle_settings = dict(request.subtitle_settings or {})
     if normalized_version and apply_meta_overlay:
         meta_profile = next(
             (META_PROFILES[i] for i in range(len(META_PROFILES))

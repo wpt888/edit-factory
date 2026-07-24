@@ -33,6 +33,8 @@ interface VariantPreviewPlayerProps {
   defaultTransition?: TransitionSpec | null;
   pipelineId: string;
   variantIndex: number;
+  scriptId: string;
+  outputId: string;
   visualVersion?: string;
   title?: string;
   profileId: string;
@@ -73,6 +75,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   defaultTransition,
   pipelineId,
   variantIndex,
+  scriptId,
+  outputId,
   visualVersion,
   title,
   profileId,
@@ -165,6 +169,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
         const resp = await apiPost(
           `/pipeline/render-preview/${pipelineId}/${variantIndex}`,
           {
+            script_id: scriptId,
+            output_id: outputId,
             match_overrides: matchesRef.current.map((m) => ({
               srt_index: m.srt_index,
               srt_text: m.srt_text,
@@ -196,7 +202,13 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             words_per_subtitle: wordsPerSubtitle,
             ultra_rapid_intro: ultraRapidIntro,
             interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
-            attention_timeline: attentionTimeline,
+            attention_timeline: attentionTimeline
+              ? {
+                  ...attentionTimeline,
+                  script_id: scriptId,
+                  output_id: outputId,
+                }
+              : undefined,
             pip_overlays: pipOverlays,
             enable_denoise: enableDenoise,
             denoise_strength: denoiseStrength,
@@ -219,6 +231,12 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
         // apiPost already throws on non-OK responses (FE-02: removed dead !resp.ok check)
         const result = await resp.json();
+        if (
+          (result.script_id && result.script_id !== scriptId)
+          || (result.output_id && result.output_id !== outputId)
+        ) {
+          throw new Error("Preview render response belongs to another output.");
+        }
         const fp = result.matches_fingerprint;
         setMatchesFingerprint(fp);
 
@@ -232,9 +250,12 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
         if (cancelledRef.current) return; // Bug #133: check before starting tracking
 
-        const visualVersionQuery = visualVersion
-          ? `?visual_version=${encodeURIComponent(visualVersion)}`
-          : "";
+        const query = new URLSearchParams({
+          script_id: scriptId,
+          output_id: outputId,
+        });
+        if (visualVersion) query.set("visual_version", visualVersion);
+        const previewIdentityQuery = `?${query.toString()}`;
 
         const applyProgress = (statusData: {
           status?: string;
@@ -242,7 +263,18 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
           current_step?: string;
           error?: string | null;
           preview_limitations?: string[] | null;
+          script_id?: string;
+          output_id?: string;
         }): boolean => {
+          if (
+            (statusData.script_id && statusData.script_id !== scriptId)
+            || (statusData.output_id && statusData.output_id !== outputId)
+          ) {
+            setStatus("failed");
+            setError("Preview render status belongs to another output.");
+            stopPolling();
+            return true;
+          }
           setProgress(statusData.progress ?? 0);
           setCurrentStep(statusData.current_step ?? "");
           if (statusData.status === "completed") {
@@ -274,7 +306,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             }
             try {
               const statusResp = await apiGet(
-                `/pipeline/preview-status/${pipelineId}/${variantIndex}${visualVersionQuery}`
+                `/pipeline/preview-status/${pipelineId}/${variantIndex}${previewIdentityQuery}`
               );
               const statusData = await statusResp.json();
               if (applyProgress(statusData)) return;
@@ -292,7 +324,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
         // Primary: SSE progress stream (F2) — instant updates, no 2s polling
         try {
           const es = new EventSource(
-            `${mediaApiUrl}/pipeline/preview-progress/${pipelineId}/${variantIndex}${visualVersionQuery}`
+            `${mediaApiUrl}/pipeline/preview-progress/${pipelineId}/${variantIndex}${previewIdentityQuery}`
           );
           eventSourceRef.current = es;
           let terminal = false;
@@ -353,7 +385,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
   const previewVideoUrl =
     status === "completed" && matchesFingerprint
-      ? `${mediaApiUrl}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}${visualVersion ? `&visual_version=${encodeURIComponent(visualVersion)}` : ""}`
+      ? `${mediaApiUrl}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}&script_id=${encodeURIComponent(scriptId)}&output_id=${encodeURIComponent(outputId)}${visualVersion ? `&visual_version=${encodeURIComponent(visualVersion)}` : ""}`
       : null;
 
   return (

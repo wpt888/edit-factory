@@ -43,6 +43,8 @@ export interface PreviewData {
   defaultTransition?: TransitionSpec | null;
   // A2 background music (null/absent = none). Persisted via the composition save.
   music?: MusicSettings | null;
+  manual_matches_preserved?: boolean;
+  manual_composition_preserved?: boolean;
   variety_warning?: {
     level: "low_variety";
     unique_clusters: number;
@@ -52,6 +54,8 @@ export interface PreviewData {
 }
 
 export type PreviewKey = string;
+export type ScriptId = string;
+export type OutputId = string;
 
 export type AsyncJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
 
@@ -65,6 +69,8 @@ export interface AsyncJobState {
   completed_at?: string | null;
   error?: string | null;
   result?: Record<string, unknown>;
+  script_id?: ScriptId;
+  output_id?: OutputId;
 }
 
 /**
@@ -81,6 +87,8 @@ export type StyleKey = "A" | "B" | "default";
 
 export interface PreviewCard {
   key: PreviewKey;
+  scriptId: ScriptId;
+  outputId: OutputId;
   baseIndex: number;
   label: string;
   visualVersion?: string;
@@ -126,6 +134,9 @@ export interface VariantStatus {
   render_fingerprint?: string;
   visual_version?: string;
   meta_platform?: string;
+  output_key?: string;
+  script_id?: ScriptId;
+  output_id?: OutputId;
   queue_position?: number;
   eta_seconds?: number;
 }
@@ -139,6 +150,7 @@ export interface VariantPreviewInfo {
 export interface PipelineScriptsResponse {
   pipeline_id: string;
   scripts: string[];
+  script_ids?: ScriptId[];
   script_names?: string[];
   context_products?: ContextProduct[];
   preview_info?: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>;
@@ -149,6 +161,9 @@ export interface PipelineScriptsResponse {
     srt_content?: string;
     script_word_count?: number;
     srt_word_count?: number;
+    elevenlabs_model?: string | null;
+    voice_id?: string | null;
+    voice_settings?: Record<string, unknown> | null;
   }>;
   captions?: Record<string, string[]>;
   selected_captions?: Record<string, string>;
@@ -170,6 +185,7 @@ export interface PipelineScriptsResponse {
     maxVariants?: number;
   };
   template_settings?: import("./pipeline-template").PipelineTemplateSettings | Record<string, never>;
+  settings_revision?: number;
   library_project_id?: string | null;
   generation_job?: Partial<AsyncJobState>;
   tts_jobs?: Record<string, Partial<AsyncJobState>>;

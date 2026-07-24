@@ -30,18 +30,20 @@ export type { AttentionAsset } from "@/components/dialogs/attention-asset-picker
 
 export type AttentionSelection = {
   templateId: string;
-  /** Step 3 override. Absent on old pipelines means "use the template default". */
+  /** Step 3 override. New and legacy selections normalize to static so content
+   * never animates until the user explicitly chooses an effect. */
   animation?: AttentionAnimationPreset;
   /** Step 3 timing override. Absent means use each authored slot/default. */
   enterMs?: number;
   /** Slot content in order — images or videos. Fewer assets than slots repeat (index % length). */
   assets: AttentionAsset[];
-  /** Seconds added per variant so image bursts never land on the same second twice (0 = off). */
+  /** Seconds added per variant so content moments never land on the same second twice (0 = off). */
   staggerSeconds: number;
 };
 
 export const EMPTY_ATTENTION_SELECTION: AttentionSelection = {
   templateId: "",
+  animation: "static",
   assets: [],
   staggerSeconds: 1,
 };
@@ -76,7 +78,7 @@ export function normalizeAttentionSelection(raw: unknown): AttentionSelection {
     templateId: typeof record.templateId === "string" ? record.templateId : "",
     animation: isAttentionAnimationPreset(record.animation)
       ? record.animation as AttentionAnimationPreset
-      : undefined,
+      : "static",
     enterMs: typeof record.enterMs === "number" && Number.isFinite(record.enterMs)
       ? Math.max(0, Math.min(10_000, Math.round(record.enterMs)))
       : undefined,
@@ -95,8 +97,8 @@ type AttentionTemplatePickerProps = {
   outputHeight?: number;
 };
 
-/** Attention-template pick used inside the Step 3 inspector card: choose a
- *  layout template, then fill its numbered slots with image content. The
+/** Content-template picker used inside the Step 3 inspector card: choose a
+ *  layout template, then fill its numbered slots with images or videos. The
  *  pipeline applies the assets to each variant's timeline. */
 export function AttentionTemplatePicker({
   selection,
@@ -173,9 +175,9 @@ export function AttentionTemplatePicker({
     onSelectionChange({
       ...selection,
       templateId,
-      // A new template starts from its authored per-slot effects. Run-specific
-      // all-slot overrides remain an explicit user action.
-      animation: undefined,
+      // Applying content is static by default. The shared effect library can
+      // opt into a run-specific effect or the template's authored defaults.
+      animation: "static",
       enterMs: undefined,
       staggerSeconds: templateGapSeconds,
       assets,
@@ -189,7 +191,7 @@ export function AttentionTemplatePicker({
         htmlFor="step3-attention-template"
         helper={
           loadFailed
-            ? "Could not load attention templates. Try again after the API is available."
+            ? "Could not load content templates. Try again after the API is available."
             : !personalTemplatesAvailable
               ? "Personal templates are unavailable until the attention-template database migration is applied."
               : templates.length === 0 && !loading
@@ -212,7 +214,7 @@ export function AttentionTemplatePicker({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__">
-              {loading ? "Loading templates..." : templates.length === 0 ? "No templates available" : "No attention template"}
+              {loading ? "Loading templates..." : templates.length === 0 ? "No templates available" : "No content template"}
             </SelectItem>
             {templates.map((template) => (
               <SelectItem key={template.id} value={template.id}>
@@ -246,11 +248,17 @@ export function AttentionTemplatePicker({
               enterMs: config.enterMs,
               label: "Template defaults",
             }}
-            onAnimationChange={(animation) => onSelectionChange({ ...selection, animation })}
-            onEnterMsChange={(enterMs) => onSelectionChange({ ...selection, enterMs })}
-            onReset={() => onSelectionChange({ ...selection, animation: undefined, enterMs: undefined })}
-            effectLabel="All-slot entrance effect"
-            helper="Optional run-specific override. Individual cues remain editable on each variant timeline after apply."
+            onAnimationChange={(animation) => {
+              onSelectionChange({ ...selection, animation });
+            }}
+            onEnterMsChange={(enterMs) => {
+              onSelectionChange({ ...selection, enterMs });
+            }}
+            onReset={() => {
+              onSelectionChange({ ...selection, animation: undefined, enterMs: undefined });
+            }}
+            effectLabel="Template effect for next apply"
+            helper="Used only the next time this template is applied. Existing timeline images are edited in Timeline effects above."
             testIdPrefix="step3-attention"
           />
 

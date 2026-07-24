@@ -193,6 +193,12 @@ export function resolveRotatedSubtitleSettings({
       )
     : undefined;
   let effective = { ...defaultSettings, ...(presetSettings ?? {}) };
+  if (preset?.wordsPerSubtitle != null) {
+    effective.wordsPerSubtitle = Math.max(
+      1,
+      Math.min(20, preset.wordsPerSubtitle),
+    );
+  }
   if (metaOverride && Object.keys(metaOverride).length > 0) {
     // Legacy A/B overrides can contain the complete editor value. Applying
     // that object wholesale would erase the selected template. Only fields

@@ -85,6 +85,10 @@ interface SubtitleEditorProps {
   compact?: boolean;
   /** Pipeline ID for FFmpeg frame preview */
   pipelineId?: string;
+  /** Stable script identity for rejecting stale index-based preview requests */
+  scriptId?: string;
+  /** Stable output identity for rejecting stale A/B preview requests */
+  outputId?: string;
   /** Variant index for FFmpeg frame preview */
   variantIndex?: number;
   /** Text sent to the FFmpeg preview endpoint when subtitle lines are not available */
@@ -137,6 +141,8 @@ export function SubtitleEditor({
   className = "",
   compact = false,
   pipelineId,
+  scriptId,
+  outputId,
   variantIndex = 0,
   previewText,
   visualVersion,
@@ -235,7 +241,7 @@ export function SubtitleEditor({
   // overlay below updates immediately, while this effect refreshes the
   // expensive FFmpeg preview shortly after the user stops moving.
   useEffect(() => {
-    if (!pipelineId) return;
+    if (!pipelineId || !scriptId || !outputId) return;
 
     if (settings.enabled === false) {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
@@ -282,6 +288,8 @@ export function SubtitleEditor({
         const resp = await apiPost(
           `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${versionQuery}`,
           {
+            script_id: scriptId,
+            output_id: outputId,
             subtitle_settings: settings,
             sample_text: previewOverlayText,
             include_subtitles: true,
@@ -313,13 +321,13 @@ export function SubtitleEditor({
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     };
-  }, [settings, pipelineId, previewOverlayText, variantIndex, visualVersion, visualVersionStyleResolved]);
+  }, [settings, pipelineId, scriptId, outputId, previewOverlayText, variantIndex, visualVersion, visualVersionStyleResolved]);
 
   // Stable clean frame used as the live-edit background. The accurate FFmpeg
   // preview image already contains text, so overlaying local text on it causes
   // duplicate subtitles while dragging sliders.
   useEffect(() => {
-    if (!pipelineId) return;
+    if (!pipelineId || !scriptId || !outputId) return;
 
     let cancelled = false;
 
@@ -332,6 +340,8 @@ export function SubtitleEditor({
         const resp = await apiPost(
           `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${backgroundQuery}`,
           {
+            script_id: scriptId,
+            output_id: outputId,
             subtitle_settings: {},
             sample_text: "",
             include_subtitles: false,
@@ -355,7 +365,7 @@ export function SubtitleEditor({
     return () => {
       cancelled = true;
     };
-  }, [pipelineId, variantIndex, visualVersion]);
+  }, [pipelineId, scriptId, outputId, variantIndex, visualVersion]);
 
   // Mirror the active blob URL into a ref so the unmount cleanup below can
   // read the *latest* value — a plain state capture with [] deps would freeze

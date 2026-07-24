@@ -218,6 +218,7 @@ def test_script_regeneration_has_its_own_metered_attempt(sqlite_backend, monkeyp
         },
     )
     pipeline_id = imported.json()["pipeline_id"]
+    script_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
     monkeypatch.setattr(
         pipeline_routes,
         "get_script_generator_for_profile",
@@ -227,7 +228,7 @@ def test_script_regeneration_has_its_own_metered_attempt(sqlite_backend, monkeyp
     response = client.post(
         f"/api/v1/pipeline/regenerate-script/{pipeline_id}/0",
         headers=HEADERS,
-        json={"provider": "gemini"},
+        json={"provider": "gemini", "script_id": script_id},
     )
 
     assert response.status_code == 200
@@ -401,6 +402,7 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     )
     assert imported.status_code == 200
     pipeline_id = imported.json()["pipeline_id"]
+    script_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
 
     async def _fake_tts_work(*_args, **_kwargs):
         pipeline_routes._update_tts_job(
@@ -421,7 +423,7 @@ def test_tts_job_is_per_variant_and_restores_from_sqlite(sqlite_backend, monkeyp
     response = client.post(
         f"/api/v1/pipeline/tts/{pipeline_id}/0",
         headers=HEADERS,
-        json={"words_per_subtitle": 2},
+        json={"words_per_subtitle": 2, "script_id": script_id},
     )
     assert response.status_code == 202
     assert response.json()["variant_index"] == 0
@@ -567,13 +569,14 @@ def test_tts_status_replays_lost_reserve_response_then_refunds(
 
 
 def test_tts_failure_refunds_reserved_credits(sqlite_backend, monkeypatch):
-    client, _repo, _profile_id = sqlite_backend
+    client, repo, _profile_id = sqlite_backend
     imported = client.post(
         "/api/v1/pipeline/import",
         headers=HEADERS,
         json={"idea": "Refund failed TTS", "scripts": ["Provider failure."]},
     )
     pipeline_id = imported.json()["pipeline_id"]
+    script_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
 
     async def fail_tts(*_args, **_kwargs):
         raise HTTPException(status_code=500, detail="Provider failed")
@@ -582,7 +585,7 @@ def test_tts_failure_refunds_reserved_credits(sqlite_backend, monkeypatch):
     response = client.post(
         f"/api/v1/pipeline/tts/{pipeline_id}/0",
         headers=HEADERS,
-        json={},
+        json={"script_id": script_id},
     )
     assert response.status_code == 202
 
@@ -596,13 +599,14 @@ def test_tts_failure_refunds_reserved_credits(sqlite_backend, monkeypatch):
 
 
 def test_tts_cancel_refunds_queued_reservation(sqlite_backend):
-    client, _repo, _profile_id = sqlite_backend
+    client, repo, _profile_id = sqlite_backend
     imported = client.post(
         "/api/v1/pipeline/import",
         headers=HEADERS,
         json={"idea": "Cancel queued TTS", "scripts": ["Cancel this."]},
     )
     pipeline_id = imported.json()["pipeline_id"]
+    script_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
     record = {
         **new_metering_record(
             "studio.tts_variant",
@@ -616,6 +620,8 @@ def test_tts_cancel_refunds_queued_reservation(sqlite_backend):
     pipeline_routes._update_tts_job(
         pipeline_id,
         0,
+        script_id=script_id,
+        output_id=f"{script_id}:default",
         status="queued",
         metering=record,
     )
@@ -623,7 +629,10 @@ def test_tts_cancel_refunds_queued_reservation(sqlite_backend):
     response = client.post(
         f"/api/v1/pipeline/tts-cancel/{pipeline_id}",
         headers=HEADERS,
-        json={"variant_indices": [0]},
+        json={
+            "variant_indices": [0],
+            "script_ids": {"0": script_id},
+        },
     )
     assert response.status_code == 200
     assert response.json()["cancelled"] == [0]
@@ -631,13 +640,14 @@ def test_tts_cancel_refunds_queued_reservation(sqlite_backend):
 
 
 def test_duplicate_active_tts_job_is_rejected(sqlite_backend):
-    client, _repo, _profile_id = sqlite_backend
+    client, repo, _profile_id = sqlite_backend
     imported = client.post(
         "/api/v1/pipeline/import",
         headers=HEADERS,
         json={"idea": "Duplicate guard", "scripts": ["Do not enqueue twice."]},
     )
     pipeline_id = imported.json()["pipeline_id"]
+    script_id = repo.get_pipeline(pipeline_id)["script_ids"][0]
     pipeline_routes._update_tts_job(
         pipeline_id,
         0,
@@ -649,7 +659,7 @@ def test_duplicate_active_tts_job_is_rejected(sqlite_backend):
     duplicate = client.post(
         f"/api/v1/pipeline/tts/{pipeline_id}/0",
         headers=HEADERS,
-        json={},
+        json={"script_id": script_id},
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["message"] == "Voice-over generation is already running"
@@ -854,3 +864,82 @@ def test_cancelled_tts_job_ignores_late_completion(sqlite_backend):
     )
     assert late_completion["status"] == "cancelled"
     assert repo.get_pipeline(pipeline_id)["tts_jobs"]["0"]["status"] == "cancelled"
+
+
+def test_retried_tts_job_rejects_late_update_from_old_attempt(sqlite_backend):
+    client, repo, _profile_id = sqlite_backend
+    imported = client.post(
+        "/api/v1/pipeline/import",
+        headers=HEADERS,
+        json={"idea": "Retry TTS race", "scripts": ["One voice-over."]},
+    )
+    pipeline_id = imported.json()["pipeline_id"]
+    pipeline = pipeline_routes._get_pipeline_or_load(pipeline_id)
+    script_id = pipeline["script_ids"][0]
+    old_attempt = "attempt-a"
+    new_attempt = "attempt-b"
+    new_job = {
+        **pipeline_routes._new_async_job("Retry queued"),
+        "attempt_id": new_attempt,
+        "script_id": script_id,
+        "output_id": pipeline_routes._build_output_id(script_id),
+        "status": "processing",
+        "metering": {
+            "idempotency_key": f"tts:{new_attempt}",
+            "state": "reserved",
+        },
+    }
+    repo.update_pipeline(pipeline_id, {"tts_jobs": {"0": new_job}})
+    # Reproduce another backend instance retaining attempt A in its cache.
+    pipeline["tts_jobs"] = {
+        0: {
+            **pipeline_routes._new_async_job("Old worker"),
+            "attempt_id": old_attempt,
+            "script_id": script_id,
+            "output_id": pipeline_routes._build_output_id(script_id),
+            "status": "processing",
+        },
+    }
+
+    late = pipeline_routes._update_tts_job(
+        pipeline_id,
+        0,
+        attempt_id=old_attempt,
+        status="completed",
+        progress=100,
+        result={"audio_duration": 12.5},
+    )
+
+    assert late["attempt_id"] == new_attempt
+    assert late["status"] == "processing"
+    assert pipeline["tts_jobs"][0]["attempt_id"] == new_attempt
+    persisted = repo.get_pipeline(pipeline_id)["tts_jobs"]["0"]
+    assert persisted["attempt_id"] == new_attempt
+    assert persisted["status"] == "processing"
+    assert "result" not in persisted
+
+
+def test_job_merge_never_carries_metering_across_attempts():
+    merged = pipeline_routes._merge_job_records(
+        {
+            "attempt_id": "attempt-a",
+            "status": "cancelled",
+            "created_at": "2026-07-24T01:00:00+00:00",
+            "metering": {
+                "state": "refunded",
+                "reservation_id": "reservation-a",
+            },
+        },
+        {
+            "attempt_id": "attempt-b",
+            "status": "processing",
+            "created_at": "2026-07-24T01:01:00+00:00",
+            "metering": {
+                "state": "reserved",
+                "reservation_id": "reservation-b",
+            },
+        },
+    )
+
+    assert merged["attempt_id"] == "attempt-b"
+    assert merged["metering"]["reservation_id"] == "reservation-b"

@@ -73,6 +73,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
     setPipelineId,
     setScripts,
     historyScripts,
+    historyScriptIds,
     setHistoryScripts,
     formatScript,
     buildRestoredTts,
@@ -359,7 +360,10 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                     </p>
                                     {hasAudio && (
                                       <button
-                                        onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handlePlayAudio(item.pipeline_id, idx, historyScriptIds[idx]);
+                                        }}
                                         className={`flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
                                           isPlaying
                                             ? "bg-primary text-primary-foreground"

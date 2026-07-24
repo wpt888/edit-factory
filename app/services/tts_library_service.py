@@ -4,12 +4,13 @@ TTS Library Service
 Manages persistent TTS assets (MP3 + SRT files) for the TTS Library feature.
 Provides generation, regeneration, deletion, and pipeline auto-save functionality.
 """
+import hashlib
 import logging
 import shutil
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.config import get_settings
 
@@ -167,6 +168,7 @@ class TTSLibraryService:
         model: str,
         duration: float,
         voice_id: Optional[str] = None,
+        voice_settings: Optional[Dict[str, Any]] = None,
         deduplicate: bool = True,
     ) -> Optional[str]:
         """
@@ -203,12 +205,22 @@ class TTSLibraryService:
                 existing = repo.list_tts_assets(
                     profile_id,
                     filters=QueryFilters(
-                        select="id",
+                        select="id, tts_voice_id, tts_voice_settings",
                         eq=identity,
-                        limit=1,
+                        limit=100,
                     ),
                 )
-                if existing.data:
+                matching_asset = next(
+                    (
+                        asset
+                        for asset in existing.data
+                        if (asset.get("tts_voice_id") or None) == (voice_id or None)
+                        and (asset.get("tts_voice_settings") or None)
+                        == (voice_settings or None)
+                    ),
+                    None,
+                )
+                if matching_asset:
                     logger.info(f"TTS Library: dedup hit, skipping save for text={text[:40]}...")
                     return None
             except Exception as e:
@@ -224,6 +236,13 @@ class TTSLibraryService:
             mp3_dest = asset_dir / f"{asset_id}.mp3"
             shutil.copy2(str(source), str(mp3_dest))
             mp3_rel = f"media/tts/{profile_id}/{asset_id}.mp3"
+            digest = hashlib.sha256()
+            with mp3_dest.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            audio_sha256 = digest.hexdigest()
+        else:
+            audio_sha256 = None
 
         # Write SRT
         srt_rel = None
@@ -244,6 +263,8 @@ class TTSLibraryService:
                 "tts_provider": "elevenlabs",
                 "tts_model": model,
                 "tts_voice_id": voice_id,
+                "tts_voice_settings": voice_settings,
+                "audio_sha256": audio_sha256,
                 "audio_duration": duration,
                 "char_count": len(text),
                 "tts_timestamps": timestamps,

@@ -8,6 +8,8 @@ import uuid
 
 
 HEADERS = {"X-Profile-Id": "test-profile-001"}
+SCRIPT_ID = "script_test_0001"
+OUTPUT_ID = f"{SCRIPT_ID}:default"
 
 
 def _match(srt_index: int, segment_id: str | None) -> dict:
@@ -37,6 +39,7 @@ def _seed_pipeline_with_preview(repo, profile_id: str) -> str:
         "name": "Save matches test",
         "idea": "idea",
         "scripts": ["script zero"],
+        "script_ids": [SCRIPT_ID],
         "variant_count": 1,
         "provider": "gemini",
         "context": "",
@@ -46,6 +49,8 @@ def _seed_pipeline_with_preview(repo, profile_id: str) -> str:
         "previews": {
             "0": {
                 "timestamp": "2026-06-11T00:00:00+00:00",
+                "script_id": SCRIPT_ID,
+                "output_id": OUTPUT_ID,
                 "preview_data": {
                     "audio_duration": 6.0,
                     "srt_content": "1\n00:00:00,000 --> 00:00:02,000\nphrase 0\n",
@@ -74,7 +79,11 @@ def test_save_matches_persists_across_restart(sqlite_backend):
     edited = [_match(0, "seg-EDITED"), _match(1, None)]
     r = client.put(
         f"/api/v1/pipeline/{pipeline_id}/matches/0",
-        json={"matches": edited},
+        json={
+            "matches": edited,
+            "script_id": SCRIPT_ID,
+            "output_id": OUTPUT_ID,
+        },
         headers=HEADERS,
     )
     assert r.status_code == 200, r.text
@@ -120,7 +129,9 @@ def test_restore_previews_uses_proxy_ids_for_legacy_intro_paths(sqlite_backend):
         "timeline_start": 0.0,
         "timeline_duration": 0.5,
     }]
-    pipeline["previews"]["1"] = {
+    pipeline["previews"]["0_B"] = {
+        "script_id": SCRIPT_ID,
+        "output_id": f"{SCRIPT_ID}:B",
         "preview_data": {
             **preview_data,
             "intro_segments": [{
@@ -144,15 +155,19 @@ def test_restore_previews_uses_proxy_ids_for_legacy_intro_paths(sqlite_backend):
     previews = response.json()["previews"]
     assert previews["0"]["intro_offset_sec"] == 2.0
     assert previews["0"]["intro_segments"][0]["source_video_id"] == source_video_id
-    assert previews["1"]["intro_offset_sec"] == 0.0
-    assert previews["1"]["intro_segments"] == []
+    assert previews["0_B"]["intro_offset_sec"] == 0.0
+    assert previews["0_B"]["intro_segments"] == []
 
 
 def test_save_matches_unknown_pipeline_404(sqlite_backend):
     client, repo, profile_id = sqlite_backend
     r = client.put(
         "/api/v1/pipeline/nonexistent-id/matches/0",
-        json={"matches": [_match(0, "seg-x")]},
+        json={
+            "matches": [_match(0, "seg-x")],
+            "script_id": SCRIPT_ID,
+            "output_id": OUTPUT_ID,
+        },
         headers=HEADERS,
     )
     assert r.status_code == 404
@@ -167,6 +182,7 @@ def test_save_matches_no_preview_404(sqlite_backend):
         "name": "No preview",
         "idea": "idea",
         "scripts": ["s"],
+        "script_ids": [SCRIPT_ID],
         "variant_count": 1,
         "provider": "gemini",
         "context": "",
@@ -177,7 +193,11 @@ def test_save_matches_no_preview_404(sqlite_backend):
     })
     r = client.put(
         f"/api/v1/pipeline/{pipeline_id}/matches/0",
-        json={"matches": [_match(0, "seg-x")]},
+        json={
+            "matches": [_match(0, "seg-x")],
+            "script_id": SCRIPT_ID,
+            "output_id": OUTPUT_ID,
+        },
         headers=HEADERS,
     )
     assert r.status_code == 404
@@ -189,7 +209,11 @@ def test_save_matches_wrong_profile_403(sqlite_backend):
     pipeline_id = _seed_pipeline_with_preview(repo, profile_id)
     r = client.put(
         f"/api/v1/pipeline/{pipeline_id}/matches/0",
-        json={"matches": [_match(0, "seg-x")]},
+        json={
+            "matches": [_match(0, "seg-x")],
+            "script_id": SCRIPT_ID,
+            "output_id": OUTPUT_ID,
+        },
         headers={"X-Profile-Id": "other-profile-999"},
     )
     assert r.status_code in (403, 404)

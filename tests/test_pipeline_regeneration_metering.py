@@ -53,6 +53,7 @@ def test_regeneration_rejects_cross_profile_pipeline_before_reserve(
     client, _repo, _profile_id = sqlite_backend
     pipeline_id = _import_pipeline(client)
     pipeline = pipeline_routes._get_pipeline_or_load(pipeline_id)
+    script_id = pipeline["script_ids"][0]
     pipeline["profile_id"] = "another-profile"
     calls: list[str] = []
 
@@ -74,7 +75,7 @@ def test_regeneration_rejects_cross_profile_pipeline_before_reserve(
     response = client.post(
         f"/api/v1/pipeline/regenerate-script/{pipeline_id}/0",
         headers=HEADERS,
-        json={"provider": "gemini"},
+        json={"provider": "gemini", "script_id": script_id},
     )
 
     assert response.status_code == 403

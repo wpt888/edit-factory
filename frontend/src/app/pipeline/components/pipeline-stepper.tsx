@@ -69,7 +69,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     handleCancelRender,
     resetPipeline,
     previewCards,
-    selectedVariants,
+    selectedOutputIds,
     variantCount,
     templateTransferBusy,
     handleExportPipelineTemplate,
@@ -92,14 +92,16 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
       return !!result && !result.generating && !result.stale;
     }).length === scripts.length;
 
-  const selectedPreviewCount = Array.isArray(previewCards)
-    ? previewCards.filter((card) => selectedVariants?.has(card.baseIndex)).length
-    : Object.keys(previews).length;
+  const selectedPreviewCount = selectedOutputIds instanceof Set
+    ? selectedOutputIds.size
+    : Array.isArray(previewCards)
+      ? previewCards.length
+      : Object.keys(previews).length;
 
   const contextCount = (() => {
     if (step === 1) return formatCount(Number(variantCount) || 0, "variant");
     if (step === 2) return formatCount(scripts.length, "script");
-    if (step === 3) return formatCount(selectedPreviewCount, "preview");
+    if (step === 3) return formatCount(selectedPreviewCount, "output");
     return formatCount(variantStatuses.length, "render");
   })();
 

@@ -40,9 +40,13 @@ def test_script_edit_invalidates_render_and_rejects_publish(sqlite_backend, monk
     })
 
     pipeline = pipeline_routes._get_pipeline_or_load(pipeline_id)
+    script_ids = pipeline_routes._ensure_pipeline_script_ids(pipeline)
+    output_id = pipeline_routes._build_output_id(script_ids[0])
     pipeline["library_project_id"] = project["id"]
     pipeline["render_jobs"] = {
         0: {
+            "script_id": script_ids[0],
+            "output_id": output_id,
             "status": "completed",
             "progress": 100,
             "current_step": "Render complete",
@@ -56,7 +60,12 @@ def test_script_edit_invalidates_render_and_rejects_publish(sqlite_backend, monk
     edited = client.put(
         f"/api/v1/pipeline/{pipeline_id}/scripts",
         headers=HEADERS,
-        json={"scripts": ["Edited after rendering."]},
+        json={
+            "scripts": ["Edited after rendering."],
+            "script_ids": script_ids,
+            "expected_script_ids": script_ids,
+            "expected_revision": int(pipeline.get("settings_revision") or 0),
+        },
     )
     assert edited.status_code == 200
 

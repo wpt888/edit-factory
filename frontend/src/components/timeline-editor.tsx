@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { useApiUrl } from "@/hooks/use-api-url";
+import { isEditorDeleteShortcutBlocked } from "@/lib/editor-keyboard";
 import { segmentFileUrl } from "@/lib/media-url";
 import { scaleSubtitlePx, scaleSubtitleFontPx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { stripAssTags, computeKaraokeWordTimings, activeKaraokeWordIndex } from "@/lib/karaoke-word-timing";
@@ -58,7 +59,6 @@ import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings, SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
-import { AttentionEffectControls } from "@/components/attention-effect-controls";
 import {
   type AttentionCue,
   type AttentionTimeline,
@@ -314,6 +314,14 @@ type AttentionAssetTarget = { kind: "layer"; cueId: string; layerId: string };
 
 const EMPTY_ATTENTION_CUES: AttentionCue[] = [];
 
+export type AttentionTimelineSelection = {
+  editorInstanceId: string;
+  cueId: string | null;
+  layerId: string | null;
+  cueIds: string[];
+  layerIds: string[];
+};
+
 interface TimelineEditorProps {
   matches: MatchPreview[];
   audioDuration: number;
@@ -331,11 +339,13 @@ interface TimelineEditorProps {
   profileId?: string;
   pipelineId?: string;
   variantIndex?: number;
+  scriptId?: string;
   subtitleSettings?: SubtitleSettings;
   interstitialSlides?: InterstitialSlide[];
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
   attentionTimeline?: AttentionTimeline;
   onAttentionTimelineChange?: (timeline: AttentionTimeline) => void;
+  onAttentionSelectionChange?: (selection: AttentionTimelineSelection) => void;
   /** A2 background music for this variant (null/absent = none). */
   music?: MusicSettings | null;
   onMusicChange?: (music: MusicSettings | null) => void;
@@ -367,11 +377,13 @@ export function TimelineEditor({
   profileId,
   pipelineId,
   variantIndex,
+  scriptId,
   subtitleSettings,
   interstitialSlides: legacyInterstitialSlides = [],
   onInterstitialSlidesChange,
   attentionTimeline,
   onAttentionTimelineChange,
+  onAttentionSelectionChange,
   music = null,
   onMusicChange,
   onRenderPreview,
@@ -506,14 +518,11 @@ export function TimelineEditor({
       zIndex: Math.max(0, ...cue.layers.map(layer => layer.zIndex)) + 1,
       fit: previous?.fit ?? "contain",
       animation: {
-        ...(previous?.animation ?? {
-          preset: "pop",
-          enterMs: 250,
-          exitMs: 200,
-          delayMs: 0,
-          intensity: 1,
-        }),
-        delayMs: cue.layers.length * 120,
+        preset: "static",
+        enterMs: 250,
+        exitMs: 200,
+        delayMs: 0,
+        intensity: 1,
       },
     };
     onAttentionTimelineChange({
@@ -560,6 +569,9 @@ export function TimelineEditor({
   const displayedOverlaysRef = useRef<CompositionClip[]>([]);
   const beginCueTimingDrag = useCallback((event: React.PointerEvent, cue: AttentionCue, edge: "move" | "resize" | "resize-start") => {
     if (!attentionTimeline || !onAttentionTimelineChange) return;
+    (event.currentTarget as HTMLElement)
+      .closest<HTMLElement>("[data-timeline-block]")
+      ?.focus({ preventScroll: true });
     event.preventDefault();
     event.stopPropagation();
     const track = (event.currentTarget as HTMLElement).closest("[data-attention-track]") as HTMLElement | null;
@@ -881,6 +893,16 @@ export function TimelineEditor({
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
+  const [selectedAttentionCueIds, setSelectedAttentionCueIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [attentionSelectionMarquee, setAttentionSelectionMarquee] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const attentionSelectionAnchorRef = useRef<string | null>(null);
   const selectAttentionCue = useCallback((cueId: string) => {
     setSelectedSlideId(cueId);
     if (attentionInspectorTargetId && typeof window !== "undefined") {
@@ -903,6 +925,44 @@ export function TimelineEditor({
     cueId: string;
     layerId: string;
   } | null>(null);
+  const setAttentionLayerSelection = useCallback((
+    selection: { cueId: string; layerId: string } | null,
+  ) => {
+    setSelectedAttentionLayer(selection);
+    setSelectedAttentionCueIds(selection ? new Set([selection.cueId]) : new Set());
+    attentionSelectionAnchorRef.current = selection?.cueId ?? null;
+    onAttentionSelectionChange?.({
+      editorInstanceId,
+      cueId: selection?.cueId ?? null,
+      layerId: selection?.layerId ?? null,
+      cueIds: selection ? [selection.cueId] : [],
+      layerIds: selection ? [selection.layerId] : [],
+    });
+  }, [editorInstanceId, onAttentionSelectionChange]);
+  const setAttentionCueSelection = useCallback((
+    cueIds: string[],
+    primaryCueId: string | null,
+  ) => {
+    const existingCueIds = cueIds.filter((cueId) => (
+      attentionCues.some((cue) => cue.id === cueId)
+    ));
+    const primaryCue = attentionCues.find((cue) => cue.id === primaryCueId)
+      ?? attentionCues.find((cue) => existingCueIds.includes(cue.id));
+    const primaryLayer = primaryCue?.layers[0];
+    setSelectedAttentionCueIds(new Set(existingCueIds));
+    setSelectedAttentionLayer(primaryCue && primaryLayer
+      ? { cueId: primaryCue.id, layerId: primaryLayer.id }
+      : null);
+    onAttentionSelectionChange?.({
+      editorInstanceId,
+      cueId: primaryCue?.id ?? null,
+      layerId: primaryLayer?.id ?? null,
+      cueIds: existingCueIds,
+      layerIds: attentionCues
+        .filter((cue) => existingCueIds.includes(cue.id))
+        .flatMap((cue) => cue.layers.map((layer) => layer.id)),
+    });
+  }, [attentionCues, editorInstanceId, onAttentionSelectionChange]);
   // A2 music selection — mutually exclusive with clip/slide/block selection.
   const [selectedMusic, setSelectedMusic] = useState(false);
   useEffect(() => {
@@ -910,8 +970,8 @@ export function TimelineEditor({
     const layerStillExists = selectedSlideId === selectedAttentionLayer.cueId
       && attentionCues.some((cue) => cue.id === selectedAttentionLayer.cueId
         && cue.layers.some((layer) => layer.id === selectedAttentionLayer.layerId));
-    if (!layerStillExists) setSelectedAttentionLayer(null);
-  }, [attentionCues, selectedAttentionLayer, selectedSlideId]);
+    if (!layerStillExists) setAttentionLayerSelection(null);
+  }, [attentionCues, selectedAttentionLayer, selectedSlideId, setAttentionLayerSelection]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSourceVideoId = useRef<string | null>(null);
   const lastStartTime = useRef<number | null>(null);
@@ -959,9 +1019,9 @@ export function TimelineEditor({
     setSelectedBlockIndex(null);
     setSelectedClipId(null);
     setSelectedSlideId(null);
-    setSelectedAttentionLayer(null);
+    setAttentionLayerSelection(null);
     setSelectedMusic(false);
-  }, []);
+  }, [setAttentionLayerSelection]);
 
   const toggleTrackLock = useCallback((kind: "video" | "audio", trackIndex: number) => {
     clearTimelineSelection();
@@ -1262,14 +1322,20 @@ export function TimelineEditor({
   const videoMatches = playbackMatches.filter((m) => m.source_video_id && m.segment_start_time != null);
 
   // Can we show the preview? Need pipelineId, profileId, and at least one video match
-  const canPreview = !!(pipelineId && variantIndex !== undefined && profileId && videoMatches.length > 0);
+  const canPreview = !!(
+    pipelineId
+    && variantIndex !== undefined
+    && scriptId
+    && profileId
+    && videoMatches.length > 0
+  );
 
   // The audio endpoint requires a Supabase bearer token. Native <audio> requests
   // cannot attach that header, so loading the API URL directly returns 401 and
   // freezes the master preview clock at 0:00. Fetch it through the authenticated
   // API client, then let the media element play the resulting local blob URL.
   useEffect(() => {
-    if (!canPreview || !pipelineId || variantIndex === undefined) {
+    if (!canPreview || !pipelineId || variantIndex === undefined || !scriptId) {
       setPreviewAudioSrc(null);
       setVoiceoverPeaks([]);
       setIsPreviewAudioLoading(false);
@@ -1285,7 +1351,8 @@ export function TimelineEditor({
     setIsPreviewAudioLoading(true);
     setPreviewAudioLoadFailed(false);
 
-    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, {
+    const identityQuery = new URLSearchParams({ script_id: scriptId });
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}?${identityQuery}`, {
       signal: controller.signal,
       cache: "no-store",
       memoryCache: false,
@@ -1347,7 +1414,7 @@ export function TimelineEditor({
       }
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [canPreview, pipelineId, variantIndex]);
+  }, [canPreview, pipelineId, scriptId, variantIndex]);
   // Next index that triggers a REAL video cut (different merge group than the
   // segment at `curIdx`). Phrases inside one merge group share a single video
   // segment, so they never become a staging target — the picture stays put while
@@ -2194,6 +2261,106 @@ export function TimelineEditor({
     window.addEventListener("pointercancel", handleUp);
   }, [scheduleTimelineSeek, timelineDuration]);
 
+  const beginAttentionMarquee = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (
+      target.closest("[data-timeline-block]")
+      || target.closest("[data-track-locked='true']")
+    ) {
+      return;
+    }
+
+    const axis = (event.currentTarget as HTMLElement).closest("[data-timeline-axis]") as HTMLElement | null;
+    const viewport = multiTrackScrollRef.current;
+    if (!axis || !viewport) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const additive = event.ctrlKey || event.metaKey;
+    const initialCueIds = additive ? new Set(selectedAttentionCueIds) : new Set<string>();
+    let didDrag = false;
+    let lastSelectionKey = "\u0001";
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    const updateSelection = (clientX: number, clientY: number) => {
+      const left = Math.min(startX, clientX);
+      const right = Math.max(startX, clientX);
+      const top = Math.min(startY, clientY);
+      const bottom = Math.max(startY, clientY);
+      const width = right - left;
+      const height = bottom - top;
+      if (!didDrag && Math.hypot(width, height) < 4) return;
+      didDrag = true;
+      setAttentionSelectionMarquee({ left, top, width, height });
+
+      const intersectedCueIds = Array.from(
+        viewport.querySelectorAll<HTMLElement>("[data-attention-cue][data-cue-id]"),
+      )
+        .filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.right >= left
+            && bounds.left <= right
+            && bounds.bottom >= top
+            && bounds.top <= bottom;
+        })
+        .map((element) => element.dataset.cueId)
+        .filter((cueId): cueId is string => Boolean(cueId));
+      const nextCueIds = additive
+        ? Array.from(new Set([...initialCueIds, ...intersectedCueIds]))
+        : Array.from(new Set(intersectedCueIds));
+      const selectionKey = nextCueIds.join("\u0000");
+      if (selectionKey === lastSelectionKey) return;
+      lastSelectionKey = selectionKey;
+
+      const primaryCueId = intersectedCueIds[intersectedCueIds.length - 1]
+        ?? nextCueIds[nextCueIds.length - 1]
+        ?? null;
+      attentionSelectionAnchorRef.current = primaryCueId;
+      if (primaryCueId) selectAttentionCue(primaryCueId);
+      else setSelectedSlideId(null);
+      setAttentionCueSelection(nextCueIds, primaryCueId);
+      setSelectedClipId(null);
+      setSelectedBlockIndex(null);
+      setSelectedMusic(false);
+    };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      updateSelection(moveEvent.clientX, moveEvent.clientY);
+    };
+    const finish = (upEvent?: PointerEvent) => {
+      if (upEvent) updateSelection(upEvent.clientX, upEvent.clientY);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.style.userSelect = previousUserSelect;
+      setAttentionSelectionMarquee(null);
+
+      if (!didDrag) {
+        attentionSelectionAnchorRef.current = null;
+        setSelectedSlideId(null);
+        setAttentionCueSelection([], null);
+        const rect = axis.getBoundingClientRect();
+        const ratio = Math.min(1, Math.max(0, (startX - rect.left) / Math.max(1, rect.width)));
+        scheduleTimelineSeek(ratio * timelineDuration);
+      }
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }, [
+    scheduleTimelineSeek,
+    selectAttentionCue,
+    selectedAttentionCueIds,
+    setAttentionCueSelection,
+    timelineDuration,
+  ]);
+
   const setTimelineZoomAt = useCallback((nextZoom: number) => {
     const viewport = multiTrackScrollRef.current;
     const normalizedZoom = Math.max(TIMELINE_MIN_ZOOM, Math.min(TIMELINE_MAX_ZOOM, nextZoom));
@@ -2511,23 +2678,6 @@ export function TimelineEditor({
     if (target.closest("button, input, textarea, select, [contenteditable='true'], [role='button']")) return;
     event.currentTarget.focus({ preventScroll: true });
   }, []);
-
-  const handleTimelineKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (
-      event.key !== " "
-      || event.altKey
-      || event.ctrlKey
-      || event.metaKey
-      || event.target !== event.currentTarget
-    ) return;
-
-    // Space scrolls the page when the scrub surface owns no keyboard action.
-    // Once the user clicks the timeline, keep the shortcut scoped to this editor.
-    event.preventDefault();
-    if (event.repeat) return;
-    if (isPreviewActive) togglePreviewPlayPause();
-    else activatePreview();
-  }, [activatePreview, isPreviewActive, togglePreviewPlayPause]);
 
   const handlePreviewSeekKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (
@@ -2956,6 +3106,7 @@ export function TimelineEditor({
     clip: CompositionClip,
   ) => {
     if (event.button !== 0) return;
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     event.stopPropagation();
     const originAxis = event.currentTarget.closest("[data-magnetic-lane]") as HTMLElement | null;
     if (!originAxis) return;
@@ -3228,6 +3379,9 @@ export function TimelineEditor({
     clip: CompositionClip,
     edge: "move" | "resize" | "resize-start",
   ) => {
+    (event.currentTarget as HTMLElement)
+      .closest<HTMLElement>("[data-timeline-block]")
+      ?.focus({ preventScroll: true });
     event.preventDefault();
     event.stopPropagation();
     const laneEl = (event.currentTarget as HTMLElement).closest("[data-track-index]") as HTMLElement | null;
@@ -3668,8 +3822,7 @@ export function TimelineEditor({
       afterMatchIndex,
       imageUrl: "",
       duration: 2.0,
-      animation: "kenburns",
-      kenBurnsDirection: "zoom-in",
+      animation: "static",
       productTitle: "",
       track,
     };
@@ -3685,6 +3838,59 @@ export function TimelineEditor({
     const updated = interstitialSlides.filter((s) => s.id !== slideId);
     emitSlides(updated);
     if (selectedSlideId === slideId) setSelectedSlideId(null);
+  };
+
+  const handleTimelineKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Delete") {
+      const target = event.target as HTMLElement;
+      const originatedOnSelectedBlock = event.target === event.currentTarget
+        || target.closest("[data-timeline-block]") !== null;
+      if (
+        event.defaultPrevented
+        || event.repeat
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || !originatedOnSelectedBlock
+        || isEditorDeleteShortcutBlocked(event.target)
+      ) return;
+
+      if (selectedSlideId !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleRemoveSlide(selectedSlideId);
+        setAttentionLayerSelection(null);
+        return;
+      }
+
+      if (selectedClipId !== null) {
+        const overlaySelected = displayedOverlays.some((clip) => clip.id === selectedClipId);
+        const magneticSelected = displayedComposition.some((clip) => clip.id === selectedClipId);
+        if (!overlaySelected && !magneticSelected) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        if (overlaySelected) removeOverlayClip(selectedClipId);
+        else commitComposition(displayedComposition.filter((clip) => clip.id !== selectedClipId));
+        setSelectedClipId(null);
+      }
+      return;
+    }
+
+    if (
+      event.key !== " "
+      || event.altKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.target !== event.currentTarget
+    ) return;
+
+    // Space scrolls the page when the scrub surface owns no keyboard action.
+    // Once the user clicks the timeline, keep the shortcut scoped to this editor.
+    event.preventDefault();
+    if (event.repeat) return;
+    if (isPreviewActive) togglePreviewPlayPause();
+    else activatePreview();
   };
 
   // --- Video preview effect for timeline view ---
@@ -3790,13 +3996,13 @@ export function TimelineEditor({
     setSelectedBlockIndex(matchIndex);
     setSelectedClipId(null);
     setSelectedSlideId(null);
-    setSelectedAttentionLayer(null);
+    setAttentionLayerSelection(null);
     setSelectedMusic(false);
     if (isPreviewPlaying) togglePreviewPlayPause();
   };
   const selectAttentionLayerForEditing = (cueId: string, layerId: string) => {
     selectAttentionCue(cueId);
-    setSelectedAttentionLayer({ cueId, layerId });
+    setAttentionLayerSelection({ cueId, layerId });
     setSelectedClipId(null);
     setSelectedBlockIndex(null);
     setSelectedMusic(false);
@@ -3866,6 +4072,18 @@ export function TimelineEditor({
     cue: AttentionCue,
     layer: AttentionCue["layers"][number],
   ) => {
+    if (
+      event.key === "Delete"
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.repeat
+    ) {
+      event.preventDefault();
+      handleRemoveSlide(cue.id);
+      setAttentionLayerSelection(null);
+      return;
+    }
     const direction = {
       ArrowLeft: [-1, 0],
       ArrowRight: [1, 0],
@@ -4792,16 +5010,52 @@ export function TimelineEditor({
                     <ImageLane
                       cues={cuesOnTrack(attentionCues, track.index)}
                       trackIndex={track.index}
-                      selectedCueId={selectedSlideId}
+                      axisWidth={laneWidth}
+                      timelineDuration={totalDuration}
+                      selectedCueIds={selectedAttentionCueIds}
                       pct={pct}
                       widthPct={widthPct}
                       onBeginTimingDrag={beginCueTimingDrag}
-                      onSelectCue={(cueId) => {
-                        selectAttentionCue(cueId);
-                        const cue = attentionCues.find((candidate) => candidate.id === cueId);
-                        setSelectedAttentionLayer(cue?.layers[0]
-                          ? { cueId, layerId: cue.layers[0].id }
-                          : null);
+                      onSelectCue={(cueId, event) => {
+                        const orderedCueIds = [...attentionCues]
+                          .sort((left, right) => (
+                            left.startMs - right.startMs
+                            || (left.track ?? 2) - (right.track ?? 2)
+                          ))
+                          .map((cue) => cue.id);
+                        let nextCueIds: string[];
+                        if (event.shiftKey && attentionSelectionAnchorRef.current) {
+                          const anchorIndex = orderedCueIds.indexOf(attentionSelectionAnchorRef.current);
+                          const currentIndex = orderedCueIds.indexOf(cueId);
+                          if (anchorIndex >= 0 && currentIndex >= 0) {
+                            const range = orderedCueIds.slice(
+                              Math.min(anchorIndex, currentIndex),
+                              Math.max(anchorIndex, currentIndex) + 1,
+                            );
+                            nextCueIds = event.ctrlKey || event.metaKey
+                              ? Array.from(new Set([...selectedAttentionCueIds, ...range]))
+                              : range;
+                          } else {
+                            nextCueIds = [cueId];
+                          }
+                        } else if (event.ctrlKey || event.metaKey) {
+                          const next = new Set(selectedAttentionCueIds);
+                          if (next.has(cueId)) next.delete(cueId);
+                          else next.add(cueId);
+                          nextCueIds = Array.from(next);
+                          attentionSelectionAnchorRef.current = next.has(cueId)
+                            ? cueId
+                            : nextCueIds[nextCueIds.length - 1] ?? null;
+                        } else {
+                          nextCueIds = [cueId];
+                          attentionSelectionAnchorRef.current = cueId;
+                        }
+                        const primaryCueId = nextCueIds.includes(cueId)
+                          ? cueId
+                          : nextCueIds[nextCueIds.length - 1] ?? null;
+                        if (primaryCueId) selectAttentionCue(primaryCueId);
+                        else setSelectedSlideId(null);
+                        setAttentionCueSelection(nextCueIds, primaryCueId);
                         setSelectedClipId(null);
                         setSelectedBlockIndex(null);
                         setSelectedMusic(false);
@@ -4811,6 +5065,8 @@ export function TimelineEditor({
                     <OverlayLane
                       clips={displayedOverlays.filter((o) => (o.track ?? 2) === track.index)}
                       mediaApiUrl={mediaApiUrl}
+                      axisWidth={laneWidth}
+                      timelineDuration={totalDuration}
                       pct={pct}
                       widthPct={widthPct}
                       selectedClipId={selectedClipId}
@@ -4857,6 +5113,8 @@ export function TimelineEditor({
                   <VideoLane
                     clips={displayedComposition}
                     mediaApiUrl={mediaApiUrl}
+                    axisWidth={laneWidth}
+                    timelineDuration={totalDuration}
                     pct={pct}
                     widthPct={widthPct}
                     selectedClipId={selectedClipId}
@@ -5018,7 +5276,8 @@ export function TimelineEditor({
             // and the backend burn-in order.
 
             return (
-              <MultiTrackTimeline
+              <>
+                <MultiTrackTimeline
                 scrollRef={multiTrackScrollRef}
                 className={`timeline-horizontal-scrollbar-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${displayMode === "full"
                   ? "col-span-3 row-start-4 h-full min-h-0"
@@ -5026,7 +5285,7 @@ export function TimelineEditor({
                 containerProps={{
                   tabIndex: 0,
                   "aria-label": "Multi-track timeline",
-                  "aria-keyshortcuts": "Space",
+                  "aria-keyshortcuts": "Space Delete",
                   title: "Click to activate timeline controls. Then scroll to zoom around the cursor or Shift+scroll to pan.",
                   onPointerDownCapture: focusTimelineKeyboardScope,
                   onKeyDown: handleTimelineKeyDown,
@@ -5072,8 +5331,10 @@ export function TimelineEditor({
                       ? "opacity-60"
                       : "cursor-ew-resize bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:5%_100%]",
                     axisProps: lane.stub ? {} : {
-                      title: "Drag to move the playhead",
-                      onPointerDown: beginMultiTrackScrub,
+                      title: lane.attention
+                        ? "Drag empty space to select multiple images"
+                        : "Drag to move the playhead",
+                      onPointerDown: lane.attention ? beginAttentionMarquee : beginMultiTrackScrub,
                       ...(lane.attention ? { "data-attention-track": "" } : {}),
                       ...(lane.trackKind ? { "data-track-kind": lane.trackKind } : {}),
                       ...(locked ? { "data-track-locked": "true" } : {}),
@@ -5090,7 +5351,19 @@ export function TimelineEditor({
                     content: lane.content,
                   };
                 })}
-              />
+                />
+                {attentionSelectionMarquee && typeof document !== "undefined"
+                  ? createPortal(
+                    <div
+                      aria-hidden="true"
+                      data-testid="attention-selection-marquee"
+                      className="pointer-events-none fixed z-[100] border border-primary bg-primary/15 shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+                      style={attentionSelectionMarquee}
+                    />,
+                    document.body,
+                  )
+                  : null}
+              </>
             );
           })()}
 
@@ -5449,6 +5722,10 @@ export function TimelineEditor({
                             : ""
                         }`}
                         data-testid={`attention-layer-${layerIndex}`}
+                        onPointerDownCapture={() => setAttentionLayerSelection({
+                          cueId: cue.id,
+                          layerId: layer.id,
+                        })}
                       >
                         <div className="flex items-center gap-2">
                           <button
@@ -5493,28 +5770,8 @@ export function TimelineEditor({
                             assetId: event.target.value || `pending:${layer.id}`,
                             assetUrl: event.target.value || undefined,
                           })}
-                          placeholder="Image URL (advanced)"
+                          placeholder="Content URL (advanced)"
                             className="h-8 text-xs"
-                        />
-
-                        <AttentionEffectControls
-                          animation={layer.animation.preset}
-                          enterMs={layer.animation.enterMs}
-                          onAnimationChange={(preset) => {
-                            if (!preset) return;
-                            updateCueLayer(cue.id, layer.id, {
-                              animation: { ...layer.animation, preset },
-                            });
-                          }}
-                          onEnterMsChange={(enterMs) => {
-                            if (enterMs === undefined) return;
-                            updateCueLayer(cue.id, layer.id, {
-                              animation: { ...layer.animation, enterMs },
-                            });
-                          }}
-                          effectLabel="Entrance effect"
-                          helper="Changes only this image in this attention cue."
-                          testIdPrefix={`attention-${layer.id}`}
                         />
 
                         <div className="grid grid-cols-3 gap-1.5">

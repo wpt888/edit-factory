@@ -23,13 +23,17 @@ async def _noop_slot_factory():
 
 
 def _queued_pipeline(pipeline_id: str) -> dict:
+    script_id = "script_queue_test"
     return {
         "pipeline_id": pipeline_id,
         "profile_id": "profile-1",
         "provider": "gemini",
         "scripts": ["Test script"],
+        "script_ids": [script_id],
         "render_jobs": {
             0: {
+                "script_id": script_id,
+                "output_id": pipeline_routes._build_output_id(script_id),
                 "status": "queued",
                 "progress": 0,
                 "current_step": "Queued for render",
@@ -119,6 +123,7 @@ def test_cancel_variant_removes_waiting_queue_item_immediately(monkeypatch):
         await pipeline_routes.cancel_variant_render(
             pipeline_id,
             "0",
+            pipeline["render_jobs"][0]["output_id"],
             ProfileContext(profile_id="profile-1", user_id="bob"),
         )
 
@@ -172,13 +177,71 @@ def test_load_marks_process_local_render_jobs_interrupted(monkeypatch, persisted
     monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repo)
     pipeline_routes._pipelines.pop(pipeline_id, None)
 
+
     restored = pipeline_routes._db_load_pipeline(pipeline_id)
     assert restored is not None
     job = restored["render_jobs"][0]
     assert job["status"] == "failed"
     assert job["progress"] == 0
     assert job["interrupted"] is True
+    assert job["script_id"] == restored["script_ids"][0]
+    assert job["output_id"] == pipeline_routes._build_output_id(
+        restored["script_ids"][0],
+    )
     assert job["current_step"] == "Render întrerupt — apasă Render din nou"
+    assert any(
+        update.get("script_ids") == restored["script_ids"]
+        and update.get("render_jobs", {}).get("0", {}).get("output_id")
+        == job["output_id"]
+        for _, update in repo.updates
+    )
     assert repo.updates[-1][1]["render_jobs"]["0"]["status"] == "failed"
 
+    pipeline_routes._pipelines.pop(pipeline_id, None)
+
+
+def test_load_preserves_recent_job_owned_by_another_backend(monkeypatch):
+    pipeline_id = "foreign-worker-render"
+    script_id = "script_11111111"
+    output_id = pipeline_routes._build_output_id(script_id)
+    row = {
+        "id": pipeline_id,
+        "profile_id": "profile-1",
+        "provider": "gemini",
+        "scripts": ["Test script"],
+        "script_ids": [script_id],
+        "render_jobs": {
+            "0": {
+                "attempt_id": "foreign-attempt",
+                "worker_instance_id": "studio_foreign",
+                "script_id": script_id,
+                "output_id": output_id,
+                "status": "processing",
+                "progress": 42,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        "previews": {},
+        "tts_previews": {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    class _Repo:
+        def __init__(self):
+            self.updates = []
+
+        def get_pipeline(self, _pipeline_id):
+            return deepcopy(row)
+
+        def update_pipeline(self, requested_id, updates):
+            self.updates.append((requested_id, deepcopy(updates)))
+
+    repo = _Repo()
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: repo)
+    pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    restored = pipeline_routes._db_load_pipeline(pipeline_id)
+
+    assert restored["render_jobs"][0]["status"] == "processing"
+    assert not any("render_jobs" in update for _, update in repo.updates)
     pipeline_routes._pipelines.pop(pipeline_id, None)

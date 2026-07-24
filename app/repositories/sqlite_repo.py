@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 # Columns known to store JSON data (TEXT in SQLite, parsed on read)
 _JSON_COLUMNS = frozenset({
     "tts_settings", "cloned_voices", "video_template_settings",
-    "subtitle_settings", "postiz_integration_ids", "scripts", "script_names",
+    "subtitle_settings", "postiz_integration_ids", "scripts", "script_ids", "script_names",
     "previews", "render_jobs", "source_video_ids", "data",
     "metadata", "selected_image_urls", "pip_config", "slide_config",
-    "tts_timestamps", "tags", "product_ids", "integration_ids",
+    "tts_timestamps", "tts_voice_settings", "tags", "product_ids", "integration_ids",
     "collection_ids", "summary",
     # V2 smart schedule
     "platform_times", "variant_routing",
@@ -34,7 +34,7 @@ _JSON_COLUMNS = frozenset({
     # Without these, callers passing raw dicts (e.g., _db_save_pipeline) get
     # `sqlite3.ProgrammingError: type 'dict' is not supported` on the bind.
     "tts_previews", "preview_renders", "segment_usage", "captions",
-    "generation_job", "tts_jobs",
+    "generation_job", "tts_jobs", "preview_jobs",
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
     "selected_captions", "subtitle_settings_by_key", "attention_timeline",
@@ -97,6 +97,8 @@ class SQLiteRepository(DataRepository):
         self._ensure_phase80_columns()
         self._ensure_profile_columns()
         self._ensure_pipeline_columns()
+        self._ensure_clip_columns()
+        self._ensure_tts_asset_columns()
         self._ensure_source_video_columns()
         self._ensure_segment_columns()
 
@@ -150,6 +152,7 @@ class SQLiteRepository(DataRepository):
         pipeline state silently never persisted in desktop mode.
         """
         wanted = {
+            "script_ids": "TEXT DEFAULT '[]'",
             "script_names": "TEXT DEFAULT '[]'",
             "selected_captions": "TEXT DEFAULT '{}'",
             "target_script_duration": "REAL",
@@ -158,7 +161,10 @@ class SQLiteRepository(DataRepository):
             "attention_timeline": "TEXT DEFAULT '{}'",
             "generation_job": "TEXT DEFAULT '{}'",
             "tts_jobs": "TEXT DEFAULT '{}'",
+            "preview_jobs": "TEXT DEFAULT '{}'",
             "template_settings": "TEXT DEFAULT '{}'",
+            "settings_revision": "INTEGER NOT NULL DEFAULT 0",
+            "jobs_revision": "INTEGER NOT NULL DEFAULT 0",
         }
         try:
             cur = self._conn.execute('PRAGMA table_info("editai_pipelines")')
@@ -179,6 +185,71 @@ class SQLiteRepository(DataRepository):
                 self._col_cache.pop("editai_pipelines", None)
         except Exception as e:
             logger.warning(f"Could not ensure pipeline columns on editai_pipelines: {e}")
+
+    def _ensure_clip_columns(self) -> None:
+        """Add stable pipeline identities to persisted Library clips."""
+        wanted = {
+            "script_id": "TEXT",
+            "output_id": "TEXT",
+        }
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_clips")')
+            cols = {row[1] for row in cur.fetchall()}
+            missing = {name: ddl for name, ddl in wanted.items() if name not in cols}
+            if missing:
+                with self._write_lock:
+                    for name, ddl in missing.items():
+                        self._conn.execute(
+                            f'ALTER TABLE "editai_clips" ADD COLUMN "{name}" {ddl}'
+                        )
+                    self._conn.commit()
+                logger.info(
+                    "editai_clips migrated in place: added %s",
+                    ", ".join(missing),
+                )
+                if hasattr(self, "_col_cache"):
+                    self._col_cache.pop("editai_clips", None)
+            with self._write_lock:
+                self._conn.execute(
+                    'CREATE INDEX IF NOT EXISTS "idx_clips_project_output_id" '
+                    'ON "editai_clips" ("project_id", "output_id")'
+                )
+                self._conn.execute(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS '
+                    '"idx_clips_project_output_id_unique" '
+                    'ON "editai_clips" ("project_id", "output_id") '
+                    'WHERE "output_id" IS NOT NULL'
+                )
+                self._conn.commit()
+        except Exception as e:
+            logger.warning(f"Could not ensure stable identity columns on editai_clips: {e}")
+
+    def _ensure_tts_asset_columns(self) -> None:
+        """Add voice provenance fields used for exact TTS restoration."""
+        wanted = {
+            "tts_voice_settings": "TEXT",
+            "audio_sha256": "TEXT",
+        }
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_tts_assets")')
+            cols = {row[1] for row in cur.fetchall()}
+            missing = {name: ddl for name, ddl in wanted.items() if name not in cols}
+            if not missing:
+                return
+            with self._write_lock:
+                for name, ddl in missing.items():
+                    self._conn.execute(
+                        f'ALTER TABLE "editai_tts_assets" ADD COLUMN "{name}" {ddl}'
+                    )
+                self._conn.commit()
+            logger.info(
+                "editai_tts_assets migrated in place: added %s",
+                ", ".join(missing),
+            )
+            if hasattr(self, "_col_cache"):
+                self._col_cache.pop("editai_tts_assets", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure TTS provenance columns: {e}")
 
     def _ensure_source_video_columns(self) -> None:
         """Add editai_source_videos columns missing from older DBs (F5 fix).
@@ -2423,10 +2494,27 @@ class SQLiteRepository(DataRepository):
             if where_parts:
                 sql += " WHERE " + " AND ".join(where_parts)
             with self._write_lock:
-                self._conn.execute(sql, vals)
+                cursor = self._conn.execute(sql, vals)
+                affected = max(0, cursor.rowcount)
                 self._conn.commit()
             # Return updated rows by re-selecting
-            return self._reselect_after_write(table, filters)
+            result = self._reselect_after_write(table, filters)
+            if (
+                affected > 0
+                and not result.data
+                and filters
+                and filters.eq
+                and "id" in filters.eq
+            ):
+                # A compare-and-swap update commonly changes one of its own
+                # predicates (for example settings_revision). Re-select by the
+                # immutable primary key so callers still receive the updated row.
+                result = self._reselect_after_write(
+                    table,
+                    QueryFilters(eq={"id": filters.eq["id"]}),
+                )
+            result.count = affected
+            return result
 
         elif operation == "upsert":
             if data is None:

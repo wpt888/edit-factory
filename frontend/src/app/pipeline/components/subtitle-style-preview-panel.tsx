@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { Badge } from "@/components/ui/badge";
 import { InspectorField } from "@/components/ui/inspector";
@@ -12,13 +12,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { SubtitleSettings, UserSubtitlePreset } from "@/types/video-processing";
-import type { PreviewCard, PreviewKey, StyleKey } from "../pipeline-types";
+import type { PreviewCard, PreviewKey } from "../pipeline-types";
 import {
   resolveSubtitleAssignmentForCard,
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 
-type PreviewCardTarget = Pick<PreviewCard, "key" | "baseIndex" | "label" | "visualVersion">;
+type PreviewCardTarget = Pick<
+  PreviewCard,
+  "key" | "scriptId" | "outputId" | "baseIndex" | "label" | "visualVersion"
+>;
 
 export function SubtitleStylePreviewPanel({
   previewCards,
@@ -29,6 +32,7 @@ export function SubtitleStylePreviewPanel({
   variantSubtitleOverrides,
   getPreviewSubtitleSettingsFor,
   getPreviewSubtitleTextFor,
+  selectedCardKey,
   onPreviewCardChange,
 }: {
   previewCards: PreviewCard[];
@@ -39,25 +43,16 @@ export function SubtitleStylePreviewPanel({
   variantSubtitleOverrides: Partial<Record<PreviewKey, Partial<SubtitleSettings>>>;
   getPreviewSubtitleSettingsFor: (card: PreviewCardTarget) => SubtitleSettings;
   getPreviewSubtitleTextFor: (card: PreviewCardTarget) => string | undefined;
-  onPreviewCardChange: (styleKey: StyleKey) => void;
+  selectedCardKey: PreviewKey | null;
+  onPreviewCardChange: (card: PreviewCard) => void;
 }) {
-  const [selectedCardKey, setSelectedCardKey] = useState<PreviewKey | null>(null);
   const selectedCard = previewCards.find((card) => card.key === selectedCardKey)
     ?? previewCards[0];
 
   useEffect(() => {
     if (!selectedCard) return;
-    if (selectedCardKey !== selectedCard.key) setSelectedCardKey(selectedCard.key);
-  }, [selectedCard, selectedCardKey]);
-
-  useEffect(() => {
-    if (!selectedCard) return;
-    onPreviewCardChange(
-      selectedCard.visualVersion === "A" || selectedCard.visualVersion === "B"
-        ? selectedCard.visualVersion
-        : "default",
-    );
-  }, [onPreviewCardChange, selectedCard]);
+    if (selectedCardKey !== selectedCard.key) onPreviewCardChange(selectedCard);
+  }, [onPreviewCardChange, selectedCard, selectedCardKey]);
 
   if (!selectedCard) {
     return (
@@ -99,6 +94,8 @@ export function SubtitleStylePreviewPanel({
         previewMaxViewportHeight={42}
         compact={false}
         pipelineId={pipelineId}
+        scriptId={selectedCard.scriptId}
+        outputId={selectedCard.outputId}
         variantIndex={selectedCard.baseIndex}
         previewText={getPreviewSubtitleTextFor(selectedCard)}
         visualVersion={selectedCard.visualVersion}
@@ -110,7 +107,13 @@ export function SubtitleStylePreviewPanel({
           label="Preview output"
           helper="The frame, text, platform version, and current assignment all come from this output."
         >
-          <Select value={selectedCard.key} onValueChange={(value) => setSelectedCardKey(value as PreviewKey)}>
+          <Select
+            value={selectedCard.key}
+            onValueChange={(value) => {
+              const nextCard = previewCards.find((card) => card.key === value);
+              if (nextCard) onPreviewCardChange(nextCard);
+            }}
+          >
             <SelectTrigger
               size="sm"
               className="w-full text-xs"

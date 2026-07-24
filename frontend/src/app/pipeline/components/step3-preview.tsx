@@ -21,7 +21,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { InspectorField, InspectorSection } from "@/components/ui/inspector";
+import {
+  InspectorField,
+  InspectorSection,
+} from "@/components/ui/inspector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -67,9 +70,15 @@ import {
   EMPTY_ATTENTION_SELECTION,
   type AttentionSelection,
 } from "@/components/attention-template-picker";
+import { AttentionEffectControls } from "@/components/attention-effect-controls";
 import { uploadAttentionMedia } from "@/components/dialogs/attention-asset-picker-dialog";
 import type { CompositionClip, TransitionSpec } from "@/types/composition-timeline";
-import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
+import {
+  TimelineEditor,
+  SegmentOption,
+  InterstitialSlide,
+  type AttentionTimelineSelection,
+} from "@/components/timeline-editor";
 import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import {
@@ -78,6 +87,7 @@ import {
   PreviewKey,
   StyleKey,
   PreviewCard,
+  OutputId,
 } from "../pipeline-types";
 import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
@@ -96,11 +106,26 @@ import {
   type SubtitleTemplateRotation,
 } from "../subtitle-template-rotation";
 import type { SafeZoneType } from "@/components/safe-zone-overlay";
-import type { AttentionTemplateApplyResult } from "../attention-template-apply";
+import {
+  applyEffectPatchToAttentionTimeline,
+  summarizeAppliedAttentionEffect,
+  summarizeAppliedAttentionLayers,
+  type AttentionEffectPatch,
+  type AttentionTemplateApplyResult,
+} from "../attention-template-apply";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 const ALL_ATTENTION_VARIANTS = "__all__";
 const ATTENTION_INSPECTOR_TARGET_ID = "step3-attention-cue-inspector";
+type TimelineEffectScope = "image" | "cue" | "variant" | "all";
+type TimelineEffectTarget = {
+  previewKey: PreviewKey;
+  editorInstanceId: string;
+  cueId: string;
+  layerId: string;
+  cueIds: string[];
+  layerIds: string[];
+};
 
 type SourceKind = "video" | "image" | "script" | "subtitle" | "voiceover" | "soundtrack";
 type SourceView = "list" | "icons";
@@ -150,6 +175,7 @@ type ConfirmDialogState = {
   confirmLabel: string;
   variant: "destructive" | "default";
   onConfirm: () => void;
+  onCancel?: () => void;
   loading?: boolean;
 };
 
@@ -193,8 +219,8 @@ type Step3Ctx = {
   subtitleSettings: SubtitleSettings;
   subtitleOverrides: Partial<Record<StyleKey, SubtitleSettings>>;
   setSubtitleOverrides: Dispatch<SetStateAction<Partial<Record<StyleKey, SubtitleSettings>>>>;
-  activeStyleKey: StyleKey;
-  selectedVariants: Set<number>;
+  selectedOutputIds: Set<OutputId>;
+  activeOutputKey: PreviewKey | null;
   userSubtitlePresets: UserSubtitlePreset[];
   setUserSubtitlePresets: Dispatch<SetStateAction<UserSubtitlePreset[]>>;
   subtitleRotation: SubtitleTemplateRotation;
@@ -216,12 +242,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   const mediaApiUrl = useApiUrl();
   const {
     previewCards,
-    selectedVariants,
+    selectedOutputIds,
+    toggleOutput,
+    activeOutputKey,
+    setActiveOutputKey,
+    pipelineSaveState,
     setStep3Mode,
     subtitleSettingsLoaded,
     metaMultiplication,
     subtitleSaveState,
-    activeStyleKey,
     setActiveStyleKey,
     handleCopyVariantSubtitle,
     handleResetVariantSubtitle,
@@ -244,8 +273,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     pipelineId,
     getSubtitleSettingsFor,
     handleVariantSubtitleChange,
+    handleSaveSubtitleAsProfileDefault,
     previews,
-    toggleVariant,
+    ttsResults,
     handlePlayAudio,
     playingAudio,
     setPlayingAudio,
@@ -304,6 +334,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
   const [maximizeSettingsTab, setMaximizeSettingsTab] = useState<"subtitles" | "timing" | "adjust">("subtitles");
   const [editingVariantKey, setEditingVariantKey] = useState<PreviewKey | null>(null);
   const [variantSubtitleDraft, setVariantSubtitleDraft] = useState<SubtitleSettings | null>(null);
+  const [subtitleEditTarget, setSubtitleEditTarget] = useState<string>(
+    metaMultiplication ? "group:A" : "pipeline",
+  );
   const [clearingLegacySubtitleAssignments, setClearingLegacySubtitleAssignments] = useState(false);
   const [safeZoneEnabled, setSafeZoneEnabled] = useState(false);
   const [safeZoneType, setSafeZoneType] = useState<SafeZoneType>("reel");
@@ -315,12 +348,51 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     pipelineId: string | null;
     scope: string;
   } | null>(null);
+  const [timelineEffectScope, setTimelineEffectScope] = useState<TimelineEffectScope>("image");
+  const [timelineEffectTarget, setTimelineEffectTarget] = useState<TimelineEffectTarget | null>(null);
   const [attentionApplying, setAttentionApplying] = useState(false);
   const [attentionApplyResult, setAttentionApplyResult] = useState<{
     pipelineId: string | null;
     note: string;
   } | null>(null);
+  const handleTimelineAttentionSelection = (
+    previewKey: PreviewKey,
+    selection: AttentionTimelineSelection,
+  ) => {
+    if (
+      selection.cueId
+      && selection.layerId
+      && selection.cueIds.length > 0
+      && selection.layerIds.length > 0
+    ) {
+      setTimelineEffectTarget({
+        previewKey,
+        editorInstanceId: selection.editorInstanceId,
+        cueId: selection.cueId,
+        layerId: selection.layerId,
+        cueIds: selection.cueIds,
+        layerIds: selection.layerIds,
+      });
+      setTimelineEffectScope((current) => current === "all" ? current : "image");
+      return;
+    }
+    setTimelineEffectTarget((current) => (
+      current?.editorInstanceId === selection.editorInstanceId ? null : current
+    ));
+  };
   const subtitleRotationPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!metaMultiplication && subtitleEditTarget.startsWith("group:")) {
+      setSubtitleEditTarget("pipeline");
+      return;
+    }
+    if (subtitleEditTarget.startsWith("output:")) {
+      const key = subtitleEditTarget.slice("output:".length);
+      if (!previewCards.some((card) => card.key === key)) {
+        setSubtitleEditTarget("pipeline");
+      }
+    }
+  }, [metaMultiplication, previewCards, subtitleEditTarget]);
   const subtitleTemplateGroups = useMemo(
     () => getSubtitleTemplateGroups(userSubtitlePresets),
     [userSubtitlePresets],
@@ -409,6 +481,100 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     : previewCards.filter((card) => card.key === attentionApplyScope);
   const attentionApplyTimelinesReady = attentionApplyTargetCards.length > 0
     && attentionApplyTargetCards.every((card) => attentionTimelines[card.key] !== undefined);
+  const globalAttentionTimelinesReady = previewCards.length > 0
+    && previewCards.every((card) => attentionTimelines[card.key] !== undefined);
+  const globalAttentionEffect = summarizeAppliedAttentionEffect(
+    previewCards.flatMap((card) => {
+      const timeline = attentionTimelines[card.key];
+      return timeline ? [timeline] : [];
+    }),
+  );
+  const updateGlobalAttentionEffect = (patch: AttentionEffectPatch) => {
+    previewCards.forEach((card) => {
+      const timeline = attentionTimelines[card.key];
+      if (!timeline) return;
+      const updated = applyEffectPatchToAttentionTimeline(timeline, patch);
+      if (updated !== timeline) {
+        getAttentionTimelineChangeHandler(card.key)(updated);
+      }
+    });
+  };
+  const timelineEffectCard = timelineEffectTarget
+    ? previewCards.find((card) => card.key === timelineEffectTarget.previewKey)
+    : undefined;
+  const timelineEffectTimeline = timelineEffectTarget
+    ? attentionTimelines[timelineEffectTarget.previewKey]
+    : undefined;
+  const timelineEffectCue = timelineEffectTimeline?.cues.find(
+    (cue) => cue.id === timelineEffectTarget?.cueId,
+  );
+  const timelineEffectLayer = timelineEffectCue?.layers.find(
+    (layer) => layer.id === timelineEffectTarget?.layerId,
+  );
+  const timelineEffectLayerIndex = timelineEffectCue && timelineEffectLayer
+    ? timelineEffectCue.layers.findIndex((layer) => layer.id === timelineEffectLayer.id)
+    : -1;
+  const timelineEffectSelectedCues = timelineEffectTimeline?.cues.filter(
+    (cue) => timelineEffectTarget?.cueIds.includes(cue.id),
+  ) ?? [];
+  const timelineEffectSelectedLayers = timelineEffectSelectedCues.flatMap(
+    (cue) => cue.layers.filter((layer) => timelineEffectTarget?.layerIds.includes(layer.id)),
+  );
+  const timelineEffectSelectionReady = Boolean(
+    timelineEffectCard
+    && timelineEffectTimeline
+    && timelineEffectCue
+    && timelineEffectLayer
+    && timelineEffectSelectedLayers.length > 0
+  );
+  const timelineEffectSummary = timelineEffectScope === "all"
+    ? globalAttentionEffect
+    : timelineEffectScope === "variant"
+      ? timelineEffectTimeline
+        ? summarizeAppliedAttentionEffect([timelineEffectTimeline])
+        : undefined
+      : timelineEffectScope === "cue"
+        ? summarizeAppliedAttentionLayers(timelineEffectCue?.layers ?? [])
+        : summarizeAppliedAttentionLayers(timelineEffectSelectedLayers);
+  const timelineEffectScopeLabel = timelineEffectScope === "all"
+    ? "All variants"
+    : timelineEffectScope === "variant"
+      ? timelineEffectCard?.label ?? "Select an image"
+      : timelineEffectScope === "cue"
+        ? timelineEffectCue
+          ? `Selected block · ${timelineEffectCue.layers.length} image${timelineEffectCue.layers.length === 1 ? "" : "s"}`
+          : "Select a block"
+        : timelineEffectSelectedLayers.length > 0
+          ? timelineEffectSelectedLayers.length === 1
+            ? `Selected image · Image ${timelineEffectLayerIndex + 1}`
+            : `Selected images · ${timelineEffectSelectedLayers.length}`
+          : "Select an image";
+  const timelineEffectScopeReady = timelineEffectScope === "all"
+    ? globalAttentionTimelinesReady && Boolean(globalAttentionEffect)
+    : timelineEffectSelectionReady && Boolean(timelineEffectSummary);
+  const updateTimelineEffect = (patch: AttentionEffectPatch) => {
+    if (timelineEffectScope === "all") {
+      if (globalAttentionTimelinesReady) updateGlobalAttentionEffect(patch);
+      return;
+    }
+    if (!timelineEffectTarget || !timelineEffectTimeline || !timelineEffectSelectionReady) return;
+    const target = timelineEffectScope === "variant"
+      ? undefined
+      : timelineEffectScope === "cue"
+        ? { cueId: timelineEffectTarget.cueId }
+        : {
+            cueIds: timelineEffectTarget.cueIds,
+            layerIds: timelineEffectTarget.layerIds,
+          };
+    const updated = applyEffectPatchToAttentionTimeline(
+      timelineEffectTimeline,
+      patch,
+      target,
+    );
+    if (updated !== timelineEffectTimeline) {
+      getAttentionTimelineChangeHandler(timelineEffectTarget.previewKey)(updated);
+    }
+  };
   const sourceInventory = useMemo(() => {
     const segmentCounts = new Map<string, number>();
     availableSegments.forEach((segment) => {
@@ -430,6 +596,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       if (thumbnail?.imageUrl) imageUrls.add(thumbnail.imageUrl);
     });
     Object.values(attentionTimelines).forEach((timeline) => {
+      if (!timeline || !Array.isArray(timeline.cues)) return;
       timeline.cues.forEach((cue) => {
         cue.layers.forEach((layer) => {
           const url = layer.assetUrl || layer.assetId;
@@ -440,7 +607,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       });
     });
     Object.values(previews).forEach((preview) => {
-      preview.matches.forEach((match) => {
+      (preview.matches ?? []).forEach((match) => {
         if (match.source_video_id) sourceVideoIds.add(match.source_video_id);
       });
       (preview.video_timeline ?? []).forEach((clip) => {
@@ -664,6 +831,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     return () => controller.abort();
   }, [currentProfile?.id, previewProxySourceIdsKey]);
 
+  const activateOutput = (card: PreviewCard) => {
+    setActiveOutputKey(card.key);
+    setActiveStyleKey(
+      card.visualVersion === "A" || card.visualVersion === "B"
+        ? card.visualVersion
+        : "default",
+    );
+  };
+
   const openRenderedPreview = (previewKey: PreviewKey) => {
     // The FFmpeg preview owns its rendered audio track. Stop the standalone
     // voice-over first so two variants cannot play over each other.
@@ -672,16 +848,121 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       audioRef.current = null;
     }
     setPlayingAudio(null);
+    const card = previewCards.find((candidate) => candidate.key === previewKey);
+    if (card) activateOutput(card);
     setPreviewVariant(previewKey);
   };
 
-  const activeSubtitleStyleKey: StyleKey = metaMultiplication
-    ? activeStyleKey === "B" ? "B" : "A"
+  const activeSubtitleCard = previewCards.find((card) => card.key === activeOutputKey)
+    ?? previewCards[0];
+  const subtitleEditScope = subtitleEditTarget === "pipeline"
+    ? "pipeline"
+    : subtitleEditTarget.startsWith("group:")
+      ? "group"
+      : "output";
+  const editingOutputKey = subtitleEditScope === "output"
+    ? subtitleEditTarget.slice("output:".length) as PreviewKey
+    : null;
+  const editingSubtitleCard = editingOutputKey
+    ? previewCards.find((card) => card.key === editingOutputKey)
+    : undefined;
+  const activeGroupStyleKey: StyleKey = subtitleEditScope === "group"
+    ? subtitleEditTarget.endsWith(":B") ? "B" : "A"
+    : editingSubtitleCard?.visualVersion === "B"
+      ? "B"
+      : editingSubtitleCard?.visualVersion === "A"
+        ? "A"
+        : "default";
+  const activeSubtitleStyleKey: StyleKey = subtitleEditScope === "group"
+    ? activeGroupStyleKey
     : "default";
-  const activeSubtitleStyleHasOverride = Boolean(
-    subtitleOverrides[activeSubtitleStyleKey]
-      && Object.keys(subtitleOverrides[activeSubtitleStyleKey] ?? {}).length > 0
-  );
+  const activeSubtitleSettings = subtitleEditScope === "output" && editingSubtitleCard
+    ? getPreviewSubtitleSettingsFor(editingSubtitleCard)
+    : getSubtitleSettingsFor(activeSubtitleStyleKey);
+  const activeSubtitleStyleHasOverride = subtitleEditScope === "output" && editingSubtitleCard
+    ? Boolean(variantSubtitleOverrides[editingSubtitleCard.key])
+    : Boolean(
+        subtitleOverrides[activeSubtitleStyleKey]
+          && Object.keys(subtitleOverrides[activeSubtitleStyleKey] ?? {}).length > 0
+      );
+  const subtitleEditingLabel = subtitleEditScope === "output"
+    ? `Output ${editingSubtitleCard?.label ?? "—"}`
+    : subtitleEditScope === "group"
+      ? `All ${activeGroupStyleKey} outputs`
+      : "Pipeline subtitles";
+  const maximizedEditingCard = maximizedKey
+    ? previewCards.find((card) => card.key === maximizedKey)
+    : undefined;
+  const timelineEditingCard = maximizedEditingCard ?? activeSubtitleCard;
+  const studioEditingLabel = timelineEditingCard
+    ? `${subtitleEditingLabel} · Timeline: Output ${timelineEditingCard.label}${
+        maximizedEditingCard ? " (full editor)" : ""
+      }`
+    : subtitleEditingLabel;
+  const previewingLabel = activeSubtitleCard?.label ?? "No output";
+
+  const handleActiveSubtitleSettingsChange = (newSettings: SubtitleSettings) => {
+    if (subtitleEditScope === "output" && editingSubtitleCard) {
+      handleVariantTemplateOverrideChange(
+        editingSubtitleCard.key,
+        newSettings,
+        getPreviewSubtitleTemplateSettingsFor(editingSubtitleCard),
+      );
+      return;
+    }
+    handleVariantSubtitleChange(activeSubtitleStyleKey, newSettings);
+  };
+
+  const confirmPipelineReassembly = (label: string): Promise<boolean> => {
+    if (Object.keys(previews).length === 0) return Promise.resolve(true);
+    const affectedCount = previewCards.length;
+    const editedCount = previewCards.filter((card) => {
+      const preview = previews[card.key];
+      return Boolean(
+        preview?.manual_matches_preserved
+        || preview?.manual_composition_preserved
+        || preview?.music
+        || preview?.defaultTransition
+        || preview?.matches?.some((match) => match.pinned),
+      );
+    }).length;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (confirmed: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(confirmed);
+      };
+      setConfirmDialog({
+        open: true,
+        title: `Apply ${label} to pipeline?`,
+        description: `This rebuilds ${affectedCount} ${
+          affectedCount === 1 ? "output" : "outputs"
+        }. Timeline, pinned matches, music, and transitions are preserved${
+          editedCount > 0 ? ` for ${editedCount} manually edited ${editedCount === 1 ? "output" : "outputs"}` : ""
+        }.`,
+        confirmLabel: `Update ${affectedCount} ${affectedCount === 1 ? "output" : "outputs"}`,
+        variant: "default",
+        onCancel: () => settle(false),
+        onConfirm: () => {
+          setConfirmDialog((previous) => ({ ...previous, open: false }));
+          settle(true);
+        },
+      });
+    });
+  };
+
+  const requestPipelineReassembly = (
+    label: string,
+    apply: () => void,
+    applySchedulesReassembly = false,
+  ) => {
+    void confirmPipelineReassembly(label).then((confirmed) => {
+      if (!confirmed) return;
+      apply();
+      if (!applySchedulesReassembly) scheduleReassemblePreviews();
+    });
+  };
 
   // Lifted out of the JSX below so the exact same element (same state, same
   // handlers) can render both in the left inspector and inside the maximized
@@ -704,15 +985,17 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           <Select
             value={String(minSegmentDuration)}
             onValueChange={(value) => {
-              setMinSegmentDuration(Number(value));
-              scheduleReassemblePreviews();
+              requestPipelineReassembly("pacing", () => setMinSegmentDuration(Number(value)));
             }}
           >
             <SelectTrigger id="pacing" size="sm" className="w-32 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="2">Fast (2s)</SelectItem>
+              <SelectItem value="0.5">Very fast (0.5s)</SelectItem>
+              <SelectItem value="1">Fast (1s)</SelectItem>
+              <SelectItem value="1.5">Quick (1.5s)</SelectItem>
+              <SelectItem value="2">Balanced (2s)</SelectItem>
               <SelectItem value="3">Normal (3s)</SelectItem>
               <SelectItem value="5">Slow (5s)</SelectItem>
             </SelectContent>
@@ -729,8 +1012,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           <Select
             value={segmentProximity}
             onValueChange={(value) => {
-              setSegmentProximity(value as typeof segmentProximity);
-              scheduleReassemblePreviews();
+              requestPipelineReassembly(
+                "segment proximity",
+                () => setSegmentProximity(value as typeof segmentProximity),
+              );
             }}
           >
             <SelectTrigger id="segment-proximity" size="sm" className="w-32 text-xs">
@@ -754,8 +1039,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             id="rapid-intro"
             checked={ultraRapidIntro}
             onCheckedChange={(checked) => {
-              setUltraRapidIntro(checked);
-              scheduleReassemblePreviews();
+              requestPipelineReassembly("rapid intro", () => setUltraRapidIntro(checked));
             }}
           />
         </div>
@@ -810,14 +1094,18 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       {subtitleTemplateGroups.length > 0 && (
         <InspectorField label="Template" htmlFor="step3-subtitle-template">
           <Select
-            value={activeSubtitleTemplateGroup?.id}
+            value={activeSubtitleTemplateGroup?.id ?? ""}
             onValueChange={(templateId) => {
               const template = subtitleTemplateGroups.find((candidate) => candidate.id === templateId);
               if (!template) return;
-              handleSubtitleTemplateChange({
-                enabled: true,
-                presetIds: template.presets.map((preset) => preset.id),
-              });
+              requestPipelineReassembly(
+                "subtitle template",
+                () => handleSubtitleTemplateChange({
+                  enabled: true,
+                  presetIds: template.presets.map((preset) => preset.id),
+                }),
+                true,
+              );
             }}
           >
             <SelectTrigger
@@ -851,10 +1139,20 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             className="h-8 text-xs"
             disabled={clearingLegacySubtitleAssignments}
             onClick={() => {
-              setClearingLegacySubtitleAssignments(true);
-              void handleUseSubtitleTemplateForAll().finally(() => {
-                setClearingLegacySubtitleAssignments(false);
-              });
+              void (async () => {
+                const confirmed = await confirmPipelineReassembly(
+                  subtitleRotation.enabled
+                    ? "subtitle template to all outputs"
+                    : "subtitle assignment reset",
+                );
+                if (!confirmed) return;
+                setClearingLegacySubtitleAssignments(true);
+                try {
+                  await handleUseSubtitleTemplateForAll();
+                } finally {
+                  setClearingLegacySubtitleAssignments(false);
+                }
+              })();
             }}
           >
             {clearingLegacySubtitleAssignments ? <Loader2 className="size-3.5 animate-spin" /> : null}
@@ -865,13 +1163,23 @@ export function Step3Preview({ ctx }: { ctx: any }) {
       <SubtitleTemplateRotationPanel
         rotation={subtitleRotation}
         presets={userSubtitlePresets}
-        onChange={handleSubtitleRotationChange}
+        onChange={(next) => requestPipelineReassembly(
+          "subtitle rotation",
+          () => handleSubtitleRotationChange(next),
+          true,
+        )}
         onSaveStyles={activeSubtitleTemplateGroup
-          ? (styles) => handleUpdateSubtitleTemplateStyles(
-              activeSubtitleTemplateGroup.id,
-              activeSubtitleTemplateGroup.name,
-              styles,
-            )
+          ? async (styles) => {
+              const confirmed = await confirmPipelineReassembly(
+                "subtitle template style changes",
+              );
+              if (!confirmed) return false;
+              return handleUpdateSubtitleTemplateStyles(
+                activeSubtitleTemplateGroup.id,
+                activeSubtitleTemplateGroup.name,
+                styles,
+              );
+            }
           : undefined}
         panelRef={subtitleRotationPanelRef}
       />
@@ -889,9 +1197,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
         actions={(
           <>
             <InlineInfo label="About subtitle settings">
-              {metaMultiplication
-                ? "Switch between A and B to preview and edit each platform style. Changes are saved automatically and shared across all scripts."
-                : "This style applies to every variant in the pipeline and is saved automatically."}
+              Preview output controls only what you see. Editing scope controls where changes are saved:
+              pipeline, platform group, or this output.
             </InlineInfo>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
           {subtitleSaveState === "saving" && (
@@ -932,21 +1239,62 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
             <InspectorSection
               title="Subtitle style"
-              summary={metaMultiplication ? `Version ${activeSubtitleStyleKey}` : "Default"}
+              summary={subtitleEditingLabel}
               defaultOpen
             >
+              <InspectorField
+                label="Editing scope"
+                helper="Preview target and edit target are independent. Choose exactly where subtitle changes are saved."
+              >
+                <Select
+                  value={subtitleEditTarget}
+                  onValueChange={setSubtitleEditTarget}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full text-xs"
+                    aria-label="Subtitle editing scope"
+                    data-testid="subtitle-edit-scope"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pipeline">Pipeline defaults</SelectItem>
+                    {metaMultiplication && (
+                      <>
+                        <SelectItem value="group:A">All A outputs</SelectItem>
+                        <SelectItem value="group:B">All B outputs</SelectItem>
+                      </>
+                    )}
+                    {previewCards.map((card) => (
+                      <SelectItem key={card.outputId} value={`output:${card.key}`}>
+                        Output · {card.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </InspectorField>
+              <p className="text-[11px] text-muted-foreground" data-testid="subtitle-inheritance-source">
+                {subtitleEditScope === "pipeline"
+                  ? "Overrides the profile default for this pipeline."
+                    : subtitleEditScope === "group"
+                      ? "Inherited from Pipeline until this group is overridden."
+                      : `Inherited from ${
+                        metaMultiplication ? `All ${activeGroupStyleKey} outputs` : "Pipeline"
+                      } until this output is overridden.`}
+              </p>
               <div className="flex flex-wrap items-center gap-2">
-                {metaMultiplication && (
+                {metaMultiplication && subtitleEditScope === "group" && (
                   <Button
                     variant="outline"
                     size="sm"
                     className="h-8 text-xs"
                     onClick={() => {
-                      const source: StyleKey = activeSubtitleStyleKey === "A" ? "B" : "A";
-                      handleCopyVariantSubtitle(source, activeSubtitleStyleKey);
+                      const source: StyleKey = activeGroupStyleKey === "A" ? "B" : "A";
+                      handleCopyVariantSubtitle(source, activeGroupStyleKey);
                     }}
                   >
-                    Copy from {activeSubtitleStyleKey === "A" ? "B" : "A"}
+                    Copy from {activeGroupStyleKey === "A" ? "B" : "A"}
                   </Button>
                 )}
 
@@ -955,9 +1303,24 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   size="sm"
                   className="h-8 text-xs"
                   disabled={!activeSubtitleStyleHasOverride}
-                  onClick={() => handleResetVariantSubtitle(activeSubtitleStyleKey)}
+                  onClick={() => {
+                    if (subtitleEditScope === "output" && editingSubtitleCard) {
+                      handleResetVariantTemplateOverride(editingSubtitleCard.key);
+                    } else {
+                      handleResetVariantSubtitle(activeSubtitleStyleKey);
+                    }
+                  }}
                 >
-                  Reset to default
+                  Reset to inherited
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => void handleSaveSubtitleAsProfileDefault(activeSubtitleSettings)}
+                >
+                  Save as profile default
                 </Button>
 
                 <Button
@@ -975,30 +1338,45 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             >
             <SubtitleEditor
               renderMode="settings-only"
-              settings={getSubtitleSettingsFor(activeSubtitleStyleKey)}
-              onSettingsChange={(newSettings) =>
-                handleVariantSubtitleChange(activeSubtitleStyleKey, newSettings)
-              }
+              settings={activeSubtitleSettings}
+              onSettingsChange={handleActiveSubtitleSettingsChange}
               showPreview={false}
               compact={true}
               userPresets={userSubtitlePresets}
               onApplyUserPreset={(preset) => {
-                if (preset.wordsPerSubtitle != null) setWordsPerSubtitle(preset.wordsPerSubtitle);
                 const presetSettings =
-                  activeSubtitleStyleKey === "A"
+                  activeGroupStyleKey === "A"
                     ? preset.settingsA ?? preset.settings
-                    : activeSubtitleStyleKey === "B"
+                    : activeGroupStyleKey === "B"
                       ? preset.settingsB ?? preset.settings
                       : preset.settings;
                 const merged = mergeSubtitleStylePreservingPlacement(
-                  getSubtitleSettingsFor(activeSubtitleStyleKey),
+                  activeSubtitleSettings,
                   presetSettings,
                 );
-                handleVariantSubtitleChange(activeSubtitleStyleKey, merged);
+                const scopedSettings = preset.wordsPerSubtitle != null
+                  ? {
+                      ...merged,
+                      wordsPerSubtitle: preset.wordsPerSubtitle,
+                    }
+                  : merged;
+                if (
+                  subtitleEditScope === "pipeline"
+                  && preset.wordsPerSubtitle != null
+                ) {
+                  setWordsPerSubtitle(preset.wordsPerSubtitle);
+                }
+                handleActiveSubtitleSettingsChange(scopedSettings);
               }}
               onDeleteUserPreset={async (preset) => {
                 const profileId = currentProfileIdRef.current;
                 if (!profileId) return;
+                if (subtitleRotation.presetIds.includes(preset.id)) {
+                  const confirmed = await confirmPipelineReassembly(
+                    `remove subtitle preset "${preset.name}" from the active rotation`,
+                  );
+                  if (!confirmed) return;
+                }
                 try {
                   await apiDelete(`/profiles/${profileId}/subtitle-presets/${preset.id}`);
                   setUserSubtitlePresets((prev) => prev.filter((item) => item.id !== preset.id));
@@ -1043,7 +1421,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
           }}
         >
           <Images className="size-3.5" />
-          Image Templates
+          Content Templates
         </button>
         <button
           type="button"
@@ -1074,14 +1452,118 @@ export function Step3Preview({ ctx }: { ctx: any }) {
         hidden={resourcePanel !== "image-templates"}
       >
         <InspectorSection
-          title="Image templates"
+          title="Timeline effects"
+          summary={timelineEffectScopeLabel}
+          defaultOpen
+        >
+          <div className="space-y-3" data-testid="step3-timeline-effects">
+            <label
+              htmlFor="timeline-effects-global"
+              className="flex cursor-pointer items-start gap-2 rounded-md border border-border/70 bg-muted/20 p-2.5"
+            >
+              <Checkbox
+                id="timeline-effects-global"
+                aria-label="Apply this effect to all images"
+                className="mt-0.5"
+                checked={timelineEffectScope === "all"}
+                disabled={!globalAttentionTimelinesReady || !globalAttentionEffect}
+                onCheckedChange={(checked) => {
+                  setTimelineEffectScope(checked === true ? "all" : "image");
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-foreground">
+                  Apply this effect to all images
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
+                  Applies the selected effect to every attention image in every variant.
+                </span>
+              </span>
+            </label>
+            <InspectorField
+              label="Apply effect to"
+              helper="Drag a selection box on empty timeline space, Ctrl/Cmd-click to add images, or Shift-click to select a range."
+            >
+              <Select
+                value={timelineEffectScope}
+                disabled={timelineEffectScope === "all"}
+                onValueChange={(value) => setTimelineEffectScope(value as TimelineEffectScope)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full text-xs"
+                  aria-label="Timeline effect scope"
+                  data-testid="timeline-effect-scope"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="image" disabled={!timelineEffectSelectionReady}>
+                    {timelineEffectSelectedLayers.length === 1 ? "Selected image" : "Selected images"}
+                    {timelineEffectSelectedLayers.length > 1
+                      ? ` · ${timelineEffectSelectedLayers.length}`
+                      : timelineEffectLayer
+                        ? ` · Image ${timelineEffectLayerIndex + 1}`
+                        : ""}
+                  </SelectItem>
+                  <SelectItem value="cue" disabled={!timelineEffectSelectionReady}>
+                    Selected block
+                    {timelineEffectCue ? ` · ${timelineEffectCue.layers.length} image${timelineEffectCue.layers.length === 1 ? "" : "s"}` : ""}
+                  </SelectItem>
+                  <SelectItem value="variant" disabled={!timelineEffectSelectionReady}>
+                    Selected variant
+                    {timelineEffectCard ? ` · ${timelineEffectCard.label}` : ""}
+                  </SelectItem>
+                  <SelectItem
+                    value="all"
+                    disabled={!globalAttentionTimelinesReady || !globalAttentionEffect}
+                  >
+                    All images · all variants
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </InspectorField>
+
+            {timelineEffectScopeReady && timelineEffectSummary ? (
+              <AttentionEffectControls
+                applied={timelineEffectSummary}
+                onAnimationChange={(animation) => {
+                  if (animation !== undefined) updateTimelineEffect({ animation });
+                }}
+                onEnterMsChange={(enterMs) => {
+                  if (enterMs !== undefined) updateTimelineEffect({ enterMs });
+                }}
+                effectLabel="Entrance effect"
+                helper={timelineEffectScope === "all"
+                  ? "Changes every attention image in every pipeline variant."
+                  : timelineEffectScope === "variant"
+                    ? `Changes every attention image in ${timelineEffectCard?.label ?? "the selected variant"}.`
+                    : timelineEffectScope === "cue"
+                      ? "Changes every image in the selected timeline block."
+                      : timelineEffectSelectedLayers.length === 1
+                        ? `Changes only Image ${timelineEffectLayerIndex + 1} in the selected block.`
+                        : `Changes only the ${timelineEffectSelectedLayers.length} selected images.`}
+                testIdPrefix="timeline-attention"
+              />
+            ) : (
+              <p className="text-[11px] text-muted-foreground" role="status">
+                {timelineEffectScope === "all"
+                  ? "Loading all variant timelines, or no attention images are available yet."
+                  : "Select an attention image block on a variant timeline to edit its effect."}
+              </p>
+            )}
+          </div>
+        </InspectorSection>
+
+        <InspectorSection
+          title="Content templates"
           summary={attentionApplySelection.templateId
             ? `${attentionApplySelection.assets.length} asset${attentionApplySelection.assets.length === 1 ? "" : "s"}`
             : "Not selected"}
           defaultOpen
         >
         <div className="space-y-3">
-        <p className="text-[11px] text-muted-foreground">Choose and apply a reusable image layout.</p>
+        <p className="text-[11px] text-muted-foreground">Choose and apply a reusable image or video layout.</p>
         <AttentionTemplatePicker
           selection={attentionApplySelection}
           onSelectionChange={(selection) => {
@@ -1315,12 +1797,35 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             className="min-w-0 space-y-3 min-[1280px]:flex min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:w-full min-[1280px]:flex-col min-[1280px]:gap-0 min-[1280px]:space-y-0 min-[1280px]:overflow-hidden"
             data-testid="step3-workspace"
           >
+            <div
+              className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-3 py-2 min-[1280px]:px-4"
+              data-testid="studio-scope-header"
+            >
+              <Badge variant="outline" data-testid="studio-preview-scope">
+                Previewing: {previewingLabel}
+              </Badge>
+              <Badge variant="outline" data-testid="studio-edit-scope">
+                Editing: {studioEditingLabel}
+              </Badge>
+              <Badge variant="secondary" data-testid="studio-render-scope">
+                Render: {selectedOutputIds.size} {selectedOutputIds.size === 1 ? "output" : "outputs"} selected
+              </Badge>
+              <span className="ml-auto text-[11px] text-muted-foreground" aria-live="polite">
+                {pipelineSaveState === "saving"
+                  ? "Saving pipeline snapshot…"
+                  : pipelineSaveState === "saved"
+                    ? "Pipeline snapshot saved"
+                    : pipelineSaveState === "error"
+                      ? "Pipeline snapshot save failed"
+                      : "Pipeline snapshot active"}
+              </span>
+            </div>
             <div className="flex shrink-0 items-center justify-between min-[1280px]:hidden">
               {/* "Back to Scripts" lives in the pipeline toolbar; don't repeat it here. */}
               <div>
                 <h2 className="font-heading text-2xl font-semibold">Preview & Select Variants</h2>
                 <p className="text-sm text-muted-foreground">
-                  {previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown
+                  {selectedOutputIds.size} {selectedOutputIds.size === 1 ? "output" : "outputs"} selected for render
                 </p>
               </div>
             </div>
@@ -1382,7 +1887,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         variantSubtitleOverrides={variantSubtitleOverrides}
                         getPreviewSubtitleSettingsFor={getPreviewSubtitleSettingsFor}
                         getPreviewSubtitleTextFor={getPreviewSubtitleTextFor}
-                        onPreviewCardChange={setActiveStyleKey}
+                        selectedCardKey={activeOutputKey}
+                        onPreviewCardChange={activateOutput}
                       />
                     </CardContent>
                     {attentionAndSourcesTabs}
@@ -1419,7 +1925,44 @@ export function Step3Preview({ ctx }: { ctx: any }) {
             <div className="grid grid-cols-1 gap-3 min-[1280px]:gap-px min-[1280px]:bg-border min-[1480px]:grid-cols-2">
               {previewCards.map((card) => {
                 const preview = previews[card.key];
-                if (!preview) return null;
+                if (!preview) {
+                  return (
+                    <Card
+                      key={card.outputId}
+                      variant="workspace"
+                      className="overflow-hidden min-[1280px]:pt-3 min-[1280px]:pb-0"
+                      data-testid={`missing-preview-${card.key}`}
+                    >
+                      <CardHeader>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={selectedOutputIds.has(card.outputId)}
+                            onCheckedChange={() => toggleOutput(card.outputId)}
+                            aria-label={`Select ${card.label} for render`}
+                          />
+                          <CardTitle className="truncate text-lg">
+                            {card.label}
+                          </CardTitle>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3 pb-4">
+                        <p className="text-sm text-muted-foreground">
+                          This output is selected but does not have a preview yet.
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => requestPipelineReassembly(
+                            "missing previews",
+                            () => undefined,
+                          )}
+                        >
+                          Generate missing previews
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                }
                 const subtitleAssignment = resolveSubtitleAssignmentForCard(
                   subtitleRotation,
                   variantTemplateSelections,
@@ -1445,8 +1988,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         <div className="min-w-0 space-y-1.5">
                           <div className="flex items-center gap-2">
                             <Checkbox
-                              checked={selectedVariants.has(card.baseIndex)}
-                              onCheckedChange={() => toggleVariant(card.baseIndex)}
+                              checked={selectedOutputIds.has(card.outputId)}
+                              onCheckedChange={() => toggleOutput(card.outputId)}
+                              aria-label={`Select ${card.label} for render`}
                             />
                             <CardTitle className="truncate text-lg">
                               {card.label}
@@ -1463,32 +2007,30 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           </Badge>
                         </div>
                         <div className="flex items-center gap-2">
-                          {assignedTemplate && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 gap-1 px-2 text-xs"
-                                onClick={() => {
-                                  setEditingVariantKey(card.key);
-                                  setVariantSubtitleDraft(getPreviewSubtitleSettingsFor(card));
-                                }}
-                                title={`Override subtitles for ${card.label}`}
-                              >
-                                <Pencil className="size-3.5" />
-                                Override
-                              </Button>
-                              {hasVariantSubtitleOverride && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 px-2 text-xs text-muted-foreground"
-                                  onClick={() => handleResetVariantTemplateOverride(card.key)}
-                                >
-                                  Reset to template
-                                </Button>
-                              )}
-                            </>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 gap-1 px-2 text-xs"
+                            onClick={() => {
+                              activateOutput(card);
+                              setSubtitleEditTarget(`output:${card.key}`);
+                              setEditingVariantKey(card.key);
+                              setVariantSubtitleDraft(getPreviewSubtitleSettingsFor(card));
+                            }}
+                            title={`Override subtitles for ${card.label}`}
+                          >
+                            <Pencil className="size-3.5" />
+                            Override
+                          </Button>
+                          {hasVariantSubtitleOverride && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs text-muted-foreground"
+                              onClick={() => handleResetVariantTemplateOverride(card.key)}
+                            >
+                              Reset to inherited
+                            </Button>
                           )}
                           <Button
                             variant="ghost"
@@ -1507,7 +2049,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                             variant="ghost"
                             size="icon"
                             className="size-8"
-                            onClick={() => setMaximizedKey(card.key)}
+                            onClick={() => {
+                              activateOutput(card);
+                              setMaximizedKey(card.key);
+                            }}
                             title="Maximize editor — full-screen timeline for this variant"
                           >
                             <Maximize2 className="size-4" />
@@ -1518,7 +2063,11 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                             className="size-8"
                             onClick={() => handleRegenerateVariantAudio(card.baseIndex, card.key, card.visualVersion)}
                             disabled={regeneratingVariantAudio[card.baseIndex]}
-                            title="Regenerate voiceover"
+                            title={
+                              metaMultiplication
+                                ? "Regenerate this script voiceover and rebuild A + B"
+                                : "Regenerate this script voiceover"
+                            }
                           >
                             {regeneratingVariantAudio[card.baseIndex] ? (
                               <Loader2 className="size-4 animate-spin" />
@@ -1533,6 +2082,14 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3 min-[1280px]:px-4">
+                      {ttsResults[card.baseIndex]?.stale && (
+                        <Alert variant="destructive">
+                          <AlertCircle className="size-4" />
+                          <AlertDescription>
+                            Voice settings changed. Regenerate this script&apos;s voice-over before rendering.
+                          </AlertDescription>
+                        </Alert>
+                      )}
                       {preview.variety_warning && (
                         <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
                           <AlertCircle className="size-4 text-amber-600" />
@@ -1540,8 +2097,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         </Alert>
                       )}
                       {/* Full timeline editor — uses this variant's effective subtitle style */}
+                      <div
+                        className="contents"
+                        onPointerDownCapture={() => activateOutput(card)}
+                        onFocusCapture={() => activateOutput(card)}
+                      >
                       <TimelineEditor
-                        matches={preview.matches}
+                        matches={preview.matches ?? []}
                         audioDuration={preview.audio_duration}
                         introOffsetSec={preview.intro_offset_sec ?? 0}
                         introSegments={preview.intro_segments ?? []}
@@ -1551,11 +2113,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
+                        scriptId={card.scriptId}
                         subtitleSettings={effectiveSubtitleSettings}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                         attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
                         onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
+                        onAttentionSelectionChange={(selection) => {
+                          handleTimelineAttentionSelection(card.key, selection);
+                        }}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
                         onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                         defaultTransition={preview.defaultTransition ?? null}
@@ -1622,6 +2188,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           );
                         })()}
                       />
+                      </div>
                     </CardContent>
                   </Card>
                 );
@@ -1664,7 +2231,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         );
                       }}
                     >
-                      Reset to template
+                      Reset to inherited
                     </Button>
                   )}
                   <Button variant="outline" onClick={() => setEditingVariantKey(null)}>Cancel</Button>
@@ -1736,6 +2303,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   music={previews[previewVariant]?.music ?? null}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
+                  scriptId={activeCard.scriptId}
+                  outputId={activeCard.outputId}
                   visualVersion={activeCard.visualVersion}
                   title={activeCard.label}
                   profileId={currentProfile.id}
@@ -1743,7 +2312,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   applyMetaSubtitleStyle={false}
                   sourceVideoIds={selectedSourceIdsArray}
                   minSegmentDuration={minSegmentDuration}
-                  wordsPerSubtitle={getWordsPerSubtitleForVariant(activeCard.baseIndex)}
+                  wordsPerSubtitle={getWordsPerSubtitleForVariant(
+                    activeCard.baseIndex,
+                    activeCard.key,
+                  )}
                   ultraRapidIntro={ultraRapidIntro}
                   interstitialSlides={interstitialSlides[previewVariant]}
                   attentionTimeline={attentionTimelines[previewVariant]}
@@ -1831,7 +2403,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                         <div className="min-h-0 flex-1 overflow-hidden">
                           <TimelineEditor
                           displayMode="full"
-                          matches={preview.matches}
+                          matches={preview.matches ?? []}
                           audioDuration={preview.audio_duration}
                           introOffsetSec={preview.intro_offset_sec ?? 0}
                           introSegments={preview.intro_segments ?? []}
@@ -1841,11 +2413,15 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                           profileId={currentProfile?.id}
                           pipelineId={pipelineId ?? undefined}
                           variantIndex={card.baseIndex}
+                          scriptId={card.scriptId}
                           subtitleSettings={getPreviewSubtitleSettingsFor(card)}
                           interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                           onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                           attentionTimeline={attentionTimelines[card.key] ?? { revision: 0, cues: [] }}
                           onAttentionTimelineChange={getAttentionTimelineChangeHandler(card.key)}
+                          onAttentionSelectionChange={(selection) => {
+                            handleTimelineAttentionSelection(card.key, selection);
+                          }}
                           onMatchesChange={getMatchesChangeHandler(card.key)}
                           onVideoTimelineChange={getVideoTimelineChangeHandler(card.key)}
                           defaultTransition={preview.defaultTransition ?? null}
@@ -1907,7 +2483,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               );
             })()}
 
-            {/* "Save as preset" dialog — captures shared default + any A/B overrides. */}
+            {/* "Save as preset" captures the effective value of the visible edit scope. */}
             <Dialog
               open={savePresetDialogOpen}
               onOpenChange={(open) => {
@@ -1922,8 +2498,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 <DialogHeader>
                   <DialogTitle>Save subtitle preset</DialogTitle>
                   <DialogDescription>
-                    Saves the shared default plus any explicit Meta A / Meta B
-                    overrides. Applying the preset restores all of them at once.
+                    {subtitleEditScope === "pipeline"
+                      ? "Saves the effective pipeline style plus explicit A / B group variations."
+                      : `Saves the effective ${subtitleEditingLabel.toLocaleLowerCase()} style as one reusable preset.`}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-2">
@@ -1959,7 +2536,10 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     Cancel
                   </Button>
                   <Button
-                    onClick={handleSubmitSavePreset}
+                    onClick={() => void handleSubmitSavePreset(
+                      activeSubtitleSettings,
+                      subtitleEditScope === "pipeline",
+                    )}
                     disabled={savePresetSubmitting || !savePresetName.trim()}
                   >
                     {savePresetSubmitting && <Loader2 className="size-4 mr-2 animate-spin" />}
@@ -1982,7 +2562,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 variant="cta"
                 size="lg"
                 className="w-full"
-                disabled={selectedVariants.size === 0}
+                disabled={selectedOutputIds.size === 0}
                 onClick={() => setStep3Mode("export")}
                 data-testid="step3-go-to-export"
               >

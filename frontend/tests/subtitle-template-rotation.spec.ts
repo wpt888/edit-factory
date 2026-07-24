@@ -377,7 +377,13 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
       if (request.method() === "PUT") {
         const body = request.postDataJSON() as Record<string, unknown>;
         rotationWrites.push(body);
-        await route.fulfill({ json: body });
+        const expectedRevision = Number(body.expected_revision);
+        await route.fulfill({
+          json: {
+            ...body,
+            revision: Number.isInteger(expectedRevision) ? expectedRevision + 1 : 1,
+          },
+        });
         return;
       }
       await route.fulfill({
@@ -385,6 +391,17 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
           enabled: true,
           presetIds: ["punchy", "minimal", "editorial"],
           variantTemplates: { "3": "minimal" },
+        },
+      });
+      return;
+    }
+    if (path.endsWith(`/pipeline/${PIPELINE_ID}/template-settings`) && request.method() === "PUT") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      const expectedRevision = Number(body.expected_revision);
+      await route.fulfill({
+        json: {
+          status: "saved",
+          revision: Number.isInteger(expectedRevision) ? expectedRevision + 1 : 1,
         },
       });
       return;
@@ -476,6 +493,7 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
   await expect(legacyAssignments).toContainText("1 legacy assignment takes precedence");
   const writeCountBeforeLegacyReset = rotationWrites.length;
   await legacyAssignments.getByRole("button", { name: "Use template for all outputs" }).click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeLegacyReset + 1);
   expect(rotationWrites.at(-1)).toMatchObject({
     enabled: true,
@@ -513,6 +531,7 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
 
   const rotationSwitch = rotationPanel.getByRole("switch", { name: "Enable subtitle template rotation" });
   await rotationSwitch.click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect(rotationSwitch).not.toBeChecked();
   await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(3);
   await expect(rotationPanel.getByTestId("subtitle-rotation-summary")).toHaveText("3 styles ready · off");
@@ -523,6 +542,7 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
 
   const writeCountBeforeRotationEnable = rotationWrites.length;
   await rotationSwitch.click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect.poll(() => rotationWrites.length).toBe(writeCountBeforeRotationEnable + 1);
   expect(rotationWrites.at(-1)).toMatchObject({
     enabled: true,
@@ -546,6 +566,7 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
   await styleDialog.getByLabel("Style name").fill("Fresh captions");
   await styleDialog.getByLabel("Words per subtitle").fill("5");
   await styleDialog.getByRole("button", { name: "Save style" }).click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(4);
   await expect(rotationPanel.getByTestId("subtitle-rotation-row").last()).toContainText("Fresh captions");
   expect(templateWrites.at(-1)?.styles).toHaveLength(4);
@@ -556,11 +577,13 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
   await rotationPanel.getByRole("button", { name: "Edit Fresh captions" }).click();
   await page.getByRole("dialog", { name: "Edit subtitle style" }).getByLabel("Style name").fill("Fresh edited");
   await page.getByRole("dialog", { name: "Edit subtitle style" }).getByRole("button", { name: "Save style" }).click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect(rotationPanel.getByTestId("subtitle-rotation-row").last()).toContainText("Fresh edited");
 
   await rotationPanel.getByRole("button", { name: "Delete Fresh edited" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("Delete subtitle style?");
   await page.getByRole("button", { name: "Delete style", exact: true }).click();
+  await page.getByRole("button", { name: "Update 4 outputs", exact: true }).click();
   await expect(rotationPanel.getByTestId("subtitle-rotation-row")).toHaveCount(3);
   expect(templateWrites.at(-1)?.styles).toHaveLength(3);
 
@@ -569,8 +592,11 @@ test("Step 3 edits selected template styles inline", async ({ page }) => {
   await subtitleSettingsSections.getByRole("button", { name: /^Subtitle style/ }).click();
   await page.getByTestId("step3-preview-timing").getByRole("button", { name: /^Preview Timing/ }).click();
   await page.getByTestId("step3-safe-zone-settings").getByRole("button", { name: /^Safe Zone/ }).click();
-  await attentionCard.getByRole("button", { name: /^Image templates/ }).click();
-  await page.getByTestId("step3-sources").getByRole("button", { name: /^Sources/ }).click();
+  await attentionCard.getByRole("button", { name: /^Content templates/ }).click();
+  const resourceTabs = page.getByRole("tablist", { name: "Preview resource panels" });
+  await resourceTabs.getByRole("tab", { name: /^Sources/ }).click();
+  await expect(page.getByTestId("step3-source-inventory")).toBeVisible();
+  await resourceTabs.getByRole("tab", { name: /^Content Templates/ }).click();
   await expect(page.getByTestId("subtitle-template-controls")).toBeHidden();
   await expect(page.getByTestId("subtitle-style-variant-editor")).toBeHidden();
   await expect(page.getByTestId("step3-preview-timing").getByText("Pacing", { exact: true })).toBeHidden();

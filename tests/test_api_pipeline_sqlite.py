@@ -41,12 +41,18 @@ def _assert_not_db_unavailable(r):
 def _seed_pipeline(repo, profile_id: str, **overrides) -> dict:
     """Insert a minimal editai_pipelines row via repo.upsert_pipeline (Plan 81-01 method)."""
     pipeline_id = overrides.pop("id", None) or f"test-pipeline-{uuid.uuid4().hex[:8]}"
+    scripts = overrides.pop("scripts", ["test script"])
+    script_ids = overrides.pop(
+        "script_ids",
+        [f"script_{uuid.uuid4().hex}" for _ in scripts],
+    )
     data = {
         "id": pipeline_id,
         "profile_id": profile_id,
         "name": overrides.pop("name", "Test Pipeline"),
         "idea": overrides.pop("idea", "test idea"),
-        "scripts": overrides.pop("scripts", ["test script"]),
+        "scripts": scripts,
+        "script_ids": script_ids,
         "tts_previews": overrides.pop("tts_previews", {}),
         "previews": overrides.pop("previews", {}),
         "render_jobs": overrides.pop("render_jobs", {}),
@@ -108,9 +114,16 @@ def test_pipeline_update_scripts_returns_non_503(sqlite_backend):
     """PUT /{pipeline_id}/scripts — Plan 81-01 site #12."""
     client, repo, profile_id = sqlite_backend
     p = _seed_pipeline(repo, profile_id)
+    current_id = p["script_ids"][0]
+    added_id = f"script_{uuid.uuid4().hex}"
     r = client.put(
         f"/api/v1/pipeline/{p['id']}/scripts",
-        json={"scripts": ["new script 1", "new script 2"]},
+        json={
+            "scripts": ["new script 1", "new script 2"],
+            "script_ids": [current_id, added_id],
+            "expected_script_ids": [current_id],
+            "expected_revision": int(p.get("settings_revision") or 0),
+        },
         headers=HEADERS,
     )
     _assert_not_db_unavailable(r)
@@ -123,7 +136,11 @@ def test_pipeline_script_names_are_saved_and_restored(sqlite_backend):
 
     update = client.patch(
         f"/api/v1/pipeline/{p['id']}/script-names",
-        json={"script_names": ["Rain hook", "Product details"]},
+        json={
+            "script_names": ["Rain hook", "Product details"],
+            "script_ids": p["script_ids"],
+            "expected_revision": int(p.get("settings_revision") or 0),
+        },
         headers=HEADERS,
     )
     assert update.status_code == 200
@@ -134,6 +151,57 @@ def test_pipeline_script_names_are_saved_and_restored(sqlite_backend):
     )
     assert restored.status_code == 200
     assert restored.json()["script_names"] == ["Rain hook", "Product details"]
+
+
+def test_pipeline_script_save_uses_snapshot_cas_atomically(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    script_id = f"script_{uuid.uuid4().hex}"
+    p = _seed_pipeline(
+        repo,
+        profile_id,
+        scripts=["original"],
+        script_ids=[script_id],
+        settings_revision=0,
+        template_settings={
+            "snapshot": {"revision": 0},
+            "content": {
+                "scripts": [
+                    {"id": script_id, "name": "Script 1", "text": "original"},
+                ],
+            },
+        },
+    )
+
+    first = client.put(
+        f"/api/v1/pipeline/{p['id']}/scripts",
+        headers=HEADERS,
+        json={
+            "scripts": ["first tab wins"],
+            "script_ids": [script_id],
+            "expected_script_ids": [script_id],
+            "expected_revision": 0,
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["revision"] == 1
+
+    stale = client.put(
+        f"/api/v1/pipeline/{p['id']}/scripts",
+        headers=HEADERS,
+        json={
+            "scripts": ["stale tab must not overwrite"],
+            "script_ids": [script_id],
+            "expected_script_ids": [script_id],
+            "expected_revision": 0,
+        },
+    )
+    assert stale.status_code == 409
+
+    saved = repo.get_pipeline(p["id"])
+    assert saved["scripts"] == ["first tab wins"]
+    assert saved["settings_revision"] == 1
+    assert saved["template_settings"]["snapshot"]["revision"] == 1
+    assert saved["template_settings"]["content"]["scripts"][0]["text"] == "first tab wins"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -151,7 +219,7 @@ def test_pipeline_approve_tts_returns_non_503(sqlite_backend):
     )
     r = client.patch(
         f"/api/v1/pipeline/{p['id']}/tts-approve/0",
-        json={"approved": True},
+        json={"approved": True, "script_id": p["script_ids"][0]},
         headers=HEADERS,
     )
     _assert_not_db_unavailable(r)
@@ -172,7 +240,7 @@ def test_pipeline_adopt_library_tts_returns_non_503(sqlite_backend):
     })
     r = client.post(
         f"/api/v1/pipeline/tts-from-library/{p['id']}/0",
-        json={"asset_id": asset["id"]},
+        json={"asset_id": asset["id"], "script_id": p["script_ids"][0]},
         headers=HEADERS,
     )
     _assert_not_db_unavailable(r)
@@ -197,7 +265,12 @@ def test_pipeline_check_render_skip_returns_non_503(sqlite_backend):
     )
     r = client.post(
         f"/api/v1/pipeline/check-render/{p['id']}",
-        json={"variant_indices": [0], "preset_name": "TikTok"},
+        json={
+            "variant_indices": [0],
+            "output_keys": ["0"],
+            "output_ids": {"0": f"{p['script_ids'][0]}:default"},
+            "preset_name": "TikTok",
+        },
         headers=HEADERS,
     )
     _assert_not_db_unavailable(r)
@@ -228,6 +301,7 @@ def test_pipeline_tts_returns_non_503(sqlite_backend, monkeypatch, tmp_path):
     r = client.post(
         f"/api/v1/pipeline/tts/{p['id']}/0",
         json={
+            "script_id": p["script_ids"][0],
             "elevenlabs_model": "eleven_flash_v2_5",
             "voice_id": "test-voice",
             "words_per_subtitle": 2,
@@ -264,6 +338,8 @@ def test_pipeline_render_preview_returns_non_503(sqlite_backend, monkeypatch, tm
         f"/api/v1/pipeline/render-preview/{p['id']}/0",
         json={
             "match_overrides": [],
+            "script_id": p["script_ids"][0],
+            "output_id": f"{p['script_ids'][0]}:default",
             "min_segment_duration": 3.0,
             "words_per_subtitle": 2,
         },
@@ -294,7 +370,12 @@ def test_pipeline_render_returns_non_503(sqlite_backend, monkeypatch):
     )
     r = client.post(
         f"/api/v1/pipeline/render/{p['id']}",
-        json={"variant_indices": [0], "preset_name": "TikTok"},
+        json={
+            "variant_indices": [0],
+            "output_keys": ["0"],
+            "output_ids": {"0": f"{p['script_ids'][0]}:default"},
+            "preset_name": "TikTok",
+        },
         headers=HEADERS,
     )
     _assert_not_db_unavailable(r)
@@ -381,6 +462,8 @@ def test_pipeline_subtitle_frame_preview_returns_non_503(sqlite_backend):
     r = client.post(
         f"/api/v1/pipeline/subtitle-frame-preview/{p['id']}/0",
         json={
+            "script_id": p["script_ids"][0],
+            "output_id": f"{p['script_ids'][0]}:default",
             "subtitle_settings": {"fontFamily": "Anton", "fontSize": 54},
             "timestamp": 2.0,
             "sample_text": "test text",
@@ -392,3 +475,20 @@ def test_pipeline_subtitle_frame_preview_returns_non_503(sqlite_backend):
     # 400 expected — source video not on disk (the database lookup succeeded,
     # which is what the dual gate cares about). Not 503.
     assert r.status_code in (200, 400, 404, 500)
+
+
+def test_pipeline_subtitle_frame_preview_rejects_stale_output_identity(sqlite_backend):
+    client, repo, profile_id = sqlite_backend
+    p = _seed_pipeline(repo, profile_id)
+
+    response = client.post(
+        f"/api/v1/pipeline/subtitle-frame-preview/{p['id']}/0",
+        headers=HEADERS,
+        json={
+            "script_id": p["script_ids"][0],
+            "output_id": f"{p['script_ids'][0]}:B",
+            "subtitle_settings": {"enabled": True},
+        },
+    )
+
+    assert response.status_code == 409

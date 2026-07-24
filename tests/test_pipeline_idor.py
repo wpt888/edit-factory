@@ -25,6 +25,7 @@ def test_profile_cannot_access_or_mutate_another_profiles_pipeline(monkeypatch):
         "pipeline_id": PIPELINE_ID,
         "profile_id": "profile-a",
         "scripts": ["private script"],
+        "script_ids": ["script_private_001"],
         "render_jobs": {},
         "preview_renders": {},
     }
@@ -42,7 +43,15 @@ def test_profile_cannot_access_or_mutate_another_profiles_pipeline(monkeypatch):
     requests = [
         ("get", f"/pipeline/status/{PIPELINE_ID}", None),
         ("get", f"/pipeline/scripts/{PIPELINE_ID}", None),
-        ("get", f"/pipeline/preview-status/{PIPELINE_ID}/0", None),
+        (
+            "get",
+            (
+                f"/pipeline/preview-status/{PIPELINE_ID}/0"
+                "?script_id=script_private_001"
+                "&output_id=script_private_001%3Adefault"
+            ),
+            None,
+        ),
         ("patch", f"/pipeline/{PIPELINE_ID}/name", {"name": "stolen"}),
         (
             "post",
@@ -52,7 +61,12 @@ def test_profile_cannot_access_or_mutate_another_profiles_pipeline(monkeypatch):
         (
             "put",
             f"/pipeline/{PIPELINE_ID}/scripts",
-            {"scripts": ["stolen script"]},
+            {
+                "scripts": ["stolen script"],
+                "script_ids": ["script_private_001"],
+                "expected_script_ids": ["script_private_001"],
+                "expected_revision": 0,
+            },
         ),
         ("delete", f"/pipeline/{PIPELINE_ID}", None),
     ]

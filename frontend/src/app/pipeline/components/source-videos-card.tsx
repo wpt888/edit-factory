@@ -25,8 +25,16 @@ import {
 import { formatDuration } from "../pipeline-utils";
 import { WorkspacePanelHeader } from "./workspace-panel-header";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspace?: boolean }) {
+export function SourceVideosCard({
+  ctx,
+  workspace = false,
+  compact = false,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any;
+  workspace?: boolean;
+  compact?: boolean;
+}) {
   const mediaApiUrl = useApiUrl();
   const {
     sourceVideos,
@@ -59,7 +67,12 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
         title="Source Videos"
         data-testid="source-videos-header"
       />
-      <CardContent className={workspace ? "space-y-3 min-[1280px]:py-4" : "space-y-3 pt-4"}>
+      <CardContent className={workspace
+        ? "space-y-3 min-[1280px]:py-4"
+        : compact
+          ? "mx-auto w-full max-w-6xl space-y-3 px-4 pt-4 sm:px-6"
+          : "space-y-3 pt-4"
+      }>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardDescription>
             {sourceVideos.length <= 1
@@ -239,7 +252,7 @@ export function SourceVideosCard({ ctx, workspace = false }: { ctx: any; workspa
                 </button>
               </div>
             </div>
-            <div className="max-h-[400px] overflow-y-auto pr-1">
+            <div className={`${workspace || !compact ? "max-h-[400px]" : "max-h-64"} overflow-y-auto pr-1`}>
               {sourceVideoViewMode === "list" ? (
                 <div className="space-y-2">
                   {sourceVideos

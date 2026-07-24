@@ -47,6 +47,8 @@ import {
   MatchPreview,
   PreviewData,
   PreviewKey,
+  ScriptId,
+  OutputId,
   StyleKey,
   toStyleKey,
   PreviewCard,
@@ -62,7 +64,14 @@ import {
   META_SUBTITLE_STYLE_BY_VERSION,
 } from "./pipeline-types";
 import {
-  isPipelineTemplateSettings,
+  buildOutputId,
+  ensureScriptIds,
+  outputBelongsToScript,
+  parseOutputId,
+  remapPreviewRecord,
+} from "./output-identity";
+import {
+  normalizePipelineTemplateSettings,
   pipelineTemplateFilename,
   type PipelineTemplateDocument,
   type PipelineTemplateImportResponse,
@@ -133,10 +142,96 @@ type TtsResult = {
   srt_content?: string;
   script_word_count?: number;
   srt_word_count?: number;
+  elevenlabs_model?: string;
+  voice_id?: string;
+  voice_settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    speed?: number;
+    use_speaker_boost?: boolean;
+  };
+  source?: "generated" | "library";
 };
 
 const isActiveAsyncJob = (job?: Partial<AsyncJobState> | null) =>
   job?.status === "queued" || job?.status === "processing";
+
+const hasOwn = (value: object, key: PropertyKey): boolean =>
+  Object.prototype.hasOwnProperty.call(value, key);
+
+function mergeSnapshotTimelineIntoPreview(
+  previewKey: PreviewKey,
+  preview: PreviewData,
+  timeline?: PipelineTemplateSettings["timeline"],
+): PreviewData {
+  if (!timeline) return preview;
+  const merged = { ...preview };
+  const matches = timeline.matches ?? {};
+  const compositions = timeline.compositions ?? {};
+  const defaultTransitions = timeline.defaultTransitions ?? {};
+  const music = timeline.music ?? {};
+  if (hasOwn(matches, previewKey)) {
+    merged.matches = matches[previewKey] ?? [];
+  }
+  if (hasOwn(compositions, previewKey)) {
+    merged.video_timeline = compositions[previewKey] ?? [];
+  }
+  if (hasOwn(defaultTransitions, previewKey)) {
+    merged.defaultTransition = defaultTransitions[previewKey] ?? null;
+  }
+  if (hasOwn(music, previewKey)) {
+    merged.music = music[previewKey] ?? null;
+  }
+  return merged;
+}
+
+function remapPendingTemplateTimeline(
+  timeline: PipelineTemplateSettings["timeline"],
+  oldScriptIds: readonly ScriptId[],
+  newScriptIds: readonly ScriptId[],
+): PipelineTemplateSettings["timeline"] {
+  const remap = <T,>(record: Record<PreviewKey, T> | undefined) => (
+    remapPreviewRecord(
+      record ?? {},
+      oldScriptIds,
+      newScriptIds,
+    ) as Record<PreviewKey, T>
+  );
+  const survivingIds = new Set(newScriptIds);
+  const selectedVariantIndices = (timeline.selectedVariantIndices ?? [])
+    .flatMap((index) => {
+      const scriptId = oldScriptIds[index];
+      if (!scriptId) return [];
+      const nextIndex = newScriptIds.indexOf(scriptId);
+      return nextIndex >= 0 ? [nextIndex] : [];
+    });
+  const selectedOutputIds = (timeline.selectedOutputIds ?? []).filter(
+    (outputId) => {
+      const parsed = parseOutputId(outputId);
+      return Boolean(parsed && survivingIds.has(parsed.scriptId));
+    },
+  );
+  const activeOutput = timeline.activeOutputId
+    ? parseOutputId(timeline.activeOutputId)
+    : null;
+  return {
+    ...timeline,
+    selectedVariantIndices,
+    selectedOutputIds,
+    activeOutputId:
+      activeOutput && survivingIds.has(activeOutput.scriptId)
+        ? timeline.activeOutputId
+        : null,
+    matches: remap(timeline.matches),
+    compositions: remap(timeline.compositions),
+    defaultTransitions: remap(timeline.defaultTransitions),
+    music: remap(timeline.music),
+    interstitialSlides: remap(timeline.interstitialSlides),
+    attentionTimelines: remap(timeline.attentionTimelines),
+    variantThumbnails: remap(timeline.variantThumbnails),
+  };
+}
 
 export default function PipelinePageWrapper() {
   return (
@@ -233,6 +328,9 @@ function PipelinePage() {
     clearHistory();
   }, [pipelineId, clearHistory]);
   const [scripts, setScripts] = useState<string[]>([]);
+  const [scriptIds, setScriptIds] = useState<ScriptId[]>([]);
+  const scriptIdsRef = useRef(scriptIds);
+  scriptIdsRef.current = scriptIds;
   const [scriptNames, setScriptNames] = useState<string[]>([]);
   const [approvedScripts, setApprovedScripts] = useState<Set<number>>(new Set());
   const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
@@ -282,6 +380,7 @@ function PipelinePage() {
 
   // Step 3: Preview
   const [previewVariant, setPreviewVariant] = useState<PreviewKey | null>(null);
+  const [activeOutputKey, setActiveOutputKey] = useState<PreviewKey | null>(null);
   const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<PreviewKey, PreviewData>>({});
   // Always-current mirror for stable per-key handlers (composition/default saves).
@@ -325,11 +424,11 @@ function PipelinePage() {
     audioFadeOut: 0.0,
   });
   const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
-  // BUG-FE-25: Initialize as empty to avoid stale defaults; the sync useEffect below populates it
-  const voiceSettingsValuesRef = useRef<Record<string, unknown>>({});
+  const [voiceProfileSaveState, setVoiceProfileSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
+  const [selectedOutputIds, setSelectedOutputIds] = useState<Set<OutputId>>(new Set());
   const [isRendering, setIsRendering] = useState(false);
   const [isResettingUsage, setIsResettingUsage] = useState(false);
   const [variantStatuses, setVariantStatuses] = useState<VariantStatus[]>([]);
@@ -353,6 +452,7 @@ function PipelinePage() {
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [historyScripts, setHistoryScripts] = useState<string[]>([]);
+  const [historyScriptIds, setHistoryScriptIds] = useState<ScriptId[]>([]);
   const [historyScriptNames, setHistoryScriptNames] = useState<string[]>([]);
   const [historyScriptsLoading, setHistoryScriptsLoading] = useState(false);
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
@@ -363,6 +463,7 @@ function PipelinePage() {
   const [historyContextProducts, setHistoryContextProducts] = useState<ContextProduct[]>([]);
   const [historyAttentionSelection, setHistoryAttentionSelection] = useState<AttentionSelection | null>(null);
   const [historyTemplateSettings, setHistoryTemplateSettings] = useState<PipelineTemplateSettings | null>(null);
+  const [historySettingsRevision, setHistorySettingsRevision] = useState(0);
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
@@ -384,6 +485,7 @@ function PipelinePage() {
     confirmLabel: string;
     variant: "destructive" | "default";
     onConfirm: () => void;
+    onCancel?: () => void;
     loading?: boolean;
   }>({ open: false, title: "", description: "", confirmLabel: "", variant: "default", onConfirm: () => {} });
 
@@ -416,6 +518,12 @@ function PipelinePage() {
   const [regeneratingScript, setRegeneratingScript] = useState<Record<number, boolean>>({});
   const [regeneratingAllScripts, setRegeneratingAllScripts] = useState(false);
   const [regeneratingAllScriptsIndex, setRegeneratingAllScriptsIndex] = useState<number | null>(null);
+  const hasActiveTtsJobs = Object.values(ttsResults).some((result) => result.generating);
+  const voiceRegenerationActive = (
+    regeneratingAll
+    || hasActiveTtsJobs
+    || Object.values(regeneratingVariantAudio).some(Boolean)
+  );
   const regenerateScriptsAbortRef = useRef<AbortController | null>(null);
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const [ttsAudioProgress, setTtsAudioProgress] = useState(0);
@@ -438,6 +546,8 @@ function PipelinePage() {
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scriptNameSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scriptStructureMutationPendingRef = useRef(false);
+  const scriptStructureEpochRef = useRef(0);
 
   // TTS library duplicate check debounce timer
   const ttsLibraryCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -451,6 +561,7 @@ function PipelinePage() {
     segments_count: number;
   }>>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const sourceSelectionChangedByUserRef = useRef(false);
   const selectedSourceIdsRef = useRef(selectedSourceIds); // Bug #120: ref for async callbacks
   selectedSourceIdsRef.current = selectedSourceIds;
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
@@ -465,7 +576,7 @@ function PipelinePage() {
   const pipelineIdRef = useRef<string | null>(null);
   // Always-current ref to handlePreviewAll, so the debounced assembly-settings
   // re-fetch (scheduleReassemblePreviews) never closes over stale state.
-  const handlePreviewAllRef = useRef<(() => Promise<void>) | null>(null);
+  const handlePreviewAllRef = useRef<((options?: { preserveRenderSelection?: boolean }) => Promise<void>) | null>(null);
   // initialSourceSelectionDone ref removed — no longer auto-selecting source videos
 
   // Product groups for tag insertion (fetched when source videos are selected)
@@ -504,9 +615,7 @@ function PipelinePage() {
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const [subtitleSaveState, setSubtitleSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subtitleSavedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-Meta-version subtitle style overrides. Keyed by StyleKey ("A", "B",
   // "default"). Style is shared across ALL script variants under the same
@@ -545,14 +654,27 @@ function PipelinePage() {
   const [savePresetSubmitting, setSavePresetSubmitting] = useState(false);
   const [savePresetError, setSavePresetError] = useState<string | null>(null);
   const [templateTransferBusy, setTemplateTransferBusy] = useState<"export" | "import" | null>(null);
+  const workspaceSnapshotRevisionRef = useRef(0);
+  const workspaceSnapshotTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceSnapshotInFlightRef = useRef<Promise<void> | null>(null);
+  const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const [pipelineSaveState, setPipelineSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const applyPipelineTemplateSettings = useCallback((
     settings: PipelineTemplateSettings,
     targetPipelineId?: string,
     restoreTimelineBindings = true,
+    authoritativeScriptIds?: readonly string[],
   ) => {
     const { generation, content, voice, assembly, timeline, subtitles, render } = settings;
-    activeTemplatePipelineIdRef.current = targetPipelineId || pipelineIdRef.current;
+    const snapshotPipelineId = targetPipelineId || pipelineIdRef.current;
+    const snapshotRevision = settings.snapshot?.revision ?? 0;
+    workspaceSnapshotRevisionRef.current =
+      snapshotPipelineId
+      && activeTemplatePipelineIdRef.current !== snapshotPipelineId
+        ? snapshotRevision
+        : Math.max(workspaceSnapshotRevisionRef.current, snapshotRevision);
+    activeTemplatePipelineIdRef.current = snapshotPipelineId;
     setPipelineName(generation.name || "Imported template");
     setIdea(generation.idea || "");
     setContext(generation.context || "");
@@ -563,7 +685,27 @@ function PipelinePage() {
     setCodexModel(generation.codexModel || DEFAULT_CODEX_MODEL);
     setAiInstructions(generation.aiInstructions || "");
 
-    setScripts((content.scripts || []).map((script) => script.text));
+    const restoredScripts = (content.scripts || []).map((script) => script.text);
+    const embeddedScriptIds = (content.scripts || []).map((script) => script.id || "");
+    const restoredScriptIds = ensureScriptIds(
+      authoritativeScriptIds?.length === restoredScripts.length
+        ? authoritativeScriptIds
+        : embeddedScriptIds,
+      restoredScripts.length,
+    );
+    const restoreOutputId = (value: OutputId): OutputId | null => {
+      const parsed = parseOutputId(value);
+      if (!parsed) return null;
+      const embeddedIndex = embeddedScriptIds.indexOf(parsed.scriptId);
+      const restoredIndex = restoredScriptIds.indexOf(parsed.scriptId);
+      const index = embeddedIndex >= 0 ? embeddedIndex : restoredIndex;
+      const scriptId = restoredScriptIds[index];
+      return scriptId
+        ? buildOutputId(scriptId, parsed.visualVersion)
+        : null;
+    };
+    setScripts(restoredScripts);
+    setScriptIds(restoredScriptIds);
     setScriptNames((content.scripts || []).map((script, index) => script.name || `Script ${index + 1}`));
     setApprovedScripts(new Set(content.approvedScriptIndices || []));
     setGeneratedCaptions(content.generatedCaptions || {});
@@ -590,6 +732,37 @@ function PipelinePage() {
     // reassemblies with the old template composition.
     importedTemplateTimelineRef.current = restoreTimelineBindings ? timeline : null;
     setSelectedVariants(new Set(timeline.selectedVariantIndices || []));
+    setSelectedOutputIds(new Set(
+      timeline.selectedOutputIds?.length
+        ? timeline.selectedOutputIds
+            .map(restoreOutputId)
+            .filter((outputId): outputId is OutputId => outputId !== null)
+        : (timeline.selectedVariantIndices || []).flatMap((index) => {
+            const scriptId = restoredScriptIds[index];
+            if (!scriptId) return [];
+            return render.metaMultiplication
+              ? [buildOutputId(scriptId, "A"), buildOutputId(scriptId, "B")]
+              : [buildOutputId(scriptId)];
+          }),
+    ));
+    const restoredActiveOutputId = timeline.activeOutputId
+      ? restoreOutputId(timeline.activeOutputId)
+      : null;
+    const restoredActiveOutput = restoredActiveOutputId
+      ? parseOutputId(restoredActiveOutputId)
+      : null;
+    const restoredActiveIndex = restoredActiveOutput
+      ? restoredScriptIds.indexOf(restoredActiveOutput.scriptId)
+      : -1;
+    setActiveOutputKey(
+      restoredActiveIndex >= 0
+        ? (
+            restoredActiveOutput?.visualVersion
+              ? `${restoredActiveIndex}_${restoredActiveOutput.visualVersion}`
+              : String(restoredActiveIndex)
+          )
+        : null,
+    );
     setInterstitialSlides(timeline.interstitialSlides || {});
     const selection = timeline.attentionSelection
       ? normalizeAttentionSelection(timeline.attentionSelection)
@@ -619,6 +792,29 @@ function PipelinePage() {
     setMetaMultiplication(render.metaMultiplication ?? true);
   }, [setProvider]);
 
+  useEffect(() => {
+    if (!snapshotConflict) return;
+    toast.error("Pipeline settings changed in another tab", {
+      id: "pipeline-settings-conflict",
+      description:
+        "Autosave is paused. Reload the authoritative snapshot before continuing.",
+      duration: Infinity,
+      action: {
+        label: "Reload",
+        onClick: () => window.location.reload(),
+      },
+    });
+  }, [snapshotConflict]);
+
+  useEffect(() => {
+    if (!pipelineId || activeTemplatePipelineIdRef.current === pipelineId) return;
+    activeTemplatePipelineIdRef.current = pipelineId;
+    workspaceSnapshotRevisionRef.current = 0;
+    workspaceSnapshotInFlightRef.current = null;
+    setSnapshotConflict(false);
+    toast.dismiss("pipeline-settings-conflict");
+  }, [pipelineId]);
+
   const markSubtitleSaveSuccess = useCallback(() => {
     setSubtitleSaveState("saved");
     if (subtitleSavedResetTimer.current) clearTimeout(subtitleSavedResetTimer.current);
@@ -626,22 +822,6 @@ function PipelinePage() {
       setSubtitleSaveState("idle");
     }, 2000);
   }, []);
-
-  const scheduleProfileSubtitleSave = useCallback((newSettings: SubtitleSettings) => {
-    if (!currentProfileIdRef.current) return;
-    setSubtitleSaveState("saving");
-    if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
-    subtitleSaveTimer.current = setTimeout(async () => {
-      try {
-        const profileId = currentProfileIdRef.current;
-        if (!profileId) return;
-        await apiPut(`/profiles/${profileId}/subtitle-settings`, newSettings);
-        markSubtitleSaveSuccess();
-      } catch {
-        setSubtitleSaveState("error");
-      }
-    }, 1000);
-  }, [markSubtitleSaveSuccess]);
 
   // ── getSubtitleSettingsFor ─────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH for "what style does this Meta version use?".
@@ -660,11 +840,14 @@ function PipelinePage() {
   // the key (matching the backend rule in pipeline_routes.py).
   const getSubtitleSettingsFor = useCallback(
     (styleKey: StyleKey): SubtitleSettings => {
-      const override = subtitleOverrides[styleKey];
-      if (!override || Object.keys(override).length === 0) {
-        return subtitleSettings;
-      }
-      return { ...subtitleSettings, ...override };
+      const pipelineOverride = subtitleOverrides.default;
+      const pipelineSettings = pipelineOverride && Object.keys(pipelineOverride).length > 0
+        ? { ...subtitleSettings, ...pipelineOverride }
+        : subtitleSettings;
+      if (styleKey === "default") return pipelineSettings;
+      const groupOverride = subtitleOverrides[styleKey];
+      if (!groupOverride || Object.keys(groupOverride).length === 0) return pipelineSettings;
+      return { ...pipelineSettings, ...groupOverride };
     },
     [subtitleSettings, subtitleOverrides]
   );
@@ -673,19 +856,20 @@ function PipelinePage() {
   // Meta profile overlay on top only when no explicit user override exists
   // for that card's Meta version. Used by TimelineEditor cards and
   // VariantPreviewPlayer, which always reason in terms of PreviewCards.
-  const getPreviewSubtitleSettingsFor = useCallback(
+  const getPreviewSubtitleInheritedSettingsFor = useCallback(
     (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => {
       // A template baseline applies when rotation is on OR this card has an
       // explicit manual selection.
       if (subtitleRotation.enabled || variantTemplateSelections[card.key]) {
+        const pipelineSettings = getSubtitleSettingsFor("default");
         return resolveRotatedSubtitleSettings({
           card,
           rotation: subtitleRotation,
           selections: variantTemplateSelections,
           presets: userSubtitlePresets,
-          defaultSettings: subtitleSettings,
+          defaultSettings: pipelineSettings,
           metaOverrides: subtitleOverrides,
-          variantOverrides: variantSubtitleOverrides,
+          variantOverrides: {},
           metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
         });
       }
@@ -712,45 +896,104 @@ function PipelinePage() {
       getSubtitleSettingsFor,
       subtitleOverrides,
       subtitleRotation,
-      subtitleSettings,
       userSubtitlePresets,
-      variantSubtitleOverrides,
       variantTemplateSelections,
     ]
   );
 
+  const getPreviewSubtitleSettingsFor = useCallback(
+    (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => {
+      // Keep the template resolver's explicit "no subtitles" behavior, which
+      // intentionally suppresses output-level visual deltas.
+      if (subtitleRotation.enabled || variantTemplateSelections[card.key]) {
+        const pipelineSettings = getSubtitleSettingsFor("default");
+        return resolveRotatedSubtitleSettings({
+          card,
+          rotation: subtitleRotation,
+          selections: variantTemplateSelections,
+          presets: userSubtitlePresets,
+          defaultSettings: pipelineSettings,
+          metaOverrides: subtitleOverrides,
+          variantOverrides: variantSubtitleOverrides,
+          metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
+        });
+      }
+      const inherited = getPreviewSubtitleInheritedSettingsFor(card);
+      const outputOverride = variantSubtitleOverrides[card.key];
+      return outputOverride && Object.keys(outputOverride).length > 0
+        ? { ...inherited, ...outputOverride }
+        : inherited;
+    },
+    [
+      getPreviewSubtitleInheritedSettingsFor,
+      getSubtitleSettingsFor,
+      subtitleOverrides,
+      subtitleRotation,
+      userSubtitlePresets,
+      variantSubtitleOverrides,
+      variantTemplateSelections,
+    ],
+  );
+
   const getPreviewSubtitleTemplateSettingsFor = useCallback(
     (card: Pick<PreviewCard, "key" | "baseIndex" | "visualVersion">): SubtitleSettings => (
-      resolveRotatedSubtitleSettings({
-        card,
-        rotation: subtitleRotation,
-        selections: variantTemplateSelections,
-        presets: userSubtitlePresets,
-        defaultSettings: subtitleSettings,
-        metaOverrides: subtitleOverrides,
-        variantOverrides: {},
-        metaFallback: META_SUBTITLE_STYLE_BY_VERSION,
-      })
+      getPreviewSubtitleInheritedSettingsFor(card)
     ),
-    [subtitleOverrides, subtitleRotation, subtitleSettings, userSubtitlePresets, variantTemplateSelections],
+    [getPreviewSubtitleInheritedSettingsFor],
   );
 
   const getWordsPerSubtitleForVariant = useCallback(
-    (variantIndex: number, previewKey?: PreviewKey) => wordsPerSubtitleForVariant(
+    (variantIndex: number, previewKey?: PreviewKey) => {
+      const key = previewKey ?? String(variantIndex);
+      const visualVersion = key.endsWith("_B")
+        ? "B"
+        : key.endsWith("_A")
+          ? "A"
+          : undefined;
+      const resolved = getPreviewSubtitleSettingsFor({
+        key,
+        baseIndex: variantIndex,
+        visualVersion,
+      }).wordsPerSubtitle;
+      if (Number.isFinite(resolved)) {
+        return Math.max(1, Math.min(20, Number(resolved)));
+      }
+      return wordsPerSubtitleForVariant(
+        subtitleRotation,
+        userSubtitlePresets,
+        variantIndex,
+        wordsPerSubtitle,
+        variantTemplateSelections,
+        previewKey,
+      );
+    },
+    [
+      getPreviewSubtitleSettingsFor,
       subtitleRotation,
       userSubtitlePresets,
-      variantIndex,
       wordsPerSubtitle,
       variantTemplateSelections,
-      previewKey,
-    ),
-    [subtitleRotation, userSubtitlePresets, wordsPerSubtitle, variantTemplateSelections],
+    ],
   );
 
   // Stable empty slides constant to avoid new array reference on every render
   const EMPTY_SLIDES: InterstitialSlide[] = useMemo(() => [], []);
 
   // Stable per-index callback refs for TimelineEditor props
+  const getIdentityForPreviewKey = useCallback((previewKey: string): {
+    scriptId: ScriptId;
+    outputId: OutputId;
+  } | null => {
+    const parsed = previewKey.match(/^(\d+)(?:_([A-J]))?$/);
+    if (!parsed) return null;
+    const scriptId = scriptIdsRef.current[Number(parsed[1])];
+    if (!scriptId) return null;
+    return {
+      scriptId,
+      outputId: buildOutputId(scriptId, parsed[2]),
+    };
+  }, []);
+
   const matchesChangeHandlers = useRef<Record<string, (matches: MatchPreview[]) => void>>({});
   // F3: debounce timers for persisting timeline edits per preview key
   const matchesSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -764,12 +1007,14 @@ function PipelinePage() {
           matches: updatedMatches,
           matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
           unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
+          manual_matches_preserved: true,
         }
       };
     });
 
     const pid = pipelineIdRef.current;
-    if (!pid) return;
+    const identity = getIdentityForPreviewKey(previewKey);
+    if (!pid || !identity) return;
     if (matchesSaveTimers.current[previewKey]) {
       clearTimeout(matchesSaveTimers.current[previewKey]);
     }
@@ -782,6 +1027,8 @@ function PipelinePage() {
       apiPut(`/pipeline/${pid}/matches/${baseVariant}`, {
         matches: updatedMatches,
         visual_version: visualVersion,
+        script_id: identity.scriptId,
+        output_id: identity.outputId,
       }).catch(() => {
         // Best-effort persistence; edits remain in local state and are still
         // sent as match_overrides at render time.
@@ -818,12 +1065,14 @@ function PipelinePage() {
           intro_offset_sec: videoTimeline
             .filter((clip) => clip.kind === "intro")
             .reduce((sum, clip) => sum + clip.timeline_duration, 0),
+          manual_composition_preserved: true,
         },
       };
     });
 
     const pid = pipelineIdRef.current;
-    if (!pid) return;
+    const identity = getIdentityForPreviewKey(previewKey);
+    if (!pid || !identity) return;
     if (videoTimelineSaveTimers.current[previewKey]) {
       clearTimeout(videoTimelineSaveTimers.current[previewKey]);
     }
@@ -840,6 +1089,8 @@ function PipelinePage() {
         visual_version: visualVersion,
         default_transition: previewsRef.current[previewKey]?.defaultTransition ?? null,
         music: previewsRef.current[previewKey]?.music ?? null,
+        script_id: identity.scriptId,
+        output_id: identity.outputId,
       }).catch((error) => {
         console.warn(`[Timeline] Could not persist composition ${previewKey}`, error);
       });
@@ -920,31 +1171,70 @@ function PipelinePage() {
   }, []);
 
   const attentionSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const getAttentionTimelineChangeHandler = useCallback((previewKey: string) => {
-    return (timeline: AttentionTimeline) => {
-      setAttentionTimelines(prev => ({ ...prev, [previewKey]: timeline }));
-      const pid = pipelineIdRef.current;
-      if (!pid) return;
-      if (attentionSaveTimers.current[previewKey]) clearTimeout(attentionSaveTimers.current[previewKey]);
-      attentionSaveTimers.current[previewKey] = setTimeout(async () => {
-        delete attentionSaveTimers.current[previewKey];
+  const attentionSaveChains = useRef<Partial<Record<string, Promise<AttentionTimeline>>>>({});
+  const queueAttentionTimelineSave = useCallback((
+    pid: string,
+    previewKey: string,
+    timeline: AttentionTimeline,
+    identity: { scriptId: ScriptId; outputId: OutputId },
+  ): Promise<AttentionTimeline> => {
+    const saveKey = `${pid}:${previewKey}`;
+    const previous = attentionSaveChains.current[saveKey];
+    const queued = (previous ? previous.catch(() => undefined) : Promise.resolve(undefined))
+      .then(async (previousSaved) => {
+        // A user can edit again while the prior PUT is in flight. Rebase the
+        // new draft onto the revision returned by that PUT instead of sending
+        // the stale optimistic revision and producing a 409.
+        const payload = {
+          ...timeline,
+          revision:
+            previousSaved && previousSaved.revision !== timeline.revision
+              ? previousSaved.revision
+              : timeline.revision,
+          script_id: identity.scriptId,
+          output_id: identity.outputId,
+        };
         try {
-          const response = await apiPut(`/pipeline/${pid}/attention-timeline/${previewKey}`, timeline);
+          const response = await apiPut(
+            `/pipeline/${pid}/attention-timeline/${previewKey}`,
+            payload,
+          );
           const saved = await response.json() as AttentionTimeline;
-          setAttentionTimelines(prev => {
-            const current = prev[previewKey];
-            return current === timeline ? { ...prev, [previewKey]: saved } : prev;
-          });
+          if (pipelineIdRef.current === pid) {
+            setAttentionTimelines((current) => (
+              current[previewKey] === timeline
+                ? { ...current, [previewKey]: saved }
+                : current
+            ));
+          }
+          return saved;
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) {
             toast.error("Attention timeline changed in another window. Reload the pipeline before editing again.");
           } else {
             toast.error("Could not save attention timeline");
           }
+          throw error;
         }
+      });
+    attentionSaveChains.current[saveKey] = queued;
+    return queued;
+  }, [getIdentityForPreviewKey]);
+
+  const getAttentionTimelineChangeHandler = useCallback((previewKey: string) => {
+    return (timeline: AttentionTimeline) => {
+      setAttentionTimelines(prev => ({ ...prev, [previewKey]: timeline }));
+      const pid = pipelineIdRef.current;
+      const identity = getIdentityForPreviewKey(previewKey);
+      if (!pid || !identity) return;
+      const saveKey = `${pid}:${previewKey}`;
+      if (attentionSaveTimers.current[saveKey]) clearTimeout(attentionSaveTimers.current[saveKey]);
+      attentionSaveTimers.current[saveKey] = setTimeout(() => {
+        delete attentionSaveTimers.current[saveKey];
+        void queueAttentionTimelineSave(pid, previewKey, timeline, identity).catch(() => {});
       }, 800);
     };
-  }, []);
+  }, [getIdentityForPreviewKey, queueAttentionTimelineSave]);
 
   const handleAttentionSelectionChange = useCallback((selection: AttentionSelection) => {
     setAttentionSelection(selection);
@@ -1070,6 +1360,7 @@ function PipelinePage() {
         const res = await apiGet(`/pipeline/scripts/${urlPipelineId}`);
         const data = await res.json() as PipelineScriptsResponse;
         if (!isMountedRef.current) return;
+        const restoredScriptIds = ensureScriptIds(data.script_ids, data.scripts.length);
 
         setPipelineId(data.pipeline_id);
         pipelineIdRef.current = data.pipeline_id; // Set ref immediately for URL sync
@@ -1085,6 +1376,7 @@ function PipelinePage() {
           }, []);
           return sentences.map((sent: string) => sent.trim()).filter(Boolean).join('\n');
         }));
+        setScriptIds(restoredScriptIds);
         setScriptNames(
           data.script_names?.length === data.scripts.length
             ? data.script_names
@@ -1100,14 +1392,23 @@ function PipelinePage() {
         if (data.codex_model) setCodexModel(data.codex_model);
         if (data.variant_count) setVariantCount(data.variant_count);
         setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
-        if (isPipelineTemplateSettings(data.template_settings)) {
+        const restoredTemplateSettings = normalizePipelineTemplateSettings(
+          data.template_settings,
+        );
+        if (restoredTemplateSettings) {
           applyPipelineTemplateSettings(
-            data.template_settings,
+            restoredTemplateSettings,
             data.pipeline_id,
             shouldRestoreImportedTemplateTimeline(data.preview_info),
+            restoredScriptIds,
           );
         }
-        if (data.attention_selection?.templateId) {
+        workspaceSnapshotRevisionRef.current =
+          Number(data.settings_revision)
+          || data.template_settings?.snapshot?.revision
+          || 0;
+        activeTemplatePipelineIdRef.current = data.pipeline_id;
+        if (!restoredTemplateSettings && data.attention_selection?.templateId) {
           const restoredSelection = normalizeAttentionSelection(data.attention_selection);
           setAttentionSelection(restoredSelection);
           attentionSelectionRef.current = restoredSelection;
@@ -1144,6 +1445,10 @@ function PipelinePage() {
             srt_content: info.srt_content,
             script_word_count: info.script_word_count,
             srt_word_count: info.srt_word_count,
+            elevenlabs_model: info.elevenlabs_model ?? undefined,
+            voice_id: info.voice_id ?? undefined,
+            voice_settings: info.voice_settings as TtsResult["voice_settings"],
+            source: "generated",
           };
           if (info.approved) restoredApproved.add(idx);
         });
@@ -1185,35 +1490,38 @@ function PipelinePage() {
         setTtsResults(restoredTts);
         if (restoredApproved.size > 0) setApprovedScripts(restoredApproved);
 
-        // Restore source video selection
-        setSelectedSourceIds(new Set());
-        try {
-          const srcRes = await apiGet(`/pipeline/${data.pipeline_id}/source-selection`);
-          const srcData = await srcRes.json();
-          if (isMountedRef.current && srcData.source_video_ids?.length > 0) {
-            setSelectedSourceIds(new Set(srcData.source_video_ids));
+        // A versioned snapshot is authoritative. Read legacy columns only for
+        // pipelines that predate complete snapshots.
+        if (!restoredTemplateSettings) {
+          setSelectedSourceIds(new Set());
+          try {
+            const srcRes = await apiGet(`/pipeline/${data.pipeline_id}/source-selection`);
+            const srcData = await srcRes.json();
+            if (isMountedRef.current && srcData.source_video_ids?.length > 0) {
+              setSelectedSourceIds(new Set(srcData.source_video_ids));
+            }
+          } catch {
+            // No saved selection — user selects manually
           }
-        } catch {
-          // No saved selection — user selects manually
         }
 
-        // Restore per-Meta-version subtitle overrides for this pipeline.
-        // The backend normalizes legacy per-script keys to {A,B,default} on
-        // read, so the payload is always in the canonical shape.
-        try {
-          const ovRes = await apiGet(`/pipeline/${data.pipeline_id}/subtitle-overrides`);
-          const ovData = await ovRes.json();
-          if (isMountedRef.current && ovData && typeof ovData.overrides === "object" && ovData.overrides !== null) {
-            const entries = Object.entries(ovData.overrides) as [string, SubtitleSettings][];
-            setSubtitleOverrides(Object.fromEntries(
-              entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
-            ) as Partial<Record<StyleKey, SubtitleSettings>>);
-            setVariantSubtitleOverrides(Object.fromEntries(
-              entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
-            ));
+        // Restore inherited subtitle layers and explicit per-output overrides.
+        if (!restoredTemplateSettings) {
+          try {
+            const ovRes = await apiGet(`/pipeline/${data.pipeline_id}/subtitle-overrides`);
+            const ovData = await ovRes.json();
+            if (isMountedRef.current && ovData && typeof ovData.overrides === "object" && ovData.overrides !== null) {
+              const entries = Object.entries(ovData.overrides) as [string, SubtitleSettings][];
+              setSubtitleOverrides(Object.fromEntries(
+                entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
+              ) as Partial<Record<StyleKey, SubtitleSettings>>);
+              setVariantSubtitleOverrides(Object.fromEntries(
+                entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
+              ));
+            }
+          } catch {
+            // Old pipeline or no overrides — silent fallback
           }
-        } catch {
-          // Old pipeline or no overrides — silent fallback
         }
 
         // Restore previews when landing on step 3+ (so variant cards are visible)
@@ -1222,16 +1530,30 @@ function PipelinePage() {
             const previewRes = await apiGet(`/pipeline/${data.pipeline_id}/restore-previews`);
             const previewData = await previewRes.json();
             if (isMountedRef.current && previewData.previews && Object.keys(previewData.previews).length > 0) {
-              const restoredPreviews: Record<string, PreviewData> = {};
+              const restoredPreviews: Record<PreviewKey, PreviewData> = {};
               for (const [key, val] of Object.entries(previewData.previews)) {
-                restoredPreviews[key] = val as PreviewData;
+                const previewKey = key as PreviewKey;
+                restoredPreviews[previewKey] = mergeSnapshotTimelineIntoPreview(
+                  previewKey,
+                  val as PreviewData,
+                  restoredTemplateSettings?.timeline,
+                );
               }
               setPreviews(restoredPreviews);
               if (previewData.available_segments?.length > 0) {
                 setAvailableSegments(previewData.available_segments);
               }
-              // Auto-select all variants so user can render immediately
-              setSelectedVariants(new Set((data.scripts || []).map((_: string, i: number) => i)));
+              if (!restoredTemplateSettings) {
+                // Legacy pipelines have no persisted output selection.
+                setSelectedVariants(new Set((data.scripts || []).map((_: string, i: number) => i)));
+                setSelectedOutputIds(new Set(
+                  restoredScriptIds.flatMap((scriptId) => (
+                    data.meta_multiplication === false
+                      ? [buildOutputId(scriptId)]
+                      : [buildOutputId(scriptId, "A"), buildOutputId(scriptId, "B")]
+                  )),
+                ));
+              }
             }
           } catch {
             // Previews not available — user can re-generate from step 2
@@ -1405,49 +1727,76 @@ function PipelinePage() {
     // No fallback — user selects manually if no saved selection exists
   }, []);
 
+  const applySourceSelection = (
+    next: Set<string>,
+    { debounce }: { debounce: boolean },
+  ) => {
+    sourceSelectionChangedByUserRef.current = true;
+    setSelectedSourceIds(next);
+    if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
+    const persist = () => {
+      const activePipelineId = pipelineIdRef.current;
+      if (!activePipelineId) return;
+      apiPut(`/pipeline/${activePipelineId}/source-selection`, {
+        source_video_ids: Array.from(next),
+      }).catch((error) => {
+        handleApiError(error, "Could not save source selection");
+      });
+    };
+    if (debounce) {
+      sourceSelectionTimer.current = setTimeout(() => {
+        sourceSelectionTimer.current = null;
+        persist();
+      }, 500);
+    } else {
+      persist();
+    }
+  };
+
+  const requestSourceSelection = (
+    next: Set<string>,
+    label: string,
+    debounce = false,
+  ) => {
+    if (Object.keys(previewsRef.current).length === 0) {
+      applySourceSelection(next, { debounce });
+      return;
+    }
+    const affectedCount = metaMultiplication
+      ? scripts.length * 2
+      : scripts.length;
+    setConfirmDialog({
+      open: true,
+      title: `${label}?`,
+      description:
+        `This rebuilds ${affectedCount} ${affectedCount === 1 ? "output" : "outputs"} using the new source pool. `
+        + "Timeline, music, transitions, and pinned matches are preserved where their source remains available.",
+      confirmLabel: `Update ${affectedCount} ${affectedCount === 1 ? "output" : "outputs"}`,
+      variant: "default",
+      onConfirm: () => {
+        setConfirmDialog((previous) => ({ ...previous, open: false }));
+        applySourceSelection(next, { debounce });
+      },
+    });
+  };
+
   // Source videos: toggle a single video selection
   const handleSourceToggle = (videoId: string) => {
-    setSelectedSourceIds(prev => {
-      const next = new Set(prev);
-      if (next.has(videoId)) {
-        next.delete(videoId);
-      } else {
-        next.add(videoId);
-      }
-      // Debounce save to DB
-      if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
-      sourceSelectionTimer.current = setTimeout(() => {
-        if (pipelineIdRef.current) {
-          apiPut(`/pipeline/${pipelineIdRef.current}/source-selection`, {
-            source_video_ids: Array.from(next)
-          }).catch(() => {});
-        }
-      }, 500);
-      return next;
-    });
+    const next = new Set(selectedSourceIds);
+    if (next.has(videoId)) next.delete(videoId);
+    else next.add(videoId);
+    requestSourceSelection(next, "Change source selection", true);
   };
 
   // Source videos: select all
   const handleSelectAllSources = () => {
-    if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
     const allIds = new Set(sourceVideos.map(v => v.id));
-    setSelectedSourceIds(allIds);
-    if (pipelineId) {
-      apiPut(`/pipeline/${pipelineId}/source-selection`, {
-        source_video_ids: Array.from(allIds)
-      }).catch(() => {});
-    }
+    requestSourceSelection(allIds, "Use all sources");
   };
 
   // Source videos: deselect all
   const handleDeselectAllSources = () => {
-    if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
-    setSelectedSourceIds(new Set());
-    if (pipelineId) {
-      apiPut(`/pipeline/${pipelineId}/source-selection`, {
-        source_video_ids: []
-      }).catch(() => {});
-    }
+    requestSourceSelection(new Set(), "Clear all sources");
   };
 
   // Source videos start unselected — user picks manually on Step 2
@@ -1469,21 +1818,42 @@ function PipelinePage() {
 
   const buildPreviewKey = useCallback((baseIndex: number, visualVersion?: string) => {
     return visualVersion ? `${baseIndex}_${visualVersion}` : String(baseIndex);
-  }, []);
+  }, [getIdentityForPreviewKey]);
+
+  useEffect(() => {
+    setScriptIds((current) => {
+      if (
+        current.length === scripts.length
+        && current.every((value) => Boolean(value))
+      ) {
+        return current;
+      }
+      return ensureScriptIds(current, scripts.length);
+    });
+  }, [scripts.length]);
 
   const previewCards = useMemo<PreviewCard[]>(() => {
     if (!metaMultiplication) {
-      return scripts.map((script, index) => ({
-        key: buildPreviewKey(index),
-        baseIndex: index,
-        label: `Variant ${index + 1}`,
-        script,
-      }));
+      return scripts.map((script, index) => {
+        const scriptId = scriptIds[index] ?? `script_pending_${index}`;
+        return {
+          key: buildPreviewKey(index),
+          scriptId,
+          outputId: buildOutputId(scriptId),
+          baseIndex: index,
+          label: `Variant ${index + 1}`,
+          script,
+        };
+      });
     }
 
-    return scripts.flatMap((script, index) => ([
-      {
+    return scripts.flatMap((script, index) => {
+      const scriptId = scriptIds[index] ?? `script_pending_${index}`;
+      return [
+        {
         key: buildPreviewKey(index, "A"),
+        scriptId,
+        outputId: buildOutputId(scriptId, "A"),
         baseIndex: index,
         label: `Variant ${index + 1} A`,
         visualVersion: "A",
@@ -1492,14 +1862,27 @@ function PipelinePage() {
       },
       {
         key: buildPreviewKey(index, "B"),
+        scriptId,
+        outputId: buildOutputId(scriptId, "B"),
         baseIndex: index,
         label: `Variant ${index + 1} B`,
         visualVersion: "B",
         metaPlatform: "facebook",
         script,
       },
-    ]));
-  }, [buildPreviewKey, metaMultiplication, scripts]);
+      ];
+    });
+  }, [buildPreviewKey, metaMultiplication, scriptIds, scripts]);
+
+  useEffect(() => {
+    if (previewCards.length === 0) {
+      setActiveOutputKey(null);
+      return;
+    }
+    if (!previewCards.some((card) => card.key === activeOutputKey)) {
+      setActiveOutputKey(previewCards[0].key);
+    }
+  }, [activeOutputKey, previewCards]);
 
   const attentionLoadedForPipeline = useRef<string | null>(null);
   useEffect(() => {
@@ -1510,7 +1893,11 @@ function PipelinePage() {
     }
     for (const card of previewCards) {
       if (attentionTimelines[card.key]) continue;
-      apiGet(`/pipeline/${pipelineId}/attention-timeline/${card.key}`)
+      const identityQuery = new URLSearchParams({
+        script_id: card.scriptId,
+        output_id: card.outputId,
+      });
+      apiGet(`/pipeline/${pipelineId}/attention-timeline/${card.key}?${identityQuery}`)
         .then(async response => {
           const document = await response.json() as AttentionTimeline;
           setAttentionTimelines(prev => prev[card.key] ? prev : { ...prev, [card.key]: document });
@@ -1544,12 +1931,16 @@ function PipelinePage() {
       attentionAutoApplied.current.add(applyKey);
       apiPost(
         `/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`,
-        buildAttentionTemplateApplyPayload({
-          selection: attentionSelection,
-          preview,
-          timeline,
-          variantIndex,
-        }),
+        {
+          ...buildAttentionTemplateApplyPayload({
+            selection: attentionSelection,
+            preview,
+            timeline,
+            variantIndex,
+          }),
+          script_id: card.scriptId,
+          output_id: card.outputId,
+        },
       )
         .then(async response => {
           const document = await response.json() as AttentionTimeline;
@@ -1578,19 +1969,40 @@ function PipelinePage() {
         return { key: card.key, status: "skipped" as const };
       }
 
-      const timeline = attentionTimelines[card.key] ?? { revision: 0, cues: [] };
+      let timeline = attentionTimelines[card.key] ?? { revision: 0, cues: [] };
       const variantIndex = parseInt(card.key, 10) || 0;
       try {
+        // An all-slot effect change uses the normal debounced timeline saver.
+        // Flush it before replacing the template so apply-template receives
+        // the server's latest revision instead of racing a pending PUT.
+        const saveKey = `${pipelineId}:${card.key}`;
+        if (attentionSaveTimers.current[saveKey]) {
+          clearTimeout(attentionSaveTimers.current[saveKey]);
+          delete attentionSaveTimers.current[saveKey];
+          timeline = await queueAttentionTimelineSave(
+            pipelineId,
+            card.key,
+            timeline,
+            { scriptId: card.scriptId, outputId: card.outputId },
+          );
+        } else if (attentionSaveChains.current[saveKey]) {
+          timeline = await attentionSaveChains.current[saveKey];
+        }
         const response = await apiPost(
           `/pipeline/${pipelineId}/attention-timeline/${card.key}/apply-template`,
-          buildAttentionTemplateApplyPayload({
-            selection,
-            preview,
-            timeline,
-            variantIndex,
-          }),
+          {
+            ...buildAttentionTemplateApplyPayload({
+              selection,
+              preview,
+              timeline,
+              variantIndex,
+            }),
+            script_id: card.scriptId,
+            output_id: card.outputId,
+          },
         );
         const document = await response.json() as AttentionTimeline;
+        attentionSaveChains.current[saveKey] = Promise.resolve(document);
         setAttentionTimelines((current) => ({ ...current, [card.key]: document }));
         return { key: card.key, status: "applied" as const };
       } catch {
@@ -1607,7 +2019,7 @@ function PipelinePage() {
         ...missingKeys,
       ],
     };
-  }, [attentionTimelines, pipelineId, previewCards, previews]);
+  }, [attentionTimelines, pipelineId, previewCards, previews, queueAttentionTimelineSave]);
 
   // Keep activeStyleKey consistent with metaMultiplication. When Meta is ON
   // the user picks between A and B; when OFF, there's only "default". This
@@ -1887,11 +2299,15 @@ function PipelinePage() {
       const allVariants = data.variants || [];
       const metaVariants = data.meta_variants || [];
       // Only show variants that have been submitted for rendering (not "not_started")
-      // When meta_variants exist, replace the base variants with meta versions
-      const renderedVariants = metaVariants.length > 0
+      // Historical Meta jobs must not reactivate Meta when the persisted
+      // setting is currently OFF.
+      const metaEnabled = data.meta_multiplication === true;
+      const renderedVariants = metaEnabled
         ? metaVariants.filter((v) => v.status !== "not_started")
         : allVariants.filter((v) => v.status !== "not_started");
-      setMetaMultiplication(Boolean(data.meta_multiplication || metaVariants.length > 0));
+      if (typeof data.meta_multiplication === "boolean") {
+        setMetaMultiplication(data.meta_multiplication);
+      }
       setVariantStatuses(renderedVariants);
       if (data.library_project_id) setLibraryProjectId(data.library_project_id);
       // Stop polling only when every rendered variant is done (ignore not_started ones)
@@ -1932,9 +2348,14 @@ function PipelinePage() {
         .then(res => res.json())
         .then(data => {
           if (!data?.variants) return;
-          setMetaMultiplication(Boolean(data.meta_multiplication || (data.meta_variants?.length ?? 0) > 0));
+          const metaEnabled = data.meta_multiplication === true;
+          if (typeof data.meta_multiplication === "boolean") {
+            setMetaMultiplication(data.meta_multiplication);
+          }
           const currentScriptCount = scripts.length;
-          const allVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+          const allVars = (
+            metaEnabled ? data.meta_variants : data.variants
+          ) || [];
           const completed = allVars.filter(
             (v: { status: string; variant_index: number; final_video_path?: string }) =>
               v.status === "completed" &&
@@ -1959,10 +2380,15 @@ function PipelinePage() {
         .then(res => res.json())
         .then(data => {
           if (!data?.variants) return [];
-          setMetaMultiplication(Boolean(data.meta_multiplication || (data.meta_variants?.length ?? 0) > 0));
+          const metaEnabled = data.meta_multiplication === true;
+          if (typeof data.meta_multiplication === "boolean") {
+            setMetaMultiplication(data.meta_multiplication);
+          }
           // Filter out not_started variants (same logic as polling onData)
-          // When meta_variants exist, use those instead (meta multiplication renders)
-          const sourceVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+          // Historical Meta jobs do not replace the base view while Meta is OFF.
+          const sourceVars = (
+            metaEnabled ? data.meta_variants : data.variants
+          ) || [];
           const rendered = sourceVars.filter(
             (v: { status: string }) => v.status !== "not_started"
           );
@@ -2148,6 +2574,7 @@ function PipelinePage() {
       if (!isMountedRef.current) return;
       setPipelineId(data.pipeline_id);
       setScripts(emptyScripts);
+      setScriptIds(ensureScriptIds(data.script_ids, emptyScripts.length));
       setScriptNames(defaultScriptNames(emptyScripts.length));
       setTotalSegmentDuration(0);
       setStep(2);
@@ -2165,9 +2592,13 @@ function PipelinePage() {
   };
 
   // Step 2: Preview all matches
-  const handlePreviewAll = async () => {
+  const handlePreviewAll = async (options?: { preserveRenderSelection?: boolean }) => {
     if (!pipelineId) {
       setPreviewError("No pipeline ID. Please generate or load scripts first.");
+      return;
+    }
+    if (voiceRegenerationActive) {
+      toast.error("Wait for voice-over regeneration to finish before generating previews");
       return;
     }
 
@@ -2198,7 +2629,10 @@ function PipelinePage() {
         setPreviewingIndex(i);
         const previewCard = cardsToPreview[i];
         try {
+          const editorPreview = previewsRef.current[previewCard.key];
           const res = await apiPost(`/pipeline/preview/${pipelineId}/${previewCard.baseIndex}`, {
+            script_id: previewCard.scriptId,
+            output_id: previewCard.outputId,
             elevenlabs_model: elevenlabsModel,
             voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
             source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined, // Bug #120: use ref
@@ -2215,72 +2649,162 @@ function PipelinePage() {
             visual_version: previewCard.visualVersion,
             preset: assemblyPreset,
             segment_proximity: segmentProximity,
+            editor_matches: editorPreview?.manual_matches_preserved
+              ? editorPreview.matches
+              : undefined,
+            editor_composition: editorPreview?.manual_composition_preserved
+              ? editorPreview.video_timeline
+              : undefined,
+            editor_default_transition: editorPreview
+              ? editorPreview.defaultTransition ?? null
+              : undefined,
+            editor_music: editorPreview ? editorPreview.music ?? null : undefined,
+            editor_default_transition_set: Boolean(editorPreview),
+            editor_music_set: Boolean(editorPreview),
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
           if (abortController.signal.aborted || !isMountedRef.current) { setPreviewingIndex(null); return; }
 
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
-          const responseData = await res.json() as PreviewData;
+          const responseData = await res.json() as PreviewData & {
+            script_id?: ScriptId;
+            output_id?: OutputId;
+          };
+          if (
+            (responseData.script_id && responseData.script_id !== previewCard.scriptId)
+            || (responseData.output_id && responseData.output_id !== previewCard.outputId)
+          ) {
+            throw new Error(
+              "Preview response belongs to an output that has moved or been deleted.",
+            );
+          }
           const importedMatches = importedTimelineForBatch?.matches?.[previewCard.key];
           const importedComposition = importedTimelineForBatch?.compositions?.[previewCard.key];
+          const hasImportedDefaultTransition = Boolean(
+            importedTimelineForBatch
+            && Object.prototype.hasOwnProperty.call(
+              importedTimelineForBatch.defaultTransitions || {},
+              previewCard.key,
+            ),
+          );
+          const hasImportedMusic = Boolean(
+            importedTimelineForBatch
+            && Object.prototype.hasOwnProperty.call(
+              importedTimelineForBatch.music || {},
+              previewCard.key,
+            ),
+          );
           const data: PreviewData = {
             ...responseData,
             ...(Array.isArray(importedMatches) ? {
               matches: importedMatches,
               matched_count: importedMatches.filter((match) => !!match.segment_id).length,
               unmatched_count: importedMatches.filter((match) => !match.segment_id).length,
+              manual_matches_preserved: true,
             } : {}),
             ...(Array.isArray(importedComposition) && importedComposition.length > 0 ? {
               video_timeline: importedComposition,
               intro_offset_sec: importedComposition
                 .filter((clip) => clip.kind === "intro")
                 .reduce((sum, clip) => sum + clip.timeline_duration, 0),
+              manual_composition_preserved: true,
             } : {}),
+            ...(hasImportedDefaultTransition
+              ? {
+                  defaultTransition:
+                    importedTimelineForBatch?.defaultTransitions?.[previewCard.key]
+                    ?? null,
+                }
+              : {}),
+            ...(hasImportedMusic
+              ? {
+                  music:
+                    importedTimelineForBatch?.music?.[previewCard.key] ?? null,
+                }
+              : {}),
           };
           if (!isMountedRef.current) return;
           newPreviews[previewCard.key] = data;
           // Keep the variant default transition across preview regeneration —
           // the preview response rebuilds the blob and doesn't carry it.
-          setPreviews(prev => ({
-            ...prev,
-            [previewCard.key]: {
-              ...data,
-              defaultTransition: prev[previewCard.key]?.defaultTransition ?? null,
-            },
-          }));
+          setPreviews(prev => {
+            const latest = prev[previewCard.key];
+            const localMatchesChanged =
+              latest?.matches !== editorPreview?.matches
+              && latest?.manual_matches_preserved;
+            const localCompositionChanged =
+              latest?.video_timeline !== editorPreview?.video_timeline
+              && latest?.manual_composition_preserved;
+            const localTransitionChanged =
+              latest?.defaultTransition !== editorPreview?.defaultTransition;
+            const localMusicChanged = latest?.music !== editorPreview?.music;
+            return {
+              ...prev,
+              [previewCard.key]: {
+                ...data,
+                ...(localMatchesChanged
+                  ? {
+                      matches: latest.matches,
+                      manual_matches_preserved: true,
+                    }
+                  : {}),
+                ...(localCompositionChanged
+                  ? {
+                      video_timeline: latest.video_timeline,
+                      manual_composition_preserved: true,
+                    }
+                  : {}),
+                defaultTransition: localTransitionChanged
+                  ? latest?.defaultTransition ?? null
+                  : data.defaultTransition ?? null,
+                music: localMusicChanged
+                  ? latest?.music ?? null
+                  : data.music ?? null,
+              },
+            };
+          });
           if (Array.isArray(importedMatches)) {
             void apiPut(`/pipeline/${pipelineId}/matches/${previewCard.baseIndex}`, {
               matches: importedMatches,
               visual_version: previewCard.visualVersion,
+              script_id: previewCard.scriptId,
+              output_id: previewCard.outputId,
             }).catch(() => {});
           }
-          if (Array.isArray(importedComposition) && importedComposition.length > 0) {
+          if (
+            (Array.isArray(importedComposition) && importedComposition.length > 0)
+            || hasImportedDefaultTransition
+            || hasImportedMusic
+          ) {
             void apiPut(`/pipeline/${pipelineId}/composition/${previewCard.baseIndex}`, {
-              video_timeline: importedComposition,
+              video_timeline: data.video_timeline || [],
               visual_version: previewCard.visualVersion,
+              default_transition: data.defaultTransition ?? null,
+              music: data.music ?? null,
+              script_id: previewCard.scriptId,
+              output_id: previewCard.outputId,
             }).catch(() => {});
           }
           // Sync ttsResults from preview response — TTS is generated as part of preview
           if (data.audio_duration > 0) {
-            setTtsResults(prev => ({
-              ...prev,
-              [previewCard.baseIndex]: {
-                audio_duration: data.audio_duration,
-                generating: false,
-                stale: false,
-                srt_content: data.srt_content,
-              }
-            }));
+            setTtsResults(prev => {
+              const liveIndex = scriptIdsRef.current.indexOf(previewCard.scriptId);
+              if (liveIndex < 0) return prev;
+              return {
+                ...prev,
+                [liveIndex]: {
+                  ...getCurrentTtsAssetMetadata(),
+                  audio_duration: data.audio_duration,
+                  generating: false,
+                  stale: false,
+                  srt_content: data.srt_content,
+                },
+              };
+            });
           }
         } catch (err) {
           if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
           handleApiError(err, "Error previewing variants");
-          // M11: Only clear the failed variant's preview, not all previews
-          setPreviews(prev => {
-            const updated = { ...prev };
-            delete updated[previewCard.key];
-            return updated;
-          });
           setPreviewingIndex(null);
           if (err instanceof ApiError) {
             if (err.isTimeout) {
@@ -2303,9 +2827,21 @@ function PipelinePage() {
         setAvailableSegments(firstPreview.available_segments);
       }
 
-      // Select all variants by default
-      const allIndices = new Set(scripts.map((_, i) => i));
-      setSelectedVariants(allIndices);
+      if (!options?.preserveRenderSelection || selectedOutputIds.size === 0) {
+        setSelectedVariants(new Set(scripts.map((_, i) => i)));
+        setSelectedOutputIds(new Set(cardsToPreview.map((card) => card.outputId)));
+      } else {
+        const availableOutputIds = new Set(cardsToPreview.map((card) => card.outputId));
+        const preservedOutputIds = new Set(
+          Array.from(selectedOutputIds).filter((outputId) => availableOutputIds.has(outputId)),
+        );
+        setSelectedOutputIds(preservedOutputIds);
+        setSelectedVariants(new Set(
+          cardsToPreview
+            .filter((card) => preservedOutputIds.has(card.outputId))
+            .map((card) => card.baseIndex),
+        ));
+      }
 
       // Auto-advance to Step 3 only when the user clicked "Generate Previews" (TTS was
       // already ready at start). When the user clicked "Generate Voice-Overs", stay on
@@ -2329,12 +2865,134 @@ function PipelinePage() {
     if (reassemblePreviewTimer.current) clearTimeout(reassemblePreviewTimer.current);
     reassemblePreviewTimer.current = setTimeout(() => {
       reassemblePreviewTimer.current = null;
-      handlePreviewAllRef.current?.();
+      handlePreviewAllRef.current?.({ preserveRenderSelection: true });
     }, 500);
   }, []);
 
-  const handleMetaMultiplicationChange = useCallback(async (checked: boolean) => {
+  const requestGlobalAssemblyChange = useCallback(({
+    title,
+    description,
+    apply,
+  }: {
+    title: string;
+    description: string;
+    apply: () => void;
+  }) => {
+    const applyAndReassemble = () => {
+      apply();
+      if (Object.keys(previewsRef.current).length > 0) {
+        scheduleReassemblePreviews();
+      }
+    };
+    const affectedCount = Object.keys(previewsRef.current).length;
+    if (affectedCount === 0) {
+      applyAndReassemble();
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title,
+      description:
+        `${description} This rebuilds ${affectedCount} `
+        + `${affectedCount === 1 ? "output" : "outputs"} while preserving manual timelines, music, transitions, and pinned matches.`,
+      confirmLabel: `Update ${affectedCount} ${affectedCount === 1 ? "output" : "outputs"}`,
+      variant: "default",
+      onConfirm: () => {
+        setConfirmDialog((previous) => ({ ...previous, open: false }));
+        applyAndReassemble();
+      },
+    });
+  }, [scheduleReassemblePreviews]);
+
+  const handleWordsPerSubtitleChange = useCallback((value: number) => {
+    if (value === wordsPerSubtitle) return;
+    requestGlobalAssemblyChange({
+      title: "Change subtitle pacing for every output?",
+      description: "Words per subtitle is a pipeline-wide timing setting.",
+      apply: () => setWordsPerSubtitle(value),
+    });
+  }, [requestGlobalAssemblyChange, wordsPerSubtitle]);
+
+  const handleMinSegmentDurationChange = useCallback((value: number) => {
+    if (value === minSegmentDuration) return;
+    requestGlobalAssemblyChange({
+      title: "Change pacing for every output?",
+      description: "Minimum segment duration is shared by the whole pipeline.",
+      apply: () => setMinSegmentDuration(value),
+    });
+  }, [minSegmentDuration, requestGlobalAssemblyChange]);
+
+  const handleUltraRapidIntroChange = useCallback((value: boolean) => {
+    if (value === ultraRapidIntro) return;
+    requestGlobalAssemblyChange({
+      title: "Change rapid intro for every output?",
+      description: "Rapid intro is shared by the whole pipeline.",
+      apply: () => setUltraRapidIntro(value),
+    });
+  }, [requestGlobalAssemblyChange, ultraRapidIntro]);
+
+  const handleAssemblyPresetChange = useCallback((
+    value: typeof assemblyPreset,
+  ) => {
+    if (value === assemblyPreset) return;
+    requestGlobalAssemblyChange({
+      title: "Change assembly preset for every output?",
+      description: "The assembly preset is shared by the whole pipeline.",
+      apply: () => setAssemblyPreset(value),
+    });
+  }, [assemblyPreset, requestGlobalAssemblyChange]);
+
+  useEffect(() => {
+    if (!sourceSelectionChangedByUserRef.current) return;
+    sourceSelectionChangedByUserRef.current = false;
+    if (Object.keys(previewsRef.current).length > 0) {
+      scheduleReassemblePreviews();
+    }
+  }, [scheduleReassemblePreviews, selectedSourceIdsKey]);
+
+  const applyMetaMultiplicationChange = useCallback(async (checked: boolean) => {
+    if (voiceRegenerationActive) {
+      toast.error("Wait for voice-over regeneration to finish before changing Meta outputs");
+      return;
+    }
+    if (pipelineId) {
+      try {
+        await apiPut(`/pipeline/${pipelineId}/meta-multiplication`, {
+          enabled: checked,
+        });
+      } catch (err) {
+        handleApiError(err, "Could not change Meta outputs");
+        return;
+      }
+    }
     setMetaMultiplication(checked);
+    setSelectedOutputIds((previous) => {
+      const next = new Set<OutputId>();
+      scriptIds.forEach((scriptId) => {
+        const defaultOutput = buildOutputId(scriptId);
+        const outputA = buildOutputId(scriptId, "A");
+        const outputB = buildOutputId(scriptId, "B");
+        if (checked) {
+          if (previous.has(defaultOutput)) {
+            next.add(outputA);
+            next.add(outputB);
+          } else {
+            if (previous.has(outputA)) next.add(outputA);
+            if (previous.has(outputB)) next.add(outputB);
+          }
+        } else if (previous.has(defaultOutput) || previous.has(outputA) || previous.has(outputB)) {
+          next.add(defaultOutput);
+        }
+      });
+      return next;
+    });
+    setActiveOutputKey((previous) => {
+      const parsed = previous?.match(/^(\d+)(?:_([A-J]))?$/);
+      if (!parsed) return previous;
+      const index = Number(parsed[1]);
+      if (!Number.isInteger(index) || index < 0 || index >= scripts.length) return null;
+      return checked ? `${index}_${parsed[2] || "A"}` : String(index);
+    });
     setPreviews(prev => {
       const next = { ...prev };
       if (checked) {
@@ -2382,15 +3040,50 @@ function PipelinePage() {
     } else {
       setPreviewError(null);
     }
-    if (!pipelineId) return;
-    try {
-      await apiPut(`/pipeline/${pipelineId}/meta-multiplication`, {
-        enabled: checked,
-      });
-    } catch (err) {
-      console.warn("[Pipeline] Failed to persist meta_multiplication:", err);
+    if (Object.keys(previewsRef.current).length > 0) {
+      scheduleReassemblePreviews();
     }
-  }, [buildPreviewKey, pipelineId, scripts.length]);
+  }, [
+    buildPreviewKey,
+    pipelineId,
+    scheduleReassemblePreviews,
+    scriptIds,
+    scripts.length,
+    voiceRegenerationActive,
+  ]);
+
+  const handleMetaMultiplicationChange = useCallback((checked: boolean) => {
+    if (checked === metaMultiplication) return;
+    if (voiceRegenerationActive) {
+      toast.error("Wait for voice-over regeneration to finish before changing Meta outputs");
+      return;
+    }
+    const affectedCount = checked ? scripts.length * 2 : scripts.length;
+    if (Object.keys(previewsRef.current).length === 0) {
+      void applyMetaMultiplicationChange(checked);
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: checked
+        ? "Enable Meta output pairs?"
+        : "Disable Meta output pairs?",
+      description:
+        `This changes the output model and rebuilds ${affectedCount} `
+        + `${affectedCount === 1 ? "output" : "outputs"}. Existing timeline, music, transitions, and pinned matches are preserved.`,
+      confirmLabel: `Update ${affectedCount} ${affectedCount === 1 ? "output" : "outputs"}`,
+      variant: "default",
+      onConfirm: () => {
+        setConfirmDialog((previous) => ({ ...previous, open: false }));
+        void applyMetaMultiplicationChange(checked);
+      },
+    });
+  }, [
+    applyMetaMultiplicationChange,
+    metaMultiplication,
+    scripts.length,
+    voiceRegenerationActive,
+  ]);
 
   const buildPipOverlaysForMatches = (matches: MatchPreview[] | undefined) => {
     const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
@@ -2410,15 +3103,21 @@ function PipelinePage() {
     return pipOverlays;
   };
 
-  const capturePipelineTemplateSettings = (): PipelineTemplateSettings => {
+  const capturePipelineTemplateSettings = (
+    revision = workspaceSnapshotRevisionRef.current,
+  ): PipelineTemplateSettings => {
     const matches: PipelineTemplateSettings["timeline"]["matches"] = {};
     const compositions: PipelineTemplateSettings["timeline"]["compositions"] = {};
+    const defaultTransitions: PipelineTemplateSettings["timeline"]["defaultTransitions"] = {};
+    const music: PipelineTemplateSettings["timeline"]["music"] = {};
     const pipOverlays: PipelineTemplateSettings["timeline"]["pipOverlays"] = {
       ...templatePipOverlays,
     };
     for (const [key, preview] of Object.entries(previews)) {
       if (Array.isArray(preview.matches)) matches[key] = preview.matches;
       if (Array.isArray(preview.video_timeline)) compositions[key] = preview.video_timeline;
+      defaultTransitions[key] = preview.defaultTransition ?? null;
+      music[key] = preview.music ?? null;
       Object.assign(pipOverlays, buildPipOverlaysForMatches(preview.matches));
     }
     const adjustments: RenderAdjustments = { ...renderAdjust };
@@ -2426,6 +3125,10 @@ function PipelinePage() {
     // This object is intentionally exhaustive against PipelineTemplateSettings.
     // Adding a setting to the contract without capturing it fails type-checking.
     return {
+      snapshot: {
+        revision,
+        savedAt: new Date().toISOString(),
+      },
       generation: {
         name: pipelineName,
         idea,
@@ -2439,6 +3142,7 @@ function PipelinePage() {
       },
       content: {
         scripts: scripts.map((text, index) => ({
+          id: scriptIds[index],
           name: scriptNames[index] || `Script ${index + 1}`,
           text,
         })),
@@ -2471,8 +3175,12 @@ function PipelinePage() {
       },
       timeline: {
         selectedVariantIndices: Array.from(selectedVariants).sort((a, b) => a - b),
+        selectedOutputIds: Array.from(selectedOutputIds).sort(),
+        activeOutputId: previewCards.find((card) => card.key === activeOutputKey)?.outputId ?? null,
         matches,
         compositions,
+        defaultTransitions,
+        music,
         interstitialSlides,
         attentionSelection,
         attentionTimelines,
@@ -2495,12 +3203,118 @@ function PipelinePage() {
     };
   };
 
+  // The live pipeline snapshot is independent from the portable export action.
+  // Every user-configurable layer is versioned and saved after a short idle
+  // window, so reopening a pipeline restores the configuration that produced
+  // its assets instead of mixing it with current profile defaults.
+  useEffect(() => {
+    if (!pipelineId || scripts.length === 0 || snapshotConflict) return;
+    if (workspaceSnapshotTimer.current) clearTimeout(workspaceSnapshotTimer.current);
+    const savedPipelineId = pipelineId;
+    const scheduledStructureEpoch = scriptStructureEpochRef.current;
+    setPipelineSaveState("saving");
+    workspaceSnapshotTimer.current = setTimeout(async () => {
+      workspaceSnapshotTimer.current = null;
+      const previousSave = workspaceSnapshotInFlightRef.current;
+      const savePromise = (async () => {
+        if (previousSave) {
+          try {
+            await previousSave;
+          } catch {
+            // The next CAS attempt will surface the authoritative conflict.
+          }
+        }
+        if (
+          scriptStructureEpochRef.current !== scheduledStructureEpoch
+          || scriptStructureMutationPendingRef.current
+          || pipelineIdRef.current !== savedPipelineId
+        ) {
+          return;
+        }
+        const expectedRevision = workspaceSnapshotRevisionRef.current;
+        const response = await apiPut(
+          `/pipeline/${savedPipelineId}/template-settings`,
+          {
+            settings: capturePipelineTemplateSettings(expectedRevision + 1),
+            mode: "autosave",
+            expected_revision: expectedRevision,
+          },
+        );
+        const result = await response.json() as {
+          status: "saved";
+          revision: number;
+        };
+        if (result.status !== "saved" || !Number.isInteger(result.revision)) {
+          throw new Error("Snapshot save did not return an authoritative revision.");
+        }
+        workspaceSnapshotRevisionRef.current = result.revision;
+      })();
+      workspaceSnapshotInFlightRef.current = savePromise;
+      try {
+        await savePromise;
+        if (pipelineIdRef.current === savedPipelineId) {
+          setPipelineSaveState("saved");
+        }
+      } catch (error) {
+        if (pipelineIdRef.current === savedPipelineId) {
+          setPipelineSaveState("error");
+          if (error instanceof ApiError && error.status === 409) {
+            setSnapshotConflict(true);
+          }
+        }
+      } finally {
+        if (workspaceSnapshotInFlightRef.current === savePromise) {
+          workspaceSnapshotInFlightRef.current = null;
+        }
+      }
+    }, 1200);
+    return () => {
+      if (workspaceSnapshotTimer.current) {
+        clearTimeout(workspaceSnapshotTimer.current);
+        workspaceSnapshotTimer.current = null;
+      }
+    };
+    // capturePipelineTemplateSettings intentionally reads this exhaustive state
+    // envelope; changing any listed layer creates a new snapshot revision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    pipelineId, pipelineName, idea, context, contextProducts, variantCount,
+    targetScriptDuration, provider, codexModel, aiInstructions, scripts,
+    scriptIds, scriptNames, approvedScripts, generatedCaptions,
+    generatedYoutubeTitles, elevenlabsModel, voiceId, voiceStability,
+    voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost,
+    wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, assemblyPreset,
+    segmentProximity, selectedSourceIds, selectedVariants, selectedOutputIds,
+    previews, interstitialSlides, attentionSelection, attentionTimelines,
+    variantThumbnails, templatePipOverlays, subtitleSettings,
+    subtitleOverrides, variantSubtitleOverrides, subtitleRotation,
+    variantTemplateSelections, presetName, renderSettings, renderAdjust,
+    metaMultiplication, activeOutputKey, snapshotConflict,
+  ]);
+
   const handleExportPipelineTemplate = async () => {
     if (!pipelineId || templateTransferBusy) return;
+    if (snapshotConflict) {
+      toast.error("Resolve the pipeline settings conflict before exporting");
+      return;
+    }
     setTemplateTransferBusy("export");
     try {
-      const settings = capturePipelineTemplateSettings();
-      await apiPut(`/pipeline/${pipelineId}/template-settings`, { settings });
+      if (workspaceSnapshotInFlightRef.current) {
+        await workspaceSnapshotInFlightRef.current;
+      }
+      const expectedRevision = workspaceSnapshotRevisionRef.current;
+      const settings = capturePipelineTemplateSettings(expectedRevision + 1);
+      const saveResponse = await apiPut(`/pipeline/${pipelineId}/template-settings`, {
+        settings,
+        mode: "explicit",
+        expected_revision: expectedRevision,
+      });
+      const saveResult = await saveResponse.json() as {
+        status: "saved";
+        revision: number;
+      };
+      workspaceSnapshotRevisionRef.current = saveResult.revision;
       const response = await apiGet(`/pipeline/${pipelineId}/template`, {
         cache: "no-store",
         memoryCache: false,
@@ -2519,6 +3333,9 @@ function PipelinePage() {
       URL.revokeObjectURL(blobUrl);
       toast.success("Pipeline template exported");
     } catch (exportError) {
+      if (exportError instanceof ApiError && exportError.status === 409) {
+        setSnapshotConflict(true);
+      }
       handleApiError(exportError, "Pipeline template export failed");
     } finally {
       setTemplateTransferBusy(null);
@@ -2550,8 +3367,14 @@ function PipelinePage() {
       setVariantStatuses([]);
       setIsRendering(false);
       setPreviewError(null);
-      applyPipelineTemplateSettings(imported.settings, imported.pipeline_id);
+      applyPipelineTemplateSettings(
+        imported.settings,
+        imported.pipeline_id,
+        true,
+        imported.script_ids,
+      );
       setScripts(imported.scripts);
+      setScriptIds(ensureScriptIds(imported.script_ids, imported.scripts.length));
       setScriptNames(imported.script_names);
       setPipelineId(imported.pipeline_id);
       pipelineIdRef.current = imported.pipeline_id;
@@ -2582,7 +3405,7 @@ function PipelinePage() {
     const matchOverrides: Record<string, MatchPreview[]> = {};
     const compositionOverrides: Record<string, CompositionClip[]> = {};
     const musicOverrides: Record<string, MusicSettings> = {};
-    const selectedPreviewCards = previewCards.filter(card => selectedVariants.has(card.baseIndex));
+    const selectedPreviewCards = previewCards.filter((card) => selectedOutputIds.has(card.outputId));
     for (const card of selectedPreviewCards) {
       if (previews[card.key]?.music) {
         musicOverrides[card.key] = previews[card.key].music!;
@@ -2637,7 +3460,11 @@ function PipelinePage() {
     }
 
     return {
-      variant_indices: Array.from(selectedVariants),
+      variant_indices: Array.from(new Set(selectedPreviewCards.map((card) => card.baseIndex))),
+      output_keys: selectedPreviewCards.map((card) => card.key),
+      output_ids: Object.fromEntries(
+        selectedPreviewCards.map((card) => [card.key, card.outputId]),
+      ),
       preset_name: presetName,
       output_width: renderSettings.output_width || 1080,
       output_height: renderSettings.output_height || 1920,
@@ -2654,7 +3481,7 @@ function PipelinePage() {
       interstitial_slides: filteredInterstitialSlides,
       attention_timelines: Object.fromEntries(
         selectedPreviewCards
-          .filter(card => attentionTimelines[card.key]?.cues.length)
+          .filter(card => (attentionTimelines[card.key]?.cues?.length ?? 0) > 0)
           .map(card => [card.key, attentionTimelines[card.key]])
       ),
       pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
@@ -2713,33 +3540,40 @@ function PipelinePage() {
       karaoke_style: subtitleSettings.karaokeStyle ?? "color",
       highlight_bg_color: subtitleSettings.highlightBgColor ?? "#A3E635",
       // Per-Meta-version overrides. Only non-empty entries are sent — the
-      // backend's PUT regex rejects `{}` entries, so we filter them out to
-      // match the same contract when we POST to /render. When no overrides
-      // remain after filtering, omit the field entirely so the backend
-      // takes the simpler code path (flat defaults only).
-      subtitle_settings_by_key: (() => {
-        const filtered: Record<string, SubtitleSettings> = {};
-        if (subtitleRotation.enabled || Object.keys(variantTemplateSelections).length > 0) {
-          for (const card of selectedPreviewCards) {
-            filtered[card.key] = getPreviewSubtitleSettingsFor(card);
-          }
-          return filtered;
-        }
-        for (const [k, v] of Object.entries(subtitleOverrides) as [StyleKey, SubtitleSettings | undefined][]) {
-          if (v && Object.keys(v).length > 0) filtered[k] = v;
-        }
-        return Object.keys(filtered).length > 0 ? filtered : undefined;
-      })(),
+      // Send the fully resolved style for every selected output. This keeps
+      // profile → pipeline → A/B → output inheritance identical in preview
+      // and render, including output overrides without a template assignment.
+      subtitle_settings_by_key: Object.fromEntries(
+        selectedPreviewCards.map((card) => [
+          card.key,
+          getPreviewSubtitleSettingsFor(card),
+        ]),
+      ),
     };
   };
 
   // Step 3: Check for existing renders before starting
   const handleRenderClick = async () => {
-    if (!pipelineId || selectedVariants.size === 0) return;
+    if (!pipelineId || selectedOutputIds.size === 0) return;
+    if (voiceRegenerationActive) {
+      toast.error("Wait for voice-over regeneration to finish before rendering");
+      return;
+    }
+
+    const staleVoiceOutputs = previewCards
+      .filter((card) => selectedOutputIds.has(card.outputId))
+      .filter((card) => ttsResults[card.baseIndex]?.stale)
+      .map((card) => card.label);
+    if (staleVoiceOutputs.length > 0) {
+      toast.error("Regenerate outdated voice-overs before rendering", {
+        description: staleVoiceOutputs.join(", "),
+      });
+      return;
+    }
 
     // Warn if any selected variant has no preview (match_overrides will be missing)
     const unpreviewedVariants = previewCards
-      .filter(card => selectedVariants.has(card.baseIndex))
+      .filter((card) => selectedOutputIds.has(card.outputId))
       .filter(card => !previews[card.key]?.matches || previews[card.key].matches.length === 0)
       .map(card => card.label);
     if (unpreviewedVariants.length > 0) {
@@ -2775,8 +3609,12 @@ function PipelinePage() {
   };
 
   // Execute render with optional skip list
-  const handleRender = async (skipVariants: number[]) => {
-    if (!pipelineId || selectedVariants.size === 0) return;
+  const handleRender = async (skipOutputKeys: string[]) => {
+    if (!pipelineId || selectedOutputIds.size === 0) return;
+    if (voiceRegenerationActive) {
+      toast.error("Wait for voice-over regeneration to finish before rendering");
+      return;
+    }
 
     setShowSkipDialog(false);
     setSkipCheckResults(null);
@@ -2789,20 +3627,29 @@ function PipelinePage() {
     }
     setPreviewVariant(null);
 
-    const skipSet = new Set(skipVariants);
+    const skipSet = new Set(skipOutputKeys);
 
     // Build initial variant statuses — skipped variants show as cached/completed
-    const initialStatuses: VariantStatus[] = Array.from(selectedVariants).map(idx => {
-      if (skipSet.has(idx)) {
+    const selectedCards = previewCards.filter((card) => selectedOutputIds.has(card.outputId));
+    const initialStatuses: VariantStatus[] = selectedCards.map((card) => {
+      if (skipSet.has(card.key)) {
         return {
-          variant_index: idx,
+          variant_index: card.baseIndex,
+          output_key: card.key,
+          script_id: card.scriptId,
+          output_id: card.outputId,
+          visual_version: card.visualVersion,
           status: "completed" as const,
           progress: 100,
           current_step: "Existing render used",
         };
       }
       return {
-        variant_index: idx,
+        variant_index: card.baseIndex,
+        output_key: card.key,
+        script_id: card.scriptId,
+        output_id: card.outputId,
+        visual_version: card.visualVersion,
         status: "queued" as const,
         progress: 0,
         current_step: "Queued for render",
@@ -2814,7 +3661,7 @@ function PipelinePage() {
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
         ...payload,
-        skip_variants: skipVariants.length > 0 ? skipVariants : undefined,
+        skip_output_keys: skipOutputKeys.length > 0 ? skipOutputKeys : undefined,
       }, { timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000 });
 
       if (!isMountedRef.current) return;
@@ -2879,6 +3726,22 @@ function PipelinePage() {
       delete payload.match_overrides;
       delete payload.composition_overrides;
       payload.variant_indices = [variantIndex];
+      payload.output_keys = [
+        visualVersion ? `${variantIndex}_${visualVersion}` : String(variantIndex),
+      ];
+      const remakeCard = previewCards.find(
+        (card) =>
+          card.baseIndex === variantIndex
+          && (visualVersion
+            ? card.visualVersion === visualVersion
+            : !card.visualVersion),
+      );
+      if (!remakeCard) {
+        throw new Error("The selected output no longer exists.");
+      }
+      payload.output_ids = {
+        [payload.output_keys[0]]: remakeCard.outputId,
+      };
 
       const url = `/pipeline/remake/${pipelineId}/${variantIndex}` + (visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "");
       await apiPost(url, payload, {
@@ -2919,6 +3782,7 @@ function PipelinePage() {
     setGenerationJob(null);
     setIsGenerating(false);
     setScripts([]);
+    setScriptIds([]);
     setScriptNames([]);
     setPreviews({});
     importedTemplateTimelineRef.current = null;
@@ -2931,6 +3795,7 @@ function PipelinePage() {
     setVariantThumbnails({});
     setPreviewError(null);
     setSelectedVariants(new Set());
+    setSelectedOutputIds(new Set());
     setMetaMultiplication(true);
     setIsRendering(false);
     setVariantStatuses([]);
@@ -2993,6 +3858,7 @@ function PipelinePage() {
           const generatedScripts = (data.scripts || []) as string[];
           const result = (job.result || {}) as Record<string, unknown>;
           setScripts(generatedScripts.map(formatScript));
+          setScriptIds(ensureScriptIds(data.script_ids, generatedScripts.length));
           setScriptNames(
             data.script_names?.length === generatedScripts.length
               ? data.script_names
@@ -3029,11 +3895,13 @@ function PipelinePage() {
     if (selectedHistoryId === id) {
       setSelectedHistoryId(null);
       setHistoryScripts([]);
+      setHistoryScriptIds([]);
       setHistoryScriptNames([]);
       setHistorySelectedScripts(new Set());
       setHistoryPreviewInfo({});
       setHistoryTtsInfo({});
       setHistoryTtsJobs({});
+      setHistorySettingsRevision(0);
       return;
     }
     setSelectedHistoryId(id);
@@ -3059,6 +3927,7 @@ function PipelinePage() {
       }
       const scriptsArr = data.scripts || data || [];
       setHistoryScripts(scriptsArr);
+      setHistoryScriptIds(ensureScriptIds(data.script_ids, scriptsArr.length));
       setHistoryScriptNames(
         data.script_names?.length === scriptsArr.length
           ? data.script_names
@@ -3083,8 +3952,9 @@ function PipelinePage() {
           : null,
       );
       setHistoryTemplateSettings(
-        isPipelineTemplateSettings(data.template_settings) ? data.template_settings : null,
+        normalizePipelineTemplateSettings(data.template_settings),
       );
+      setHistorySettingsRevision(Number(data.settings_revision) || 0);
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
     } finally {
@@ -3109,12 +3979,14 @@ function PipelinePage() {
           if (selectedHistoryId === id) {
             setSelectedHistoryId(null);
             setHistoryScripts([]);
+            setHistoryScriptIds([]);
             setHistorySelectedScripts(new Set());
           }
           // If the deleted pipeline is currently loaded in the editor, clear it
           if (pipelineId === id) {
             setPipelineId(null);
             setScripts([]);
+            setScriptIds([]);
             setScriptNames([]);
             setPreviews({});
             setTtsResults({});
@@ -3183,8 +4055,13 @@ function PipelinePage() {
       });
       const data = await res.json();
       const pid = data.pipeline_id;
+      const importedScriptIds = ensureScriptIds(
+        data.script_ids,
+        (data.scripts || []).length,
+      );
       setPipelineId(pid);
       setScripts((data.scripts || []).map(formatScript));
+      setScriptIds(importedScriptIds);
       setScriptNames(defaultScriptNames((data.scripts || []).length));
 
       // Auto-adopt each TTS library asset into the pipeline
@@ -3193,8 +4070,15 @@ function PipelinePage() {
         try {
           const adoptRes = await apiPost(`/pipeline/tts-from-library/${pid}/${i}`, {
             asset_id: assets[i].id,
+            script_id: importedScriptIds[i],
           });
           const adoptData = await adoptRes.json();
+          if (
+            adoptData.script_id
+            && adoptData.script_id !== importedScriptIds[i]
+          ) {
+            throw new Error("Library audio belongs to a different script.");
+          }
           newTtsResults[i] = { audio_duration: adoptData.audio_duration, generating: false, stale: false };
         } catch (err) {
           console.warn(`Failed to adopt TTS asset ${assets[i].id}:`, err);
@@ -3231,11 +4115,13 @@ function PipelinePage() {
     fetchTtsLibrary();
     setSelectedHistoryId(null);
     setHistoryScripts([]);
+    setHistoryScriptIds([]);
     setHistorySelectedScripts(new Set());
     setHistoryPreviewInfo({});
     setHistoryTtsInfo({});
     setHistoryTtsJobs({});
     setHistoryTemplateSettings(null);
+    setHistorySettingsRevision(0);
   }, [currentProfile?.id, fetchHistory, fetchTtsLibrary]);
 
   // Fetch source videos on mount
@@ -3319,24 +4205,6 @@ function PipelinePage() {
     loadSubtitleSettings();
   }, [currentProfile?.id]);
 
-  // Debounced save for the DEFAULT subtitle settings (persisted on the profile
-  // so they propagate to future pipelines). Per-variant overrides use a
-  // different endpoint (see `handleVariantSubtitleChange` below).
-  const handleDefaultSubtitleChange = useCallback((newSettings: SubtitleSettings) => {
-    setSubtitleSettings(newSettings);
-    if (!currentProfileIdRef.current) return;
-    if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
-    subtitleSaveTimer.current = setTimeout(async () => {
-      try {
-        const profileId = currentProfileIdRef.current;
-        if (!profileId) return;
-        await apiPut(`/profiles/${profileId}/subtitle-settings`, newSettings);
-      } catch {
-        // Silent — settings still work locally
-      }
-    }, 1000);
-  }, []);
-
   // Debounced save for per-variant overrides. Scoped to the pipeline, not
   // the profile — these are creative choices specific to this content.
   //
@@ -3365,18 +4233,55 @@ function PipelinePage() {
     for (const [key, value] of Object.entries(nextVariantOverrides)) {
       if (value && Object.keys(value).length > 0) snapshot[key] = value;
     }
+    const outputIds: Record<string, OutputId> = {};
+    for (const key of Object.keys(snapshot)) {
+      const identity = getIdentityForPreviewKey(key);
+      if (identity) outputIds[key] = identity.outputId;
+    }
     overridesSaveTimer.current = setTimeout(async () => {
       // Bail out if the user navigated to a different pipeline meanwhile.
       if (pipelineIdRef.current !== savedPid) return;
+      const previousSave = workspaceSnapshotInFlightRef.current;
+      const savePromise = (async () => {
+        if (previousSave) {
+          try {
+            await previousSave;
+          } catch {
+            // The CAS below still uses the last authoritative revision.
+          }
+        }
+        if (pipelineIdRef.current !== savedPid) return;
+        const expectedRevision = workspaceSnapshotRevisionRef.current;
+        const response = await apiPut(`/pipeline/${savedPid}/subtitle-overrides`, {
+          overrides: snapshot,
+          output_ids: outputIds,
+          expected_revision: expectedRevision,
+        });
+        const result = await response.json() as { revision: number };
+        if (!Number.isInteger(result.revision)) {
+          throw new Error("Subtitle save did not return an authoritative revision.");
+        }
+        workspaceSnapshotRevisionRef.current = result.revision;
+      })();
+      workspaceSnapshotInFlightRef.current = savePromise;
       try {
-        await apiPut(`/pipeline/${savedPid}/subtitle-overrides`, { overrides: snapshot });
+        await savePromise;
         markSubtitleSaveSuccess();
-      } catch {
+      } catch (error) {
         setSubtitleSaveState("error");
+        if (error instanceof ApiError && error.status === 409) {
+          toast.error("Subtitle edit was not saved", {
+            description: "The output changed while the save was pending. Reopen it and try again.",
+          });
+        }
         // Silent — overrides still work locally for this session
+      } finally {
+        if (workspaceSnapshotInFlightRef.current === savePromise) {
+          workspaceSnapshotInFlightRef.current = null;
+        }
       }
     }, 800);
-  }, [markSubtitleSaveSuccess, variantSubtitleOverrides]);
+  }, [getIdentityForPreviewKey, markSubtitleSaveSuccess, variantSubtitleOverrides]);
 
   // Cancel any pending override save when the active pipeline changes, so a
   // late-firing timer for the previous pipeline can never write into the new
@@ -3396,29 +4301,66 @@ function PipelinePage() {
   const handleVariantSubtitleChange = useCallback(
     (styleKey: StyleKey, newSettings: SubtitleSettings) => {
       if (styleKey === "default") {
-        setSubtitleSettings(newSettings);
         setSubtitleOverrides(prev => {
-          if (!("default" in prev)) return prev;
           const next = { ...prev };
-          delete next.default;
+          const delta = subtitleSettingsDiff(subtitleSettings, newSettings);
+          if (Object.keys(delta).length > 0) next.default = delta as SubtitleSettings;
+          else delete next.default;
           scheduleOverridesSave(next);
           return next;
         });
-        scheduleProfileSubtitleSave(newSettings);
         return;
       }
 
       setSubtitleOverrides(prev => {
         const next = { ...prev };
-        const delta = subtitleSettingsDiff(subtitleSettings, newSettings);
+        const pipelineBase = prev.default && Object.keys(prev.default).length > 0
+          ? { ...subtitleSettings, ...prev.default }
+          : subtitleSettings;
+        const delta = subtitleSettingsDiff(pipelineBase, newSettings);
         if (Object.keys(delta).length > 0) next[styleKey] = delta as SubtitleSettings;
         else delete next[styleKey];
         scheduleOverridesSave(next);
         return next;
       });
     },
-    [scheduleOverridesSave, scheduleProfileSubtitleSave, subtitleSettings]
+    [scheduleOverridesSave, subtitleSettings]
   );
+
+  const handleSaveSubtitleAsProfileDefault = useCallback(async (newSettings: SubtitleSettings) => {
+    const profileId = currentProfileIdRef.current;
+    if (!profileId) {
+      toast.error("Select a profile before saving subtitle defaults.");
+      return;
+    }
+    setSubtitleSaveState("saving");
+    try {
+      await apiPut(`/profiles/${profileId}/subtitle-settings`, newSettings);
+      setSubtitleOverrides((previous) => {
+        const previousPipelineSettings = previous.default && Object.keys(previous.default).length > 0
+          ? { ...subtitleSettings, ...previous.default }
+          : subtitleSettings;
+        const next = { ...previous };
+        // "Save as profile default" changes the source inherited by future
+        // pipelines. Keep this pipeline visually identical by materializing its
+        // previous effective default as an explicit pipeline delta.
+        const pipelineDelta = subtitleSettingsDiff(newSettings, previousPipelineSettings);
+        if (Object.keys(pipelineDelta).length > 0) {
+          next.default = pipelineDelta as SubtitleSettings;
+        } else {
+          delete next.default;
+        }
+        scheduleOverridesSave(next);
+        return next;
+      });
+      setSubtitleSettings(newSettings);
+      markSubtitleSaveSuccess();
+      toast.success("Subtitle profile default updated");
+    } catch (error) {
+      setSubtitleSaveState("error");
+      handleApiError(error, "Could not save subtitle profile default");
+    }
+  }, [markSubtitleSaveSuccess, scheduleOverridesSave, subtitleSettings]);
 
   // Remove an override for a Meta version (Reset to default).
   const handleResetVariantSubtitle = useCallback(
@@ -3465,29 +4407,41 @@ function PipelinePage() {
   const handleCopyVariantSubtitle = useCallback(
     (sourceKey: StyleKey, targetKey: StyleKey) => {
       if (sourceKey === targetKey) return;
+      const sourceCard = previewCards.find(
+        (card) => toStyleKey(card) === sourceKey,
+      );
+      const resolvedSource = sourceCard
+        ? getPreviewSubtitleInheritedSettingsFor(sourceCard)
+        : getSubtitleSettingsFor(sourceKey);
       setSubtitleOverrides(prev => {
-        // Resolve the source's effective style inline (mirrors getSubtitleSettingsFor)
-        const sourceOverride = prev[sourceKey];
-        const sourceEffective: SubtitleSettings =
-          sourceOverride && Object.keys(sourceOverride).length > 0
-            ? { ...subtitleSettings, ...sourceOverride }
-            : { ...subtitleSettings };
+        const pipelineBase = prev.default && Object.keys(prev.default).length > 0
+          ? { ...subtitleSettings, ...prev.default }
+          : subtitleSettings;
         const next = { ...prev };
-        const delta = subtitleSettingsDiff(subtitleSettings, sourceEffective);
+        const delta = subtitleSettingsDiff(pipelineBase, resolvedSource);
         if (Object.keys(delta).length > 0) next[targetKey] = delta as SubtitleSettings;
         else delete next[targetKey];
         scheduleOverridesSave(next);
         return next;
       });
     },
-    [scheduleOverridesSave, subtitleSettings]
+    [
+      getPreviewSubtitleInheritedSettingsFor,
+      getSubtitleSettingsFor,
+      previewCards,
+      scheduleOverridesSave,
+      subtitleSettings,
+    ]
   );
 
   // Submit a "Save as preset" — POSTs the shared style plus any explicit A/B
   // overrides to /profiles/{id}/subtitle-presets and refreshes the list on
   // success. A/B overrides are included only when they have real content, so
   // tabs the user never touched don't freeze the default into the preset.
-  const handleSubmitSavePreset = useCallback(async () => {
+  const handleSubmitSavePreset = useCallback(async (
+    sourceSettings?: SubtitleSettings,
+    includePlatformVariants = true,
+  ) => {
     const profileId = currentProfileIdRef.current;
     if (!profileId) {
       setSavePresetError("No active profile");
@@ -3499,8 +4453,9 @@ function PipelinePage() {
       return;
     }
 
-    const overrideA = subtitleOverrides["A"];
-    const overrideB = subtitleOverrides["B"];
+    const baseSettings = sourceSettings ?? getSubtitleSettingsFor("default");
+    const overrideA = includePlatformVariants ? subtitleOverrides["A"] : undefined;
+    const overrideB = includePlatformVariants ? subtitleOverrides["B"] : undefined;
     const hasOverrideA = !!overrideA && Object.keys(overrideA).length > 0;
     const hasOverrideB = !!overrideB && Object.keys(overrideB).length > 0;
 
@@ -3512,14 +4467,14 @@ function PipelinePage() {
       wordsPerSubtitle?: number;
     } = {
       name: trimmedName,
-      settings: subtitleSettings,
-      wordsPerSubtitle,
+      settings: baseSettings,
+      wordsPerSubtitle: baseSettings.wordsPerSubtitle ?? wordsPerSubtitle,
     };
     if (hasOverrideA) {
-      payload.settingsA = { ...subtitleSettings, ...overrideA };
+      payload.settingsA = getSubtitleSettingsFor("A");
     }
     if (hasOverrideB) {
-      payload.settingsB = { ...subtitleSettings, ...overrideB };
+      payload.settingsB = getSubtitleSettingsFor("B");
     }
 
     setSavePresetSubmitting(true);
@@ -3540,7 +4495,12 @@ function PipelinePage() {
     } finally {
       setSavePresetSubmitting(false);
     }
-  }, [savePresetName, subtitleSettings, subtitleOverrides, wordsPerSubtitle]);
+  }, [
+    getSubtitleSettingsFor,
+    savePresetName,
+    subtitleOverrides,
+    wordsPerSubtitle,
+  ]);
 
   // Load/refresh user-saved subtitle presets from the profile.
   const refreshUserSubtitlePresets = useCallback(async () => {
@@ -3602,17 +4562,55 @@ function PipelinePage() {
       toast.error("Could not save subtitle template settings");
       return false;
     }
-    try {
-      await apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, {
+    const outputIds: Record<string, OutputId> = {};
+    for (const key of Object.keys(selections)) {
+      const identity = getIdentityForPreviewKey(key);
+      if (!identity) {
+        toast.error("Could not save subtitle template settings", {
+          description: "One selected output no longer exists. Reopen the pipeline and try again.",
+        });
+        return false;
+      }
+      outputIds[key] = identity.outputId;
+    }
+    const previousSave = workspaceSnapshotInFlightRef.current;
+    const savePromise = (async () => {
+      if (previousSave) {
+        await previousSave;
+      }
+      const expectedRevision = workspaceSnapshotRevisionRef.current;
+      const response = await apiPut(`/pipeline/${savedPipelineId}/subtitle-rotation`, {
         ...rotation,
         variantTemplates: selections,
+        output_ids: outputIds,
+        expected_revision: expectedRevision,
       });
+      const result = await response.json() as { revision: number };
+      if (!Number.isInteger(result.revision)) {
+        throw new Error("Subtitle template save did not return a revision.");
+      }
+      workspaceSnapshotRevisionRef.current = result.revision;
+    })();
+    workspaceSnapshotInFlightRef.current = savePromise;
+    try {
+      await savePromise;
       return true;
-    } catch {
-      toast.error("Could not save subtitle template settings");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setSnapshotConflict(true);
+        toast.error("Subtitle template selection was not saved", {
+          description: "The pipeline changed in another tab. Reload it before editing further.",
+        });
+      } else {
+        toast.error("Could not save subtitle template settings");
+      }
       return false;
+    } finally {
+      if (workspaceSnapshotInFlightRef.current === savePromise) {
+        workspaceSnapshotInFlightRef.current = null;
+      }
     }
-  }, []);
+  }, [getIdentityForPreviewKey]);
 
   const handleSubtitleRotationChange = useCallback((next: SubtitleTemplateRotation) => {
     setSubtitleRotation(next);
@@ -3625,17 +4623,21 @@ function PipelinePage() {
   // "apply to all" / No subtitles choice) would silently mask the new
   // rotation in every variant preview.
   const handleSubtitleTemplateChange = useCallback((next: SubtitleTemplateRotation) => {
-    const nextSelections: VariantTemplateSelections = {};
+    const allowedPresetIds = new Set(next.presetIds);
+    const nextSelections = Object.fromEntries(
+      Object.entries(variantTemplateSelections).filter(
+        ([, presetId]) => Boolean(presetId && allowedPresetIds.has(presetId)),
+      ),
+    ) as VariantTemplateSelections;
     setSubtitleRotation(next);
     setVariantTemplateSelections(nextSelections);
-    setVariantSubtitleOverrides((previous) => {
-      if (Object.keys(previous).length === 0) return previous;
-      scheduleOverridesSave(subtitleOverrides, {});
-      return {};
-    });
     void persistSubtitleRotation(next, nextSelections);
     scheduleReassemblePreviews();
-  }, [persistSubtitleRotation, scheduleOverridesSave, scheduleReassemblePreviews, subtitleOverrides]);
+  }, [
+    persistSubtitleRotation,
+    scheduleReassemblePreviews,
+    variantTemplateSelections,
+  ]);
 
   const handleUpdateSubtitleTemplateStyles = useCallback(async (
     templateId: string,
@@ -3693,29 +4695,163 @@ function PipelinePage() {
   }, [persistSubtitleRotation, scheduleReassemblePreviews, subtitleRotation]);
 
   // Debounced auto-save scripts to backend
-  const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[], updatedNames?: string[]) => {
+  const saveScriptsToBackend = useCallback((
+    pId: string,
+    updatedScripts: string[],
+    updatedNames?: string[],
+    updatedScriptIds?: ScriptId[],
+    options?: {
+      immediate?: boolean;
+      onSaved?: () => void;
+      onSettled?: () => void;
+    },
+  ) => {
     if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
-    scriptSaveTimer.current = setTimeout(async () => {
+    const expectedScriptIds = [...scriptIdsRef.current];
+    const savedScriptIds = ensureScriptIds(
+      updatedScriptIds ?? scriptIds,
+      updatedScripts.length,
+    );
+    const save = async () => {
+      const previousSave = workspaceSnapshotInFlightRef.current;
+      const savePromise = (async () => {
+        if (previousSave) {
+          try {
+            await previousSave;
+          } catch {
+            return;
+          }
+        }
+        try {
+          const currentPid = pipelineIdRef.current;
+          if (!currentPid || currentPid !== pId) return;
+          const expectedRevision = workspaceSnapshotRevisionRef.current;
+          const response = await apiPut(`/pipeline/${pId}/scripts`, {
+            scripts: updatedScripts,
+            script_ids: savedScriptIds,
+            expected_script_ids: expectedScriptIds,
+            expected_revision: expectedRevision,
+            ...(updatedNames ? { script_names: updatedNames } : {}),
+          });
+          const result = await response.json() as {
+            status: "updated";
+            revision: number;
+          };
+          if (!Number.isInteger(result.revision)) {
+            throw new Error("Script save did not return an authoritative revision.");
+          }
+          workspaceSnapshotRevisionRef.current = result.revision;
+          options?.onSaved?.();
+        } catch (error) {
+          // Script text remains local for ordinary edits. Structural changes
+          // use onSaved, so a rejected CAS is never applied optimistically.
+          if (error instanceof ApiError && error.status === 409) {
+            const activeJobConflict = error.detail.includes(
+              "identity-sensitive jobs",
+            );
+            if (!activeJobConflict) setSnapshotConflict(true);
+            toast.error(
+              activeJobConflict
+                ? "Scripts were not changed"
+                : "Pipeline settings conflict",
+              {
+                description: activeJobConflict
+                  ? "An active voice, preview, or render job still owns the current output positions."
+                  : "Another tab saved a newer pipeline revision. Reload before editing further.",
+              },
+            );
+            try {
+              const response = await apiGet(`/pipeline/scripts/${pId}`);
+              const authoritative = await response.json() as PipelineScriptsResponse;
+              setScripts(authoritative.scripts || []);
+              setScriptIds(
+                ensureScriptIds(
+                  authoritative.script_ids,
+                  authoritative.scripts?.length || 0,
+                ),
+              );
+              setScriptNames(
+                authoritative.script_names
+                ?? defaultScriptNames(authoritative.scripts?.length || 0),
+              );
+              workspaceSnapshotRevisionRef.current =
+                Number(authoritative.settings_revision) || 0;
+            } catch (reloadError) {
+              handleApiError(
+                reloadError,
+                "Could not restore the authoritative script order",
+              );
+            }
+          }
+        }
+      })();
+      workspaceSnapshotInFlightRef.current = savePromise;
       try {
-        const currentPid = pipelineIdRef.current;
-        if (!currentPid) return;
-        await apiPut(`/pipeline/${currentPid}/scripts`, {
-          scripts: updatedScripts,
-          ...(updatedNames ? { script_names: updatedNames } : {}),
-        });
-      } catch {
-        // Silent — scripts still work locally, will retry on next edit
+        await savePromise;
+      } finally {
+        if (workspaceSnapshotInFlightRef.current === savePromise) {
+          workspaceSnapshotInFlightRef.current = null;
+        }
+        options?.onSettled?.();
       }
-    }, 1000);
-  }, []);
+    };
+    if (options?.immediate) {
+      void save();
+    } else {
+      scriptSaveTimer.current = setTimeout(() => {
+        scriptSaveTimer.current = null;
+        void save();
+      }, 1000);
+    }
+  }, [scriptIds]);
 
   const saveScriptNamesToBackend = useCallback((pId: string, names: string[]) => {
     if (scriptNameSaveTimer.current) clearTimeout(scriptNameSaveTimer.current);
+    const savedScriptIds = [...scriptIdsRef.current];
     scriptNameSaveTimer.current = setTimeout(async () => {
+      const previousSave = workspaceSnapshotInFlightRef.current;
+      const savePromise = (async () => {
+        if (previousSave) {
+          try {
+            await previousSave;
+          } catch {
+            return;
+          }
+        }
       try {
-        await apiPatch(`/pipeline/${pId}/script-names`, { script_names: names });
-      } catch {
-        toast.error("Script name could not be saved");
+        const expectedRevision = workspaceSnapshotRevisionRef.current;
+        const response = await apiPatch(`/pipeline/${pId}/script-names`, {
+          script_names: names,
+          script_ids: savedScriptIds,
+          expected_revision: expectedRevision,
+        });
+        const result = await response.json() as {
+          status: "updated";
+          revision: number;
+        };
+        if (!Number.isInteger(result.revision)) {
+          throw new Error("Script-name save did not return an authoritative revision.");
+        }
+        workspaceSnapshotRevisionRef.current = result.revision;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          setSnapshotConflict(true);
+          toast.error("Script name was not saved", {
+            description:
+              "Another tab saved a newer pipeline revision. Reload before editing further.",
+          });
+        } else {
+          toast.error("Script name could not be saved");
+        }
+      }
+      })();
+      workspaceSnapshotInFlightRef.current = savePromise;
+      try {
+        await savePromise;
+      } finally {
+        if (workspaceSnapshotInFlightRef.current === savePromise) {
+          workspaceSnapshotInFlightRef.current = null;
+        }
       }
     }, 1500);
   }, []);
@@ -3729,6 +4865,10 @@ function PipelinePage() {
   }, []);
 
   const handleScriptNameCommit = useCallback((index: number) => {
+    if (scriptStructureMutationPendingRef.current) {
+      toast.error("Wait for the script-list change to finish saving.");
+      return;
+    }
     setScriptNames((prev) => {
       const next = [...prev];
       next[index] = next[index]?.trim() || `Script ${index + 1}`;
@@ -3737,7 +4877,164 @@ function PipelinePage() {
     });
   }, [pipelineId, saveScriptNamesToBackend]);
 
+  const handleDeleteScript = useCallback((index: number) => {
+    if (scripts.length <= 1 || index < 0 || index >= scripts.length) return;
+    if (scriptStructureMutationPendingRef.current) {
+      toast.error("A script-list change is already being saved.");
+      return;
+    }
+    const identitySensitiveJobActive =
+      isGenerating
+      || regeneratingAllScripts
+      || Object.values(regeneratingScript).some(Boolean)
+      || Object.values(regeneratingVariantAudio).some(Boolean)
+      || Object.values(ttsResults).some((result) => result.generating)
+      || previewingIndex !== null
+      || variantStatuses.some(
+        (status) => status.status === "queued" || status.status === "processing",
+      );
+    if (identitySensitiveJobActive) {
+      toast.error("Wait for active jobs before deleting a script", {
+        description:
+          "Deleting or reordering scripts is locked while voice, preview, or render work can still finish.",
+      });
+      return;
+    }
+    const removedScriptId = scriptIds[index];
+    const nextScripts = scripts.filter((_, itemIndex) => itemIndex !== index);
+    const nextNames = scriptNames.filter((_, itemIndex) => itemIndex !== index);
+    const nextScriptIds = scriptIds.filter((_, itemIndex) => itemIndex !== index);
+    const remapKey = (key: PreviewKey | null): PreviewKey | null => {
+      if (!key) return null;
+      return Object.keys(remapPreviewRecord(
+        { [key]: true },
+        scriptIds,
+        nextScriptIds,
+      ))[0] ?? null;
+    };
+    const remapNumericRecord = <T,>(record: Record<number, T>): Record<number, T> => (
+      remapPreviewRecord(
+        record as unknown as Record<PreviewKey, T>,
+        scriptIds,
+        nextScriptIds,
+      ) as Record<number, T>
+    );
+
+    const applyAcceptedDelete = () => {
+      clearHistory();
+      Object.values(matchesSaveTimers.current).forEach(clearTimeout);
+      Object.values(videoTimelineSaveTimers.current).forEach(clearTimeout);
+      matchesSaveTimers.current = {};
+      videoTimelineSaveTimers.current = {};
+      matchesChangeHandlers.current = {};
+      videoTimelineChangeHandlers.current = {};
+      if (importedTemplateTimelineRef.current) {
+        importedTemplateTimelineRef.current = remapPendingTemplateTimeline(
+          importedTemplateTimelineRef.current,
+          scriptIds,
+          nextScriptIds,
+        );
+      }
+      setScripts(nextScripts);
+      setScriptNames(nextNames);
+      setScriptIds(nextScriptIds);
+      setTtsResults(remapNumericRecord);
+      setLibraryMatches(remapNumericRecord);
+      setSrtPreviewOpen(remapNumericRecord);
+      setPreviews((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ) as Record<PreviewKey, PreviewData>);
+      setInterstitialSlides((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ) as Record<PreviewKey, InterstitialSlide[]>);
+      setAttentionTimelines((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ) as Record<PreviewKey, AttentionTimeline>);
+      setVariantThumbnails((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ) as Record<PreviewKey, ThumbnailSelection>);
+      setVariantSubtitleOverrides((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ));
+      setVariantTemplateSelections((previous) => remapPreviewRecord(
+        previous,
+        scriptIds,
+        nextScriptIds,
+      ));
+      setApprovedScripts((previous) => new Set(
+        Array.from(previous)
+          .map((oldIndex) => scriptIds[oldIndex])
+          .map((scriptId) => nextScriptIds.indexOf(scriptId))
+          .filter((newIndex) => newIndex >= 0),
+      ));
+      setSelectedVariants((previous) => new Set(
+        Array.from(previous)
+          .map((oldIndex) => scriptIds[oldIndex])
+          .map((scriptId) => nextScriptIds.indexOf(scriptId))
+          .filter((newIndex) => newIndex >= 0),
+      ));
+      if (removedScriptId) {
+        setSelectedOutputIds((previous) => new Set(
+          Array.from(previous).filter(
+            (outputId) => !outputBelongsToScript(outputId, removedScriptId),
+          ),
+        ));
+      }
+      setActiveOutputKey((current) => remapKey(current));
+      setPreviewVariant((current) => remapKey(current));
+      setThumbnailPickerKey((current) => remapKey(current));
+    };
+
+    scriptStructureEpochRef.current += 1;
+    if (pipelineId) {
+      scriptStructureMutationPendingRef.current = true;
+      saveScriptsToBackend(
+        pipelineId,
+        nextScripts,
+        nextNames,
+        nextScriptIds,
+        {
+          immediate: true,
+          onSaved: applyAcceptedDelete,
+          onSettled: () => {
+            scriptStructureMutationPendingRef.current = false;
+          },
+        },
+      );
+    } else {
+      applyAcceptedDelete();
+    }
+  }, [
+    isGenerating,
+    pipelineId,
+    previewingIndex,
+    regeneratingAllScripts,
+    regeneratingScript,
+    regeneratingVariantAudio,
+    saveScriptsToBackend,
+    clearHistory,
+    scriptIds,
+    scriptNames,
+    scripts,
+    ttsResults,
+    variantStatuses,
+  ]);
+
   const handleScriptCommit = useCallback((index: number, nextValue: string) => {
+    if (scriptStructureMutationPendingRef.current) {
+      toast.error("Wait for the script-list change to finish saving.");
+      return;
+    }
     setScripts((prev) => {
       if (prev[index] === nextValue) return prev;
       const next = [...prev];
@@ -3786,42 +5083,8 @@ function PipelinePage() {
         }
         setLibraryMatches(parsed);
 
-        // Auto-adopt library audio for all matches without existing TTS
-        if (!cancelled && pipelineId && Object.keys(parsed).length > 0) {
-          const indicesToLoad = Object.keys(parsed)
-            .map(Number)
-            .filter(idx => !ttsResultsRef.current[idx]);
-
-          for (const idx of indicesToLoad) {
-            if (cancelled) break;
-            const match = parsed[idx];
-            if (!match) continue;
-
-            setTtsResults(prev => ({
-              ...prev,
-              [idx]: { audio_duration: 0, generating: true, stale: false }
-            }));
-
-            try {
-              const adoptRes = await apiPost(`/pipeline/tts-from-library/${pipelineId}/${idx}`, {
-                asset_id: match.asset_id,
-              });
-              const adoptData = await adoptRes.json();
-              if (cancelled) break;
-              setTtsResults(prev => ({
-                ...prev,
-                [idx]: { audio_duration: adoptData.audio_duration, generating: false, stale: false }
-              }));
-            } catch {
-              if (cancelled) break;
-              setTtsResults(prev => {
-                const next = { ...prev };
-                delete next[idx];
-                return next;
-              });
-            }
-          }
-        }
+        // Text-only duplicate matches are suggestions, never implicit adoption:
+        // the user must choose the Library asset for this script explicitly.
       } catch (err) {
         console.warn("TTS library duplicate check failed:", err);
       }
@@ -3888,6 +5151,10 @@ function PipelinePage() {
           srt_content: info.srt_content,
           script_word_count: info.script_word_count,
           srt_word_count: info.srt_word_count,
+          elevenlabs_model: info.elevenlabs_model ?? undefined,
+          voice_id: info.voice_id ?? undefined,
+          voice_settings: info.voice_settings as TtsResult["voice_settings"],
+          source: "generated",
         };
         if (info.approved) restoredApproved.add(index);
       }
@@ -3934,8 +5201,13 @@ function PipelinePage() {
     // If all scripts are selected, reuse the existing pipeline (no duplicate)
     if (selected.length === historyScripts.length && selectedHistoryId) {
       const pid = selectedHistoryId;
+      const restoredHistoryScriptIds = ensureScriptIds(
+        historyScriptIds,
+        historyScripts.length,
+      );
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
+      setScriptIds(restoredHistoryScriptIds);
       setScriptNames(
         historyScriptNames.length === historyScripts.length
           ? historyScriptNames
@@ -3948,11 +5220,20 @@ function PipelinePage() {
       // Restore context products from history
       setContextProducts(historyContextProducts);
       if (historyTemplateSettings) {
-        applyPipelineTemplateSettings(historyTemplateSettings, selectedHistoryId || undefined);
+        applyPipelineTemplateSettings(
+          historyTemplateSettings,
+          selectedHistoryId || undefined,
+          true,
+          restoredHistoryScriptIds,
+        );
       }
-      const restoredSelection = historyAttentionSelection ?? EMPTY_ATTENTION_SELECTION;
-      setAttentionSelection(restoredSelection);
-      attentionSelectionRef.current = restoredSelection;
+      workspaceSnapshotRevisionRef.current = historySettingsRevision;
+      activeTemplatePipelineIdRef.current = selectedHistoryId;
+      if (!historyTemplateSettings) {
+        const restoredSelection = historyAttentionSelection ?? EMPTY_ATTENTION_SELECTION;
+        setAttentionSelection(restoredSelection);
+        attentionSelectionRef.current = restoredSelection;
+      }
       // Restore pipeline metadata for "Back to Input"
       const histItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
       if (histItem) {
@@ -3962,46 +5243,54 @@ function PipelinePage() {
         if (histItem.variant_count) setVariantCount(histItem.variant_count);
         if (histItem.target_script_duration) setTargetScriptDuration(histItem.target_script_duration);
       }
-      apiGet(`/pipeline/${pid}/meta-multiplication`)
-        .then(async (res) => {
-          if (!isMountedRef.current) return;
-          const data = await res.json();
-          setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
-        })
-        .catch(() => {
-          setMetaMultiplication(true);
-        });
+      if (!historyTemplateSettings) {
+        apiGet(`/pipeline/${pid}/meta-multiplication`)
+          .then(async (res) => {
+            if (!isMountedRef.current) return;
+            const data = await res.json();
+            setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
+          })
+          .catch(() => {
+            setMetaMultiplication(true);
+          });
+      }
 
       // Restore per-Meta-version subtitle overrides for this pipeline.
-      apiGet(`/pipeline/${pid}/subtitle-overrides`)
-        .then(async (res) => {
-          if (!isMountedRef.current) return;
-          const data = await res.json();
-          if (data && typeof data.overrides === "object" && data.overrides !== null) {
-            const entries = Object.entries(data.overrides) as [string, SubtitleSettings][];
-            setSubtitleOverrides(Object.fromEntries(
-              entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
-            ) as Partial<Record<StyleKey, SubtitleSettings>>);
-            setVariantSubtitleOverrides(Object.fromEntries(
-              entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
-            ));
-          } else {
+      if (!historyTemplateSettings) {
+        apiGet(`/pipeline/${pid}/subtitle-overrides`)
+          .then(async (res) => {
+            if (!isMountedRef.current) return;
+            const data = await res.json();
+            if (data && typeof data.overrides === "object" && data.overrides !== null) {
+              const entries = Object.entries(data.overrides) as [string, SubtitleSettings][];
+              setSubtitleOverrides(Object.fromEntries(
+                entries.filter(([key]) => key === "A" || key === "B" || key === "default"),
+              ) as Partial<Record<StyleKey, SubtitleSettings>>);
+              setVariantSubtitleOverrides(Object.fromEntries(
+                entries.filter(([key]) => /^\d+(?:_[A-J])?$/.test(key)),
+              ));
+            } else {
+              setSubtitleOverrides({});
+              setVariantSubtitleOverrides({});
+            }
+          })
+          .catch(() => {
             setSubtitleOverrides({});
             setVariantSubtitleOverrides({});
-          }
-        })
-        .catch(() => {
-          setSubtitleOverrides({});
-          setVariantSubtitleOverrides({});
-        });
+          });
+      }
       setSelectedHistoryId(null);
       setHistoryScripts([]);
+      setHistoryScriptIds([]);
       setHistorySelectedScripts(new Set());
       setPreviews({});
       setPreviewError(null);
-      // Restore source video selection from DB
-      setSelectedSourceIds(new Set());
-      restoreSourceSelection(pid);
+      // Complete snapshots own source bindings. Legacy pipelines still use
+      // the dedicated source-selection column.
+      if (!historyTemplateSettings) {
+        setSelectedSourceIds(new Set());
+        restoreSourceSelection(pid);
+      }
 
       // Restore previews in background (so step 3 is ready when user navigates there)
       const allHavePreviews = historyScripts.every((_, idx) => {
@@ -4017,13 +5306,25 @@ function PipelinePage() {
             if (previewData.previews && Object.keys(previewData.previews).length > 0) {
               const restoredPreviews: Record<PreviewKey, PreviewData> = {};
               for (const [key, val] of Object.entries(previewData.previews)) {
-                restoredPreviews[key] = val as PreviewData;
+                const previewKey = key as PreviewKey;
+                restoredPreviews[previewKey] = mergeSnapshotTimelineIntoPreview(
+                  previewKey,
+                  val as PreviewData,
+                  historyTemplateSettings?.timeline,
+                );
               }
               setPreviews(restoredPreviews);
               if (previewData.available_segments?.length > 0) {
                 setAvailableSegments(previewData.available_segments);
               }
-              setSelectedVariants(new Set(historyScripts.map((_, i) => i)));
+              if (!historyTemplateSettings) {
+                setSelectedVariants(new Set(historyScripts.map((_, i) => i)));
+                setSelectedOutputIds(new Set(
+                  restoredHistoryScriptIds.flatMap((scriptId) => (
+                    [buildOutputId(scriptId, "A"), buildOutputId(scriptId, "B")]
+                  )),
+                ));
+              }
             }
           })
           .catch((err) => {
@@ -4060,6 +5361,7 @@ function PipelinePage() {
       attentionSelectionRef.current = importedSelection;
       setPipelineId(pid);
       setScripts((data.scripts || []).map(formatScript));
+      setScriptIds(ensureScriptIds(data.script_ids, (data.scripts || []).length));
       const importedNames = selectedNames.length === selected.length
         ? selectedNames
         : defaultScriptNames((data.scripts || []).length);
@@ -4069,6 +5371,7 @@ function PipelinePage() {
       setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
+      setHistoryScriptIds([]);
       setHistorySelectedScripts(new Set());
       setPreviews({});
       setPreviewError(null);
@@ -4099,8 +5402,20 @@ function PipelinePage() {
   };
 
   // Audio preview: play/pause toggle
-  const handlePlayAudio = (pipelineId: string, variantIndex: number) => {
+  const handlePlayAudio = (
+    pipelineId: string,
+    variantIndex: number,
+    explicitScriptId?: ScriptId,
+  ) => {
     const audioKey = `${pipelineId}-${variantIndex}`;
+    const targetScriptId = explicitScriptId
+      ?? (pipelineId === pipelineIdRef.current
+        ? scriptIdsRef.current[variantIndex]
+        : undefined);
+    if (!targetScriptId) {
+      toast.error("Audio identity is unavailable. Reload the pipeline and try again.");
+      return;
+    }
 
     if (playingAudio === audioKey) {
       stopCurrentAudio();
@@ -4113,7 +5428,11 @@ function PipelinePage() {
     const controller = new AbortController();
     audioPlayAbortRef.current = controller;
 
-    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}?_t=${Date.now()}`, { signal: controller.signal })
+    const audioQuery = new URLSearchParams({
+      _t: String(Date.now()),
+      script_id: targetScriptId,
+    });
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}?${audioQuery}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(blob => {
         if (controller.signal.aborted) return;
@@ -4168,8 +5487,6 @@ function PipelinePage() {
       if (scriptSaveTimer.current) { clearTimeout(scriptSaveTimer.current); scriptSaveTimer.current = null; }
       if (scriptNameSaveTimer.current) { clearTimeout(scriptNameSaveTimer.current); scriptNameSaveTimer.current = null; }
       if (catalogSearchTimer.current) { clearTimeout(catalogSearchTimer.current); catalogSearchTimer.current = null; }
-      if (voiceSettingsSaveTimer.current) { clearTimeout(voiceSettingsSaveTimer.current); voiceSettingsSaveTimer.current = null; }
-      if (subtitleSaveTimer.current) { clearTimeout(subtitleSaveTimer.current); subtitleSaveTimer.current = null; }
       if (subtitleSavedResetTimer.current) { clearTimeout(subtitleSavedResetTimer.current); subtitleSavedResetTimer.current = null; }
       previewAbortRef.current?.abort();
       scriptAbortRef.current?.abort();
@@ -4191,7 +5508,6 @@ function PipelinePage() {
   // Fix: the only way `userChangedVoiceRef` flips to true is via the slider / checkbox
   // onChange handlers below, so any number of async hydration sources can fire without
   // triggering staleness.
-  const voiceSettingsHydrated = useRef(false);
   const userChangedVoiceRef = useRef(false);
   useEffect(() => {
     if (!voiceSettingsLoaded) return;
@@ -4206,138 +5522,161 @@ function PipelinePage() {
       }
       return next;
     });
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
+  }, [
+    elevenlabsModel,
+    voiceId,
+    voiceSettingsLoaded,
+    voiceSimilarity,
+    voiceSpeakerBoost,
+    voiceSpeed,
+    voiceStability,
+    voiceStyle,
+  ]);
 
-  // Load voice settings from localStorage after hydration
+  const ttsAssetConfigSignature = useMemo(
+    () => Object.entries(ttsResults)
+      .map(([index, result]) => [
+        index,
+        result.source,
+        result.elevenlabs_model,
+        result.voice_id,
+        result.voice_settings?.stability,
+        result.voice_settings?.similarity_boost,
+        result.voice_settings?.style,
+        result.voice_settings?.speed,
+        result.voice_settings?.use_speaker_boost,
+        result.stale,
+      ].join(":"))
+      .sort()
+      .join("|"),
+    [ttsResults],
+  );
   useEffect(() => {
-    if (!currentProfile?.id) return;
-    if (activeTemplatePipelineIdRef.current) {
-      setVoiceSettingsLoaded(true);
-      return;
-    }
-    try {
-      const stability = readWorkspaceStorage(currentProfile.id, "pipeline.voice.stability", "ef_voice_stability");
-      const similarity = readWorkspaceStorage(currentProfile.id, "pipeline.voice.similarity", "ef_voice_similarity");
-      const style = readWorkspaceStorage(currentProfile.id, "pipeline.voice.style", "ef_voice_style");
-      const speed = readWorkspaceStorage(currentProfile.id, "pipeline.voice.speed", "ef_voice_speed");
-      const boost = readWorkspaceStorage(currentProfile.id, "pipeline.voice.speaker-boost", "ef_voice_speaker_boost");
-      const wps = readWorkspaceStorage(currentProfile.id, "pipeline.words-per-subtitle", "ef_words_per_subtitle");
-      const elModel = readWorkspaceStorage(currentProfile.id, "pipeline.elevenlabs-model", "ef_elevenlabs_model");
-      const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
-      if (stability !== null) setVoiceStability(parseFloat(stability));
-      if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
-      if (style !== null) setVoiceStyle(parseFloat(style));
-      if (speed !== null) setVoiceSpeed(parseFloat(speed));
-      if (boost !== null) setVoiceSpeakerBoost(boost === "true");
-      if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
-      if (elModel !== null) setElevenlabsModel(elModel);
-      const msd = readWorkspaceStorage(currentProfile.id, "pipeline.min-segment-duration", "ef_min_segment_duration");
-      if (msd !== null) setMinSegmentDuration(parseFloat(msd));
-      const uri = readWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", "ef_ultra_rapid_intro");
-      if (uri !== null) setUltraRapidIntro(uri === "true");
-      const preset = readWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", "ef_assembly_preset");
-      if (preset === "keyword_strict" || preset === "balanced" || preset === "max_variety" || preset === "shuffle" || preset === "ai_smart") {
-        setAssemblyPreset(preset);
+    if (!voiceSettingsLoaded) return;
+    const effectiveVoiceId = voiceId && voiceId !== "default" ? voiceId : undefined;
+    setTtsResults((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const [rawIndex, result] of Object.entries(previous)) {
+        if (
+          result.source === "library"
+          || (!result.elevenlabs_model && !result.voice_id && !result.voice_settings)
+        ) {
+          continue;
+        }
+        const saved = result.voice_settings;
+        const mismatch = (
+          result.elevenlabs_model !== elevenlabsModel
+          || result.voice_id !== effectiveVoiceId
+          || (saved?.stability != null && saved.stability !== voiceStability)
+          || (saved?.similarity_boost != null && saved.similarity_boost !== voiceSimilarity)
+          || (saved?.style != null && saved.style !== voiceStyle)
+          || (saved?.speed != null && saved.speed !== voiceSpeed)
+          || (
+            saved?.use_speaker_boost != null
+            && saved.use_speaker_boost !== voiceSpeakerBoost
+          )
+        );
+        if (mismatch && !result.stale && !result.generating) {
+          next[Number(rawIndex)] = { ...result, stale: true };
+          changed = true;
+        }
       }
-      const proximity = readWorkspaceStorage(currentProfile.id, "pipeline.segment-proximity", "ef_segment_proximity");
-      if (proximity === "separate" || proximity === "merge") {
-        setSegmentProximity(proximity);
-      }
-      // If no voice values were stored, hydration won't trigger a re-render,
-      // so pre-mark as hydrated to avoid skipping the first real user change
-      if (!hasVoiceValues) voiceSettingsHydrated.current = true;
-    } catch {
-      // FE-16: SecurityError or QuotaExceededError — use defaults
-    }
-    setVoiceSettingsLoaded(true);
+      return changed ? next : previous;
+    });
+  }, [
+    elevenlabsModel,
+    ttsAssetConfigSignature,
+    voiceId,
+    voiceSettingsLoaded,
+    voiceSimilarity,
+    voiceSpeakerBoost,
+    voiceSpeed,
+    voiceStability,
+    voiceStyle,
+  ]);
+
+  // Voice changes belong to the active pipeline and are captured by the
+  // pipeline snapshot. They no longer leak into workspace/profile defaults
+  // through localStorage or an implicit profile PATCH.
+  useEffect(() => {
+    if (currentProfile?.id) setVoiceSettingsLoaded(true);
   }, [currentProfile?.id]);
 
-  // Keep voice settings ref in sync for debounced save (Bug #87)
-  useEffect(() => {
-    voiceSettingsValuesRef.current = { voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel };
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel]);
-
-  // Persist voice settings to localStorage (skip initial render before load)
-  useEffect(() => {
-    if (!voiceSettingsLoaded || !currentProfile?.id) return;
-    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.stability", String(voiceStability));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.similarity", String(voiceSimilarity));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.style", String(voiceStyle));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.speed", String(voiceSpeed));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.voice.speaker-boost", String(voiceSpeakerBoost));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.words-per-subtitle", String(wordsPerSubtitle));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.min-segment-duration", String(minSegmentDuration));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.ultra-rapid-intro", String(ultraRapidIntro));
-    writeWorkspaceStorage(currentProfile.id, "pipeline.elevenlabs-model", elevenlabsModel);
-    writeWorkspaceStorage(currentProfile.id, "pipeline.assembly-preset", assemblyPreset);
-    writeWorkspaceStorage(currentProfile.id, "pipeline.segment-proximity", segmentProximity);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset, segmentProximity, currentProfile?.id]);
-
-  // Debounced auto-save voice settings to profile.
-  // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
-  // which appears fragile due to potential race conditions. In practice it is safe because:
-  // 1. The 1500ms debounce ensures rapid slider changes coalesce into a single save.
-  // 2. Only one profile is active at a time, so concurrent writes from other tabs are unlikely.
-  // 3. The merge preserves unrelated tts_settings fields (voice_id, voice_name) that other
-  //    save paths may have written.
-  useEffect(() => {
-    if (!voiceSettingsLoaded || !voiceSettingsHydrated.current) return;
-    if (!currentProfileIdRef.current) return;
-    const savedProfileId = currentProfileIdRef.current;
-    if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
-    voiceSettingsSaveTimer.current = setTimeout(async () => {
-      const profileId = currentProfileIdRef.current;
-      if (!profileId) return;
-      if (currentProfileIdRef.current !== savedProfileId) return;
-      // Read from ref to avoid stale closure values (Bug #87)
-      const vs = voiceSettingsValuesRef.current;
-      try {
-        const res = await apiGetWithRetry(`/profiles/${profileId}`);
-        const profileData = await res.json();
-        const existingTts = profileData.tts_settings || {};
-        await apiPatch(`/profiles/${profileId}`, {
-          tts_settings: {
-            ...existingTts,
-            voice_stability: vs.voiceStability,
-            voice_similarity: vs.voiceSimilarity,
-            voice_style: vs.voiceStyle,
-            voice_speed: vs.voiceSpeed,
-            voice_speaker_boost: vs.voiceSpeakerBoost,
-            words_per_subtitle: vs.wordsPerSubtitle,
-            min_segment_duration: vs.minSegmentDuration,
-            ultra_rapid_intro: vs.ultraRapidIntro,
-            elevenlabs_model: vs.elevenlabsModel,
-          },
-        });
-      } catch {
-        // Silent — settings still work locally via localStorage
-      }
-    }, 1000);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, currentProfile?.id]);
+  const handleSaveVoiceAsProfileDefault = useCallback(async () => {
+    const profileId = currentProfileIdRef.current;
+    if (!profileId) {
+      toast.error("Select a profile before saving voice defaults.");
+      return;
+    }
+    setVoiceProfileSaveState("saving");
+    try {
+      const response = await apiGetWithRetry(`/profiles/${profileId}`);
+      const profileData = await response.json();
+      await apiPatch(`/profiles/${profileId}`, {
+        tts_settings: {
+          ...(profileData.tts_settings || {}),
+          voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+          voice_stability: voiceStability,
+          voice_similarity: voiceSimilarity,
+          voice_style: voiceStyle,
+          voice_speed: voiceSpeed,
+          voice_speaker_boost: voiceSpeakerBoost,
+          words_per_subtitle: wordsPerSubtitle,
+          min_segment_duration: minSegmentDuration,
+          ultra_rapid_intro: ultraRapidIntro,
+          elevenlabs_model: elevenlabsModel,
+        },
+      });
+      if (voiceId && voiceId !== "default") setDefaultVoiceId(voiceId);
+      setVoiceProfileSaveState("saved");
+      toast.success("Voice profile default updated");
+      setTimeout(() => setVoiceProfileSaveState("idle"), 2000);
+    } catch (error) {
+      setVoiceProfileSaveState("error");
+      handleApiError(error, "Could not save voice profile default");
+    }
+  }, [
+    elevenlabsModel,
+    minSegmentDuration,
+    ultraRapidIntro,
+    voiceId,
+    voiceSimilarity,
+    voiceSpeakerBoost,
+    voiceSpeed,
+    voiceStability,
+    voiceStyle,
+    wordsPerSubtitle,
+  ]);
 
   // Regenerate a single script via AI
   const handleRegenerateScript = async (variantIndex: number) => {
     if (!pipelineId || regeneratingScript[variantIndex] || regeneratingAllScripts) return;
+    const targetScriptId = scriptIds[variantIndex];
+    if (!targetScriptId) return;
 
     setRegeneratingScript(prev => ({ ...prev, [variantIndex]: true }));
     try {
       const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${variantIndex}`, {
+        script_id: targetScriptId,
         provider,
         codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
       }, { timeout: provider === "codex" ? 240_000 : 120_000 });
       const data = await res.json();
 
-      // Update script in local state
       setScripts(prev => {
+        const liveIndex = scriptIdsRef.current.indexOf(data.script_id ?? targetScriptId);
+        if (liveIndex < 0) return prev;
         const next = [...prev];
-        next[variantIndex] = data.script;
+        next[liveIndex] = data.script;
         return next;
       });
 
       // Mark TTS as stale since script changed
       setTtsResults(prev => {
-        if (!prev[variantIndex]) return prev;
-        return { ...prev, [variantIndex]: { ...prev[variantIndex], stale: true } };
+        const liveIndex = scriptIdsRef.current.indexOf(data.script_id ?? targetScriptId);
+        if (liveIndex < 0 || !prev[liveIndex]) return prev;
+        return { ...prev, [liveIndex]: { ...prev[liveIndex], stale: true } };
       });
 
       toast.success(`Script ${variantIndex + 1} regenerated`);
@@ -4358,6 +5697,7 @@ function PipelinePage() {
     if (!pipelineId || scripts.length === 0 || regeneratingAllScripts) return;
 
     const abort = new AbortController();
+    const targetScriptIds = [...scriptIds];
     regenerateScriptsAbortRef.current = abort;
     setRegeneratingAllScripts(true);
 
@@ -4367,21 +5707,27 @@ function PipelinePage() {
       setRegeneratingScript(prev => ({ ...prev, [i]: true }));
 
       try {
+        const targetScriptId = targetScriptIds[i];
+        if (!targetScriptId) continue;
         const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${i}`, {
+          script_id: targetScriptId,
           provider,
           codex_model: codexModel.trim() || DEFAULT_CODEX_MODEL,
         }, { timeout: provider === "codex" ? 240_000 : 120_000 });
         const data = await res.json();
 
         setScripts(prev => {
+          const liveIndex = scriptIdsRef.current.indexOf(data.script_id ?? targetScriptId);
+          if (liveIndex < 0) return prev;
           const next = [...prev];
-          next[i] = data.script;
+          next[liveIndex] = data.script;
           return next;
         });
 
         setTtsResults(prev => {
-          if (!prev[i]) return prev;
-          return { ...prev, [i]: { ...prev[i], stale: true } };
+          const liveIndex = scriptIdsRef.current.indexOf(data.script_id ?? targetScriptId);
+          if (liveIndex < 0 || !prev[liveIndex]) return prev;
+          return { ...prev, [liveIndex]: { ...prev[liveIndex], stale: true } };
         });
       } catch (err) {
         if (!abort.signal.aborted) {
@@ -4411,8 +5757,34 @@ function PipelinePage() {
   };
 
   // Per-script TTS: generate voice-over for a single script
+  const getCurrentTtsAssetMetadata = useCallback((): Pick<
+    TtsResult,
+    "elevenlabs_model" | "voice_id" | "voice_settings" | "source"
+  > => ({
+    elevenlabs_model: elevenlabsModel,
+    voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+    voice_settings: {
+      stability: voiceStability,
+      similarity_boost: voiceSimilarity,
+      style: voiceStyle,
+      speed: voiceSpeed,
+      use_speaker_boost: voiceSpeakerBoost,
+    },
+    source: "generated",
+  }), [
+    elevenlabsModel,
+    voiceId,
+    voiceSimilarity,
+    voiceSpeakerBoost,
+    voiceSpeed,
+    voiceStability,
+    voiceStyle,
+  ]);
+
   const handleGenerateTts = async (variantIndex: number) => {
     if (!pipelineId) return;
+    const targetScriptId = scriptIds[variantIndex];
+    if (!targetScriptId) return;
 
     // Bug #88: prevent concurrent TTS calls for the same variant
     if (ttsResults[variantIndex]?.generating) return;
@@ -4420,6 +5792,7 @@ function PipelinePage() {
     setTtsResults(prev => ({
       ...prev,
       [variantIndex]: {
+        ...getCurrentTtsAssetMetadata(),
         audio_duration: 0,
         generating: true,
         stale: false,
@@ -4438,6 +5811,7 @@ function PipelinePage() {
 
     try {
       const res = await apiPost(`/pipeline/tts/${pipelineId}/${variantIndex}`, {
+        script_id: targetScriptId,
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
         voice_settings: {
@@ -4454,9 +5828,15 @@ function PipelinePage() {
 
       // apiPost throws on non-OK responses (FE-01)
       const data = await res.json();
+      if (data.script_id && data.script_id !== targetScriptId) {
+        throw new Error("Voice-over job belongs to a different script.");
+      }
+      const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+      if (liveIndex < 0) return;
       setTtsResults(prev => ({
         ...prev,
-        [variantIndex]: {
+        [liveIndex]: {
+          ...prev[liveIndex],
           audio_duration: 0,
           generating: true,
           stale: false,
@@ -4471,18 +5851,23 @@ function PipelinePage() {
         ? err.detail || err.message
         : "Network error. Please check if the backend is running.";
       setPreviewError(message);
-      setTtsResults(prev => ({
-        ...prev,
-        [variantIndex]: {
-          audio_duration: 0,
-          generating: false,
-          stale: false,
-          status: "failed",
-          progress: 0,
-          current_step: "Voice-over failed",
-          error: message,
-        },
-      }));
+      setTtsResults(prev => {
+        const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+        if (liveIndex < 0) return prev;
+        return {
+          ...prev,
+          [liveIndex]: {
+            ...prev[liveIndex],
+            audio_duration: 0,
+            generating: false,
+            stale: false,
+            status: "failed",
+            progress: 0,
+            current_step: "Voice-over failed",
+            error: message,
+          },
+        };
+      });
     }
   };
 
@@ -4502,11 +5887,14 @@ function PipelinePage() {
 
     await Promise.all(scripts.map(async (_, i) => {
       if (abortController.signal.aborted) return;
+      const targetScriptId = scriptIds[i];
+      if (!targetScriptId) return;
 
       setRegeneratingAllIndex(i);
       setTtsResults(prev => ({
         ...prev,
         [i]: {
+          ...getCurrentTtsAssetMetadata(),
           audio_duration: 0,
           generating: true,
           stale: false,
@@ -4518,6 +5906,7 @@ function PipelinePage() {
 
       try {
         const res = await apiPost(`/pipeline/tts/${pipelineId}/${i}`, {
+          script_id: targetScriptId,
           elevenlabs_model: elevenlabsModel,
           voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
           voice_settings: {
@@ -4536,34 +5925,46 @@ function PipelinePage() {
 
         // apiPost throws on non-OK responses (FE-01)
         const data = await res.json();
+        if (data.script_id && data.script_id !== targetScriptId) {
+          throw new Error("Voice-over job belongs to a different script.");
+        }
         if (!isMountedRef.current) return;
-        setTtsResults(prev => ({
-          ...prev,
-          [i]: {
-            audio_duration: 0,
-            generating: true,
-            stale: false,
-            status: data.job?.status || data.status || "queued",
-            progress: data.job?.progress || 0,
-            current_step: data.job?.current_step || "Queued for voice-over generation",
-          }
-        }));
+        setTtsResults(prev => {
+          const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+          if (liveIndex < 0) return prev;
+          return {
+            ...prev,
+            [liveIndex]: {
+              ...prev[liveIndex],
+              audio_duration: 0,
+              generating: true,
+              stale: false,
+              status: data.job?.status || data.status || "queued",
+              progress: data.job?.progress || 0,
+              current_step: data.job?.current_step || "Queued for voice-over generation",
+            },
+          };
+        });
       } catch (err) {
         if (abortController.signal.aborted) return;
         handleApiError(err, "TTS regeneration error");
         const message = err instanceof ApiError ? err.detail || err.message : "Voice-over dispatch failed";
-        setTtsResults(prev => ({
-          ...prev,
-          [i]: {
-            audio_duration: 0,
-            generating: false,
-            stale: false,
-            status: "failed",
-            progress: 0,
-            current_step: "Voice-over failed",
-            error: message,
-          },
-        }));
+        setTtsResults(prev => {
+          const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+          if (liveIndex < 0) return prev;
+          return {
+            ...prev,
+            [liveIndex]: {
+              audio_duration: 0,
+              generating: false,
+              stale: false,
+              status: "failed",
+              progress: 0,
+              current_step: "Voice-over failed",
+              error: message,
+            },
+          };
+        });
       }
     }));
 
@@ -4594,6 +5995,12 @@ function PipelinePage() {
       try {
         await apiPost(`/pipeline/tts-cancel/${pipelineId}`, {
           variant_indices: scripts.map((_, index) => index),
+          script_ids: Object.fromEntries(
+            scriptIdsRef.current.map((scriptId, index) => [
+              String(index),
+              scriptId,
+            ]),
+          ),
         });
       } catch (err) {
         handleApiError(err, "Could not cancel voice-over generation");
@@ -4617,8 +6024,6 @@ function PipelinePage() {
     });
   };
 
-  const hasActiveTtsJobs = Object.values(ttsResults).some(result => result.generating);
-
   useEffect(() => {
     if (!pipelineId || !hasActiveTtsJobs) return;
     let disposed = false;
@@ -4634,9 +6039,15 @@ function PipelinePage() {
 
         const jobs = (data.jobs || {}) as Record<string, Partial<AsyncJobState>>;
         const results = (data.results || {}) as Record<string, Partial<TtsResult>>;
+        const resolveJobIndex = (
+          key: string,
+          job: Partial<AsyncJobState>,
+        ) => job.script_id
+          ? scriptIdsRef.current.indexOf(job.script_id)
+          : Number(key);
         const activeIndices = Object.entries(jobs)
           .filter(([, job]) => isActiveAsyncJob(job))
-          .map(([key]) => Number(key))
+          .map(([key, job]) => resolveJobIndex(key, job))
           .filter(index => Number.isInteger(index) && index >= 0 && index < scripts.length);
         const firstActive = activeIndices.length > 0 ? activeIndices[0] : null;
         const completedAny = Object.values(jobs).some(job => job.status === "completed");
@@ -4646,10 +6057,11 @@ function PipelinePage() {
         setTtsResults(prev => {
           const next = { ...prev };
           for (const [key, job] of Object.entries(jobs)) {
-            const index = Number(key);
+            const index = resolveJobIndex(key, job);
             if (!Number.isInteger(index) || index < 0 || index >= scripts.length) continue;
             if (isActiveAsyncJob(job)) {
               next[index] = {
+                ...next[index],
                 audio_duration: 0,
                 generating: true,
                 stale: false,
@@ -4663,6 +6075,8 @@ function PipelinePage() {
             if (job.status === "completed") {
               const result = results[key] || (job.result as Partial<TtsResult> | undefined) || {};
               next[index] = {
+                ...next[index],
+                ...result,
                 audio_duration: Number(result.audio_duration) || 0,
                 generating: false,
                 stale: false,
@@ -4676,6 +6090,7 @@ function PipelinePage() {
             } else if (job.status === "failed" || job.status === "cancelled") {
               const message = job.error || (job.status === "failed" ? "Voice-over generation failed" : null);
               next[index] = {
+                ...next[index],
                 audio_duration: 0,
                 generating: false,
                 stale: false,
@@ -4710,44 +6125,154 @@ function PipelinePage() {
     };
   }, [pipelineId, hasActiveTtsJobs, scripts.length, fetchElevenCredits]);
 
-  // Step 3: Regenerate audio for a single variant (force TTS regeneration + re-match)
+  // Step 3: regenerate the script-level voice-over, then rebuild every output
+  // (default or A/B) that shares it. Keeping a sibling preview assembled
+  // against the former audio timing would associate edits with the wrong SRT.
   const handleRegenerateVariantAudio = async (variantIndex: number, previewKey?: string, visualVersion?: string) => {
     if (!pipelineId) return;
-    if (regeneratingVariantAudio[variantIndex]) return;
+    if (voiceRegenerationActive || regeneratingVariantAudio[variantIndex]) return;
 
     setRegeneratingVariantAudio(prev => ({ ...prev, [variantIndex]: true }));
 
+    let audioWasReplaced = false;
     try {
-      const res = await apiPost(`/pipeline/preview/${pipelineId}/${variantIndex}`, {
-        elevenlabs_model: elevenlabsModel,
-        voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-        source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
-        voice_settings: {
-          stability: voiceStability,
-          similarity_boost: voiceSimilarity,
-          style: voiceStyle,
-          speed: voiceSpeed,
-          use_speaker_boost: voiceSpeakerBoost,
-        },
-        words_per_subtitle: getWordsPerSubtitleForVariant(variantIndex),
-        min_segment_duration: minSegmentDuration,
-        ultra_rapid_intro: ultraRapidIntro,
-        visual_version: visualVersion,
-        force_regenerate_tts: true,
-        preset: assemblyPreset,
-        segment_proximity: segmentProximity,
-      }, { timeout: 300_000 });
+      const requestedKey = previewKey ?? buildPreviewKey(variantIndex, visualVersion);
+      const requestedCard = previewCards.find((card) => card.key === requestedKey);
+      if (!requestedCard) {
+        throw new Error("The selected output no longer exists.");
+      }
+      const scriptCards = [
+        requestedCard,
+        ...previewCards.filter(
+          (card) => card.baseIndex === variantIndex && card.key !== requestedCard.key,
+        ),
+      ];
+      const editorSnapshots = new Map(
+        scriptCards.map((card) => [card.key, previewsRef.current[card.key]] as const),
+      );
+      let regeneratedAudio: PreviewData | null = null;
 
-      const data = await res.json();
-      if (!isMountedRef.current) return;
-      setPreviews(prev => {
-        const key = previewKey ?? buildPreviewKey(variantIndex);
-        // Preserve the variant default transition (not in the preview response).
-        return { ...prev, [key]: { ...data, defaultTransition: prev[key]?.defaultTransition ?? null } };
+      const mergeLateEditorChanges = (
+        data: PreviewData,
+        latest: PreviewData | undefined,
+        requestSnapshot: PreviewData | undefined,
+      ): PreviewData => ({
+        ...data,
+        ...(latest?.matches !== requestSnapshot?.matches
+          && latest?.manual_matches_preserved
+          ? {
+              matches: latest.matches,
+              manual_matches_preserved: true,
+            }
+          : {}),
+        ...(latest?.video_timeline !== requestSnapshot?.video_timeline
+          && latest?.manual_composition_preserved
+          ? {
+              video_timeline: latest.video_timeline,
+              manual_composition_preserved: true,
+            }
+          : {}),
+        defaultTransition:
+          latest?.defaultTransition !== requestSnapshot?.defaultTransition
+            ? latest?.defaultTransition ?? null
+            : data.defaultTransition ?? null,
+        music:
+          latest?.music !== requestSnapshot?.music
+            ? latest?.music ?? null
+            : data.music ?? null,
+      });
+
+      for (let cardIndex = 0; cardIndex < scriptCards.length; cardIndex++) {
+        const outputCard = scriptCards[cardIndex];
+        const editorPreview = editorSnapshots.get(outputCard.key);
+        const res = await apiPost(`/pipeline/preview/${pipelineId}/${variantIndex}`, {
+          script_id: outputCard.scriptId,
+          output_id: outputCard.outputId,
+          elevenlabs_model: elevenlabsModel,
+          voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+          source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
+          voice_settings: {
+            stability: voiceStability,
+            similarity_boost: voiceSimilarity,
+            style: voiceStyle,
+            speed: voiceSpeed,
+            use_speaker_boost: voiceSpeakerBoost,
+          },
+          words_per_subtitle: getWordsPerSubtitleForVariant(
+            variantIndex,
+            outputCard.key,
+          ),
+          min_segment_duration: minSegmentDuration,
+          ultra_rapid_intro: ultraRapidIntro,
+          visual_version: outputCard.visualVersion,
+          force_regenerate_tts: cardIndex === 0,
+          preset: assemblyPreset,
+          segment_proximity: segmentProximity,
+          editor_matches: editorPreview?.manual_matches_preserved
+            ? editorPreview.matches
+            : undefined,
+          editor_composition: editorPreview?.manual_composition_preserved
+            ? editorPreview.video_timeline
+            : undefined,
+          editor_default_transition: editorPreview
+            ? editorPreview.defaultTransition ?? null
+            : undefined,
+          editor_music: editorPreview ? editorPreview.music ?? null : undefined,
+          editor_default_transition_set: Boolean(editorPreview),
+          editor_music_set: Boolean(editorPreview),
+        }, { timeout: 300_000 });
+
+        const data = await res.json() as PreviewData & {
+          script_id?: ScriptId;
+          output_id?: OutputId;
+        };
+        if (
+          (data.script_id && data.script_id !== outputCard.scriptId)
+          || (data.output_id && data.output_id !== outputCard.outputId)
+        ) {
+          throw new Error(
+            "Audio regeneration response belongs to an output that has moved or been deleted.",
+          );
+        }
+        if (!isMountedRef.current) return;
+        regeneratedAudio ??= data;
+        audioWasReplaced = true;
+        setPreviews((previous) => {
+          const next = { ...previous };
+          next[outputCard.key] = mergeLateEditorChanges(
+            data,
+            previous[outputCard.key],
+            editorPreview,
+          );
+          return next;
+        });
+      }
+
+      if (!regeneratedAudio) {
+        throw new Error("Voice-over regeneration returned no preview.");
+      }
+      setTtsResults((previous) => {
+        const liveIndex = scriptIdsRef.current.indexOf(requestedCard.scriptId);
+        if (liveIndex < 0) return previous;
+        return {
+          ...previous,
+          [liveIndex]: {
+            ...getCurrentTtsAssetMetadata(),
+            audio_duration: Number(regeneratedAudio.audio_duration) || 0,
+            generating: false,
+            stale: false,
+            status: "completed",
+            srt_content: regeneratedAudio.srt_content,
+          },
+        };
       });
     } catch (err) {
       handleApiError(err, "Audio regeneration error");
-      if (err instanceof ApiError && err.isTimeout) {
+      if (audioWasReplaced) {
+        setPreviewError(
+          "Voice-over regenerated, but not every output preview could be rebuilt. Generate the missing previews before rendering.",
+        );
+      } else if (err instanceof ApiError && err.isTimeout) {
         setPreviewError("Audio regeneration timed out. Try again.");
       } else {
         setPreviewError("Failed to regenerate audio. Please check if the backend is running.");
@@ -4766,6 +6291,8 @@ function PipelinePage() {
     if (ttsResults[variantIndex]?.generating || regeneratingAll) return;
     const match = libraryMatches[variantIndex];
     if (!match) return;
+    const targetScriptId = scriptIds[variantIndex];
+    if (!targetScriptId) return;
 
     setTtsResults(prev => ({
       ...prev,
@@ -4775,20 +6302,27 @@ function PipelinePage() {
     try {
       const res = await apiPost(`/pipeline/tts-from-library/${pipelineId}/${variantIndex}`, {
         asset_id: match.asset_id,
+        script_id: targetScriptId,
       });
 
       // apiPost throws on non-OK responses (FE-01)
       const data = await res.json();
+      if (data.script_id && data.script_id !== targetScriptId) {
+        throw new Error("Library audio belongs to a different script.");
+      }
+      const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+      if (liveIndex < 0) return;
       setTtsResults(prev => ({
         ...prev,
-        [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
+        [liveIndex]: { audio_duration: data.audio_duration, generating: false, stale: false, source: "library" }
       }));
     } catch (err) {
       handleApiError(err, "Library TTS adoption error");
       setPreviewError("Failed to load library audio. Please try generating instead.");
       setTtsResults(prev => {
         const next = { ...prev };
-        delete next[variantIndex];
+        const liveIndex = scriptIdsRef.current.indexOf(targetScriptId);
+        if (liveIndex >= 0) delete next[liveIndex];
         return next;
       });
     }
@@ -4797,6 +6331,8 @@ function PipelinePage() {
   // Per-script TTS: play/pause audio
   const handlePlayTts = (variantIndex: number) => {
     if (!pipelineId) return;
+    const targetScriptId = scriptIdsRef.current[variantIndex];
+    if (!targetScriptId) return;
 
     if (playingTtsVariant === variantIndex) {
       ttsPlayAbortRef.current?.abort();
@@ -4842,7 +6378,10 @@ function PipelinePage() {
     ttsPlayAbortRef.current = controller;
 
     // Cache-bust: append timestamp to URL so browser never serves stale audio
-    const cacheBust = `_t=${Date.now()}`;
+    const cacheBust = new URLSearchParams({
+      _t: String(Date.now()),
+      script_id: targetScriptId,
+    }).toString();
     apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}?${cacheBust}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(playBlob)
@@ -4856,15 +6395,22 @@ function PipelinePage() {
       });
   };
 
-  // Toggle variant selection
-  const toggleVariant = (index: number) => {
-    setSelectedVariants((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
+  // Render selection is output-scoped. Script indices remain a derived,
+  // backward-compatible projection for endpoints that still group status by
+  // script.
+  const toggleOutput = (outputId: OutputId) => {
+    setSelectedOutputIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(outputId)) {
+        next.delete(outputId);
       } else {
-        next.add(index);
+        next.add(outputId);
       }
+      setSelectedVariants(new Set(
+        previewCards
+          .filter((card) => next.has(card.outputId))
+          .map((card) => card.baseIndex),
+      ));
       return next;
     });
   };
@@ -4974,6 +6520,7 @@ function PipelinePage() {
     handleCreateManual,
     step2HeaderRef,
     scripts,
+    scriptIds,
     setScripts,
     scriptNames,
     setScriptNames,
@@ -5017,15 +6564,21 @@ function PipelinePage() {
     setVoiceStyle,
     voiceSpeakerBoost,
     setVoiceSpeakerBoost,
+    voiceProfileSaveState,
+    handleSaveVoiceAsProfileDefault,
     userChangedVoiceRef,
     wordsPerSubtitle,
     setWordsPerSubtitle,
+    handleWordsPerSubtitleChange,
     minSegmentDuration,
     setMinSegmentDuration,
+    handleMinSegmentDurationChange,
     ultraRapidIntro,
     setUltraRapidIntro,
+    handleUltraRapidIntroChange,
     assemblyPreset,
     setAssemblyPreset,
+    handleAssemblyPresetChange,
     segmentProximity,
     setSegmentProximity,
     renderAdjust,
@@ -5038,6 +6591,7 @@ function PipelinePage() {
     handleExportPipelineTemplate,
     handleImportPipelineTemplate,
     saveScriptsToBackend,
+    handleDeleteScript,
     libraryMatches,
     setLibraryMatches,
     previews,
@@ -5071,6 +6625,7 @@ function PipelinePage() {
     handleSourceToggle,
     metaMultiplication,
     handleMetaMultiplicationChange,
+    voiceRegenerationActive,
     previewCards,
     previewingIndex,
     isRendering,
@@ -5078,6 +6633,12 @@ function PipelinePage() {
     setIsResettingUsage,
     handlePreviewAll,
     selectedVariants,
+    selectedOutputIds,
+    setSelectedOutputIds,
+    toggleOutput,
+    activeOutputKey,
+    setActiveOutputKey,
+    pipelineSaveState,
     presetName,
     setPresetName,
     subtitleSettingsLoaded,
@@ -5103,7 +6664,7 @@ function PipelinePage() {
     variantTemplateSelections,
     subtitleSettings,
     setSubtitleSettings,
-    scheduleProfileSubtitleSave,
+    handleSaveSubtitleAsProfileDefault,
     subtitleOverrides,
     setSubtitleOverrides,
     scheduleOverridesSave,
@@ -5111,7 +6672,6 @@ function PipelinePage() {
     getSubtitleSettingsFor,
     getPreviewSubtitleTextFor,
     handleVariantSubtitleChange,
-    toggleVariant,
     handlePlayAudio,
     playingAudio,
     setPlayingAudio,
@@ -5194,6 +6754,7 @@ function PipelinePage() {
     historyImporting,
     setPipelineId,
     historyScripts,
+    historyScriptIds,
     setHistoryScripts,
     formatScript,
     buildRestoredTts,
@@ -5322,7 +6883,10 @@ function PipelinePage() {
       {/* Confirm Dialog */}
       <ConfirmDialog
         open={confirmDialog.open}
-        onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}
+        onOpenChange={(open) => setConfirmDialog((prev) => {
+          if (!open && prev.open) prev.onCancel?.();
+          return { ...prev, open };
+        })}
         title={confirmDialog.title}
         description={confirmDialog.description}
         confirmLabel={confirmDialog.confirmLabel}

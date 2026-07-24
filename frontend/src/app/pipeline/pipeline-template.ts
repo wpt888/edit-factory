@@ -11,15 +11,23 @@ import type { ThumbnailSelection } from "@/components/thumbnail-picker";
 import type { RenderAdjustments, RenderSettings } from "@/components/render-settings-panel";
 import type { AttentionSelection } from "@/components/attention-template-picker";
 import type { AttentionTimeline } from "@/types/attention-timeline";
-import type { CompositionClip } from "@/types/composition-timeline";
+import type {
+  CompositionClip,
+  MusicSettings,
+  TransitionSpec,
+} from "@/types/composition-timeline";
 import type { SubtitleSettings } from "@/types/video-processing";
 import type { SubtitleTemplateRotation } from "./subtitle-template-rotation";
-import type { ContextProduct, MatchPreview, PreviewKey, StyleKey } from "./pipeline-types";
+import type { ContextProduct, MatchPreview, OutputId, PreviewKey, ScriptId, StyleKey } from "./pipeline-types";
 
 export const PIPELINE_TEMPLATE_FORMAT = "edit-factory.pipeline-template" as const;
 export const PIPELINE_TEMPLATE_SCHEMA_VERSION = 1 as const;
 
 export interface PipelineTemplateSettings {
+  snapshot?: {
+    revision: number;
+    savedAt: string;
+  };
   generation: {
     name: string;
     idea: string;
@@ -32,7 +40,7 @@ export interface PipelineTemplateSettings {
     aiInstructions: string;
   };
   content: {
-    scripts: Array<{ name: string; text: string }>;
+    scripts: Array<{ id?: ScriptId; name: string; text: string }>;
     approvedScriptIndices: number[];
     generatedCaptions: Record<string, string>;
     generatedYoutubeTitles: Record<string, string>;
@@ -57,8 +65,12 @@ export interface PipelineTemplateSettings {
   };
   timeline: {
     selectedVariantIndices: number[];
+    selectedOutputIds?: OutputId[];
+    activeOutputId?: OutputId | null;
     matches: Record<PreviewKey, MatchPreview[]>;
     compositions: Record<PreviewKey, CompositionClip[]>;
+    defaultTransitions: Record<PreviewKey, TransitionSpec | null>;
+    music: Record<PreviewKey, MusicSettings | null>;
     interstitialSlides: Record<PreviewKey, InterstitialSlide[]>;
     attentionSelection: AttentionSelection;
     attentionTimelines: Record<PreviewKey, AttentionTimeline>;
@@ -99,6 +111,7 @@ export interface PipelineTemplateImportResponse {
   pipeline_id: string;
   settings: PipelineTemplateSettings;
   scripts: string[];
+  script_ids?: ScriptId[];
   script_names: string[];
   warnings: string[];
 }
@@ -120,6 +133,73 @@ export function isPipelineTemplateSettings(value: unknown): value is PipelineTem
     const candidate = record[section];
     return !!candidate && typeof candidate === "object" && !Array.isArray(candidate);
   });
+}
+
+const asRecord = <T>(value: unknown): Record<string, T> => (
+  value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, T>
+    : {}
+);
+
+/**
+ * Upgrade schema-v1 snapshots written before all timeline/output maps existed.
+ * The format version stayed at 1 while these fields were added, so section-only
+ * guards are insufficient for safe restore.
+ */
+export function normalizePipelineTemplateSettings(
+  value: unknown,
+): PipelineTemplateSettings | null {
+  if (!isPipelineTemplateSettings(value)) return null;
+  const timeline = value.timeline as Partial<PipelineTemplateSettings["timeline"]>;
+  const subtitles = value.subtitles as Partial<PipelineTemplateSettings["subtitles"]>;
+  return {
+    ...value,
+    timeline: {
+      ...timeline,
+      selectedVariantIndices: Array.isArray(timeline.selectedVariantIndices)
+        ? timeline.selectedVariantIndices
+        : [],
+      selectedOutputIds: Array.isArray(timeline.selectedOutputIds)
+        ? timeline.selectedOutputIds
+        : [],
+      activeOutputId: timeline.activeOutputId ?? null,
+      matches: asRecord<MatchPreview[]>(timeline.matches),
+      compositions: asRecord<CompositionClip[]>(timeline.compositions),
+      defaultTransitions: asRecord<TransitionSpec | null>(
+        timeline.defaultTransitions,
+      ),
+      music: asRecord<MusicSettings | null>(timeline.music),
+      interstitialSlides: asRecord<InterstitialSlide[]>(
+        timeline.interstitialSlides,
+      ),
+      attentionSelection: timeline.attentionSelection ?? {},
+      attentionTimelines: asRecord<AttentionTimeline>(
+        timeline.attentionTimelines,
+      ),
+      variantThumbnails: asRecord<ThumbnailSelection>(
+        timeline.variantThumbnails,
+      ),
+      pipOverlays: asRecord<{
+        image_url: string;
+        position: string;
+        size: string;
+        animation: string;
+      }>(timeline.pipOverlays),
+    },
+    subtitles: {
+      ...subtitles,
+      default: subtitles.default ?? {} as SubtitleSettings,
+      overrides: asRecord<SubtitleSettings>(subtitles.overrides),
+      variantOverrides: asRecord<Partial<SubtitleSettings>>(
+        subtitles.variantOverrides,
+      ),
+      rotation: subtitles.rotation ?? {
+        enabled: false,
+        presetIds: [],
+      },
+      variantTemplates: asRecord<string>(subtitles.variantTemplates),
+    },
+  } as PipelineTemplateSettings;
 }
 
 export function pipelineTemplateFilename(name: string): string {

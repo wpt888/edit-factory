@@ -61,8 +61,7 @@ import {
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useRef, useState } from "react";
-import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
-import { SourceVideosCard } from "./source-videos-card";
+import type { Voice } from "../pipeline-types";
 import { WorkspaceSplit } from "./workspace-split";
 import { WorkspacePanelHeader } from "./workspace-panel-header";
 
@@ -78,6 +77,16 @@ type TtsResult = {
   srt_content?: string;
   script_word_count?: number;
   srt_word_count?: number;
+  elevenlabs_model?: string;
+  voice_id?: string;
+  voice_settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    speed?: number;
+    use_speaker_boost?: boolean;
+  };
+  source?: "generated" | "library";
 };
 
 // Loose ctx-bag type (F4): only the fields that need contextual typing for the
@@ -86,12 +95,8 @@ type Step2Ctx = {
   scripts: string[];
   voices: Voice[];
   ttsResults: Record<number, TtsResult>;
-  setTtsResults: Dispatch<SetStateAction<Record<number, TtsResult>>>;
-  setLibraryMatches: Dispatch<SetStateAction<Record<number, { asset_id: string; audio_duration: number }>>>;
-  setPreviews: Dispatch<SetStateAction<Record<PreviewKey, PreviewData>>>;
   setSrtPreviewOpen: Dispatch<SetStateAction<Record<number, boolean>>>;
   setApprovedScripts: Dispatch<SetStateAction<Set<number>>>;
-  setSelectedVariants: Dispatch<SetStateAction<Set<number>>>;
   productGroups: Array<{
     id: string;
     label: string;
@@ -147,9 +152,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
   const {
     step2HeaderRef,
     scripts,
-    setScripts,
+    scriptIds,
     scriptNames,
-    setScriptNames,
     handleScriptNameChange,
     handleScriptNameCommit,
     regeneratingAllScripts,
@@ -163,7 +167,6 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     regeneratingScript,
     handleRegenerateScript,
     ttsResults,
-    setTtsResults,
     setStep,
     previewError,
     setPreviewError,
@@ -190,26 +193,25 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     setVoiceStyle,
     voiceSpeakerBoost,
     setVoiceSpeakerBoost,
+    voiceProfileSaveState,
+    handleSaveVoiceAsProfileDefault,
     userChangedVoiceRef,
     wordsPerSubtitle,
-    setWordsPerSubtitle,
+    handleWordsPerSubtitleChange,
     minSegmentDuration,
-    setMinSegmentDuration,
+    handleMinSegmentDurationChange,
     ultraRapidIntro,
-    setUltraRapidIntro,
+    handleUltraRapidIntroChange,
     assemblyPreset,
-    setAssemblyPreset,
+    handleAssemblyPresetChange,
     approvedScripts,
     setApprovedScripts,
     pipelineId,
-    saveScriptsToBackend,
     libraryMatches,
-    setLibraryMatches,
     previews,
-    setPreviews,
     srtPreviewOpen,
     setSrtPreviewOpen,
-    setSelectedVariants,
+    handleDeleteScript,
     totalSegmentDuration,
     handleScriptCommit,
     productGroups,
@@ -229,6 +231,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     selectedSourceIds,
     metaMultiplication,
     handleMetaMultiplicationChange,
+    voiceRegenerationActive,
     previewCards,
     isGenerating,
     previewingIndex,
@@ -371,8 +374,6 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 }
                 data-testid="step2-inspector"
               >
-                <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
-
             {/* ElevenLabs model selector */}
             <Card variant={workspaceLayout ? "workspace" : "default"} className="gap-0 overflow-hidden py-0 min-[1280px]:py-0">
               <WorkspacePanelHeader
@@ -390,6 +391,29 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 />}
               />
               <CardContent className={`space-y-5 pt-5 ${workspaceLayout ? "min-[1280px]:pb-4" : ""}`}>
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2"
+                  data-testid="voice-edit-scope"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium">Editing: Pipeline voice</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Existing voice-overs keep the settings they were generated with.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={voiceProfileSaveState === "saving"}
+                    onClick={() => void handleSaveVoiceAsProfileDefault()}
+                  >
+                    {voiceProfileSaveState === "saving" && <Loader2 className="size-3.5 animate-spin" />}
+                    {voiceProfileSaveState === "saved" && <CheckCircle className="size-3.5 text-success" />}
+                    Save as profile default
+                  </Button>
+                </div>
                 {elevenCredits?.last_error && (
                   <Alert variant="destructive">
                     <AlertDescription className="text-xs">
@@ -400,7 +424,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <div className="grid grid-cols-1 gap-4 min-[640px]:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="tts-model">ElevenLabs Model</Label>
-                  <Select value={elevenlabsModel} onValueChange={setElevenlabsModel}>
+                  <Select
+                    value={elevenlabsModel}
+                    onValueChange={(value) => {
+                      userChangedVoiceRef.current = true;
+                      setElevenlabsModel(value);
+                    }}
+                  >
                     <SelectTrigger id="tts-model">
                       <SelectValue />
                     </SelectTrigger>
@@ -420,7 +450,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 <div className="space-y-2">
                   <Label htmlFor="tts-voice">Voice</Label>
                   <div className="flex gap-2">
-                    <Select value={voiceId} onValueChange={setVoiceId}>
+                    <Select
+                      value={voiceId}
+                      onValueChange={(value) => {
+                        userChangedVoiceRef.current = true;
+                        setVoiceId(value);
+                      }}
+                    >
                       <SelectTrigger id="tts-voice" disabled={voicesLoading} className="flex-1">
                         <SelectValue placeholder={voicesLoading ? "Loading voices..." : "Select a voice"} />
                       </SelectTrigger>
@@ -583,7 +619,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </div>
                     <Slider
                       value={[wordsPerSubtitle]}
-                      onValueChange={([v]) => setWordsPerSubtitle(v)}
+                      onValueCommit={([v]) => handleWordsPerSubtitleChange(v)}
                       min={1} max={4} step={1}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -600,7 +636,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </div>
                     <Slider
                       value={[minSegmentDuration]}
-                      onValueChange={([v]) => setMinSegmentDuration(v)}
+                      onValueCommit={([v]) => handleMinSegmentDurationChange(v)}
                       min={0.5} max={5} step={0.5}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -617,7 +653,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       <Checkbox
                         id="ultra-rapid-intro"
                         checked={ultraRapidIntro}
-                        onCheckedChange={(checked) => setUltraRapidIntro(checked === true)}
+                        onCheckedChange={(checked) => handleUltraRapidIntroChange(checked === true)}
                       />
                       <Label htmlFor="ultra-rapid-intro" className="text-xs cursor-pointer">
                         Ultra-fast sequences at the start
@@ -717,72 +753,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                               size="icon"
                               className="size-7 text-muted-foreground hover:text-destructive"
                               title="Delete script"
-                              onClick={() => {
-                                const newScripts = scripts.filter((_, i) => i !== index);
-                                const newScriptNames = scriptNames.filter((_: string, i: number) => i !== index);
-                                setScripts(newScripts);
-                                setScriptNames(newScriptNames);
-                                if (pipelineId) saveScriptsToBackend(pipelineId, newScripts, newScriptNames);
-                                // Remap ttsResults: remove deleted index, shift higher indices down
-                                setTtsResults(prev => {
-                                  const next: typeof prev = {};
-                                  for (const [k, v] of Object.entries(prev)) {
-                                    const ki = Number(k);
-                                    if (ki < index) next[ki] = v;
-                                    else if (ki > index) next[ki - 1] = v;
-                                    // ki === index is dropped
-                                  }
-                                  return next;
-                                });
-                                // Remap libraryMatches: remove deleted index, shift higher indices down
-                                setLibraryMatches(prev => {
-                                  const next: typeof prev = {};
-                                  for (const [k, v] of Object.entries(prev)) {
-                                    const ki = Number(k);
-                                    if (ki < index) next[ki] = v;
-                                    else if (ki > index) next[ki - 1] = v;
-                                  }
-                                  return next;
-                                });
-                                // Remap previews: remove deleted index, shift higher indices down
-                                setPreviews(prev => {
-                                  const next: typeof prev = {};
-                                  for (const [k, v] of Object.entries(prev)) {
-                                    const ki = Number(k);
-                                    if (ki < index) next[ki] = v;
-                                    else if (ki > index) next[ki - 1] = v;
-                                  }
-                                  return next;
-                                });
-                                // Remap srtPreviewOpen: remove deleted index, shift higher indices down
-                                setSrtPreviewOpen(prev => {
-                                  const next: typeof prev = {};
-                                  for (const [k, v] of Object.entries(prev)) {
-                                    const ki = Number(k);
-                                    if (ki < index) next[ki] = v;
-                                    else if (ki > index) next[ki - 1] = v;
-                                  }
-                                  return next;
-                                });
-                                // Remap approvedScripts: remove deleted index, shift higher indices down
-                                setApprovedScripts(prev => {
-                                  const next = new Set<number>();
-                                  for (const ki of prev) {
-                                    if (ki < index) next.add(ki);
-                                    else if (ki > index) next.add(ki - 1);
-                                  }
-                                  return next;
-                                });
-                                // Remap selectedVariants: remove deleted index, shift higher indices down
-                                setSelectedVariants(prev => {
-                                  const next = new Set<number>();
-                                  for (const ki of prev) {
-                                    if (ki < index) next.add(ki);
-                                    else if (ki > index) next.add(ki - 1);
-                                  }
-                                  return next;
-                                });
-                              }}
+                              onClick={() => handleDeleteScript(index)}
                             >
                               <X className="size-4" />
                             </Button>
@@ -997,7 +968,20 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                   return next;
                                 });
                                 if (pipelineId) {
-                                  apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
+                                  const scriptId = scriptIds[index];
+                                  if (!scriptId) return;
+                                  apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, {
+                                    approved,
+                                    script_id: scriptId,
+                                  }).catch(() => {
+                                    setApprovedScripts(prev => {
+                                      const next = new Set(prev);
+                                      if (approved) next.delete(index);
+                                      else next.add(index);
+                                      return next;
+                                    });
+                                    toast.error("Voice-over approval was not saved");
+                                  });
                                 }
                               }}
                               className="size-4.5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
@@ -1011,6 +995,25 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                           </div>
                         )}
                       </div>
+                      {(ttsResults[index]?.audio_duration || 0) > 0 && !ttsResults[index]?.generating && (
+                        <p
+                          className="text-[11px] text-muted-foreground"
+                          data-testid={`tts-generation-config-${index}`}
+                        >
+                          {metaMultiplication ? "Shared by outputs A and B. " : ""}
+                          {ttsResults[index]?.source === "library"
+                            ? "Using an existing TTS Library asset."
+                            : ttsResults[index]?.elevenlabs_model || ttsResults[index]?.voice_id
+                              ? `Generated with ${
+                                  voices.find((voice) => voice.voice_id === ttsResults[index]?.voice_id)?.name
+                                  || ttsResults[index]?.voice_id
+                                  || "profile voice"
+                                } · ${ttsResults[index]?.elevenlabs_model || "legacy model"} · ${
+                                  (ttsResults[index]?.voice_settings?.speed ?? 1).toFixed(2)
+                                }x`
+                              : "Generation settings were not recorded for this legacy asset."}
+                        </p>
+                      )}
 
                       {/* SRT Subtitle Preview */}
                       {ttsResults[index]?.srt_content && !ttsResults[index]?.generating && !ttsResults[index]?.stale && (
@@ -1077,7 +1080,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         </Label>
                         <Select
                           value={assemblyPreset}
-                          onValueChange={(value) => setAssemblyPreset(value as typeof assemblyPreset)}
+                          onValueChange={(value) => handleAssemblyPresetChange(value as typeof assemblyPreset)}
                         >
                           <SelectTrigger id="assembly-preset-step2" className="w-40 shrink-0">
                             <SelectValue />
@@ -1100,6 +1103,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         <Checkbox
                           id="meta-multiplication-step2"
                           checked={metaMultiplication}
+                          disabled={voiceRegenerationActive}
                           onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
                         />
                         <Label htmlFor="meta-multiplication-step2" className="cursor-pointer text-sm font-medium">
@@ -1125,7 +1129,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       </div>
                       {selectedSourceIds.size === 0 && (
                         <span className="pl-6 text-xs text-amber-600 dark:text-amber-400">
-                          Select at least one source video above
+                          Select at least one source video in Step 1
                         </span>
                       )}
                     </div>
@@ -1184,7 +1188,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       </Button>
                       <Button
                         onClick={handlePreviewAll}
-                        disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                        disabled={voiceRegenerationActive || isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
                         variant={hasPreviews ? "outline" : "default"}
                         size="sm"
                       >
@@ -1211,7 +1215,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                             setPreviewError(null);
                             setStep(3);
                           }}
-                          disabled={previewingIndex !== null || isGenerating || isRendering}
+                          disabled={voiceRegenerationActive || previewingIndex !== null || isGenerating || isRendering}
                         >
                           <CheckCircle className="mr-2 size-4" />
                           Continue to Preview

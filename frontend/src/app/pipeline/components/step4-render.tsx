@@ -117,8 +117,14 @@ export function Step4Render({ ctx }: { ctx: any }) {
     const jobKey = status.visual_version
       ? `${status.variant_index}_${status.visual_version}`
       : `${status.variant_index}`;
+    if (!status.output_id) {
+      toast.error("This render has no stable output identity. Reload the pipeline before stopping it.");
+      return;
+    }
     try {
-      await apiPost(`/pipeline/${pipelineId}/cancel/${encodeURIComponent(jobKey)}`, {});
+      await apiPost(`/pipeline/${pipelineId}/cancel/${encodeURIComponent(jobKey)}`, {
+        output_id: status.output_id,
+      });
       setVariantStatuses(prev =>
         prev.map(v => {
           const matches = status.visual_version

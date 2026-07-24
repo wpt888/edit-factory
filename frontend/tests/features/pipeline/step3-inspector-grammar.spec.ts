@@ -151,26 +151,26 @@ test("Edit and Export stay separate while sharing the inspector grammar", async 
     })).toEqual({ position: "absolute", bottom: "0px", height: "12px" });
   }
   const resourceTablist = previewTargetPanel.getByRole("tablist", { name: "Preview resource panels" });
-  const imageTemplatesTab = resourceTablist.getByRole("tab", { name: /Image Templates/ });
-  await expect(imageTemplatesTab).toBeVisible();
-  await expect(imageTemplatesTab).toHaveCSS("border-top-width", "2px");
-  await expect(imageTemplatesTab).toHaveCSS("border-bottom-width", "0px");
-  const [resourceTablistBox, imageTemplatesTabBox] = await Promise.all([
+  const contentTemplatesTab = resourceTablist.getByRole("tab", { name: /Content Templates/ });
+  await expect(contentTemplatesTab).toBeVisible();
+  await expect(contentTemplatesTab).toHaveCSS("border-top-width", "2px");
+  await expect(contentTemplatesTab).toHaveCSS("border-bottom-width", "0px");
+  const [resourceTablistBox, contentTemplatesTabBox] = await Promise.all([
     resourceTablist.boundingBox(),
-    imageTemplatesTab.boundingBox(),
+    contentTemplatesTab.boundingBox(),
   ]);
   expect(resourceTablistBox).not.toBeNull();
-  expect(imageTemplatesTabBox).not.toBeNull();
-  expect(Math.abs(resourceTablistBox!.x - imageTemplatesTabBox!.x)).toBeLessThanOrEqual(1);
+  expect(contentTemplatesTabBox).not.toBeNull();
+  expect(Math.abs(resourceTablistBox!.x - contentTemplatesTabBox!.x)).toBeLessThanOrEqual(1);
   const sourcesTab = previewTargetPanel.getByRole("tab", { name: /Sources/ });
   await expect(sourcesTab).toBeVisible();
   await sourcesTab.click();
   await expect(sourcesTab).toHaveAttribute("aria-selected", "true");
   await expect(previewTargetPanel.getByTestId("step3-sources")).toBeVisible();
-  const imageTemplatesPanel = previewTargetPanel.getByTestId("step3-attention-apply");
-  await expect(imageTemplatesPanel).toBeAttached();
-  await expect(imageTemplatesPanel).toBeHidden();
-  await expect(imageTemplatesPanel).toHaveAttribute("hidden", "");
+  const contentTemplatesPanel = previewTargetPanel.getByTestId("step3-attention-apply");
+  await expect(contentTemplatesPanel).toBeAttached();
+  await expect(contentTemplatesPanel).toBeHidden();
+  await expect(contentTemplatesPanel).toHaveAttribute("hidden", "");
   await expect(previewTargetPanel.getByRole("combobox", { name: "Filter sources by type" })).toBeVisible();
   await expect(previewTargetPanel.getByRole("button", { name: "List view" })).toHaveAttribute("aria-pressed", "true");
   await previewTargetPanel.getByRole("button", { name: "Icon view" }).click();

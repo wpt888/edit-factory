@@ -8,10 +8,18 @@ from app.services.studio_metering import StudioMeteringBlocked
 
 
 def _pipeline(audio: dict | None = None) -> dict:
+    script_id = "script_11111111"
+    if audio is not None:
+        audio = {
+            **audio,
+            "script_id": script_id,
+            "output_id": f"{script_id}:default",
+        }
     return {
         "pipeline_id": "pipeline-preview-metering",
         "profile_id": "profile-1",
         "scripts": ["A short metered preview script"],
+        "script_ids": [script_id],
         "previews": {},
         "segment_usage": {},
         "tts_previews": ({0: audio} if audio is not None else {}),
@@ -45,13 +53,35 @@ async def _call_preview(pipeline_routes, *, force: bool = False):
         min_segment_duration=3.0,
         ultra_rapid_intro=True,
         preset="balanced",
+        segment_proximity="separate",
         visual_version=None,
+        script_id="script_11111111",
+        output_id="script_11111111:default",
         force_regenerate_tts=force,
+        editor_matches=None,
+        editor_composition=None,
+        editor_default_transition=None,
+        editor_music=None,
+        editor_default_transition_set=False,
+        editor_music_set=False,
         current_user=AuthUser("user-1", "person@example.com"),
     )
 
 
 def _wire_preview(monkeypatch, pipeline_routes, pipeline, assembly):
+    class Repo:
+        def get_pipeline(self, pipeline_id):
+            return pipeline if pipeline_id == pipeline["pipeline_id"] else None
+
+        def get_profile(self, _profile_id):
+            return {
+                "tts_settings": {
+                    "elevenlabs": {
+                        "voice_id": "voice-1",
+                    },
+                },
+            }
+
     monkeypatch.setattr(
         pipeline_routes,
         "_get_pipeline_or_load",
@@ -60,7 +90,36 @@ def _wire_preview(monkeypatch, pipeline_routes, pipeline, assembly):
     monkeypatch.setattr(pipeline_routes, "_db_update_async_jobs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline_routes, "_db_save_pipeline", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline_routes, "_get_data_repository", lambda: None)
+    monkeypatch.setattr(pipeline_routes, "get_repository", lambda: Repo())
     monkeypatch.setattr(pipeline_routes, "get_assembly_service", lambda: assembly)
+
+
+def test_preview_rejects_an_authoritative_active_voice_regeneration(
+    monkeypatch,
+) -> None:
+    from app.api import pipeline_routes
+
+    pipeline = _pipeline()
+    pipeline["tts_jobs"] = {
+        0: {
+            "status": "processing",
+            "attempt_id": "active-voice-attempt",
+            "script_id": "script_11111111",
+            "output_id": "script_11111111:default",
+        }
+    }
+
+    class AssemblyMustNotRun:
+        async def preview_matches(self, **_kwargs):
+            raise AssertionError("preview started during voice regeneration")
+
+    _wire_preview(monkeypatch, pipeline_routes, pipeline, AssemblyMustNotRun())
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(_call_preview(pipeline_routes))
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "voice_regeneration_active"
 
 
 def test_preview_tts_denial_is_402_before_provider_or_forced_cache_mutation(
@@ -92,7 +151,8 @@ def test_preview_tts_denial_is_402_before_provider_or_forced_cache_mutation(
         asyncio.run(_call_preview(pipeline_routes, force=True))
 
     assert caught.value.status_code == 402
-    assert pipeline["tts_previews"][0] == previous
+    assert pipeline["tts_previews"][0]["audio_path"] == previous["audio_path"]
+    assert pipeline["tts_previews"][0]["script_hash"] == previous["script_hash"]
     job = pipeline["tts_jobs"][0]
     assert job["status"] == "failed"
     assert job["metering"]["state"] == "denied"
@@ -220,7 +280,8 @@ def test_preview_tts_provider_failure_refunds_and_restores_forced_audio(
     assert settlements == [False]
     assert pipeline["tts_jobs"][0]["status"] == "failed"
     assert pipeline["tts_jobs"][0]["metering"]["state"] == "released"
-    assert pipeline["tts_previews"][0] == previous
+    assert pipeline["tts_previews"][0]["audio_path"] == previous["audio_path"]
+    assert pipeline["tts_previews"][0]["script_hash"] == previous["script_hash"]
 
 
 def test_preview_reuses_persisted_tts_without_new_reservation(monkeypatch, tmp_path):
@@ -235,6 +296,17 @@ def test_preview_reuses_persisted_tts_without_new_reservation(monkeypatch, tmp_p
             "script_hash": pipeline_routes._stable_hash("A short metered preview script"),
             "srt_content": "existing srt",
             "words_per_subtitle": 2,
+            "elevenlabs_model": "eleven_flash_v2_5",
+            "voice_id": "voice-1",
+            "voice_settings": {
+                "stability": 0.57,
+                "similarity_boost": 0.75,
+                "style": 0.22,
+                "use_speaker_boost": True,
+                "speed": 1.0,
+            },
+            "asset_provenance": "generated",
+            "audio_sha256": pipeline_routes._file_sha256(audio),
         }
     )
 

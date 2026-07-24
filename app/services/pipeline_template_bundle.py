@@ -80,6 +80,11 @@ def normalize_pipeline_template_settings(settings: Any) -> dict[str, Any]:
             "Template is missing settings sections: " + ", ".join(missing)
         )
 
+    # Added within schema v1 as integrity fields. Older v1 snapshots normalize
+    # to explicit empty maps instead of losing compatibility.
+    normalized["timeline"].setdefault("defaultTransitions", {})
+    normalized["timeline"].setdefault("music", {})
+
     expected_nested_types = {
         ("generation", "contextProducts"): list,
         ("content", "scripts"): list,
@@ -91,6 +96,8 @@ def normalize_pipeline_template_settings(settings: Any) -> dict[str, Any]:
         ("timeline", "selectedVariantIndices"): list,
         ("timeline", "matches"): Mapping,
         ("timeline", "compositions"): Mapping,
+        ("timeline", "defaultTransitions"): Mapping,
+        ("timeline", "music"): Mapping,
         ("timeline", "interstitialSlides"): Mapping,
         ("timeline", "attentionSelection"): Mapping,
         ("timeline", "attentionTimelines"): Mapping,
@@ -178,6 +185,8 @@ def fallback_pipeline_template_settings(pipeline: Mapping[str, Any]) -> dict[str
     previews = pipeline.get("previews") or {}
     matches: dict[str, Any] = {}
     compositions: dict[str, Any] = {}
+    default_transitions: dict[str, Any] = {}
+    music: dict[str, Any] = {}
     for raw_key, raw_preview in previews.items():
         if not isinstance(raw_preview, Mapping):
             continue
@@ -190,6 +199,12 @@ def fallback_pipeline_template_settings(pipeline: Mapping[str, Any]) -> dict[str
         timeline = preview_data.get("video_timeline") or preview_data.get("timeline")
         if isinstance(timeline, list):
             compositions[key] = copy.deepcopy(timeline)
+        if "default_transition" in preview_data:
+            default_transitions[key] = copy.deepcopy(
+                preview_data.get("default_transition")
+            )
+        if "music" in preview_data:
+            music[key] = copy.deepcopy(preview_data.get("music"))
 
     attention = copy.deepcopy(dict(pipeline.get("attention_timeline") or {}))
     attention_selection = attention.pop("_selection", {})
@@ -209,7 +224,10 @@ def fallback_pipeline_template_settings(pipeline: Mapping[str, Any]) -> dict[str
         },
         "content": {
             "scripts": [
-                {"name": names[index] if index < len(names) else f"Script {index + 1}", "text": text}
+                {
+                    "name": names[index] if index < len(names) else f"Script {index + 1}",
+                    "text": text,
+                }
                 for index, text in enumerate(scripts)
             ],
             "approvedScriptIndices": [],
@@ -237,6 +255,8 @@ def fallback_pipeline_template_settings(pipeline: Mapping[str, Any]) -> dict[str
             "selectedVariantIndices": list(range(len(scripts))),
             "matches": matches,
             "compositions": compositions,
+            "defaultTransitions": default_transitions,
+            "music": music,
             "interstitialSlides": {},
             "attentionSelection": attention_selection,
             "attentionTimelines": attention,

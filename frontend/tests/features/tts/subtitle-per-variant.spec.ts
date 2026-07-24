@@ -19,6 +19,7 @@ const PIPELINE_META_ON = process.env.SUBTITLE_TEST_PIPELINE_META_ON
   ?? '5b02fde8-9517-4829-b200-a7b1552794ec';
 const PIPELINE_META_OFF = process.env.SUBTITLE_TEST_PIPELINE_META_OFF
   ?? '242029a5-2e35-48c2-9155-5db4c6e098a7';
+let simulateActiveVoiceRegeneration = false;
 
 const PROFILE = {
   id: 'subtitle-meta-profile',
@@ -64,6 +65,7 @@ const makeSilentWav = () => {
 };
 
 test.beforeEach(async ({ page }) => {
+  simulateActiveVoiceRegeneration = false;
   await page.addInitScript((profile) => {
     localStorage.setItem('editai_profiles', JSON.stringify([profile]));
     localStorage.setItem('editai_current_profile_id', profile.id);
@@ -130,7 +132,17 @@ test.beforeEach(async ({ page }) => {
         variant_count: 1,
         meta_multiplication: metaMultiplication,
         generation_job: {},
-        tts_jobs: {},
+        tts_jobs: simulateActiveVoiceRegeneration
+          ? {
+              '0': {
+                status: 'processing',
+                progress: 45,
+                current_step: 'Regenerating voice-over',
+                attempt_id: 'active-voice-attempt',
+                output_id: 'script_subtitle_meta:default',
+              },
+            }
+          : {},
       } });
       return;
     }
@@ -151,7 +163,18 @@ test.beforeEach(async ({ page }) => {
         provider: 'gemini',
         variant_count: 1,
         variants: [{ variant_index: 0, status: 'not_started', progress: 0, current_step: '' }],
-        meta_variants: metaMultiplication ? { A: {}, B: {} } : null,
+        // Keep one historical Meta result even when the persisted setting is
+        // OFF. Status hydration must still select the base output.
+        meta_variants: metaMultiplication
+          ? { A: {}, B: {} }
+          : [{
+              variant_index: 0,
+              visual_version: 'A',
+              status: 'completed',
+              progress: 100,
+              current_step: 'Historical Meta render',
+              final_video_path: 'historical-meta-a.mp4',
+            }],
         meta_multiplication: metaMultiplication,
         preview_info: {},
         tts_info: {},
@@ -313,11 +336,12 @@ test.describe('Template-only subtitle assignment', () => {
 
     await selector.click();
     await page.getByRole('option', { name: 'Punchy Yellow · 1 style', exact: true }).click();
+    await page.getByRole('button', { name: 'Update 1 output', exact: true }).click();
     await expect(selector).toContainText('Punchy Yellow · 1 style');
     await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Punchy Yellow · Template rotation');
     await expect(page.getByTestId('subtitle-assignment-badge')).toContainText('Punchy Yellow · Rotation');
     await expect(page.getByTestId('subtitle-style-to-apply')).toHaveCount(0);
-    await expect(page.getByRole('combobox', { name: 'Subtitle apply scope' })).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'Subtitle editing scope' })).toContainText('Pipeline defaults');
   });
 
   test('selection survives reload (persisted via rotation endpoint)', async ({ page }) => {
@@ -331,6 +355,7 @@ test.describe('Template-only subtitle assignment', () => {
     const selector = page.getByTestId('step3-subtitle-template-select');
     await selector.click();
     await page.getByRole('option', { name: 'Bold Red · 1 style', exact: true }).click();
+    await page.getByRole('button', { name: 'Update 1 output', exact: true }).click();
     await expect(selector).toContainText('Bold Red · 1 style');
     await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Bold Red · Template rotation');
 
@@ -374,7 +399,9 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await enterAdvancedMode(page);
 
     const previewOutput = page.getByRole('combobox', { name: 'Preview output' });
+    const editingScope = page.getByRole('combobox', { name: 'Subtitle editing scope' });
     await expect(previewOutput).toContainText('Variant 1 A · Bold Red');
+    await expect(editingScope).toContainText('All A outputs');
     await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Bold Red · Template rotation');
     await previewOutput.click();
 
@@ -387,8 +414,9 @@ test.describe('Subtitle style — per-Meta-version model', () => {
 
     await expect(previewOutput).toContainText('Variant 1 B · Punchy Yellow');
     await expect(page.getByTestId('subtitle-current-assignment')).toContainText('Punchy Yellow · Template rotation');
+    await expect(editingScope).toContainText('All A outputs');
+    await expect(page.getByTestId('studio-edit-scope')).toContainText('Editing: All A outputs');
     await expect(page.getByRole('combobox', { name: 'Subtitle style to apply' })).toHaveCount(0);
-    await expect(page.getByRole('combobox', { name: 'Subtitle apply scope' })).toHaveCount(0);
   });
 
   test('Meta OFF → single preview, zero tabs', async ({ page }) => {
@@ -461,7 +489,7 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     expect(consoleErrors, `Console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('Meta ON → switching the preview target replaces the active preview and settings', async ({ page }) => {
+  test('Meta ON → preview changes do not change the edit target', async ({ page }) => {
     await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
@@ -469,7 +497,9 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await page.waitForTimeout(1500);
 
     const previewOutput = page.getByRole('combobox', { name: 'Preview output' });
+    const editingScope = page.getByRole('combobox', { name: 'Subtitle editing scope' });
     await expect(previewOutput).toContainText('Variant 1 A · Default');
+    await expect(editingScope).toContainText('All A outputs');
 
     await page.screenshot({
       path: 'screenshots/subtitle-editing-a-vs-b.png',
@@ -480,5 +510,142 @@ test.describe('Subtitle style — per-Meta-version model', () => {
     await page.getByRole('option', { name: 'Variant 1 B · Default', exact: true }).click();
     await page.waitForTimeout(300);
     await expect(previewOutput).toContainText('Variant 1 B · Default');
+    await expect(editingScope).toContainText('All A outputs');
+
+    await editingScope.click();
+    await page.getByRole('option', { name: 'Output · Variant 1 B', exact: true }).click();
+    await expect(page.getByTestId('studio-preview-scope')).toContainText('Previewing: Variant 1 B');
+    await expect(page.getByTestId('studio-edit-scope')).toContainText('Editing: Output Variant 1 B');
+    await page.waitForTimeout(300);
+    await page.screenshot({
+      path: 'screenshots/studio-scope-output-b.png',
+      fullPage: true,
+    });
+  });
+
+  test('output subtitle override works without an assigned template', async ({ page }) => {
+    let checkPayload: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/pipeline/check-render/${PIPELINE_META_ON}`)) {
+        checkPayload = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({ json: { results: [], any_skippable: false } });
+        return;
+      }
+      if (path.endsWith(`/pipeline/render/${PIPELINE_META_ON}`)) {
+        await route.fulfill({
+          json: {
+            pipeline_id: PIPELINE_META_ON,
+            rendering_variants: [0],
+            total_variants: 2,
+            meta_multiplication: true,
+            visual_versions: ['A', 'B'],
+          },
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1500);
+    await enterAdvancedMode(page);
+
+    const editingScope = page.getByRole('combobox', { name: 'Subtitle editing scope' });
+    await editingScope.click();
+    await page.getByRole('option', { name: 'Output · Variant 1 B', exact: true }).click();
+
+    const fontSize = styleCardLocator(page).getByRole('slider').first();
+    await expect(fontSize).toHaveAttribute('aria-valuenow', '48');
+    await fontSize.press('ArrowRight');
+    await expect(fontSize).toHaveAttribute('aria-valuenow', '49');
+
+    await page.getByTestId('step3-go-to-export').click();
+    await page.getByTestId('export-render-button').click();
+    await expect.poll(() => checkPayload).not.toBeNull();
+
+    const subtitles = (checkPayload as unknown as {
+      subtitle_settings_by_key?: Record<string, { fontSize?: number }>;
+    }).subtitle_settings_by_key;
+    expect(subtitles?.['0_A']?.fontSize).toBe(48);
+    expect(subtitles?.['0_B']?.fontSize).toBe(49);
+  });
+
+  test('Meta A and B are independently selectable through the render payload', async ({ page }) => {
+    let checkPayload: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/pipeline/check-render/${PIPELINE_META_ON}`)) {
+        checkPayload = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({ json: { results: [], any_skippable: false } });
+        return;
+      }
+      if (path.endsWith(`/pipeline/render/${PIPELINE_META_ON}`)) {
+        await route.fulfill({
+          json: {
+            pipeline_id: PIPELINE_META_ON,
+            rendering_variants: [0],
+            total_variants: 1,
+            meta_multiplication: true,
+            visual_versions: ['B'],
+          },
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto(`/pipeline?step=3&id=${PIPELINE_META_ON}`);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1500);
+    await enterAdvancedMode(page);
+
+    const outputA = page.getByRole('checkbox', { name: 'Select Variant 1 A for render' });
+    const outputB = page.getByRole('checkbox', { name: 'Select Variant 1 B for render' });
+    await expect(outputA).toBeChecked();
+    await expect(outputB).toBeChecked();
+    await outputA.uncheck();
+    await expect(outputA).not.toBeChecked();
+    await expect(outputB).toBeChecked();
+    await expect(page.getByTestId('studio-render-scope')).toContainText('Render: 1 output selected');
+
+    await page.getByTestId('step3-go-to-export').click();
+    await page.getByTestId('export-render-button').click();
+
+    await expect.poll(() => checkPayload).not.toBeNull();
+    expect(checkPayload).toMatchObject({
+      variant_indices: [0],
+      output_keys: ['0_B'],
+      meta_multiplication: true,
+    });
+  });
+
+  test('active voice regeneration locks Preview, Meta, and Render actions', async ({ page }) => {
+    simulateActiveVoiceRegeneration = true;
+    await page.setViewportSize({ width: 2048, height: 900 });
+    await page.goto(`/pipeline?step=2&id=${PIPELINE_META_OFF}`);
+    await page.waitForLoadState('networkidle');
+    await enterAdvancedMode(page);
+
+    await expect(
+      page.getByRole('button', { name: /Generate (Previews|Voice-Overs)/ }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole('checkbox', { name: 'Meta Multiplication before preview' }),
+    ).toBeDisabled();
+    await page.screenshot({
+      path: 'screenshots/voice-regeneration-action-lock.png',
+      fullPage: false,
+    });
+
+    await page.goto(`/pipeline?step=3&id=${PIPELINE_META_OFF}`);
+    await page.waitForLoadState('networkidle');
+    await enterAdvancedMode(page);
+    await page.getByTestId('pipeline-mode-export').click();
+    await expect(page.getByTestId('export-render-button')).toBeDisabled();
+    await expect(page.getByTestId('export-render-button')).toContainText(
+      'Voice-over updating...',
+    );
   });
 });

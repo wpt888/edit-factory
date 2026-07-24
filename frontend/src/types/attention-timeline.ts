@@ -81,6 +81,8 @@ export type AttentionCue = {
 export type AttentionTimeline = {
   revision: number;
   cues: AttentionCue[];
+  script_id?: string;
+  output_id?: string;
 };
 
 export const EMPTY_ATTENTION_TIMELINE: AttentionTimeline = {

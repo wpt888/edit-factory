@@ -112,18 +112,19 @@ test("Step 2 inspector keeps the canvas background below its cards", async ({ pa
   await expect(inspector).toBeVisible();
   await expect(inspector).toHaveCSS("background-color", "rgb(24, 24, 24)");
 
-  const sourceHeader = page.getByTestId("source-videos-header");
+  const configurationHeader = page.getByTestId("step2-tts-header");
   const reviewHeader = page.getByTestId("step2-review-header");
-  await expect(sourceHeader).toBeVisible();
+  await expect(page.getByTestId("source-videos-panel")).toHaveCount(0);
+  await expect(configurationHeader).toBeVisible();
   await expect(reviewHeader).toBeVisible();
-  const [sourceHeaderBox, reviewHeaderBox] = await Promise.all([
-    sourceHeader.boundingBox(),
+  const [configurationHeaderBox, reviewHeaderBox] = await Promise.all([
+    configurationHeader.boundingBox(),
     reviewHeader.boundingBox(),
   ]);
-  expect(sourceHeaderBox).not.toBeNull();
+  expect(configurationHeaderBox).not.toBeNull();
   expect(reviewHeaderBox).not.toBeNull();
-  expect(Math.abs(sourceHeaderBox!.y - reviewHeaderBox!.y)).toBeLessThanOrEqual(1);
-  expect(sourceHeaderBox!.height).toBe(reviewHeaderBox!.height);
+  expect(Math.abs(configurationHeaderBox!.y - reviewHeaderBox!.y)).toBeLessThanOrEqual(1);
+  expect(configurationHeaderBox!.height).toBe(reviewHeaderBox!.height);
 
   const actionDockPanel = page.getByTestId("step2-action-dock");
   const actionDock = page.getByTestId("step2-secondary-actions");

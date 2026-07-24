@@ -2,6 +2,16 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
+SCRIPT_ID = "script_preview_001"
+
+
+class _AuthoritativePipelineRepo:
+    def __init__(self, pipeline):
+        self.pipeline = pipeline
+
+    def get_pipeline(self, _pipeline_id):
+        return {**self.pipeline, "tts_jobs": self.pipeline.get("tts_jobs", {})}
+
 
 def test_render_preview_fingerprint_includes_subtitle_settings(tmp_path):
     from app.api.pipeline_routes import PreviewRenderRequest, render_preview
@@ -15,6 +25,8 @@ def test_render_preview_fingerprint_includes_subtitle_settings(tmp_path):
         "ultra_rapid_intro": True,
         "interstitial_slides": [],
         "visual_version": None,
+        "script_id": SCRIPT_ID,
+        "output_id": f"{SCRIPT_ID}:default",
     }
     changed_request = {
         **base_request,
@@ -34,6 +46,7 @@ def test_render_preview_fingerprint_includes_subtitle_settings(tmp_path):
         pipeline = {
             "profile_id": "profile-1",
             "scripts": ["script"],
+            "script_ids": [SCRIPT_ID],
             "tts_previews": {
                 0: {
                     "audio_path": str(audio_path),
@@ -43,6 +56,10 @@ def test_render_preview_fingerprint_includes_subtitle_settings(tmp_path):
         }
         request_model = PreviewRenderRequest(**request_payload)
         with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+             patch(
+                 "app.api.pipeline_routes.get_repository",
+                 return_value=_AuthoritativePipelineRepo(pipeline),
+             ), \
              patch("app.api.pipeline_routes.get_assembly_service", return_value=object()):
             result = await render_preview.__wrapped__(
                 DummyRequest(),
@@ -79,15 +96,22 @@ def test_render_preview_fingerprint_includes_composition_order_and_trims(tmp_pat
         pipeline = {
             "profile_id": "profile-1",
             "scripts": ["script"],
+            "script_ids": [SCRIPT_ID],
             "tts_previews": {0: {"audio_path": str(audio_path)}},
             "preview_renders": {},
         }
         request_model = PreviewRenderRequest(
             match_overrides=[{"segment_id": "seg-1", "merge_group": "", "transforms": {}}],
             composition_override=composition,
+            script_id=SCRIPT_ID,
+            output_id=f"{SCRIPT_ID}:default",
         )
         try:
             with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+                 patch(
+                     "app.api.pipeline_routes.get_repository",
+                     return_value=_AuthoritativePipelineRepo(pipeline),
+                 ), \
                  patch("app.api.pipeline_routes.get_assembly_service", return_value=object()):
                 result = await render_preview.__wrapped__(
                     object(),
@@ -134,6 +158,7 @@ def test_render_preview_isolates_each_variant_and_meta_version(tmp_path):
     pipeline = {
         "profile_id": "profile-1",
         "scripts": ["first script", "second script"],
+        "script_ids": ["script_preview_001", "script_preview_002"],
         "tts_previews": {
             index: {"audio_path": str(audio_path)}
             for index, audio_path in enumerate(audio_paths)
@@ -155,6 +180,7 @@ def test_render_preview_isolates_each_variant_and_meta_version(tmp_path):
     pipeline_id = f"isolated-preview-{tmp_path.name}"
 
     async def start(variant_index, visual_version=None):
+        script_id = pipeline["script_ids"][variant_index]
         background_tasks = DummyBackgroundTasks()
         result = await render_preview.__wrapped__(
             DummyRequest(),
@@ -168,6 +194,8 @@ def test_render_preview_isolates_each_variant_and_meta_version(tmp_path):
                     "transforms": {},
                 }],
                 visual_version=visual_version,
+                script_id=script_id,
+                output_id=f"{script_id}:{visual_version or 'default'}",
             ),
             background_tasks,
             profile,
@@ -177,7 +205,11 @@ def test_render_preview_isolates_each_variant_and_meta_version(tmp_path):
 
     preview_keys = {"0", "1", "0_A", "0_B"}
     try:
-        with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline):
+        with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+             patch(
+                 "app.api.pipeline_routes.get_repository",
+                 return_value=_AuthoritativePipelineRepo(pipeline),
+             ):
             variant_0 = asyncio.run(start(0))
             variant_1 = asyncio.run(start(1))
             meta_a = asyncio.run(start(0, "A"))
@@ -212,6 +244,7 @@ def test_render_preview_accepts_appdata_relative_voiceover_path(tmp_path):
     pipeline = {
         "profile_id": "profile-1",
         "scripts": ["script"],
+        "script_ids": [SCRIPT_ID],
         "tts_previews": {0: {"audio_path": relative_audio_path}},
         "preview_renders": {},
     }
@@ -229,12 +262,20 @@ def test_render_preview_accepts_appdata_relative_voiceover_path(tmp_path):
 
     try:
         with patch("app.api.pipeline_routes._get_pipeline_or_load", return_value=pipeline), \
+             patch(
+                 "app.api.pipeline_routes.get_repository",
+                 return_value=_AuthoritativePipelineRepo(pipeline),
+             ), \
              patch("app.api.pipeline_routes.get_settings", return_value=SimpleNamespace(base_dir=tmp_path)):
             result = asyncio.run(render_preview.__wrapped__(
                 object(),
                 pipeline_id,
                 0,
-                PreviewRenderRequest(match_overrides=[{"segment_id": "segment-1"}]),
+                PreviewRenderRequest(
+                    match_overrides=[{"segment_id": "segment-1"}],
+                    script_id=SCRIPT_ID,
+                    output_id=f"{SCRIPT_ID}:default",
+                ),
                 background_tasks,
                 profile,
             ))

@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
@@ -35,11 +36,13 @@ def _request() -> Request:
 
 
 def _pipeline(pipeline_id: str, audio_path: str, *, duration: float = 61.0) -> dict:
+    script_id = "script_render_test"
     return {
         "pipeline_id": pipeline_id,
         "profile_id": "profile-1",
         "provider": "gemini",
         "scripts": ["Test script"],
+        "script_ids": [script_id],
         "render_jobs": {},
         "previews": {},
         "tts_previews": {
@@ -47,11 +50,25 @@ def _pipeline(pipeline_id: str, audio_path: str, *, duration: float = 61.0) -> d
                 "audio_path": audio_path,
                 "audio_duration": duration,
                 "script_hash": pipeline_routes._stable_hash("Test script"),
+                "elevenlabs_model": "eleven_flash_v2_5",
+                "voice_id": None,
+                "voice_settings": None,
+                "audio_sha256": pipeline_routes._file_sha256(Path(audio_path)),
+                "asset_provenance": "generated",
             }
         },
         "meta_multiplication": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _render_request(pipeline: dict) -> pipeline_routes.PipelineRenderRequest:
+    script_id = pipeline["script_ids"][0]
+    return pipeline_routes.PipelineRenderRequest(
+        variant_indices=[0],
+        output_keys=["0"],
+        output_ids={"0": pipeline_routes._build_output_id(script_id)},
+    )
 
 
 def _install_render_route_fakes(monkeypatch, pipeline_id: str, pipeline: dict) -> None:
@@ -63,6 +80,42 @@ def _install_render_route_fakes(monkeypatch, pipeline_id: str, pipeline: dict) -
         lambda _request: ({}, {}),
     )
     monkeypatch.setattr(pipeline_routes, "_db_update_render_jobs", lambda *_args: None)
+
+
+def test_render_rejects_active_voice_regeneration(monkeypatch, tmp_path):
+    async def scenario():
+        audio = tmp_path / "voice.mp3"
+        audio.write_bytes(b"a" * 101)
+        pipeline_id = "render-blocked-by-voice"
+        pipeline = _pipeline(pipeline_id, str(audio))
+        pipeline["tts_jobs"] = {
+            0: {
+                "status": "processing",
+                "attempt_id": "active-voice-attempt",
+                "script_id": pipeline["script_ids"][0],
+                "output_id": pipeline_routes._build_output_id(
+                    pipeline["script_ids"][0]
+                ),
+            }
+        }
+        _install_render_route_fakes(monkeypatch, pipeline_id, pipeline)
+
+        with pytest.raises(HTTPException) as error:
+            await pipeline_routes.render_variants(
+                _request(),
+                pipeline_id,
+                _render_request(pipeline),
+                BackgroundTasks(),
+                ProfileContext(profile_id="profile-1", user_id="user-1"),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "voice_regeneration_active"
+        assert pipeline["render_jobs"] == {}
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())
 
 
 def test_render_reserves_exact_minutes_before_queue_entry(monkeypatch, tmp_path):
@@ -89,7 +142,7 @@ def test_render_reserves_exact_minutes_before_queue_entry(monkeypatch, tmp_path)
         response = await pipeline_routes.render_variants(
             _request(),
             pipeline_id,
-            pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+            _render_request(pipeline),
             BackgroundTasks(),
             ProfileContext(profile_id="profile-1", user_id="user-1"),
             AuthUser("user-1", "person@example.com"),
@@ -137,7 +190,7 @@ def test_render_credit_denial_never_enters_queue(monkeypatch, tmp_path):
             await pipeline_routes.render_variants(
                 _request(),
                 pipeline_id,
-                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                _render_request(pipeline),
                 BackgroundTasks(),
                 ProfileContext(profile_id="profile-1", user_id="user-1"),
                 AuthUser("user-1", "person@example.com"),
@@ -171,11 +224,14 @@ def test_cancelled_queued_render_refunds_reservation(monkeypatch):
             "profile_id": "profile-1",
             "provider": "gemini",
             "scripts": ["Test script"],
+            "script_ids": ["script_render_test"],
             "render_jobs": {
                 0: {
                     "status": "queued",
                     "progress": 0,
                     "current_step": "Queued",
+                    "script_id": "script_render_test",
+                    "output_id": "script_render_test:default",
                     "metering": record,
                 }
             },
@@ -199,6 +255,7 @@ def test_cancelled_queued_render_refunds_reservation(monkeypatch):
         await pipeline_routes.cancel_variant_render(
             pipeline_id,
             "0",
+            "script_render_test:default",
             ProfileContext(profile_id="profile-1", user_id="user-1"),
         )
 
@@ -230,8 +287,11 @@ def test_status_reconciles_capture_after_output_persistence(monkeypatch):
             "profile_id": "profile-1",
             "provider": "gemini",
             "scripts": ["Test script"],
+            "script_ids": ["script_render_test"],
             "render_jobs": {
                 0: {
+                    "script_id": "script_render_test",
+                    "output_id": "script_render_test:default",
                     "status": "completed",
                     "progress": 100,
                     "current_step": "Render complete",
@@ -254,7 +314,7 @@ def test_status_reconciles_capture_after_output_persistence(monkeypatch):
         async def settle(identity, current, *, delivered, result_metadata=None):
             assert identity.supabase_user_id == "user-1"
             assert delivered is True
-            assert result_metadata["output_id"] == "0"
+            assert result_metadata["output_id"] == "script_render_test:default"
             return {**current, "state": "captured", "last_error": None}
 
         monkeypatch.setattr(pipeline_routes, "get_render_queue", lambda: _Queue())
@@ -290,8 +350,11 @@ def test_status_replays_lost_render_reserve_response_then_refunds(monkeypatch):
             "profile_id": "profile-1",
             "provider": "gemini",
             "scripts": ["Test script"],
+            "script_ids": ["script_render_test"],
             "render_jobs": {
                 0: {
+                    "script_id": "script_render_test",
+                    "output_id": "script_render_test:default",
                     "status": "failed",
                     "progress": 0,
                     "current_step": "Render interrupted",
@@ -367,6 +430,8 @@ def test_render_preserves_lost_reserve_attempt_when_replay_is_unavailable(
         }
         pipeline = _pipeline(pipeline_id, str(audio))
         pipeline["render_jobs"][0] = {
+            "script_id": pipeline["script_ids"][0],
+            "output_id": f"{pipeline['script_ids'][0]}:default",
             "status": "failed",
             "progress": 0,
             "current_step": "Render interrupted",
@@ -385,7 +450,7 @@ def test_render_preserves_lost_reserve_attempt_when_replay_is_unavailable(
             await pipeline_routes.render_variants(
                 _request(),
                 pipeline_id,
-                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                _render_request(pipeline),
                 BackgroundTasks(),
                 ProfileContext(profile_id="profile-1", user_id="user-1"),
                 AuthUser("user-1", "person@example.com"),
@@ -421,6 +486,8 @@ def test_render_preserves_refund_pending_attempt_when_settlement_is_unavailable(
         }
         pipeline = _pipeline(pipeline_id, str(audio))
         pipeline["render_jobs"][0] = {
+            "script_id": pipeline["script_ids"][0],
+            "output_id": f"{pipeline['script_ids'][0]}:default",
             "status": "failed",
             "progress": 0,
             "current_step": "Render failed",
@@ -444,7 +511,7 @@ def test_render_preserves_refund_pending_attempt_when_settlement_is_unavailable(
             await pipeline_routes.render_variants(
                 _request(),
                 pipeline_id,
-                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                _render_request(pipeline),
                 BackgroundTasks(),
                 ProfileContext(profile_id="profile-1", user_id="user-1"),
                 AuthUser("user-1", "person@example.com"),
@@ -498,7 +565,7 @@ def test_remake_preserves_lost_reserve_attempt_when_replay_is_unavailable(
                 _request(),
                 pipeline_id,
                 0,
-                pipeline_routes.PipelineRenderRequest(variant_indices=[0]),
+                _render_request(pipeline),
                 BackgroundTasks(),
                 None,
                 ProfileContext(profile_id="profile-1", user_id="user-1"),
@@ -510,6 +577,38 @@ def test_remake_preserves_lost_reserve_attempt_when_replay_is_unavailable(
         preserved = pipeline["render_jobs"][0]["metering"]
         assert preserved["idempotency_key"] == record["idempotency_key"]
         assert preserved["state"] == "reserve_pending"
+        pipeline_routes._pipelines.pop(pipeline_id, None)
+
+    asyncio.run(scenario())
+
+
+def test_remake_rejects_output_id_reassigned_before_request_runs(
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        audio = tmp_path / "voice.mp3"
+        audio.write_bytes(b"a" * 101)
+        pipeline_id = "remake-stale-output-id"
+        pipeline = _pipeline(pipeline_id, str(audio))
+        stale_request = _render_request(pipeline)
+        pipeline["script_ids"] = ["script_replacement"]
+        _install_render_route_fakes(monkeypatch, pipeline_id, pipeline)
+
+        with pytest.raises(HTTPException) as error:
+            await pipeline_routes.remake_variant.__wrapped__(
+                _request(),
+                pipeline_id,
+                0,
+                stale_request,
+                BackgroundTasks(),
+                None,
+                ProfileContext(profile_id="profile-1", user_id="user-1"),
+                AuthUser("user-1", "person@example.com"),
+            )
+
+        assert error.value.status_code == 409
+        assert pipeline["render_jobs"] == {}
         pipeline_routes._pipelines.pop(pipeline_id, None)
 
     asyncio.run(scenario())

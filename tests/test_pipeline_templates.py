@@ -52,6 +52,8 @@ def _complete_settings() -> dict:
             "selectedVariantIndices": [0, 1],
             "matches": {"0": []},
             "compositions": {},
+            "defaultTransitions": {"0_A": None},
+            "music": {"0_A": None},
             "interstitialSlides": {"0": []},
             "attentionSelection": {
                 "templateId": "system-tornado-stack",
@@ -134,10 +136,13 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     saved = client.put(
         f"/api/v1/pipeline/{pipeline_id}/template-settings",
         headers=HEADERS,
-        json={"settings": settings},
+        json={"settings": settings, "expected_revision": 0},
     )
     assert saved.status_code == 200, saved.text
-    assert repo.get_pipeline(pipeline_id)["template_settings"] == settings
+    assert saved.json()["revision"] == 1
+    persisted_settings = repo.get_pipeline(pipeline_id)["template_settings"]
+    assert persisted_settings["snapshot"]["revision"] == 1
+    assert {key: value for key, value in persisted_settings.items() if key != "snapshot"} == settings
 
     exported = client.get(
         f"/api/v1/pipeline/{pipeline_id}/template",
@@ -147,7 +152,7 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     document = exported.json()
     assert document["format"] == "edit-factory.pipeline-template"
     assert document["schemaVersion"] == 1
-    assert document["settings"] == settings
+    assert document["settings"] == persisted_settings
     assert "profile_id" not in document
     assert document["checksum"]["algorithm"] == "sha256"
 
@@ -159,13 +164,13 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     assert imported.status_code == 200, imported.text
     payload = imported.json()
     assert payload["pipeline_id"] != pipeline_id
-    assert payload["settings"] == settings
+    assert payload["settings"] == persisted_settings
     assert payload["scripts"] == ["First complete script.", "Second complete script."]
     assert payload["script_names"] == ["Hook A", "Hook B"]
 
     imported_row = repo.get_pipeline(payload["pipeline_id"])
     assert imported_row["profile_id"] == "test-profile-001"
-    assert imported_row["template_settings"] == settings
+    assert imported_row["template_settings"] == persisted_settings
     assert imported_row["min_segment_duration"] == 4.5
     assert imported_row["meta_multiplication"] == 1
     assert imported_row["subtitle_settings_by_key"]["A"]["fontSize"] == 60
@@ -177,6 +182,38 @@ def test_pipeline_template_round_trip_preserves_complete_settings(sqlite_backend
     assert imported_row["template_settings"]["subtitles"]["variantTemplates"] == {
         "1": NO_SUBTITLES_PRESET_ID,
     }
+
+
+def test_pipeline_snapshot_rejects_out_of_order_autosave(sqlite_backend):
+    client, repo, _profile_id = sqlite_backend
+    pipeline_id = _create_pipeline(client)
+    newer = _complete_settings()
+    newer["snapshot"] = {"revision": 99, "savedAt": "2026-07-23T12:00:02Z"}
+    newer["generation"]["name"] = "Newer snapshot"
+    older = _complete_settings()
+    older["snapshot"] = {"revision": 98, "savedAt": "2026-07-23T12:00:01Z"}
+    older["generation"]["name"] = "Older snapshot"
+
+    saved = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/template-settings",
+        headers=HEADERS,
+        json={"settings": newer, "mode": "autosave", "expected_revision": 0},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 1
+
+    stale = client.put(
+        f"/api/v1/pipeline/{pipeline_id}/template-settings",
+        headers=HEADERS,
+        json={"settings": older, "mode": "autosave", "expected_revision": 0},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["current_revision"] == 1
+    assert (
+        stale.json()["detail"]["current_settings"]["generation"]["name"]
+        == "Newer snapshot"
+    )
+    assert repo.get_pipeline(pipeline_id)["template_settings"]["generation"]["name"] == "Newer snapshot"
 
 
 def test_pipeline_template_export_backfills_legacy_pipeline_contract(sqlite_backend):
@@ -225,7 +262,7 @@ def test_pipeline_template_rejects_sensitive_and_incomplete_settings(sqlite_back
     sensitive = client.put(
         f"/api/v1/pipeline/{pipeline_id}/template-settings",
         headers=HEADERS,
-        json={"settings": settings},
+        json={"settings": settings, "expected_revision": 0},
     )
     assert sensitive.status_code == 422
     assert "sensitive" in sensitive.text.lower()
@@ -235,7 +272,7 @@ def test_pipeline_template_rejects_sensitive_and_incomplete_settings(sqlite_back
     missing = client.put(
         f"/api/v1/pipeline/{pipeline_id}/template-settings",
         headers=HEADERS,
-        json={"settings": incomplete},
+        json={"settings": incomplete, "expected_revision": 0},
     )
     assert missing.status_code == 422
     assert "render" in missing.text

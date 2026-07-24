@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,13 +19,15 @@ export interface RenderCheckResult {
   can_skip: boolean;
   reason: string;
   existing_video_path?: string | null;
+  output_key?: string | null;
+  visual_version?: string | null;
 }
 
 interface SkipRenderDialogProps {
   open: boolean;
   onClose: () => void;
   checkResults: RenderCheckResult[];
-  onConfirm: (skipVariants: number[], renderVariants: number[]) => void;
+  onConfirm: (skipOutputKeys: string[], renderOutputKeys: string[]) => void;
 }
 
 export function SkipRenderDialog({
@@ -35,37 +37,45 @@ export function SkipRenderDialog({
   onConfirm,
 }: SkipRenderDialogProps) {
   const skippable = checkResults.filter((r) => r.can_skip);
-  const nonSkippable = checkResults.filter((r) => !r.can_skip);
-
-  // Track which skippable variants user wants to actually skip (default: all)
-  const [skipSet, setSkipSet] = useState<Set<number>>(
-    () => new Set(skippable.map((r) => r.variant_index))
+  const resultKey = (result: RenderCheckResult) => (
+    result.output_key
+    || `${result.variant_index}${result.visual_version ? `_${result.visual_version}` : ""}`
   );
 
-  const toggleSkip = (variantIndex: number) => {
+  // Track exact output keys, so A and B never collapse to the same script index.
+  const [skipSet, setSkipSet] = useState<Set<string>>(
+    () => new Set(skippable.map(resultKey))
+  );
+  useEffect(() => {
+    if (open) setSkipSet(new Set(skippable.map(resultKey)));
+    // `checkResults` is the server snapshot for this dialog opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkResults, open]);
+
+  const toggleSkip = (outputKey: string) => {
     setSkipSet((prev) => {
       const next = new Set(prev);
-      if (next.has(variantIndex)) {
-        next.delete(variantIndex);
+      if (next.has(outputKey)) {
+        next.delete(outputKey);
       } else {
-        next.add(variantIndex);
+        next.add(outputKey);
       }
       return next;
     });
   };
 
   const handleConfirm = () => {
-    const skipVariants = Array.from(skipSet);
-    const renderVariants = checkResults
-      .map((r) => r.variant_index)
-      .filter((idx) => !skipSet.has(idx));
-    onConfirm(skipVariants, renderVariants);
+    const skipOutputKeys = Array.from(skipSet);
+    const renderOutputKeys = checkResults
+      .map(resultKey)
+      .filter((outputKey) => !skipSet.has(outputKey));
+    onConfirm(skipOutputKeys, renderOutputKeys);
   };
 
   const handleRenderAll = () => {
     onConfirm(
       [],
-      checkResults.map((r) => r.variant_index)
+      checkResults.map(resultKey)
     );
   };
 
@@ -106,20 +116,21 @@ export function SkipRenderDialog({
         <div className="space-y-2 max-h-[300px] overflow-y-auto">
           {checkResults.map((result) => (
             <div
-              key={result.variant_index}
+              key={resultKey(result)}
               className="flex items-center justify-between p-3 rounded-lg border bg-card"
             >
               <div className="flex items-center gap-3">
                 {result.can_skip ? (
                   <Checkbox
-                    checked={skipSet.has(result.variant_index)}
-                    onCheckedChange={() => toggleSkip(result.variant_index)}
+                    checked={skipSet.has(resultKey(result))}
+                    onCheckedChange={() => toggleSkip(resultKey(result))}
+                    aria-label={`Use existing render for output ${result.variant_index + 1}${result.visual_version ? ` ${result.visual_version}` : ""}`}
                   />
                 ) : (
                   <RefreshCw className="size-4 text-muted-foreground" />
                 )}
                 <span className="font-medium">
-                  Variant {result.variant_index + 1}
+                  Output {result.variant_index + 1}{result.visual_version ? ` ${result.visual_version}` : ""}
                 </span>
               </div>
               <div className="flex items-center gap-2">

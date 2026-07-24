@@ -147,7 +147,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
             enabled={workspaceLayout}
             fallbackClassName={workspaceLayout
               ? "w-full space-y-3 min-[1280px]:grid min-[1280px]:h-full min-[1280px]:min-h-0 min-[1280px]:grid-cols-[minmax(22rem,0.72fr)_minmax(0,1.6fr)] min-[1280px]:items-stretch min-[1280px]:gap-px min-[1280px]:space-y-0 min-[1280px]:bg-border"
-              : "w-full space-y-4"
+              : "mx-auto w-full max-w-[96rem] space-y-4 px-4 pb-6 lg:px-6"
             }
             leftSizing={{ defaultSize: "31%", minSize: "18rem" }}
             rightSizing={{ minSize: "30%" }}
@@ -161,7 +161,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
               }
               data-testid="step1-inspector"
             >
-              <SourceVideosCard ctx={ctx} workspace={workspaceLayout} />
+              <SourceVideosCard ctx={ctx} workspace={workspaceLayout} compact={!workspaceLayout} />
             </aside>
 
             <section
@@ -178,38 +178,40 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 title="Video Idea"
                 data-testid="step1-idea-header"
               />
-              <CardContent className={`space-y-4 pt-4 ${workspaceLayout ? "min-[1280px]:pb-5" : ""}`}>
+              <CardContent className={`mx-auto w-full max-w-6xl space-y-4 pt-4 ${workspaceLayout ? "min-[1280px]:pb-5" : "px-4 pb-5 sm:px-6"}`}>
                 <CardDescription>
                   Describe the video you want to create, then generate scripts.
                 </CardDescription>
-                <div className="space-y-2">
-                  <Label htmlFor="idea">Video Idea *</Label>
-                  <DebouncedTextarea
-                    id="idea"
-                    placeholder="Describe your video idea..."
-                    rows={8}
-                    value={idea}
-                    onCommit={setIdea}
-                    className="resize-y [field-sizing:fixed]"
+                <div className="grid items-end gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="idea">Video Idea *</Label>
+                    <DebouncedTextarea
+                      id="idea"
+                      placeholder="Describe your video idea..."
+                      rows={4}
+                      value={idea}
+                      onCommit={setIdea}
+                      className="min-h-24 resize-y [field-sizing:fixed]"
+                    />
+                  </div>
+
+                  <OutputFormatSelect
+                    width={renderSettings.output_width || 1080}
+                    height={renderSettings.output_height || 1920}
+                    onChange={(width, height) => setRenderSettings({
+                      ...renderSettings,
+                      output_width: width,
+                      output_height: height,
+                    })}
                   />
                 </div>
-
-                <OutputFormatSelect
-                  width={renderSettings.output_width || 1080}
-                  height={renderSettings.output_height || 1920}
-                  onChange={(width, height) => setRenderSettings({
-                    ...renderSettings,
-                    output_width: width,
-                    output_height: height,
-                  })}
-                />
 
                 <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
                   <CollapsibleTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
-                      className="w-full justify-between border border-dashed px-3 text-muted-foreground hover:text-foreground"
+                      className="h-9 w-full justify-between rounded-none border-x-0 border-y border-border/70 px-1.5 text-muted-foreground hover:text-foreground"
                       data-testid="step1-advanced-trigger"
                       aria-label="Advanced generation options"
                     >
@@ -217,15 +219,22 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         <Settings2 className="size-4" />
                         Advanced
                       </span>
-                      {advancedOpen ? (
-                        <ChevronUp className="size-4" />
-                      ) : (
-                        <ChevronDown className="size-4" />
-                      )}
+                      <span className="flex min-w-0 items-center gap-3">
+                        {!advancedOpen && (
+                          <span className="hidden truncate text-xs font-normal text-muted-foreground sm:block">
+                            {variantCount} {variantCount === 1 ? "variant" : "variants"} · {targetScriptDuration}s · {provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "Gemini"}
+                          </span>
+                        )}
+                        {advancedOpen ? (
+                          <ChevronUp className="size-4" />
+                        ) : (
+                          <ChevronDown className="size-4" />
+                        )}
+                      </span>
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent
-                    className="space-y-4 pt-4"
+                    className="space-y-4 pt-3"
                     data-testid="step1-advanced-content"
                   >
                 {/* Persistent script-generation rules */}
@@ -234,7 +243,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-9 gap-2"
+                    className="h-8 gap-2 text-xs"
                     onClick={() => setAiRulesExpanded(true)}
                   >
                     <BookOpen className="size-4 text-primary" />
@@ -318,7 +327,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   </DialogContent>
                 </Dialog>
 
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,1fr)]">
                   <div className="space-y-4">
                     {/* Script set name */}
                     <div className="space-y-2">
@@ -330,19 +339,19 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         onCommit={setPipelineName}
                         maxLength={200}
                       />
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-[11px] text-muted-foreground">
                         Leave blank to use the first words of your idea. You can rename it later.
                       </p>
                     </div>
                   </div>
 
                   {/* Reference context: product data is optional, not required */}
-                  <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
+                  <div className="space-y-2 border-t border-border/70 pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
                   {/* Header row */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="mr-auto">
                       <Label htmlFor="context">Reference Context</Label>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p className="mt-1 text-[11px] text-muted-foreground">
                         Optional details — products, services, brand info, or creative direction
                       </p>
                     </div>
@@ -405,7 +414,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                     <DebouncedTextarea
                       id="context"
                       placeholder="Additional context (brand info, instructions)..."
-                      rows={3}
+                      rows={2}
                       value={context}
                       onCommit={setContext}
                       className="resize-none max-h-[200px] overflow-y-auto [field-sizing:fixed]"
@@ -549,7 +558,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 </div>
 
                 {/* Configuration row */}
-                <div className={`grid grid-cols-1 gap-4 ${provider === "codex" ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
+                <div className={`grid grid-cols-1 gap-3 border-t border-border/70 pt-4 ${provider === "codex" ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-3"}`}>
                   {/* Variant count */}
                   <div className="space-y-2">
                     <Label htmlFor="variant-count">Variants</Label>
@@ -557,7 +566,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       value={variantCount.toString()}
                       onValueChange={(val) => setVariantCount(parseInt(val))}
                     >
-                      <SelectTrigger id="variant-count">
+                      <SelectTrigger id="variant-count" size="sm" className="text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -572,8 +581,8 @@ export function Step1Script({ ctx }: { ctx: any }) {
 
                   {/* Script Duration */}
                   <div className="space-y-2">
-                    <Label>Duration (sec)</Label>
-                    <div className="flex items-center gap-2">
+                    <Label className="text-xs font-medium text-muted-foreground">Duration (sec)</Label>
+                    <div className="flex h-8 items-center gap-2">
                        <Slider
                          value={[targetScriptDuration]}
                          onValueChange={([v]) => setTargetScriptDuration(v)}
@@ -592,7 +601,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                            const v = parseInt(e.target.value);
                            if (!isNaN(v) && v >= 5 && v <= 300) setTargetScriptDuration(v);
                          }}
-                        className="w-16 h-8 text-center text-sm px-1"
+                        className="h-8 w-16 px-1 text-center font-mono text-xs tabular-nums"
                       />
                     </div>
                   </div>
@@ -601,7 +610,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                   <div className="space-y-2">
                     <Label htmlFor="provider">AI Provider</Label>
                     <Select value={provider} onValueChange={setProvider}>
-                      <SelectTrigger id="provider">
+                      <SelectTrigger id="provider" size="sm" className="text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -626,7 +635,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         placeholder="gpt-5.4-mini"
                         spellCheck={false}
                         autoCapitalize="none"
-                        className="font-mono"
+                        className="h-8 font-mono text-xs"
                       />
                       <p className="text-[11px] leading-relaxed text-muted-foreground">
                         Uses this computer&apos;s Codex login in an ephemeral, read-only session.
